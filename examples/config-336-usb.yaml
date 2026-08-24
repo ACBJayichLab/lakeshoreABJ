@@ -1,0 +1,79 @@
+# Lake Shore 336 on USB — READ-ONLY.
+#
+# Cryostat state when this was written (2026-08-24): cryo OFF, at atmosphere,
+# everything at room temperature.  Expect all four inputs near 295-297 K.
+#
+#   A  Coldplate    ~295 K   (loop 1 setpoint)
+#   B  Stage 2      ~297 K   (loop 2 setpoint)
+#   C  Rad Shield   ~296 K   (loop 3 setpoint)
+#   D  Stage 1      ~295 K   (loop 4 setpoint)
+#
+# SAFETY.  Two independent interlocks, both on:
+#
+#   transport.read_only: true   refuses to transmit ANY command, at the layer
+#                               where bytes leave -- so a bug anywhere above
+#                               it still cannot write.
+#   allow_writes: false         driver policy: no SETP / RANGE / PID.
+#
+# Turning either off is a deliberate, reviewed act.  Do not do it to "test
+# whether writing works".
+#
+#   python -m lschart -c examples/config-336-usb.yaml probe    read everything once
+#   python -m lschart -c examples/config-336-usb.yaml run      record continuously
+#
+# `probe` forces read_only on regardless of what this file says.
+
+log_level: INFO
+
+instruments:
+  - name: ls336
+    model: "336"
+    driver: lakeshore         # Lake Shore's own driver: USB serial, no VISA
+    transport:
+      # This box enumerates as USB VID 0x1FB9 / PID 0x0301 through a Silicon
+      # Labs CP210x bridge, serial LSA26E0.  Matching on the serial number
+      # rather than the port is what survives a re-enumeration: after a replug
+      # the port number changes and the serial does not.  With com_port empty
+      # the vendor driver scans for the instrument.
+      serial_number: "LSA26E0"
+      com_port: ""
+      baud_rate: 57600        # the 336's fixed USB rate (57600, 7-O-1)
+      timeout_ms: 3000
+
+      read_only: true         # <-- INTERLOCK.  Leave this on.
+
+      # A USB device that re-enumerates comes back under the same serial, so
+      # reconnection actually works here.
+      reconnect: true
+      retry_min_s: 1.0
+      retry_max_s: 30.0
+
+    # The rig as labelled.  Set explicitly rather than read from the front
+    # panel, so a column never silently changes meaning if someone relabels
+    # the instrument mid-run.
+    channels:
+      A: Coldplate
+      B: Stage 2
+      C: Rad Shield
+      D: Stage 1
+
+    read_status: true         # RDGST? per input -- worth it at 1 Hz on one box
+    status_every_n_cycles: 15
+    read_setpoints: true      # SETP? 1-4
+    read_heaters: true        # HTR? and RANGE? on outputs 1 and 2
+
+    allow_writes: false       # <-- INTERLOCK.  Leave this off.
+
+acquisition:
+  interval_s: 1.0
+  log_every_n: 1
+  ringbuffer_size: 43200      # 12 h at 1 Hz, for plotting only
+
+recorder:
+  enabled: true
+  directory: data
+  filename_prefix: ls336
+  flush_every_sample: true
+
+runtime:
+  lock_path: data/ls336.lock

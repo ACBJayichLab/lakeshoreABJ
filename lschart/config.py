@@ -62,6 +62,11 @@ class TransportConfig:
     ip_address: str = ""
     tcp_port: int = 7777
 
+    #: Hard interlock, one layer below `allow_writes`: refuse to transmit any
+    #: command at all.  Use it on a box that must not be touched under any
+    #: circumstances, including by a bug in this program.
+    read_only: bool = False
+
     # -- staying connected ---------------------------------------------------
     #: A dropped link is recovered rather than being terminal.  Turn this off
     #: only if you would rather a run stop than continue with a gap.

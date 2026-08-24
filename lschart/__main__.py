@@ -133,6 +133,65 @@ def cmd_check(args) -> int:
     return 0
 
 
+def cmd_probe(args) -> int:
+    """Open each instrument, read everything, write nothing.
+
+    The first thing to run against hardware that has never been talked to.
+    Every transport is forced READ-ONLY regardless of what the config says, so
+    this cannot alter instrument state even if the config enables writes and
+    even if there is a bug above the transport layer.  The commands issued are
+    queries only: *IDN?, INNAME?, KRDG?, SETP?, HTR?, RANGE?, PID?, RAMP?.
+    """
+    cfg = config_mod.load(args.config)
+    _setup_logging(args.log_level or cfg.log_level)
+
+    # Force the interlock on before anything is constructed.
+    for inst_cfg in cfg.instruments:
+        inst_cfg.transport.read_only = True
+
+    app = BUILDER(cfg)
+    print("PROBE -- read-only: no command that can change instrument state "
+          "will be sent.\n")
+    failures = 0
+    try:
+        for inst in app.instruments:
+            print(f"{inst.name}:")
+            try:
+                inst.transport.open()
+            except OSError as exc:
+                print(f"  LINK DOWN: {exc}\n")
+                failures += 1
+                continue
+            try:
+                print(f"  *IDN?          : {inst.idn()}")
+                verify = getattr(inst, "verify_model", None)
+                if verify is not None:
+                    verify()
+                    print("  model check    : OK")
+                readings, aux = inst.read_frame()
+                print(f"  channels       : {len(readings)}")
+                for name, r in readings.items():
+                    flag = "" if r.validity.name == "GOOD" else f"  <-- {r.validity.name}"
+                    print(f"    {name:<24} {r.kelvin:10.4f} K{flag}")
+                if aux:
+                    print("  auxiliary:")
+                    for k in sorted(aux):
+                        print(f"    {k:<24} {aux[k]:10.4f}")
+            except (OSError, ValueError) as exc:
+                print(f"  READ FAILED: {exc}")
+                failures += 1
+            print()
+    finally:
+        for inst in app.instruments:
+            inst.transport.close()
+
+    if failures:
+        print(f"{failures} instrument(s) could not be read.")
+        return 1
+    print("All instruments read successfully.  Nothing was written.")
+    return 0
+
+
 def _one_controller(app, want: str | None):
     """Pick the instrument a `set`/`status` command is about.
 
@@ -236,6 +295,14 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
 
     chk = sub.add_parser("check", help="validate a config file and exit")
     chk.set_defaults(func=cmd_check)
+
+    prb = sub.add_parser(
+        "probe",
+        help="open each instrument and read everything; writes nothing",
+        description="Forces every transport read-only regardless of config. "
+                    "Safe to run against hardware that has never been touched.",
+    )
+    prb.set_defaults(func=cmd_probe)
 
     st = sub.add_parser(
         "set",

@@ -56,6 +56,7 @@ class Transport(ABC):
     def __init__(
         self,
         *,
+        read_only: bool = False,
         reconnect: bool = True,
         retry_min_s: float = 1.0,
         retry_max_s: float = 30.0,
@@ -65,6 +66,13 @@ class Transport(ABC):
         self._lock = threading.RLock()
         self._last_txn = 0.0
         self._clock = clock
+        #: Hard interlock: no byte that could change instrument state leaves
+        #: this transport.  Belt to `allow_writes`' braces, and deliberately at
+        #: a *lower* layer -- `allow_writes` is a driver policy that a caller
+        #: could flip, whereas this refuses at the point where bytes would
+        #: actually go out, so a bug anywhere above it still cannot write.
+        #: Set by `probe`, and by `read_only: true` on an instrument.
+        self.read_only = read_only
         self.reconnect = reconnect
         self.retry_min_s = retry_min_s
         self.retry_max_s = retry_max_s
@@ -160,6 +168,12 @@ class Transport(ABC):
             time.sleep(gap)
 
     def write(self, cmd: str) -> None:
+        if self.read_only:
+            raise PermissionError(
+                f"{self} is open READ-ONLY; refusing to send {cmd!r}. "
+                "Nothing that could change instrument state may be written "
+                "while this interlock is set."
+            )
         with self._lock:
             self._ensure_open()
             self._pace()

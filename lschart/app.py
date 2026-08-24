@@ -32,6 +32,7 @@ def build_transport(cfg: InstrumentConfig, *, device=None) -> Transport:
     """
     t = cfg.transport
     recovery = dict(
+        read_only=t.read_only,
         reconnect=t.reconnect,
         retry_min_s=t.retry_min_s,
         retry_max_s=t.retry_max_s,
@@ -44,7 +45,15 @@ def build_transport(cfg: InstrumentConfig, *, device=None) -> Transport:
         # GPIB board; applying it to an in-process fake just makes every cycle
         # cost 9 x 50 ms for nothing, and makes the measured cadence disagree
         # with what AppConfig.estimated_cycle_s() predicts for a sim run.
-        return LoopbackTransport(device, inter_command_delay=0.0)
+        #
+        # `read_only` IS honoured here, and must be: rehearsing a read-only
+        # config against the simulator is exactly how someone convinces
+        # themselves it is safe before pointing it at a cryostat.  An interlock
+        # that silently does nothing in rehearsal is worse than none.
+        # Reconnection stays off -- there is no link to lose.
+        return LoopbackTransport(
+            device, inter_command_delay=0.0, read_only=t.read_only
+        )
 
     if cfg.driver == "visa":
         from .transport import VisaTransport
