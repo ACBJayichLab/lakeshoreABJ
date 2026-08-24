@@ -9,8 +9,8 @@ once without weakening the check.
 
 import pytest
 
-from lschart.control import LoopMode, SupervisorState
-from lschart.control.ramp import RampConfig, SetpointRamp
+from ltspm.control import LoopMode, SupervisorState
+from ltspm.control.ramp import RampConfig, SetpointRamp
 
 
 def armed(harness, **kw):

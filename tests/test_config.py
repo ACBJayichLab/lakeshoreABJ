@@ -1,6 +1,8 @@
-"""Config loading and the checks that make a bad config fail loudly."""
+"""Config loading and the checks that make a bad config fail loudly.
 
-import os
+Generic only.  The `control:` section belongs to `ltspm`, and its tests live in
+`tests_ltspm/test_config_control.py`.
+"""
 
 import pytest
 
@@ -20,21 +22,12 @@ def test_defaults_are_valid_and_simulated():
     cfg = config_mod.load(None)
     assert not cfg.uses_hardware
     assert cfg.control_channel == "Sample"
-    assert not cfg.control.enabled, "control must never default to on"
-
-
-def test_repo_config_is_valid():
-    """The committed starter file must actually load."""
-    if not os.path.exists("config.yaml"):
-        pytest.skip("no config.yaml in cwd")
-    cfg = config_mod.load("config.yaml")
-    assert cfg.source_path == "config.yaml"
 
 
 def test_partial_config_keeps_defaults(tmp_path):
     cfg = config_mod.load(write(tmp_path, "acquisition:\n  interval_s: 2.5\n"))
     assert cfg.acquisition.interval_s == 2.5
-    assert cfg.control.supervisor.operating_point_pct == 63.076
+    assert cfg.recorder.flush_every_sample is True
 
 
 def test_yaml_integer_channel_keys_survive(tmp_path):
@@ -53,21 +46,29 @@ ls218:
 def test_unknown_key_is_rejected(tmp_path):
     """A typo in a safety limit must not be silently ignored."""
     with pytest.raises(ConfigError, match="unknown key"):
-        config_mod.load(write(tmp_path, "control:\n  supervisor:\n    max_eror_k: 5\n"))
+        config_mod.load(write(tmp_path, "acquisition:\n  intervl_s: 2.5\n"))
+
+
+def test_an_unregistered_extension_section_is_unknown(tmp_path):
+    """`control:` is only a legal key once `ltspm` has registered it.
+
+    A recorder-only install must refuse a config that asks it to close a heater
+    loop, rather than ignoring the section and quietly recording instead.
+    """
+    with pytest.raises(ConfigError, match="unknown key"):
+        config_mod.load(write(tmp_path, "sample_pid:\n  enabled: true\n"))
 
 
 def test_nested_sections_are_built(tmp_path):
     cfg = config_mod.load(write(tmp_path, """
-control:
-  enabled: true
-  guard:
-    fault_after_s: 300.0
-  pid:
-    kp: 0.05
+ls336:
+  read_heaters: false
+acquisition:
+  interval_s: 2.0
+  ringbuffer_size: 100
 """))
-    assert cfg.control.guard.fault_after_s == 300.0
-    assert cfg.control.pid.kp == 0.05
-    assert cfg.control.enabled
+    assert cfg.ls336.read_heaters is False
+    assert cfg.acquisition.ringbuffer_size == 100
 
 
 def test_round_trip_through_dump(tmp_path):
@@ -79,21 +80,6 @@ def test_round_trip_through_dump(tmp_path):
 
 
 # -- validation -------------------------------------------------------------
-
-def test_empty_authority_band_is_rejected():
-    cfg = AppConfig()
-    cfg.control.supervisor.hard_max_pct = 10.0
-    with pytest.raises(ConfigError, match="authority band"):
-        cfg.validate()
-
-
-def test_safe_output_above_operating_point_is_rejected():
-    """A fault ramp toward a *higher* output would add heat on a fault."""
-    cfg = AppConfig()
-    cfg.control.supervisor.safe_output_pct = 70.0
-    with pytest.raises(ConfigError, match="ramp would .*raise"):
-        cfg.validate()
-
 
 def test_visa_backend_without_a_resource_is_rejected():
     cfg = AppConfig()

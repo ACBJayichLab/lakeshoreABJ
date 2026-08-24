@@ -4,7 +4,7 @@ Two departures from a textbook PID, both driven by this rig:
 
 * **Derivative on a regressed slope, not on the error.**  Differencing a 10 mK-rms
   signal at 4 s would produce 3.5 mK/s of pure noise; the caller supplies a
-  least-squares dT/dt instead (see :class:`~lschart.control.filters.SlopeEstimator`).
+  least-squares dT/dt instead (see :class:`~ltspm.control.filters.SlopeEstimator`).
   Taking it on the measurement rather than the error also removes setpoint kick.
 
 * **Integral clamped in output units.**  ``Ki * integral`` is limited directly to

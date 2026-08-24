@@ -10,10 +10,10 @@ import math
 
 import pytest
 
-from lschart.control.dither import SigmaDeltaDither
-from lschart.control.feedforward import Feedforward, FeedforwardConfig
-from lschart.instruments.sim import PlantParams
-from lschart.plant import MEASURED_CURVE, SteadyStateCurve, fit_thermal_exponent
+from ltspm.control.dither import SigmaDeltaDither
+from ltspm.control.feedforward import Feedforward, FeedforwardConfig
+from ltspm.sim_plant import PlantParams
+from ltspm.plant import MEASURED_CURVE, SteadyStateCurve, fit_thermal_exponent
 
 
 # -- the exactly-known half -------------------------------------------------

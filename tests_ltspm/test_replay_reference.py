@@ -14,8 +14,8 @@ import os
 
 import pytest
 
-from lschart.control.health import HealthState
-from lschart.tools import replay as replay_mod
+from ltspm.control.health import HealthState
+from ltspm.tools import replay as replay_mod
 
 pytest.importorskip("xlrd")
 

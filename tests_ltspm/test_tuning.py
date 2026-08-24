@@ -9,9 +9,9 @@ data to R^2 0.9969 and 0.99998 and disagree by tens of kelvin outside it.
 
 import pytest
 
-from lschart.control import LoopMode, SupervisorConfig
-from lschart.control.pid import PID, PIDConfig
-from lschart.control.tuning import (
+from ltspm.control import LoopMode, SupervisorConfig
+from ltspm.control.pid import PID, PIDConfig
+from ltspm.control.tuning import (
     ControlPhase,
     OperatingPoint,
     PlantSchedule,
@@ -20,7 +20,7 @@ from lschart.control.tuning import (
     identify_first_order,
     imc_pi,
 )
-from lschart.instruments.sim import PlantParams
+from ltspm.sim_plant import PlantParams
 
 
 # -- the tuning rule --------------------------------------------------------

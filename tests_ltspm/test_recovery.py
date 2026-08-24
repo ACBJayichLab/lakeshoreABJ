@@ -8,7 +8,7 @@ moved in the meantime.
 
 import pytest
 
-from lschart.control import HealthState, LoopMode, SupervisorConfig, SupervisorState
+from ltspm.control import HealthState, LoopMode, SupervisorConfig, SupervisorState
 
 
 def armed(harness, **kw):

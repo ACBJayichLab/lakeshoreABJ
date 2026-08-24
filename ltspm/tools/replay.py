@@ -12,8 +12,8 @@ questions that the simulator structurally cannot:
 
 Run it directly::
 
-    python -m lschart.tools.replay reference/logs/CD8/*.xls
-    python -m lschart.tools.replay --channel "Input 1" reference/logs/CD*/*.xls
+    python -m ltspm.tools.replay reference/logs/CD8/*.xls
+    python -m ltspm.tools.replay --channel "Input 1" reference/logs/CD*/*.xls
 
 The pipeline under test is exactly the production one -- ``SensorGuard``,
 ``MeasurementFilter`` and ``CoherenceMonitor`` -- fed from the log instead of
@@ -30,8 +30,8 @@ from dataclasses import dataclass, field
 from ..control.coherence import CoherenceConfig, CoherenceMonitor
 from ..control.filters import MeasurementFilter
 from ..control.health import HealthState, SensorGuard, SensorGuardConfig
-from ..model import Reading, Validity
-from .import_xls import ChartLog, load
+from lschart.model import Reading, Validity
+from lschart.tools.import_xls import ChartLog, load
 
 #: The 218 input carrying the sample, and the 336 channel names.
 DEFAULT_CONTROL_CHANNEL = "Input 1"

@@ -32,8 +32,8 @@ import math
 import time
 from dataclasses import dataclass, field
 
-from ..model import Reading, Validity
-from ..transport import TransportError
+from lschart.model import Reading, Validity
+from lschart.transport import TransportError
 from .coherence import CoherenceConfig, CoherenceMonitor
 from .dither import SigmaDeltaDither
 from .feedforward import Feedforward, FeedforwardConfig
@@ -255,6 +255,17 @@ class HeaterSupervisor:
 
     # -- operator controls -------------------------------------------------
 
+    def arm(self, setpoint_k: float) -> None:
+        """Adopt ``setpoint_k`` and close the loop.
+
+        The controller half of :meth:`lschart.app.Application.arm`, which owns
+        deciding *what* to arm to but must not know what a :class:`LoopMode` is.
+        Stepped, not ramped: the caller has already established that this is
+        where the rig is now, so there is nothing to traverse.
+        """
+        self.set_setpoint(setpoint_k, ramp=False)
+        self.set_mode(LoopMode.PID)
+
     def set_mode(self, mode: LoopMode) -> None:
         if self.state is SupervisorState.LOCKED_OUT and mode is not LoopMode.OFF:
             raise PermissionError(
@@ -307,7 +318,7 @@ class HeaterSupervisor:
         Ramps by default.  A step change of more than ``max_error_k`` is
         indistinguishable from a broken premise, so stepping the setpoint is
         how you stall the loop rather than how you move it -- see
-        :mod:`lschart.control.ramp`.  ``ramp=False`` is for small trims.
+        :mod:`ltspm.control.ramp`.  ``ramp=False`` is for small trims.
         """
         # An explicit setpoint command takes charge of the trajectory: the
         # deferred post-fault approach must not silently re-rate an operator's
@@ -436,7 +447,7 @@ class HeaterSupervisor:
         ``readings`` is the whole frame.  Supplying it lets the supervisor ask
         whether any *other* channel saw the same event, which is the only
         reliable way to tell a fast cooldown from a sick sensor -- see
-        :mod:`lschart.control.coherence`.  Omitting it degrades gracefully to
+        :mod:`ltspm.control.coherence`.  Omitting it degrades gracefully to
         the absolute slew limit.
         """
         dt = 0.0 if self._last_t is None else max(0.0, t - self._last_t)

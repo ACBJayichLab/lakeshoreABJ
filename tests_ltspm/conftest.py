@@ -5,9 +5,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lschart.control import HeaterSupervisor, PIDConfig, SensorGuardConfig, SupervisorConfig
+from ltspm.control import HeaterSupervisor, PIDConfig, SensorGuardConfig, SupervisorConfig
 from lschart.instruments import LS218
-from lschart.instruments.sim import PlantParams, Sim218, SimulatedRig
+from lschart.instruments.sim import Sim218, SimulatedRig
+from ltspm.sim_plant import LTSPM_AUX_COUPLING, PlantParams, ThermalModel
 from lschart.transport import LoopbackTransport
 
 
@@ -39,8 +40,16 @@ class Harness:
         self.equilibrium_k = plant.steady_state(63.076)
         if start_k is None:
             start_k = self.equilibrium_k
+        # SimulatedRig takes a plant *object* now, not parameters: the generic
+        # simulator has no idea which cryostat it is pretending to be, so the
+        # calibrated model and the measured cross-channel couplings are both
+        # injected from here.
         self.rig = SimulatedRig(
-            plant, start_k=start_k, time_source=self.clock, seed=7
+            ThermalModel(plant, start_k=start_k),
+            start_k=start_k,
+            time_source=self.clock,
+            seed=7,
+            aux_coupling=LTSPM_AUX_COUPLING,
         )
         self.sim = Sim218(self.rig)
         self.rig.plant.pct = self.sim.analog_pct

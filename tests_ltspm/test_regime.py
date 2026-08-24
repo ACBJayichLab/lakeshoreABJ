@@ -11,10 +11,10 @@ about it, and it has to say so.
 
 import pytest
 
-from lschart.control import LoopMode, SupervisorConfig, SupervisorState
-from lschart.control.feedforward import Feedforward, FeedforwardConfig
-from lschart.control.pid import PID, PIDConfig
-from lschart.instruments.sim import PlantParams
+from ltspm.control import LoopMode, SupervisorConfig, SupervisorState
+from ltspm.control.feedforward import Feedforward, FeedforwardConfig
+from ltspm.control.pid import PID, PIDConfig
+from ltspm.sim_plant import PlantParams
 
 
 def cooler_off(**kw):

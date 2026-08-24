@@ -22,7 +22,7 @@ What a controller actually needs is local and measurable:
 
 A step test yields both directly, with no functional form assumed and no
 extrapolation.  Doing it at a handful of temperatures gives the schedule in
-:mod:`lschart.control.tuning`, which is what sets the PI gains.
+:mod:`ltspm.control.tuning`, which is what sets the PI gains.
 
 Protocol
 --------
@@ -40,10 +40,10 @@ At each operating point, with the loop in MANUAL:
 Usage::
 
     # against the simulator, right now
-    python -m lschart.tools.steptest --points 63.0,64.0,65.0
+    python -m ltspm.tools.steptest --points 63.0,64.0,65.0
 
     # against a recorded run
-    python -m lschart.tools.steptest --from-csv data/lschart_2026-08-23.csv
+    python -m ltspm.tools.steptest --from-csv data/lschart_2026-08-23.csv
 """
 
 from __future__ import annotations
@@ -85,7 +85,9 @@ def run_simulated(points: list[float], *, step_pct: float = 0.5,
     applied to real data, so a mistake in the procedure shows up here rather
     than after an hour of cryostat time.
     """
-    from ..instruments.sim import Sim218, SimulatedRig
+    from lschart.instruments.sim import Sim218, SimulatedRig
+
+    from ..sim_plant import PlantParams, ThermalModel
 
     class Clock:
         t = 0.0
@@ -96,7 +98,9 @@ def run_simulated(points: list[float], *, step_pct: float = 0.5,
     out: list[OperatingPoint] = []
     for base in points:
         clock = Clock()
-        rig = SimulatedRig(time_source=clock)
+        # The calibrated plant, explicitly: a rehearsal against the generic
+        # one-pole model would identify that model's tau, not this rig's.
+        rig = SimulatedRig(ThermalModel(PlantParams()), time_source=clock)
         sim = Sim218(rig)
         rig.plant.pct = base
         # Start already settled at this operating point, so the step is the

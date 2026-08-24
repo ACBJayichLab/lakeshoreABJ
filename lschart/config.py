@@ -20,14 +20,6 @@ import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any
 
-from .control.coherence import CoherenceConfig
-from .control.feedforward import FeedforwardConfig
-from .control.health import SensorGuardConfig
-from .control.pid import PIDConfig
-from .control.ramp import RampConfig
-from .control.tuning import TuningConfig
-from .control.supervisor import SupervisorConfig
-
 DEFAULT_CONFIG_NAME = "config.yaml"
 
 
@@ -132,19 +124,39 @@ class RecorderConfig:
     max_rows: int | None = None
 
 
-@dataclass
-class ControlConfig:
-    """The heater loop.  ``enabled: false`` gives a pure chart recorder."""
+# -- extension sections ------------------------------------------------------
+#
+# The generic recorder must not know that a software PID exists, but the config
+# file is still one file and unknown keys are still an error.  So a dependent
+# package registers its own top-level section and its own validator, and both
+# are honoured by `load()` and `AppConfig.validate()` exactly as the built-in
+# sections are.  `ltspm.config` registers `control:` this way.
 
-    enabled: bool = False
-    supervisor: SupervisorConfig = field(default_factory=SupervisorConfig)
-    pid: PIDConfig = field(default_factory=PIDConfig)
-    guard: SensorGuardConfig = field(default_factory=SensorGuardConfig)
-    coherence: CoherenceConfig = field(default_factory=CoherenceConfig)
-    ramp: RampConfig = field(default_factory=RampConfig)
-    tuning: TuningConfig = field(default_factory=TuningConfig)
-    feedforward: FeedforwardConfig = field(default_factory=FeedforwardConfig)
-    filter: dict[str, Any] = field(default_factory=dict)
+_SECTIONS: dict[str, type] = {}
+_VALIDATORS: dict[str, Any] = {}
+
+#: Section name -> the package that provides it.  Purely a diagnostic: it turns
+#: "unknown key ['control']" into a sentence that says what to do about it.
+#: Nothing here is imported, so the dependency stays one-way.
+_SECTION_HINTS = {"control": "ltspm"}
+
+
+def register_section(name: str, cls: type, *, validator=None) -> None:
+    """Attach an extension config section, e.g. ltspm's ``control:``.
+
+    ``validator`` is called as ``validator(section, app_cfg, problems)`` during
+    :meth:`AppConfig.validate` and appends strings to ``problems``.  Registering
+    the same name twice with the same class is a no-op, so importing the
+    extension more than once is harmless.
+    """
+    if _SECTIONS.get(name) not in (None, cls):
+        raise ConfigError(
+            f"config section {name!r} is already registered to "
+            f"{_SECTIONS[name].__name__}"
+        )
+    _SECTIONS[name] = cls
+    if validator is not None:
+        _VALIDATORS[name] = validator
 
 
 @dataclass
@@ -162,8 +174,9 @@ class AppConfig:
     ls336: LS336Config = field(default_factory=LS336Config)
     acquisition: AcquisitionConfig = field(default_factory=AcquisitionConfig)
     recorder: RecorderConfig = field(default_factory=RecorderConfig)
-    control: ControlConfig = field(default_factory=ControlConfig)
     sim: SimConfig = field(default_factory=SimConfig)
+    #: Populated from `_SECTIONS` by `load()`; see `register_section`.
+    extensions: dict[str, Any] = field(default_factory=dict)
     log_level: str = "INFO"
     source_path: str | None = None
 
@@ -179,6 +192,18 @@ class AppConfig:
                 f"ls218.control_input {self.ls218.control_input} is not in "
                 f"ls218.channels {sorted(self.ls218.channels)}"
             ) from None
+
+    def section(self, name: str, default=None):
+        """An extension section, or ``default`` if the file did not carry one.
+
+        Returns a default-constructed section when the extension is registered
+        but the file omitted it, so a caller never has to distinguish "absent"
+        from "all defaults".
+        """
+        if name in self.extensions:
+            return self.extensions[name]
+        cls = _SECTIONS.get(name)
+        return cls() if cls is not None else default
 
     @property
     def uses_hardware(self) -> bool:
@@ -206,27 +231,6 @@ class AppConfig:
             except ConfigError as exc:
                 problems.append(str(exc))
 
-        s = self.control.supervisor
-        lo = max(s.hard_min_pct, s.operating_point_pct - s.authority_pct)
-        hi = min(s.hard_max_pct, s.operating_point_pct + s.authority_pct)
-        if lo > hi:
-            problems.append(
-                f"empty authority band: operating point {s.operating_point_pct}% is "
-                f"outside hard limits [{s.hard_min_pct}, {s.hard_max_pct}]"
-            )
-        if s.safe_output_pct > s.operating_point_pct:
-            problems.append(
-                f"safe_output_pct {s.safe_output_pct}% is above the operating point "
-                f"{s.operating_point_pct}% -- a fault ramp would *raise* the heater"
-            )
-        if s.on_exit not in ("hold", "zero"):
-            problems.append(f"control.supervisor.on_exit must be 'hold' or 'zero', got {s.on_exit!r}")
-
-        g = self.control.guard
-        if g.corroborate_slew_k_per_s > g.max_slew_k_per_s:
-            problems.append(
-                "guard.corroborate_slew_k_per_s must not exceed max_slew_k_per_s"
-            )
         if self.acquisition.interval_s <= 0:
             problems.append("acquisition.interval_s must be positive")
         if self.acquisition.log_every_n < 1:
@@ -242,6 +246,11 @@ class AppConfig:
                 f"acquisition.interval_s is {self.acquisition.interval_s} s. "
                 "Lower inter_command_delay, set read_status: false, or slow the poll."
             )
+
+        for name, validator in _VALIDATORS.items():
+            section = self.extensions.get(name)
+            if section is not None:
+                validator(section, self, problems)
 
         if problems:
             where = f" in {self.source_path}" if self.source_path else ""
@@ -293,11 +302,27 @@ def _coerce(cls, value: Any, path: str):
         raise ConfigError(f"{path}: expected a mapping, got {type(value).__name__}")
 
     known = {f.name: f for f in fields(cls)}
+    # Neither is settable from the file: `extensions` is populated by `load()`
+    # from the registry, `source_path` is stamped on afterwards.  Listing them
+    # as valid keys would be an invitation to write one.
+    known.pop("extensions", None)
+    known.pop("source_path", None)
     unknown = set(value) - set(known)
     if unknown:
+        hint = ""
+        missing = {k: _SECTION_HINTS[k] for k in sorted(unknown) if k in _SECTION_HINTS}
+        if missing:
+            pkgs = sorted(set(missing.values()))
+            hint = (
+                f". Section(s) {sorted(missing)} are provided by "
+                f"{' and '.join(repr(p) for p in pkgs)}; this looks like a "
+                f"config for {' and '.join(pkgs)} being loaded by a "
+                "recorder-only install. Run it with "
+                f"`python -m {pkgs[0]}`, or remove the section to record only"
+            )
         raise ConfigError(
-            f"{path}: unknown key(s) {sorted(unknown)}; "
-            f"valid keys are {sorted(known)}"
+            f"{path or '<top level>'}: unknown key(s) {sorted(unknown)}; "
+            f"valid keys are {sorted(known)}{hint}"
         )
 
     kwargs = {}
@@ -338,7 +363,15 @@ def load(path: str | None = None, *, validate: bool = True) -> AppConfig:
             raw = yaml.safe_load(fh) or {}
         if not isinstance(raw, dict):
             raise ConfigError(f"{path}: top level must be a mapping")
+        # Registered extension sections are peeled off before AppConfig sees
+        # the mapping -- otherwise `control:` reads as an unknown key, which is
+        # a hard error by design.
+        extensions = {}
+        for name, cls in _SECTIONS.items():
+            if name in raw:
+                extensions[name] = _coerce(cls, raw.pop(name), name)
         cfg = _coerce(AppConfig, raw, "")
+        cfg.extensions = extensions
         cfg.source_path = path
     if validate:
         cfg.validate()
@@ -351,4 +384,8 @@ def dump(cfg: AppConfig) -> str:
 
     d = dataclasses.asdict(cfg)
     d.pop("source_path", None)
+    # Extension sections belong at the top level of the file, where they were
+    # read from -- not nested under a key the loader would then reject.
+    for name, section in d.pop("extensions", {}).items():
+        d[name] = section
     return yaml.safe_dump(d, sort_keys=False, default_flow_style=False)

@@ -71,7 +71,7 @@ __all__ = ["Feedforward", "FeedforwardConfig", "MEASURED_CURVE", "fit_thermal_ex
 
 @dataclass
 class FeedforwardConfig:
-    """The measured steady-state curve.  See :mod:`lschart.plant`."""
+    """The measured steady-state curve.  See :mod:`ltspm.plant`."""
 
     enabled: bool = True
     t_bath_k: float = T_BATH_K

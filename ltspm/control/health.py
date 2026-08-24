@@ -21,7 +21,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 
-from ..model import Reading, Validity
+from lschart.model import Reading, Validity
 
 
 class HealthState(enum.Enum):
@@ -53,7 +53,7 @@ class SensorGuardConfig:
     So a single slew number cannot separate them: 1.25 K/s rejects real
     cooldowns, and anything loose enough to pass those also passes much of the
     glitch.  The split is now two-tier, with cross-channel corroboration
-    (:mod:`lschart.control.coherence`) deciding which tier applies.
+    (:mod:`ltspm.control.coherence`) deciding which tier applies.
     """
 
     valid_min_k: float = 1.0

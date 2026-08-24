@@ -25,7 +25,7 @@ cryostat noticed*.
 
 This module answers exactly that question and nothing else.  It reports how
 far each channel has departed from its own short-term prediction, in units of
-that channel's own robust noise; :class:`~lschart.control.health.SensorGuard`
+that channel's own robust noise; :class:`~ltspm.control.health.SensorGuard`
 decides what to do about it.
 """
 
@@ -34,7 +34,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 
-from ..model import Reading
+from lschart.model import Reading
 from .filters import MeasurementFilter
 
 

@@ -2,8 +2,8 @@
 
 import pytest
 
-from lschart.control import HealthState, LoopMode, SupervisorConfig, SupervisorState, PIDConfig
-from lschart.control.health import SensorGuardConfig
+from ltspm.control import HealthState, LoopMode, SupervisorConfig, SupervisorState, PIDConfig
+from ltspm.control.health import SensorGuardConfig
 
 
 def armed(harness, **kw):

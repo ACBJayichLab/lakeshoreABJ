@@ -19,6 +19,11 @@ from .app import Application
 
 log = logging.getLogger("lschart")
 
+#: How to build the Application.  `ltspm.__main__` swaps this for its own
+#: builder, which adds the heater loop and the calibrated plant.  Everything
+#: else in this module is shared, so the two CLIs cannot drift apart.
+BUILDER = Application
+
 
 def _setup_logging(level: str) -> None:
     logging.basicConfig(
@@ -35,16 +40,21 @@ def cmd_run(args) -> int:
         cfg.validate()
     _setup_logging(args.log_level or cfg.log_level)
 
-    app = Application(cfg)
+    app = BUILDER(cfg)
+    # Whether a controller exists is the builder's answer, not the config's:
+    # a recorder-only install has no `control:` section to consult.
+    controlled = app.supervisor is not None
     mode = "hardware" if cfg.uses_hardware else "SIMULATION"
     log.warning(
         "starting in %s; control %s; %.3f s cadence",
         mode,
-        "ENABLED" if cfg.control.enabled else "disabled",
+        "ENABLED" if controlled else "disabled",
         cfg.acquisition.interval_s,
     )
-    if cfg.control.enabled and not args.arm:
+    if controlled and not args.arm:
         log.warning("control is configured but NOT armed; pass --arm to close the loop")
+    if args.arm and not controlled:
+        log.error("--arm was given but no controller is configured; recording only")
 
     stopping = False
 
@@ -60,7 +70,7 @@ def cmd_run(args) -> int:
 
     app.start()
     try:
-        if cfg.control.enabled and args.arm:
+        if controlled and args.arm:
             _arm_when_ready(app, args.setpoint, cfg.acquisition.interval_s)
         while not stopping:
             time.sleep(0.25)
@@ -93,14 +103,16 @@ def cmd_check(args) -> int:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 1
     print(f"config: {cfg.source_path or '<defaults>'}")
+    control = cfg.section("control")
+    enabled = bool(getattr(control, "enabled", False))
     print(f"  backend        : {'visa (HARDWARE)' if cfg.uses_hardware else 'sim'}")
-    print(f"  control        : {'enabled' if cfg.control.enabled else 'disabled'}")
+    print(f"  control        : {'enabled' if enabled else 'disabled'}")
     print(f"  control channel: {cfg.control_channel}")
     print(f"  cadence        : {cfg.acquisition.interval_s} s")
     print(f"  budget         : {cfg.estimated_transactions()} transactions "
           f"~ {cfg.estimated_cycle_s():.2f} s per cycle")
-    if cfg.control.enabled:
-        s = cfg.control.supervisor
+    if enabled:
+        s = control.supervisor
         lo = max(s.hard_min_pct, s.operating_point_pct - s.authority_pct)
         hi = min(s.hard_max_pct, s.operating_point_pct + s.authority_pct)
         print(f"  authority band : {lo:.3f}% .. {hi:.3f}%  (on_exit={s.on_exit})")
@@ -122,8 +134,8 @@ def cmd_init(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="lschart", description=__doc__.splitlines()[0])
+def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
+    ap = argparse.ArgumentParser(prog=prog, description=__doc__.splitlines()[0])
     ap.add_argument("-c", "--config", default=None, help="path to config.yaml")
     ap.add_argument("--log-level", default=None)
     sub = ap.add_subparsers(dest="command")

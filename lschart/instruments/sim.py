@@ -1,22 +1,22 @@
-"""In-process fakes for the 218 and 336, plus the thermal model behind them.
+"""In-process fakes for the Lake Shore boxes, plus a plain default plant.
 
 There is no hardware on the bench, so this is the primary development target.
-The model is *not* an attempt at cryostat physics; it is tuned to reproduce the
-four things the control software actually has to cope with, all measured from
-``reference/logs/cd10_7_2026_sample_cold.xls``:
+The fakes answer the subset of each command set the real drivers use, and they
+are deliberately *rig-agnostic*: what makes a simulated cryostat behave like
+one particular cryostat is the plant object handed to :class:`SimulatedRig`.
 
-1. a steeply nonlinear steady state.  The output is a voltage into a fixed
-   50 ohm heater, so ``P ~ pct**2`` exactly; the rest is thermal, measured as
-   ``dT ~ P**3.16`` over 24 settled heater steps.  Together that is a lumped
-   ``pct**6.32`` and a local gain near 9.5 K/% at 63%;
-2. two very different time constants -- the one clean step response in the logs
-   gives ~620 s at 137 K, against the ~360 s previously assumed;
-3. temperature-dependent sensor noise -- quadratic in T: ~1.8 mK at 18 K,
-   ~14 mK at 96 K, ~110 mK at 290 K;
-4. 1 mK reporting quantisation.
+A plant is anything with this shape::
 
-Faults never seen in the real logs (dropouts to 0 K, RDGST errors, comms
-timeouts) can be injected explicitly -- see :meth:`SimulatedRig.inject`.
+    plant.pct          float, written by the fake when the heater is commanded
+    plant.temperature  float, the true temperature right now
+    plant.advance(dt)  integrate dt seconds forward
+    plant.observe(rng) the temperature as the *sensor* would report it
+
+:class:`FirstOrderPlant` is the default and is intentionally boring -- one pole
+onto a linear steady state.  The calibrated LTSPM3 model lives in
+:mod:`ltspm.sim_plant`, which builds a rig around this same class.
+
+Faults are injected explicitly -- see :meth:`SimulatedRig.inject`.
 """
 
 from __future__ import annotations
@@ -26,110 +26,53 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from ..plant import MEASURED_CURVE, SteadyStateCurve
 from ..transport import TransportError
 
 
 @dataclass
-class PlantParams:
-    """Calibrated against the 2026-07 cooldown; see module docstring."""
+class SimplePlantParams:
+    """A single-pole plant with a linear steady state.
+
+    Enough to exercise the recorder, the fakes and the IPC layer on any rig.
+    It is not calibrated to anything, and it is not meant to be: a controller
+    tuned against this has learned nothing about a real cryostat.
+    """
 
     t_bath: float = 4.0
-    #: The analog output is a VOLTAGE into a stable 50 ohm heater, so power goes
-    #: as pct**2 exactly.  The remaining nonlinearity is thermal -- changing
-    #: heat capacity and conductance -- and is carried by ``thermal_exponent``:
-    #:
-    #:     P  ~ pct**2                          (exact, temperature-independent)
-    #:     dT ~ P**thermal_exponent             (measured 3.16 over 116-171 K)
-    #:
-    #: so a T-vs-percent plot shows a lumped exponent of 2*3.158 = 6.32, fitted
-    #: over 24 settled heater steps in cd10 monitor4/5 with R^2 = 0.9962.  The
-    #: previous value of 5.0 came from two points and was too shallow.
-    thermal_exponent: float = 3.158
-    ref_pct: float = 63.076        # the operating point the rig actually sat at
-    ref_rise: float = 95.6         # T_ss - T_bath there: 99.60 K absolute
-    #: Measured steady-state points, shared with the feedforward via
-    #: lschart.plant so the two cannot silently disagree.  Set to () to fall
-    #: back to the pure power law -- which is how model mismatch between the
-    #: plant and the controller's idea of it gets injected in tests.
-    calibration: tuple = MEASURED_CURVE
-    tau_fast: float = 620.0        # s   measured from the one clean step
-                                   #     response in the logs (65.9% -> 137.3 K)
-    tau_slow: float = 14400.0      # s   (~4 h)
-    fast_fraction: float = 0.90    # of the step lands on the fast pole
-    #: Sensor noise, measured by 3-point local detrending over cd9+cd10:
-    #:
-    #:     18 K   1.8 mK        190 K   45 mK
-    #:     96 K  13.6 mK        240 K   73 mK
-    #:                          290 K  109 mK
-    #:
-    #: That is *quadratic* in T, not linear -- the previous linear model was
-    #: calibrated at 96 K and underestimated 290 K noise by about 4x.  It
-    #: matters for the sweep requirement: at room temperature the measurement
-    #: floor is ~110 mK, so millikelvin stability is unreachable up there
-    #: however good the control is.
-    noise_floor_k: float = 0.0018  # rms at low T
-    noise_quadratic: float = 1.36e-6   # rms = this * T**2
-    quantum_k: float = 0.001       # reported resolution
-
-    @property
-    def exponent(self) -> float:
-        """Lumped exponent of dT vs percent: twice the thermal exponent."""
-        return 2.0 * self.thermal_exponent
-
-    @property
-    def coeff(self) -> float:
-        return self.ref_rise / (self.ref_pct**self.exponent)
-
-    @property
-    def curve(self) -> SteadyStateCurve:
-        return SteadyStateCurve(
-            self.calibration, t_bath_k=self.t_bath,
-            thermal_exponent=self.thermal_exponent,
-            ref_pct=self.ref_pct, ref_rise_k=self.ref_rise,
-        )
-
-    def relative_power(self, pct: float) -> float:
-        """Power as a fraction of power at ref_pct.  Exact: V**2 / R."""
-        return (max(pct, 0.0) / self.ref_pct) ** 2
-
-    def steady_state(self, pct: float) -> float:
-        return self.curve.kelvin_for(pct)
-
-    def local_gain(self, pct: float) -> float:
-        """dT/d(pct) in K/% -- the number that makes this rig hard to control."""
-        return self.curve.gain_at(pct)
+    gain_k_per_pct: float = 1.5     # steady-state K per output percent
+    tau_s: float = 300.0
+    noise_k: float = 0.002
+    quantum_k: float = 0.001        # reported resolution
 
 
-class ThermalModel:
-    """Two-pole lag onto a nonlinear steady state, integrated with exact
-    exponential updates so the step size never affects stability."""
+class FirstOrderPlant:
+    """``T -> t_bath + gain*pct`` through one pole, integrated exactly.
 
-    def __init__(self, params: PlantParams | None = None, *, start_k: float | None = None):
-        self.p = params or PlantParams()
-        start = self.p.t_bath if start_k is None else start_k
-        self._fast = start - self.p.t_bath
-        self._slow = start - self.p.t_bath
+    Exact exponential updates rather than Euler, so the step size never affects
+    stability -- the tests drive this with a virtual clock at wildly varying dt.
+    """
+
+    def __init__(self, params: SimplePlantParams | None = None, *,
+                 start_k: float | None = None) -> None:
+        self.p = params or SimplePlantParams()
+        self._rise = (self.p.t_bath if start_k is None else start_k) - self.p.t_bath
         self.pct = 0.0
 
     @property
     def temperature(self) -> float:
-        p = self.p
-        return p.t_bath + p.fast_fraction * self._fast + (1 - p.fast_fraction) * self._slow
+        return self.p.t_bath + self._rise
+
+    def steady_state(self, pct: float) -> float:
+        return self.p.t_bath + self.p.gain_k_per_pct * max(pct, 0.0)
 
     def advance(self, dt: float) -> None:
         if dt <= 0:
             return
-        target = self.p.steady_state(self.pct) - self.p.t_bath
-        a_f = 1.0 - math.exp(-dt / self.p.tau_fast)
-        a_s = 1.0 - math.exp(-dt / self.p.tau_slow)
-        self._fast += a_f * (target - self._fast)
-        self._slow += a_s * (target - self._slow)
+        target = self.steady_state(self.pct) - self.p.t_bath
+        self._rise += (1.0 - math.exp(-dt / self.p.tau_s)) * (target - self._rise)
 
     def observe(self, rng: random.Random) -> float:
-        t = self.temperature
-        sigma = max(self.p.noise_floor_k, self.p.noise_quadratic * t * t)
-        noisy = t + rng.gauss(0.0, sigma)
+        noisy = self.temperature + rng.gauss(0.0, self.p.noise_k)
         q = self.p.quantum_k
         return round(noisy / q) * q if q > 0 else noisy
 
@@ -170,38 +113,41 @@ class FaultInjection:
 class SimulatedRig:
     """Holds the shared clock, the plant and the fault state for both fakes."""
 
+    #: Resting values for the ancillary channels, so a chart has something to
+    #: show.  Plausible rather than calibrated -- they are scenery.
+    DEFAULT_AUX_BASE = {
+        "218.2": 8.06, "218.3": 6.72,
+        "336.A": 38.2, "336.B": 290.6, "336.C": 28.56, "336.D": 3.95,
+    }
+
     def __init__(
         self,
-        params: PlantParams | None = None,
+        plant=None,
         *,
         seed: int = 0xC01D,
         start_k: float = 96.0,
         time_source=time.monotonic,
         speedup: float = 1.0,
+        aux_base: dict[str, float] | None = None,
+        aux_coupling: dict[str, float] | None = None,
     ) -> None:
-        self.plant = ThermalModel(params, start_k=start_k)
+        # A rig with no plant gets the boring one.  Anything rig-specific --
+        # the LTSPM3 two-pole model, say -- is injected, so this module never
+        # has to know which cryostat it is pretending to be.
+        self.plant = plant if plant is not None else FirstOrderPlant(start_k=start_k)
         self.rng = random.Random(seed)
         self.faults = FaultInjection()
         self.speedup = speedup
         self._time = time_source
         self._t0 = self._time()
         self._last = self._t0
-        # Ancillary channels drift gently so the chart has something to show.
-        self._aux_base = {
-            "218.2": 8.06, "218.3": 6.72,
-            "336.A": 38.2, "336.B": 290.6, "336.C": 28.56, "336.D": 3.95,
-        }
-        #: How strongly each ancillary channel follows the sample, in K per K.
-        #: Measured from cd8_..._sample_monitor7.xls, where the sample fell
-        #: 22.4 K and input 2 fell 0.183 K (0.008) while input 3 fell 0.051 K
-        #: (0.002).  Small, but hundreds of times those channels' own noise --
-        #: which is exactly what makes a real transient distinguishable from a
-        #: one-channel glitch.  Without this coupling the simulator can never
-        #: corroborate anything and the coherence logic is untestable.
-        self._aux_coupling = {
-            "218.2": 0.0082, "218.3": 0.0023,
-            "336.A": 0.0040, "336.B": 0.0002, "336.C": 0.0015, "336.D": 0.0008,
-        }
+        self._aux_base = dict(aux_base) if aux_base else dict(self.DEFAULT_AUX_BASE)
+        #: How strongly each ancillary channel follows the control channel, in
+        #: K per K.  Empty by default: on an unknown rig we have no business
+        #: inventing a correlation, and cross-channel corroboration should see
+        #: nothing rather than something fictitious.  The LTSPM3 numbers,
+        #: measured from the reference logs, are in :mod:`ltspm.sim_plant`.
+        self._aux_coupling = dict(aux_coupling) if aux_coupling else {}
         self._plant_ref_k = self.plant.temperature
         self._stuck_values: dict[str, float] = {}
 

@@ -14,7 +14,6 @@ from .acquisition.poller import Poller
 from .acquisition.recorder import Recorder
 from .acquisition.ringbuffer import RingBuffer
 from .config import AppConfig, LS218Config, LS336Config, TransportConfig
-from .control.supervisor import HeaterSupervisor, LoopMode
 from .instruments.ls218 import AnalogOutputConfig, LS218
 from .instruments.ls336 import LS336
 from .transport import LoopbackTransport, Transport
@@ -57,14 +56,32 @@ def build_transport(cfg: TransportConfig, *, device=None) -> Transport:
 class Application:
     """Everything wired together, with a lifecycle."""
 
-    def __init__(self, cfg: AppConfig) -> None:
+    def __init__(self, cfg: AppConfig, *, controller_factory=None,
+                 plant_factory=None) -> None:
+        """``controller_factory`` and ``plant_factory`` are the extension seams.
+
+        The recorder knows nothing about software control loops or about any
+        particular cryostat's thermal model, so both are injected:
+
+        ``controller_factory(app) -> controller | None``
+            Anything with ``step(t, reading, readings) -> status`` and
+            ``shutdown()``.  The poller steps it once per frame and already
+            isolates it -- an exception there is logged and logging continues.
+        ``plant_factory(cfg.sim) -> plant``
+            The simulated plant; see :mod:`lschart.instruments.sim`.  Defaults
+            to the plain one-pole model.
+
+        :mod:`ltspm.app` passes both.
+        """
         cfg.validate()
         self.cfg = cfg
+        self._controller_factory = controller_factory
+        self._plant_factory = plant_factory
         self.rig = None                 # SimulatedRig, when simulating
         self.instruments: list = []
         self.ls218: LS218 | None = None
         self.ls336: LS336 | None = None
-        self.supervisor: HeaterSupervisor | None = None
+        self.supervisor = None          # set by controller_factory, if any
         self.recorder: Recorder | None = None
         self.ring = RingBuffer(cfg.acquisition.ringbuffer_size)
         self.poller: Poller | None = None
@@ -77,7 +94,12 @@ class Application:
         from .instruments.sim import Sim218, Sim336, SimulatedRig
 
         if self.rig is None:
+            plant = (
+                self._plant_factory(self.cfg.sim)
+                if self._plant_factory is not None else None
+            )
             self.rig = SimulatedRig(
+                plant,
                 start_k=self.cfg.sim.start_k,
                 seed=self.cfg.sim.seed,
                 speedup=self.cfg.sim.speedup,
@@ -149,30 +171,17 @@ class Application:
                 flush_every_sample=cfg.recorder.flush_every_sample,
             )
 
-        if cfg.control.enabled and cfg.sim.speedup != 1.0 and not cfg.uses_hardware:
-            log.warning(
-                "sim.speedup=%.1f accelerates the plant but NOT the controller, "
-                "which still integrates in real time -- closed-loop behaviour in "
-                "this run does not represent the rig.  Use the virtual-clock "
-                "harness in tests/ for accelerated closed-loop work.",
-                cfg.sim.speedup,
-            )
-        if cfg.control.enabled:
-            if self.ls218 is None:
-                raise ValueError("control.enabled requires ls218.enabled -- the "
-                                 "sample heater is the 218's analog output")
-            self.supervisor = HeaterSupervisor(
-                self.ls218,
-                channel=cfg.control_channel,
-                config=cfg.control.supervisor,
-                pid_config=cfg.control.pid,
-                guard_config=cfg.control.guard,
-                coherence_config=cfg.control.coherence,
-                ramp_config=cfg.control.ramp,
-                tuning_config=cfg.control.tuning,
-                feedforward_config=cfg.control.feedforward,
-                filter_kwargs=dict(cfg.control.filter),
-            )
+        if self._controller_factory is not None:
+            self.supervisor = self._controller_factory(self)
+            if self.supervisor is not None and cfg.sim.speedup != 1.0 \
+                    and not cfg.uses_hardware:
+                log.warning(
+                    "sim.speedup=%.1f accelerates the plant but NOT the controller, "
+                    "which still integrates in real time -- closed-loop behaviour in "
+                    "this run does not represent the rig.  Use the virtual-clock "
+                    "harness in tests/ for accelerated closed-loop work.",
+                    cfg.sim.speedup,
+                )
 
         self.poller = Poller(
             self.instruments,
@@ -209,10 +218,10 @@ class Application:
         that is bumpless: adopting a stale configured setpoint instead asks the
         loop to move somewhere the heater is not currently set for, which the
         premise check correctly reads as a broken premise and refuses.
-        Deliberate moves are sweeps -- see HeaterSupervisor.sweep_to.
+        Deliberate moves are sweeps -- see the controller's own ``sweep_to``.
         """
         if self.supervisor is None:
-            raise RuntimeError("control is not enabled in this configuration")
+            raise RuntimeError("no controller is configured -- this is a recorder")
         if setpoint_k is None:
             here = self.current_temperature()
             if here is None:
@@ -222,8 +231,7 @@ class Application:
                 )
             setpoint_k = here
             log.warning("arming to hold the present temperature, %.4f K", setpoint_k)
-        self.supervisor.set_setpoint(setpoint_k, ramp=False)
-        self.supervisor.set_mode(LoopMode.PID)
+        self.supervisor.arm(setpoint_k)
 
     def current_temperature(self) -> float | None:
         """Latest usable reading on the control channel, or None."""

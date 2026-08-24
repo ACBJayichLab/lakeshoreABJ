@@ -7,11 +7,17 @@ dependencies = [
     "numpy>=1.26",
     "pyyaml>=6.0",
     "pyvisa>=1.14",
-    "pyqtgraph>=0.13",
-    "PySide6>=6.6",
 ]
 
+# The recorder process must be able to run without Qt.  It is the thing that
+# has to stay up for months, and every dependency it does not have is a
+# dependency that cannot break it -- so the viewer, which is a *separate*
+# process reading status.json and the CSV, carries its own.
 [project.optional-dependencies]
+# Lake Shore's own driver: USB/serial and TCP, no VISA runtime needed.  This is
+# the supported path for a 335 on a COM port; the pyvisa path stays for GPIB.
+serial = ["lakeshore>=1.10"]
+gui = ["pyqtgraph>=0.13", "PySide6>=6.6"]
 dev = ["pytest>=8.0", "xlrd>=2.0"]
 
 [project.scripts]
@@ -21,5 +27,11 @@ lschart = "lschart.__main__:main"
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+# Explicit, because auto-discovery cannot cope with `reference/` and `data/`
+# sitting alongside the packages -- and because the split adds `ltspm`, which
+# must be picked up without anything else changing here.
+[tool.setuptools.packages.find]
+include = ["lschart*", "ltspm*"]
+
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "tests_ltspm"]
