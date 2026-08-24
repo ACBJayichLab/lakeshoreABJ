@@ -324,6 +324,13 @@ class LakeshoreTransport(Transport):
     #: Model name -> the vendor driver class that speaks to it.
     MODELS = {"335": "Model335", "336": "Model336", "224": "Model224", "240": "Model240"}
 
+    #: The vendor driver logs *every* transaction at INFO -- two lines per
+    #: query.  Measured on the bench 336: 1,114 lines in 60 s at 1 Hz, which is
+    #: ~1.6 M lines a day, and this recorder is meant to run for months.  So it
+    #: is quietened to WARNING unless someone has deliberately asked for DEBUG,
+    #: where per-transaction traffic is exactly what you want to see.
+    VENDOR_LOGGER = "lakeshore"
+
     def __init__(
         self,
         model: str,
@@ -355,16 +362,48 @@ class LakeshoreTransport(Transport):
         else:
             self._kwargs["com_port"] = com_port
             self._kwargs["serial_number"] = serial_number
+            # NOT unconditional: the vendor classes disagree about this.
+            # Model335.__init__ takes baud_rate as its first REQUIRED
+            # positional argument; Model336.__init__ does not accept it at all
+            # (the 336's USB rate is fixed internally) and passing it lands in
+            # **kwargs, reaching the parent as a duplicate -- "got multiple
+            # values for argument 'baud_rate'".  So the signature decides.
             self._kwargs["baud_rate"] = baud_rate
         self._inst = None
+        self._quieten_vendor_logging()
+
+    @classmethod
+    def _quieten_vendor_logging(cls) -> None:
+        vendor = logging.getLogger(cls.VENDOR_LOGGER)
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            return
+        if vendor.level in (logging.NOTSET, logging.INFO):
+            vendor.setLevel(logging.WARNING)
 
     def __str__(self) -> str:
         return f"Model{self.model} at {self.descriptor}"
 
     def _connect(self) -> None:
+        import inspect
+
         import lakeshore
 
-        self._inst = getattr(lakeshore, self._cls_name)(**self._kwargs)
+        cls = getattr(lakeshore, self._cls_name)
+        # Keep only what this model's constructor actually names.  Every class
+        # also declares **kwargs, so an unknown argument would not be rejected
+        # here -- it would be forwarded to the parent and collide there, with a
+        # message that names the argument but not the reason.
+        accepted = {
+            name for name, param in inspect.signature(cls.__init__).parameters.items()
+            if param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+            and name != "self"
+        }
+        kwargs = {k: v for k, v in self._kwargs.items() if k in accepted}
+        dropped = sorted(set(self._kwargs) - set(kwargs))
+        if dropped:
+            log.debug("%s: %s does not accept %s; not passing it",
+                      self, self._cls_name, ", ".join(dropped))
+        self._inst = cls(**kwargs)
         log.info("opened %s via the lakeshore driver", self)
 
     def _disconnect(self) -> None:

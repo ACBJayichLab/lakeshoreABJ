@@ -57,7 +57,14 @@ instruments:
       C: Rad Shield
       D: Stage 1
 
-    read_status: true         # RDGST? per input -- worth it at 1 Hz on one box
+    # MEASURED on this box over USB (2026-08-24, 120 s at 1 Hz):
+    # a 9-transaction cycle fits inside 1 s comfortably; the 13-transaction
+    # cycle that adds the four RDGST? queries does not -- it takes ~1.25 s.
+    # With status_every_n_cycles: 15 that is 7 slow cycles in 119, and NONE
+    # were dropped: the poller schedules from a fixed deadline, so a long
+    # cycle is followed by a short one and the median stays exactly 1.000 s.
+    # Raise this number, or set read_status: false, if you want the margin.
+    read_status: true
     status_every_n_cycles: 15
     read_setpoints: true      # SETP? 1-4
     read_heaters: true        # HTR? and RANGE? on outputs 1 and 2
