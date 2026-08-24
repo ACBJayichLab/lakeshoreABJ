@@ -120,6 +120,79 @@ def cmd_check(args) -> int:
     return 0
 
 
+def _one_controller(app, want: str | None):
+    """Pick the instrument a `set`/`status` command is about.
+
+    With one controller configured there is nothing to choose, so choosing is
+    not demanded.  With several, guessing would be the wrong kind of helpful.
+    """
+    from .instruments.ls33x import LS33x
+
+    boxes = {n: i for n, i in app.by_name.items() if isinstance(i, LS33x)}
+    if not boxes:
+        raise SystemExit("no 33x controller is configured; nothing to set")
+    if want:
+        if want not in boxes:
+            raise SystemExit(
+                f"no instrument named {want!r}; configured: {sorted(boxes)}"
+            )
+        return boxes[want]
+    if len(boxes) > 1:
+        raise SystemExit(
+            f"several controllers are configured ({sorted(boxes)}); "
+            "say which with --instrument"
+        )
+    return next(iter(boxes.values()))
+
+
+def cmd_set(args) -> int:
+    """Change what an instrument's own PID loop is doing, then read it back.
+
+    Deliberately a *separate*, one-shot command rather than a flag on `run`:
+    setting a setpoint is an operator action with a consequence, and it should
+    not be something that happens as a side effect of starting a recorder.
+    """
+    cfg = config_mod.load(args.config)
+    _setup_logging(args.log_level or cfg.log_level)
+    app = BUILDER(cfg)
+    inst = _one_controller(app, args.instrument)
+    try:
+        inst.verify_model()
+        if args.setpoint is not None:
+            inst.set_setpoint(args.loop, args.setpoint)
+        if args.ramp is not None:
+            inst.set_ramp(args.loop, args.ramp, enable=args.ramp > 0)
+        if args.pid is not None:
+            inst.set_pid(args.loop, *args.pid)
+        # Range last: it is the command that actually applies power, so
+        # everything else is already in place by the time it lands.
+        if args.range is not None:
+            inst.set_heater_range(args.heater, args.range)
+
+        print(f"{inst.name} (model {inst.model})")
+        print(f"  loop {args.loop} setpoint : {inst.setpoint(args.loop):.4f} K")
+        on, rate = inst.ramp(args.loop)
+        print(f"  loop {args.loop} ramp     : "
+              f"{'on, %.3f K/min' % rate if on else 'off'}")
+        p_, i_, d_ = inst.pid(args.loop)
+        print(f"  loop {args.loop} PID      : P={p_:.1f} I={i_:.1f} D={d_:.1f}")
+        for out in inst.caps.heater_outputs:
+            from .instruments.ls33x import HEATER_RANGE_NAMES
+            r = inst.heater_range(out)
+            print(f"  heater {out}          : {inst.heater_output(out):.1f}% "
+                  f"of range {r} ({HEATER_RANGE_NAMES.get(r, r)})")
+    except PermissionError as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 1
+    except (ValueError, OSError) as exc:
+        print(f"FAILED: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        for i in app.instruments:
+            i.transport.close()
+    return 0
+
+
 def cmd_init(args) -> int:
     """Write a starter config file."""
     import os
@@ -150,6 +223,27 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
 
     chk = sub.add_parser("check", help="validate a config file and exit")
     chk.set_defaults(func=cmd_check)
+
+    st = sub.add_parser(
+        "set",
+        help="read or change an instrument's own PID loop (setpoint, range, gains)",
+        description="With no options, reports the loop's present state and "
+                    "changes nothing.",
+    )
+    st.add_argument("--instrument", default=None,
+                    help="which box, if more than one is configured")
+    st.add_argument("--loop", type=int, default=1, help="control loop (default 1)")
+    st.add_argument("--heater", type=int, default=1,
+                    help="heater output for --range (default 1)")
+    st.add_argument("--setpoint", type=float, default=None, help="kelvin")
+    st.add_argument("--range", type=int, default=None, choices=[0, 1, 2, 3],
+                    help="heater range: 0=off 1=low 2=medium 3=high. "
+                         "THIS IS WHAT APPLIES POWER")
+    st.add_argument("--ramp", type=float, default=None,
+                    help="instrument setpoint ramp in K/min; 0 turns ramping off")
+    st.add_argument("--pid", type=float, nargs=3, default=None,
+                    metavar=("P", "I", "D"), help="the loop's own gains")
+    st.set_defaults(func=cmd_set)
 
     ini = sub.add_parser("init", help="write a starter config.yaml")
     ini.add_argument("path", nargs="?", default=config_mod.DEFAULT_CONFIG_NAME)

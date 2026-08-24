@@ -68,7 +68,7 @@ def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) ->
 
     # The sample heater *is* the 218's analog output; there is nowhere else for
     # this loop to act.  Catching it here beats failing at wiring time.
-    if cfg.enabled and not app.ls218.enabled:
+    if cfg.enabled and app.ls218 is None:
         problems.append(
             "control.enabled requires ls218.enabled -- the sample heater is the "
             "218's analog output"

@@ -61,13 +61,13 @@ def test_an_unregistered_extension_section_is_unknown(tmp_path):
 
 def test_nested_sections_are_built(tmp_path):
     cfg = config_mod.load(write(tmp_path, """
-ls336:
-  read_heaters: false
 acquisition:
   interval_s: 2.0
   ringbuffer_size: 100
+recorder:
+  filename_prefix: run
 """))
-    assert cfg.ls336.read_heaters is False
+    assert cfg.recorder.filename_prefix == "run"
     assert cfg.acquisition.ringbuffer_size == 100
 
 
@@ -81,33 +81,41 @@ def test_round_trip_through_dump(tmp_path):
 
 # -- validation -------------------------------------------------------------
 
-def test_visa_backend_without_a_resource_is_rejected():
+def test_visa_driver_without_a_resource_is_rejected():
     cfg = AppConfig()
-    cfg.ls218.transport.backend = "visa"
-    cfg.ls218.transport.resource = ""
-    with pytest.raises(ConfigError, match="no resource"):
+    cfg.instruments[0].driver = "visa"
+    cfg.instruments[0].transport.resource = ""
+    with pytest.raises(ConfigError, match="no transport.resource"):
         cfg.validate()
 
 
-def test_unknown_backend_is_rejected():
+def test_unknown_driver_is_rejected():
     cfg = AppConfig()
-    cfg.ls218.transport.backend = "carrier-pigeon"
-    with pytest.raises(ConfigError, match="backend"):
+    cfg.instruments[0].driver = "carrier-pigeon"
+    with pytest.raises(ConfigError, match="driver"):
         cfg.validate()
 
 
 def test_control_input_not_in_channels_is_rejected():
     cfg = AppConfig()
-    cfg.ls218.control_input = 7
+    cfg.instruments[0].control_input = 7
     with pytest.raises(ConfigError, match="control_input"):
         cfg.validate()
 
 
-def test_a_cadence_the_bus_cannot_sustain_is_rejected():
-    """21 transactions at 50 ms pacing cannot happen twice a second."""
+def test_duplicate_instrument_names_are_rejected():
+    """Names label the log columns, so two boxes cannot share one."""
     cfg = AppConfig()
-    for inst in (cfg.ls218, cfg.ls336):
-        inst.transport.backend = "visa"
+    cfg.instruments[1].name = cfg.instruments[0].resolved_name()
+    with pytest.raises(ConfigError, match="both named"):
+        cfg.validate()
+
+
+def test_a_cadence_the_bus_cannot_sustain_is_rejected():
+    """A full status poll at 50 ms pacing cannot happen twice a second."""
+    cfg = AppConfig()
+    for inst in cfg.instruments:
+        inst.driver = "visa"
         inst.read_status = True
     cfg.acquisition.interval_s = 0.5
     with pytest.raises(ConfigError, match="poll cycle needs"):
@@ -117,7 +125,7 @@ def test_a_cadence_the_bus_cannot_sustain_is_rejected():
 def test_recommended_cadence_fits_the_budget():
     """1 Hz must be achievable on real hardware, or the default is a lie."""
     cfg = AppConfig()
-    for inst in (cfg.ls218, cfg.ls336):
-        inst.transport.backend = "visa"
+    for inst in cfg.instruments:
+        inst.driver = "visa"
     cfg.validate()
     assert cfg.estimated_cycle_s() < cfg.acquisition.interval_s

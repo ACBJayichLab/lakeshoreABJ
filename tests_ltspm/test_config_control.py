@@ -114,6 +114,8 @@ def test_corroboration_threshold_above_the_hard_slew_limit_is_rejected():
 def test_control_without_the_218_is_rejected():
     """The sample heater *is* the 218's analog output; there is nowhere else."""
     cfg = _with_control(enabled=True)
-    cfg.ls218.enabled = False
+    for inst in cfg.instruments:
+        if inst.model == "218":
+            inst.enabled = False
     with pytest.raises(ConfigError, match="requires ls218"):
         cfg.validate()

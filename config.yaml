@@ -5,11 +5,15 @@
 # a silently-dropped typo in a safety limit is exactly the failure this file is
 # meant to prevent.
 #
-#   .venv/bin/python -m lschart -c config.yaml check     validate, touch nothing
-#   .venv/bin/python -m lschart -c config.yaml run       record
-#   .venv/bin/python -m lschart -c config.yaml run --arm close the heater loop
+# This file carries a `control:` section, so it is an LTSPM config: run it with
+# `ltspm`, not with `lschart`.  Plain `lschart` will refuse it and say so --
+# a recorder-only install must not silently ignore a request to drive a heater.
 #
-# GOING LIVE is the two `backend:` lines below.  Nothing else changes, and no
+#   .venv/bin/python -m ltspm -c config.yaml check     validate, touch nothing
+#   .venv/bin/python -m ltspm -c config.yaml run       record
+#   .venv/bin/python -m ltspm -c config.yaml run --arm close the heater loop
+#
+# GOING LIVE is the two `driver:` lines below.  Nothing else changes, and no
 # code changes.  On Windows that also needs the NI-VISA runtime installed for
 # pyvisa to see GPIB0::.
 
@@ -17,35 +21,46 @@ log_level: INFO
 
 # ---------------------------------------------------------------- instruments
 
-ls218:
-  enabled: true
-  transport:
-    backend: sim            # <-- "visa" to talk to the real box
-    resource: GPIB0::15::INSTR
-    inter_command_delay: 0.05
-  channels:                 # {input number: display name}; only these are read
-    1: Sample
-    2: Cold Head
-    3: Shield
-  control_input: 1          # the sample -- this is what the PID controls
-  # Polling RDGST? for every input costs 8 transactions a cycle and is the
-  # single thing that makes a 1 s cadence impossible.  Poll it occasionally
-  # instead: a fault that matters shows up in the reading itself immediately.
-  read_status: false
-  status_every_n_cycles: 15
-  analog_output: 1          # the heater.  ANALOG 1, 0, 2, 1, 1,1,1,<percent>
+instruments:
+  # `driver:` is how bytes reach the box, and it is the ONLY line that changes
+  # between the bench and the cryostat:
+  #     sim        an in-process fake -- no hardware, no VISA, no serial port
+  #     visa       pyvisa: GPIB (needs the NI-VISA runtime on Windows)
+  #     lakeshore  Lake Shore's own driver: USB/serial and TCP, NO VISA needed
+  #
+  # GOING LIVE is changing `sim` to `visa` on both boxes below.  No code change.
 
-ls336:
-  enabled: true
-  transport:
-    backend: sim            # <-- "visa" to talk to the real box
-    resource: GPIB0::12::INSTR
-  channels: {}              # empty = ask the instrument (INNAME?)
-  read_setpoints: true
-  read_heaters: true
-  # Loop 2 independently holds THE CHONKE at ~290.6 K with heater 2 near 98%.
-  # This software records the 336 and stays out of its way.  Leave this false.
-  allow_writes: false
+  - name: ls218
+    model: "218"
+    enabled: true
+    driver: sim               # <-- "visa" to talk to the real box
+    transport:
+      resource: GPIB0::15::INSTR
+      inter_command_delay: 0.05
+    channels:                 # {input number: display name}; only these are read
+      1: Sample
+      2: Cold Head
+      3: Shield
+    control_input: 1          # the sample -- this is what the software PID controls
+    # Polling RDGST? for every input costs 8 transactions a cycle and is the
+    # single thing that makes a 1 s cadence impossible.  Poll it occasionally
+    # instead: a fault that matters shows up in the reading itself immediately.
+    read_status: false
+    status_every_n_cycles: 15
+    analog_output: 1          # the heater.  ANALOG 1, 0, 2, 1, 1,1,1,<percent>
+
+  - name: ls336
+    model: "336"
+    enabled: true
+    driver: sim               # <-- "visa" to talk to the real box
+    transport:
+      resource: GPIB0::12::INSTR
+    channels: {}              # empty = ask the instrument (INNAME?)
+    read_setpoints: true
+    read_heaters: true
+    # Loop 2 independently holds THE CHONKE at ~290.6 K with heater 2 near 98%.
+    # This software records the 336 and stays out of its way.  Leave this false.
+    allow_writes: false
 
 # ---------------------------------------------------------------- acquisition
 

@@ -13,44 +13,63 @@ import logging
 from .acquisition.poller import Poller
 from .acquisition.recorder import Recorder
 from .acquisition.ringbuffer import RingBuffer
-from .config import AppConfig, LS218Config, LS336Config, TransportConfig
+from .config import AppConfig, InstrumentConfig
 from .instruments.ls218 import AnalogOutputConfig, LS218
-from .instruments.ls336 import LS336
+from .instruments.ls33x import LS33x
 from .transport import LoopbackTransport, Transport
 
 log = logging.getLogger(__name__)
 
 
-def build_transport(cfg: TransportConfig, *, device=None) -> Transport:
-    """``sim`` needs a loopback onto a fake device; ``visa`` needs a resource.
+def build_transport(cfg: InstrumentConfig, *, device=None) -> Transport:
+    """One instrument's link, chosen by ``driver:``.
 
-    ``pyvisa`` is imported inside :class:`~lschart.transport.VisaTransport`, so
-    a sim deployment runs on a machine with no VISA runtime at all -- which is
-    every development machine here.
+    Neither ``pyvisa`` nor ``lakeshore`` is imported until the driver that
+    needs it is actually selected, so a sim deployment runs on a machine with
+    neither installed -- which is every development machine here, and matters
+    again for a coworker whose box is on a COM port and who therefore has no
+    reason to install a VISA runtime.
     """
-    if cfg.backend == "sim":
+    t = cfg.transport
+    if cfg.driver == "sim":
         if device is None:
-            raise ValueError("sim backend requires a simulated device")
+            raise ValueError(f"{cfg.resolved_name()}: sim driver needs a simulated device")
         # No pacing in simulation.  inter_command_delay exists to be kind to a
         # GPIB board; applying it to an in-process fake just makes every cycle
         # cost 9 x 50 ms for nothing, and makes the measured cadence disagree
         # with what AppConfig.estimated_cycle_s() predicts for a sim run.
         return LoopbackTransport(device, inter_command_delay=0.0)
-    if cfg.backend == "visa":
+
+    if cfg.driver == "visa":
         from .transport import VisaTransport
 
         return VisaTransport(
-            cfg.resource,
-            timeout_ms=cfg.timeout_ms,
-            read_termination=cfg.read_termination,
-            write_termination=cfg.write_termination,
-            inter_command_delay=cfg.inter_command_delay,
-            visa_library=cfg.visa_library,
-            baud_rate=cfg.baud_rate,
-            data_bits=cfg.data_bits,
-            parity=cfg.parity,
+            t.resource,
+            timeout_ms=t.timeout_ms,
+            read_termination=t.read_termination,
+            write_termination=t.write_termination,
+            inter_command_delay=t.inter_command_delay,
+            visa_library=t.visa_library,
+            baud_rate=t.baud_rate,
+            data_bits=t.data_bits,
+            parity=t.parity,
         )
-    raise ValueError(f"unknown transport backend {cfg.backend!r}")
+
+    if cfg.driver == "lakeshore":
+        from .transport import LakeshoreTransport
+
+        return LakeshoreTransport(
+            cfg.model,
+            com_port=t.com_port or None,
+            serial_number=t.serial_number or None,
+            ip_address=t.ip_address or None,
+            baud_rate=t.baud_rate or 57600,
+            timeout_ms=t.timeout_ms,
+            inter_command_delay=t.inter_command_delay,
+            tcp_port=t.tcp_port,
+        )
+
+    raise ValueError(f"{cfg.resolved_name()}: unknown driver {cfg.driver!r}")
 
 
 class Application:
@@ -79,8 +98,10 @@ class Application:
         self._plant_factory = plant_factory
         self.rig = None                 # SimulatedRig, when simulating
         self.instruments: list = []
-        self.ls218: LS218 | None = None
-        self.ls336: LS336 | None = None
+        #: By config name, so a controller or a tool can find one box among
+        #: several without caring what order they were declared in.
+        self.by_name: dict = {}
+        self.ls218: LS218 | None = None     # the first 218, if any
         self.supervisor = None          # set by controller_factory, if any
         self.recorder: Recorder | None = None
         self.ring = RingBuffer(cfg.acquisition.ringbuffer_size)
@@ -89,9 +110,13 @@ class Application:
 
     # -- construction ------------------------------------------------------
 
-    def _simulated_devices(self):
-        """One shared plant behind both fakes, so their channels agree."""
-        from .instruments.sim import Sim218, Sim336, SimulatedRig
+    def _sim_device(self, cfg: InstrumentConfig):
+        """A fake for one instrument, all sharing one plant and one clock.
+
+        The shared rig is what makes the fakes' channels agree with each other,
+        which is what makes cross-channel corroboration testable at all.
+        """
+        from .instruments.sim import Sim218, Sim33x, SimulatedRig
 
         if self.rig is None:
             plant = (
@@ -104,72 +129,82 @@ class Application:
                 seed=self.cfg.sim.seed,
                 speedup=self.cfg.sim.speedup,
             )
-            self._sim218 = Sim218(self.rig)
-            self._sim336 = Sim336(self.rig)
-            self.rig.plant.pct = self._sim218.analog_pct
-        return self._sim218, self._sim336
+        if cfg.model == "218":
+            dev = Sim218(self.rig)
+            # The plant starts wherever the fake's analog output already is,
+            # so an unarmed run does not begin with a phantom step.
+            self.rig.plant.pct = dev.analog_pct
+            return dev
+        return Sim33x(self.rig, model=cfg.model)
 
-    def _build_218(self, c: LS218Config) -> LS218:
-        device = self._simulated_devices()[0] if c.transport.backend == "sim" else None
-        return LS218(
-            build_transport(c.transport, device=device),
-            name=c.name,
-            channels=dict(c.channels),
-            read_status=c.read_status,
-            analog=AnalogOutputConfig(
-                output=c.analog_output, decimals=c.analog_decimals
-            ),
-        )
-
-    def _build_336(self, c: LS336Config) -> LS336:
-        device = self._simulated_devices()[1] if c.transport.backend == "sim" else None
-        return LS336(
-            build_transport(c.transport, device=device),
-            name=c.name,
+    def _build_instrument(self, c: InstrumentConfig):
+        device = self._sim_device(c) if c.driver == "sim" else None
+        transport = build_transport(c, device=device)
+        if c.model == "218":
+            return LS218(
+                transport,
+                name=c.resolved_name(),
+                channels=dict(c.channels),
+                read_status=c.read_status,
+                analog=AnalogOutputConfig(
+                    output=c.analog_output, decimals=c.analog_decimals
+                ),
+            )
+        return LS33x(
+            transport,
+            model=c.model,
+            name=c.resolved_name(),
             channels=dict(c.channels) or None,
             read_status=c.read_status,
             read_setpoints=c.read_setpoints,
             read_heaters=c.read_heaters,
             read_analog_outputs=c.read_analog_outputs,
             allow_writes=c.allow_writes,
+            max_setpoint_k=c.max_setpoint_k,
         )
+
+    def _channel_columns(self) -> list[str]:
+        """Every logged temperature channel, in declaration order.
+
+        Taken from configuration, not from a frame: the CSV header is written
+        before the first read, and a channel that is merely slow to answer must
+        not silently lose its column for the rest of the run.
+        """
+        cols: list[str] = []
+        for c in self.cfg.enabled_instruments:
+            for label in c.channels.values():
+                if label not in cols:
+                    cols.append(label)
+        return cols
 
     def _aux_columns(self) -> list[str]:
         """Auxiliary scalars worth a column, in a stable order.
 
-        The legacy logs carried the 336's setpoints and heaters alongside the
-        temperatures and analysis scripts expect them, so keep them.
+        Asked of each instrument rather than assumed, so adding a second 335
+        adds its columns without anything here changing.  `heater_pct` leads
+        because the legacy logs put the commanded output first and analysis
+        scripts expect it.
         """
-        cols = ["heater_pct"]
-        c = self.cfg
-        if c.ls218.enabled:
-            cols.append(f"{c.ls218.name}.aout{c.ls218.analog_output}")
-        if c.ls336.enabled:
-            if c.ls336.read_setpoints:
-                cols += [f"{c.ls336.name}.setpoint{i}" for i in (1, 2, 3, 4)]
-            if c.ls336.read_heaters:
-                cols += [f"{c.ls336.name}.heater{i}" for i in (1, 2)]
-            if c.ls336.read_analog_outputs:
-                cols += [f"{c.ls336.name}.aout{i}" for i in (3, 4)]
+        # `heater_pct` is what a *software* loop commanded.  On a rig whose
+        # box runs its own PID there is no such number, and an always-empty
+        # column in a months-long CSV is just a question every reader has to
+        # ask once.
+        cols = ["heater_pct"] if self.supervisor is not None else []
+        for inst, c in zip(self.instruments, self.cfg.enabled_instruments):
+            if c.model == "218":
+                cols.append(f"{inst.name}.aout{c.analog_output}")
+            else:
+                cols += inst.aux_keys()
         return cols
 
     def _build(self) -> None:
         cfg = self.cfg
-        if cfg.ls218.enabled:
-            self.ls218 = self._build_218(cfg.ls218)
-            self.instruments.append(self.ls218)
-        if cfg.ls336.enabled:
-            self.ls336 = self._build_336(cfg.ls336)
-            self.instruments.append(self.ls336)
-
-        if cfg.recorder.enabled:
-            self.recorder = Recorder(
-                cfg.recorder.directory,
-                prefix=cfg.recorder.filename_prefix,
-                channels=list(cfg.ls218.channels.values()) if cfg.ls218.enabled else [],
-                aux_keys=self._aux_columns(),
-                flush_every_sample=cfg.recorder.flush_every_sample,
-            )
+        for c in cfg.enabled_instruments:
+            inst = self._build_instrument(c)
+            self.instruments.append(inst)
+            self.by_name[inst.name] = inst
+            if c.model == "218" and self.ls218 is None:
+                self.ls218 = inst
 
         if self._controller_factory is not None:
             self.supervisor = self._controller_factory(self)
@@ -183,15 +218,30 @@ class Application:
                     cfg.sim.speedup,
                 )
 
+        if cfg.recorder.enabled:
+            self.recorder = Recorder(
+                cfg.recorder.directory,
+                prefix=cfg.recorder.filename_prefix,
+                channels=self._channel_columns(),
+                aux_keys=self._aux_columns(),
+                flush_every_sample=cfg.recorder.flush_every_sample,
+            )
+
         self.poller = Poller(
             self.instruments,
             interval_s=cfg.acquisition.interval_s,
             recorder=self.recorder,
             ringbuffer=self.ring,
             supervisor=self.supervisor,
-            control_channel=cfg.control_channel if cfg.ls218.enabled else None,
+            control_channel=(
+                cfg.control_channel if cfg.control_instrument is not None else None
+            ),
             log_every_n=cfg.acquisition.log_every_n,
-            status_every_n_cycles=cfg.ls218.status_every_n_cycles,
+            # One cadence for the whole cycle: the poller toggles read_status
+            # on every instrument at once, so the strictest declared value wins.
+            status_every_n_cycles=min(
+                (c.status_every_n_cycles for c in cfg.enabled_instruments), default=0
+            ),
         )
 
     # -- lifecycle ---------------------------------------------------------

@@ -1,0 +1,57 @@
+# lschart — a single Lake Shore 335 on a USB/serial port.
+#
+# The 335 runs its own PID loop into its own heaters.  This software records
+# every input continuously and hands that loop a setpoint; it never computes a
+# control output itself.  (The software PID is a separate package, `ltspm`,
+# and is specific to one cryostat.)
+#
+#   python -m lschart -c config-335-usb.yaml check     validate, touch nothing
+#   python -m lschart -c config-335-usb.yaml run       record until interrupted
+#
+# Install:  pip install "lschart[serial,gui]"
+# No NI-VISA runtime is needed for this configuration.
+
+log_level: INFO
+
+instruments:
+  - name: ls335
+    model: "335"
+    driver: lakeshore         # Lake Shore's own driver: serial/USB, no VISA
+    transport:
+      com_port: COM10         # Windows; on Linux/macOS "/dev/tty.usbserial-..."
+      # Better than com_port where you know it: a USB device that
+      # re-enumerates comes back on a different port number but the same
+      # serial number, so this is what survives a replug.  Set com_port to ""
+      # if you use it -- the driver then scans for the instrument.
+      serial_number: ""
+      baud_rate: 57600        # the 335's factory default (57600, 7-O-1)
+      timeout_ms: 3000
+
+    # Empty means "ask the instrument for the labels set on its front panel"
+    # (INNAME?).  Name them here to override:
+    #   channels: {A: Sample, B: Cold Head}
+    channels: {}
+
+    read_setpoints: true      # SETP? on both loops -> a log column each
+    read_heaters: true        # HTR? and RANGE? on both outputs
+
+    # Writes are OFF by default.  Turn this on for a box this software is meant
+    # to drive; leave it off for one that is only being watched.  It gates the
+    # setpoint, the heater range and the loop's PID gains alike.
+    allow_writes: true
+
+    # A blunt guard against a typo'd setpoint: refused in software rather than
+    # politely forwarded to a cryostat.  Set it to whatever your rig should
+    # never exceed.
+    max_setpoint_k: 330.0
+
+acquisition:
+  interval_s: 1.0
+  log_every_n: 1              # 1 = record every sample.  CSV has no row limit.
+  ringbuffer_size: 43200      # 12 h at 1 Hz, for plotting only -- never the log
+
+recorder:
+  enabled: true
+  directory: data
+  filename_prefix: ls335
+  flush_every_sample: true    # a power cut should cost one sample, not an hour
