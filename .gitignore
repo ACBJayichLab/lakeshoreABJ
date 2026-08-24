@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# macOS (development machine)
+.DS_Store
+
+# Runtime output -- the recorder writes here.  Never version experiment data.
+data/
+*.csv
+
+# NOTE: reference/logs/*.xls ARE tracked on purpose.  They are the only
+# empirical record of the plant and every default in control/ is derived
+# from them.  ~110 MB total; see CLAUDE.md.

@@ -1,0 +1,162 @@
+# lschart configuration
+#
+# Every value here has a default in lschart/config.py; anything omitted takes
+# that default.  Unknown keys are a hard error rather than being ignored, since
+# a silently-dropped typo in a safety limit is exactly the failure this file is
+# meant to prevent.
+#
+#   .venv/bin/python -m lschart -c config.yaml check     validate, touch nothing
+#   .venv/bin/python -m lschart -c config.yaml run       record
+#   .venv/bin/python -m lschart -c config.yaml run --arm close the heater loop
+#
+# GOING LIVE is the two `backend:` lines below.  Nothing else changes, and no
+# code changes.  On Windows that also needs the NI-VISA runtime installed for
+# pyvisa to see GPIB0::.
+
+log_level: INFO
+
+# ---------------------------------------------------------------- instruments
+
+ls218:
+  enabled: true
+  transport:
+    backend: sim            # <-- "visa" to talk to the real box
+    resource: GPIB0::15::INSTR
+    inter_command_delay: 0.05
+  channels:                 # {input number: display name}; only these are read
+    1: Sample
+    2: Cold Head
+    3: Shield
+  control_input: 1          # the sample -- this is what the PID controls
+  # Polling RDGST? for every input costs 8 transactions a cycle and is the
+  # single thing that makes a 1 s cadence impossible.  Poll it occasionally
+  # instead: a fault that matters shows up in the reading itself immediately.
+  read_status: false
+  status_every_n_cycles: 15
+  analog_output: 1          # the heater.  ANALOG 1, 0, 2, 1, 1,1,1,<percent>
+
+ls336:
+  enabled: true
+  transport:
+    backend: sim            # <-- "visa" to talk to the real box
+    resource: GPIB0::12::INSTR
+  channels: {}              # empty = ask the instrument (INNAME?)
+  read_setpoints: true
+  read_heaters: true
+  # Loop 2 independently holds THE CHONKE at ~290.6 K with heater 2 near 98%.
+  # This software records the 336 and stays out of its way.  Leave this false.
+  allow_writes: false
+
+# ---------------------------------------------------------------- acquisition
+
+acquisition:
+  # 1 Hz.  The measured noise is strongly correlated (lag-1 autocorrelation
+  # 0.51), so it does NOT average down as 1/sqrt(N): 10 Hz would hammer the bus
+  # for almost no gain, while 1 Hz still gives the median and reversal tests
+  # four times the samples they had at the old 4 s cadence.
+  interval_s: 1.0
+  log_every_n: 1            # 1 = record every sample.  CSV has no row limit.
+  ringbuffer_size: 43200    # 12 h at 1 Hz, for plotting only -- never the log
+
+recorder:
+  enabled: true
+  directory: data
+  filename_prefix: lschart
+  flush_every_sample: true  # a power cut should cost one sample, not an hour
+
+# -------------------------------------------------------------------- control
+#
+# Leave enabled: false for a pure chart recorder.  Arming is never implicit
+# even when this is true -- it takes `run --arm`.
+
+control:
+  enabled: false
+
+  supervisor:
+    operating_point_pct: 63.076   # measured: ~63.076% held ~100 K
+    authority_pct: 1.0            # +/-1% ~= +/-7.6 K of ultimate authority
+    hard_min_pct: 0.0
+    hard_max_pct: 70.0
+    max_step_pct: 0.02            # ~150 mK per update: ample for trim
+    max_rate_pct_per_min: 0.20
+
+    # Premise checks.  An error this large means something is wrong with the
+    # RIG, not with the control, so hold -- and ramp down only if it persists.
+    max_error_k: 1.0
+    anomaly_demand_pct: 0.50
+    anomaly_hold_s: 180.0
+    # A setpoint ramp of rate r on a plant with time constant tau settles at a
+    # tracking error of exactly r*tau, so a commanded move is allowed that much
+    # extra and nothing else.  Decays away once the ramp stops.
+    plant_lag_s: 360.0
+    max_ramp_error_k: 6.0
+    approach_rate_k_per_min: 0.25
+
+    # Fault response.  Nothing here ever raises the heater.
+    rampdown_pct_per_min: 0.50
+    safe_output_pct: 0.0
+    require_ack_after_fault: true
+
+    dac_step_pct: 0.01
+    dither: true                  # one code is ~76 mK; the plant averages it
+    verify_readback: true
+    on_exit: hold                 # zeroing a live sample heater is its own hazard
+
+  pid:
+    kp: 0.02                      # %/K -- loop gain ~0.15 against 7.6 K/%
+    ti: 900.0
+    td: 0.0
+    setpoint: 96.0                # `run --arm` with no --setpoint holds the
+                                  # present temperature instead of this
+
+  # Feedforward supplies the bulk of an output change during a sweep, so the
+  # gentle gains above do not have to build it through the integral.
+  feedforward:
+    enabled: true
+    t_bath_k: 4.0
+    ref_pct: 63.076
+    ref_rise_k: 96.0
+    exponent: 5.0                 # fitted 43%->18.2 K vs 63.076%->~100 K;
+                                  # UNCONFIRMED, may be nearer 5.6 -- see HANDOFF
+
+  guard:
+    valid_min_k: 1.0
+    valid_max_k: 400.0
+    # Two-tier, because one number cannot separate these: genuine cooldowns
+    # reach 1.63 K/s (corroborated on all three inputs) while the observed
+    # sensor glitch runs 7.3 K/s and up.
+    max_slew_k_per_s: 5.0         # hard physical impossibility, always rejected
+    corroborate_slew_k_per_s: 0.5 # above this, another channel must agree
+    # Reversal test: a real thermal signal is smooth, the glitch is not.
+    curvature_ratio: 1.5
+    curvature_floor_k: 0.5
+    # The longest observed self-healing glitch lasted 280 s.  At the old 60 s
+    # this turned a five-minute sensor burp into a lost cooldown.
+    fault_after_s: 600.0
+    recover_samples: 5
+    recover_samples_from_fault: 15
+
+  coherence:
+    sigma: 4.0                    # "did another channel move at all"
+    window_s: 30.0
+    tau_s: 30.0
+
+  ramp:
+    rate_k_per_min: 0.5           # default sweep rate
+    max_rate_k_per_min: 5.0
+
+  filter:
+    tau: 60.0
+    spike_sigma: 8.0
+    stale_after_s: 30.0           # past this the stored trend is not about now
+
+# --------------------------------------------------------------- simulation
+# Only consulted when a transport backend is "sim".
+
+sim:
+  start_k: 96.0
+  seed: 49181
+  # NOTE: speedup accelerates the plant but NOT the controller, which still
+  # integrates in real time.  Fine for exercising the recorder; meaningless for
+  # closed-loop behaviour.  Use the virtual-clock harness in tests/ for that.
+  speedup: 1.0
