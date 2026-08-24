@@ -169,6 +169,7 @@ class Application:
                 guard_config=cfg.control.guard,
                 coherence_config=cfg.control.coherence,
                 ramp_config=cfg.control.ramp,
+                tuning_config=cfg.control.tuning,
                 feedforward_config=cfg.control.feedforward,
                 filter_kwargs=dict(cfg.control.filter),
             )

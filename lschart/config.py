@@ -25,6 +25,7 @@ from .control.feedforward import FeedforwardConfig
 from .control.health import SensorGuardConfig
 from .control.pid import PIDConfig
 from .control.ramp import RampConfig
+from .control.tuning import TuningConfig
 from .control.supervisor import SupervisorConfig
 
 DEFAULT_CONFIG_NAME = "config.yaml"
@@ -141,6 +142,7 @@ class ControlConfig:
     guard: SensorGuardConfig = field(default_factory=SensorGuardConfig)
     coherence: CoherenceConfig = field(default_factory=CoherenceConfig)
     ramp: RampConfig = field(default_factory=RampConfig)
+    tuning: TuningConfig = field(default_factory=TuningConfig)
     feedforward: FeedforwardConfig = field(default_factory=FeedforwardConfig)
     filter: dict[str, Any] = field(default_factory=dict)
 

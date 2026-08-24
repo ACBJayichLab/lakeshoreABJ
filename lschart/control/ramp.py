@@ -25,6 +25,7 @@ loop with authority to spare for the correction on top of the ramp.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -38,6 +39,20 @@ class RampConfig:
     #: broken premise -- so an over-fast ramp does not run away, it stalls the
     #: loop.  Better to reject it at the point of request.
     max_rate_k_per_min: float = 5.0
+
+    #: Low-pass applied to the ramp before the PID sees it.
+    #:
+    #: A linear ramp has a discontinuous derivative at both ends.  The loop
+    #: cannot follow a corner, so it lags into the ramp and then overshoots out
+    #: of it -- and no retuning fixes that, because the demand itself is not
+    #: physically realisable.  Rounding the corners costs a little tracking lag
+    #: and removes the overshoot.  0 disables smoothing.
+    #: 300 s measured best against the 620 s plant: overshoot falls from
+    #: 464 mK to 25 mK on a 3 K sweep, and becomes independent of sweep rate
+    #: (25 mK at 0.3, 0.6 and 1.2 K/min alike), which is the signature of a
+    #: trajectory the loop can actually follow.  Smoothing alone gets only part
+    #: of that -- it works with the velocity feedforward, not instead of it.
+    smooth_tau_s: float = 300.0
 
 
 class SetpointRamp:
@@ -71,11 +86,11 @@ class SetpointRamp:
 
     @property
     def rate_k_per_s(self) -> float:
-        """Signed rate, or 0.0 when not ramping."""
+        """Signed commanded rate, or 0.0 when not ramping."""
         return self._rate_k_per_s if self._t0 is not None else 0.0
 
     def value(self, t: float) -> float:
-        """The setpoint to chase at time ``t``."""
+        """The commanded setpoint at ``t`` -- linear, exact, unsmoothed."""
         if self._t0 is None:
             return self._to_k
         travelled = self._rate_k_per_s * (t - self._t0)
@@ -145,3 +160,51 @@ class SetpointRamp:
         here = self.value(t)
         self.jump_to(here)
         return here
+
+
+class SetpointSmoother:
+    """Rounds the corners off a commanded trajectory.
+
+    A linear ramp has a discontinuous derivative at both ends.  A first-order
+    plant cannot follow a corner, so the loop lags going into the ramp and
+    overshoots coming out of it -- and no retuning removes that, because the
+    demand itself is not physically realisable.  Low-passing the setpoint costs
+    a little tracking lag and removes the overshoot.
+
+    Kept separate from :class:`SetpointRamp` so the ramp stays an exact,
+    directly-testable generator and the smoothing is visibly a control choice.
+    It also reports the *achieved* rate, which is what velocity feedforward
+    should be built on: it rises from zero and decays back to zero, so the
+    feedforward does the same instead of stepping at each end of the ramp.
+    """
+
+    def __init__(self, tau_s: float = 150.0, *, value: float | None = None) -> None:
+        self.tau_s = tau_s
+        self.value = value
+        self.rate_k_per_s = 0.0
+        self._last_t: float | None = None
+
+    def reset(self, value: float | None = None) -> None:
+        self.value = value
+        self.rate_k_per_s = 0.0
+        self._last_t = None
+
+    @property
+    def settled(self) -> bool:
+        return abs(self.rate_k_per_s) < 1e-9
+
+    def update(self, t: float, target: float) -> float:
+        if self.tau_s <= 0 or self.value is None or self._last_t is None:
+            self.value = target
+            self.rate_k_per_s = 0.0
+            self._last_t = t
+            return target
+        dt = t - self._last_t
+        self._last_t = t
+        if dt <= 0:
+            return self.value
+        alpha = 1.0 - math.exp(-dt / self.tau_s)
+        previous = self.value
+        self.value += alpha * (target - self.value)
+        self.rate_k_per_s = (self.value - previous) / dt
+        return self.value

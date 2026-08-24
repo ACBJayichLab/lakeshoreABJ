@@ -40,7 +40,8 @@ from .feedforward import Feedforward, FeedforwardConfig
 from .filters import MeasurementFilter
 from .health import HealthState, SensorGuard, SensorGuardConfig
 from .pid import PID, PIDConfig
-from .ramp import RampConfig, SetpointRamp
+from .ramp import RampConfig, SetpointRamp, SetpointSmoother
+from .tuning import ControlPhase, Tuner, TuningConfig
 
 log = logging.getLogger(__name__)
 
@@ -79,19 +80,46 @@ class SupervisorConfig:
 
     # Premise checks -- "this should only ever be a small correction".
     max_error_k: float = 1.0
+    #: A one-cycle lurch in the *feedback* terms (P+I+D) this large means a bad
+    #: reading is driving the loop, not that the rig needs the output.
     anomaly_demand_pct: float = 0.50
     anomaly_hold_s: float = 180.0
 
-    #: Dominant plant time constant, from the measured ~6 min fast pole.  A
+    #: Dominant plant time constant.  620 s is measured, but from the *one*
+    #: clean step response the reference logs contain (65.9% -> 137.3 K); every
+    #: other command there is a sub-2 K trim.  Heat capacity varies with
+    #: temperature, so this certainly does too -- treat it as provisional and
+    #: re-measure with a deliberate step test.  A
     #: first-order plant asked to follow a setpoint ramp of rate r settles at a
     #: tracking error of exactly r * tau -- at 0.5 K/min that is 3 K, which
     #: would trip max_error_k on every legitimate sweep.  So while a ramp is in
     #: progress the premise check is widened by the lag the ramp itself
     #: commands, and by nothing else.  When not ramping the allowance is zero
     #: and the check is exactly as strict as before.
-    plant_lag_s: float = 360.0
+    plant_lag_s: float = 620.0
     #: Ceiling on that allowance, so a fast ramp cannot blind the check entirely.
     max_ramp_error_k: float = 6.0
+
+    #: Hard cap on the feedforward contribution.  The steady-state curve is
+    #: calibrated for one regime -- cooler running, shields cold.  With the
+    #: cooler off (before a cooldown, after a warmup) the same percent produces
+    #: a very different temperature, and a temperature log alone cannot tell
+    #: those regimes apart.  Feedforward enters incrementally so a whole-curve
+    #: offset cancels; this bounds what a wrong local *slope* can do.
+    max_feedforward_pct: float = 0.40
+    #: Velocity feedforward gets its own, larger budget.  It is derived from a
+    #: trajectory *we commanded*, not from extrapolating a curve, so it is a
+    #: different kind of risk -- and following a ramp of rate r genuinely needs
+    #: r*tau/K, which at 0.6 K/min and tau=620 s is already 0.6%.  Capping it at
+    #: the positional limit does not prevent the drive, it just makes the
+    #: integral supply it instead and then overshoot when the ramp ends.
+    max_velocity_ff_pct: float = 1.00
+    #: Once settled, the measurement should agree with kelvin_for(output).  If
+    #: it disagrees by more than this the calibration does not describe the
+    #: present regime -- say so loudly rather than quietly trusting it.
+    model_trust_k: float = 15.0
+    #: "Settled" for that check: slope below this and no ramp in progress.
+    model_check_slope_k_per_s: float = 0.002
     #: Re-arming after a fault ramp-down is the hardest approach: the plant is
     #: still settling toward the output the ramp-down left it at, so the gap
     #: grows for a while before it closes.  Approach more gently than a sweep.
@@ -135,6 +163,13 @@ class SupervisorStatus:
     readback_pct: float | None = None
     validity: Validity = Validity.GOOD
     corroborated: bool | None = None
+    #: measured - model, once settled.  None while ramping or still moving.
+    model_error_k: float | None = None
+    model_trusted: bool = True
+    phase: str = "hold"
+    kp: float = 0.0
+    ti: float = 0.0
+    velocity_ff_pct: float = 0.0
     reason: str = ""
     alarms: list[str] = field(default_factory=list)
     wrote: bool = False
@@ -154,6 +189,7 @@ class HeaterSupervisor:
         coherence_config: CoherenceConfig | None = None,
         ramp_config: RampConfig | None = None,
         feedforward_config: FeedforwardConfig | None = None,
+        tuning_config: TuningConfig | None = None,
         filter_kwargs: dict | None = None,
         clock=time.monotonic,
     ) -> None:
@@ -166,8 +202,15 @@ class HeaterSupervisor:
         self.clock = clock
 
         self.feedforward = Feedforward(feedforward_config)
-        self.pid = PID(pid_config or PIDConfig(), feedforward=self.feedforward)
+        self.tuner = Tuner(tuning_config)
+        self.pid = PID(
+            pid_config or PIDConfig(),
+            feedforward=self.feedforward,
+            ff_limit_pct=self.cfg.max_feedforward_pct,
+        )
         self.ramp = SetpointRamp(self.pid.cfg.setpoint, ramp_config)
+        self.smoother = SetpointSmoother(self.ramp.cfg.smooth_tau_s,
+                                         value=self.pid.cfg.setpoint)
         self._apply_band_to_pid()
 
         self.dither = SigmaDeltaDither(self.cfg.dac_step_pct)
@@ -184,6 +227,8 @@ class HeaterSupervisor:
         self._rampdown_complete = False
         self._ramp_allowance_k = 0.0
         self._pending_approach = False
+        self._model_warned = False
+        self._last_feedback = 0.0
 
     # -- authority band ----------------------------------------------------
 
@@ -230,6 +275,8 @@ class HeaterSupervisor:
                 current = self.cfg.operating_point_pct
             self.output_pct = current
             self.pid.prime(self.clamp(current))
+            self._last_feedback = 0.0
+            self.smoother.reset(self.pid.cfg.setpoint)
             self.dither.reset()
             # Approach the target from wherever the plant actually is.  After a
             # fault ramp-down the rig can be many kelvin away, and that gap is
@@ -262,8 +309,17 @@ class HeaterSupervisor:
         how you stall the loop rather than how you move it -- see
         :mod:`lschart.control.ramp`.  ``ramp=False`` is for small trims.
         """
+        # An explicit setpoint command takes charge of the trajectory: the
+        # deferred post-fault approach must not silently re-rate an operator's
+        # sweep to approach_rate_k_per_min behind their back.
+        self._pending_approach = False
         if not ramp:
+            # A step means a step: bypass the smoother too.  Otherwise
+            # ramp=False silently becomes a gentle approach, and the premise
+            # check -- whose whole job is to refuse a setpoint the loop was
+            # never asked to reach gradually -- never sees the error.
             self.ramp.jump_to(kelvin)
+            self.smoother.reset(kelvin)
         else:
             t = self.clock()
             # Ramp from the measurement, not the old setpoint: if the plant has
@@ -281,8 +337,17 @@ class HeaterSupervisor:
         self.set_setpoint(kelvin, ramp=True, rate_k_per_min=rate_k_per_min)
 
     def abort_ramp(self) -> float:
-        """Stop a sweep where it stands and hold that temperature."""
-        held = self.ramp.abort(self.clock())
+        """Stop a sweep where it stands and hold that temperature.
+
+        Holds the *smoothed* setpoint -- the value the loop is actually
+        chasing -- not the raw ramp position it was lagging behind.
+        """
+        t = self.clock()
+        self.ramp.abort(t)
+        held = self.smoother.value if self.smoother.value is not None else self.ramp.target
+        self.ramp.jump_to(held)
+        self.smoother.reset(held)
+        self.pid.cfg.setpoint = held
         log.warning("ramp aborted, holding %.4f K", held)
         return held
 
@@ -377,13 +442,13 @@ class HeaterSupervisor:
         dt = 0.0 if self._last_t is None else max(0.0, t - self._last_t)
         self._last_t = t
 
-        self.pid.cfg.setpoint = self.ramp.value(t)
+        self.pid.cfg.setpoint = self.smoother.update(t, self.ramp.value(t))
         s = SupervisorStatus(
             t=t,
             mode=self.mode,
             setpoint_k=self.pid.cfg.setpoint,
             setpoint_target_k=self.ramp.target,
-            ramping=self.ramp.ramping,
+            ramping=self.ramp.ramping or not self.smoother.settled,
         )
         s.raw_k = reading.kelvin if reading is not None else None
 
@@ -472,6 +537,17 @@ class HeaterSupervisor:
         ) * self.cfg.dac_step_pct
         code = max(self.cfg.hard_min_pct, min(self.cfg.hard_max_pct, code))
 
+        # Re-apply the band AFTER quantising.  Rounding to the nearest code can
+        # land above a target that was itself inside the band, and the band is
+        # specified as an unconditional cap on heat -- half a code of overshoot
+        # is still overshoot.  Stepping down a code (rather than clamping to a
+        # non-code value) keeps the output on the DAC grid.
+        if self.state is not SupervisorState.RAMPING_DOWN:
+            _, band_hi = self.band
+            while code > band_hi + 1e-9:
+                code -= self.cfg.dac_step_pct
+            code = max(code, self.cfg.hard_min_pct)
+
         if self.output_pct is None or abs(code - self.output_pct) >= self.cfg.dac_step_pct / 2:
             s.wrote = self._write_output(code, s)
         else:
@@ -517,7 +593,9 @@ class HeaterSupervisor:
                 # effect, so priming against the old target makes the
                 # feedforward term open negative and drive the heater the wrong
                 # way for the whole approach.
-                s.setpoint_k = self.pid.cfg.setpoint = self.ramp.value(t)
+                self.smoother.reset(s.filtered_k)
+                s.setpoint_k = self.pid.cfg.setpoint = self.smoother.update(
+                    t, self.ramp.value(t))
                 self.pid.prime(self.clamp(
                     self.output_pct if self.output_pct is not None else s.filtered_k
                 ))
@@ -528,7 +606,41 @@ class HeaterSupervisor:
 
         # Snapshot so a hold can restore the integral bit-for-bit: PID.update
         # both integrates and back-calculates, so an arithmetic "undo" drifts.
-        integral_before = self.pid.integral
+        # Snapshot the whole controller state *before* the tuner touches it.
+        # A hold must leave the PID exactly as it found it, and rescheduling
+        # does move it: set_gains re-solves the integral to preserve P+I, so
+        # against a standing error even a tiny change in kp shifts the stored
+        # integral by (dkp * error / ki) -- and 1/ki is ~3000 here.
+        state_before = (self.pid.integral, self.pid.cfg.kp, self.pid.cfg.ti)
+
+        # Retune for where we are and what we are doing.  Both the gain and the
+        # time constant of a weakly-pinned island change with temperature, so a
+        # single fixed pair of gains is only ever right at one operating point.
+        if self.tuner.enabled:
+            phase = self.tuner.update_phase(
+                t,
+                error_k=self.pid.cfg.setpoint - s.filtered_k,
+                ramping=self.ramp.ramping or not self.smoother.settled,
+            )
+            kp, ti = self.tuner.gains_for(s.filtered_k, phase)
+            self.pid.set_gains(kp, ti)
+            s.phase = phase.value
+        s.kp, s.ti = self.pid.cfg.kp, self.pid.cfg.ti
+
+        # Velocity feedforward: sustain a ramp instead of lagging it.  Uses the
+        # scheduled gain and time constant, i.e. exactly the two local numbers
+        # a step test measures -- so this gets better as the schedule does.
+        vel = 0.0
+        if not self.smoother.settled and self.tuner.enabled:
+            gain = self.tuner.schedule.gain_at(s.filtered_k)
+            tau = self.tuner.schedule.tau_at(s.filtered_k)
+            if gain > 0:
+                vel = self.smoother.rate_k_per_s * tau / gain
+                limit = self.cfg.max_velocity_ff_pct
+                vel = max(-limit, min(limit, vel))
+        self.pid.velocity_ff_pct = vel
+        s.velocity_ff_pct = vel
+
         terms = self.pid.update(s.filtered_k, s.slope_k_per_s, dt)
         s.demand_pct = terms.unclamped
         s.error_k = terms.error
@@ -559,16 +671,30 @@ class HeaterSupervisor:
                 f"{self.cfg.max_error_k} K"
                 + (f" + {allowance:.2f} K ramp allowance" if allowance else "")
             )
-        if abs(terms.unclamped - current) > self.cfg.anomaly_demand_pct:
+        # What this check is for is a *bad reading* driving the loop: the
+        # feedback terms lurch in one cycle.  So watch those terms directly.
+        #
+        # Comparing total demand against the present output (the original form)
+        # cannot work alongside feedforward: a commanded ramp legitimately puts
+        # ~r*tau/K of extra demand in at once, the rate limiter needs many
+        # cycles to apply it, and for all of those cycles demand-minus-output
+        # sits above the threshold -- a permanent false anomaly that escalates
+        # to a ramp-down.  Discounting only the *change* in feedforward does not
+        # fix it, because the un-applied level is what shows up in the gap.
+        feedback = terms.p + terms.i + terms.d
+        jump = feedback - self._last_feedback
+        self._last_feedback = feedback
+        if abs(jump) > self.cfg.anomaly_demand_pct:
             anomalies.append(
-                f"demand jumped {terms.unclamped - current:+.3f}% "
+                f"feedback demand jumped {jump:+.3f}% in one cycle "
                 f"(limit {self.cfg.anomaly_demand_pct}%)"
             )
 
         if anomalies:
             # Whatever we decide below, we are not acting on this PID output, so
             # the integral must not keep charging while the loop refuses to move.
-            self.pid.integral = integral_before
+            self.pid.integral, self.pid.cfg.kp, self.pid.cfg.ti = state_before
+            self._last_feedback = feedback
             if self._anomaly_since is None:
                 self._anomaly_since = t
                 log.warning("heater anomaly, holding: %s", "; ".join(anomalies))
@@ -581,8 +707,43 @@ class HeaterSupervisor:
             return None
 
         self._anomaly_since = None
+        self._check_model(s)
         self.state = SupervisorState.TRACKING
         return terms.output
+
+    def _check_model(self, s: SupervisorStatus) -> None:
+        """Is the calibration still describing this rig, in this regime?
+
+        The steady-state curve was measured with the cooler running.  Before a
+        cooldown or after a warmup it does not apply, and nothing in a
+        temperature log distinguishes those cases -- so check it against
+        reality instead of assuming.  Only meaningful once settled: during a
+        ramp the measurement is *supposed* to lag the model.
+        """
+        if self.ramp.ramping or self.output_pct is None or s.filtered_k is None:
+            return
+        if abs(s.slope_k_per_s) > self.cfg.model_check_slope_k_per_s:
+            return
+        expected = self.feedforward.kelvin_for(self.output_pct)
+        s.model_error_k = s.filtered_k - expected
+        if abs(s.model_error_k) > self.cfg.model_trust_k:
+            s.model_trusted = False
+            s.alarms.append(
+                f"calibration does not describe this regime: {self.output_pct:.3f}% "
+                f"should settle near {expected:.1f} K but reads {s.filtered_k:.1f} K "
+                f"({s.model_error_k:+.1f} K). Feedforward is capped at "
+                f"{self.cfg.max_feedforward_pct}%; the integral is doing the work."
+            )
+            if not self._model_warned:
+                self._model_warned = True
+                log.warning(
+                    "plant does not match the calibration curve (%+.1f K at %.3f%%) -- "
+                    "different cooler/vacuum state?  Control continues on feedback.",
+                    s.model_error_k, self.output_pct,
+                )
+        else:
+            s.model_trusted = True
+            self._model_warned = False
 
     def _rampdown_target(
         self, t: float, s: SupervisorStatus, why: str, dt: float

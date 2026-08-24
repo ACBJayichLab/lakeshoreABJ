@@ -84,7 +84,7 @@ uncertain is tolerable.
 | `acquisition/` | Complete: poller, recorder (CSV, no row limit, flushed per sample), ring buffer. |
 | `tools/` | `import_xls.py`, `replay.py`. |
 | `__main__.py` / `app.py` | `run` / `check` / `init`. Going live is two `backend:` lines. |
-| Tests | **64 passing**, incl. 6 replaying real logs. |
+| Tests | **102 passing**, incl. 6 replaying real logs. |
 | GUI | **Not started.** |
 
 Replay against the full reference set: **12.8 rejections/day, 0 samples ever
@@ -116,6 +116,87 @@ capability. Near 96 K the measurement floor is ~2.5-4 mK; near room temperature
 it is ~100 mK, and no amount of control quality changes that. Sweeps that end
 high will not hold to mK.
 
+### The plant model was structurally wrong (Jeff, 2026-08-23)
+
+The output percent is a **voltage**, into a stable 50 Ω heater. So `P ∝ pct²`
+exactly, and the observed nonlinearity is thermal — changing heat capacities
+and conductances — not actuator behaviour. The old lumped `T ∝ pct^5` fit
+conflated the two.
+
+Re-fitting properly against **24 settled heater steps** extracted from the
+`ANALOG` commands in the `cd10 monitor4/5` Notes columns:
+
+| | old | new |
+|---|---|---|
+| lumped exponent | 5.0 (2 points) | **6.32** (24 points, R² = 0.9962) |
+| thermal exponent | — | **3.16** (`ΔT ∝ P^m`) |
+| gain @ 63.076% | 7.6 K/% | **10.0 K/%** |
+| one DAC code | 76 mK | **100 mK** |
+| τ | 360 s (assumed) | **620 s** @ 137 K (measured, one step) |
+
+Consequences: `lschart/plant.py` now holds the single shared curve, imported by
+both the simulator and the feedforward so they cannot disagree by accident;
+`plant_lag_s` is 620 s; the authority band is ±10 K, not ±7.6 K.
+
+The exponent question in the old handoff is **answered**: 66.95% → 151.05 K in
+the logs, close to Jeff's "65-ish is around 150 K", and the old n = 5.0 was too
+shallow. But no single exponent spans the range, so a calibration table is used
+where data exists.
+
+**Also resolved from the logs:** a Notes entry reads
+`Query sent: AOUT? / Query response: +63.070` after 63.076 was commanded —
+direct evidence the 218 **quantises to 0.01%**, which was an open hardware
+question. `dac_step_pct: 0.01` is confirmed.
+
+### Gain scheduling replaced the fixed gains (2026-08-24)
+
+The steady-state curve is **underdetermined by the logs** and cannot be the
+control model.  Two forms fit the same 24 settled points and then disagree by
+tens of kelvin outside the fitted band:
+
+| form | R² | extrapolated to 43% |
+|---|---|---|
+| `dT ~ pct^6.51` | 0.9969 | 16.1 K |
+| `dT ~ (pct-56.9)^0.92` | 0.99998 | heater off |
+
+43% -> 18.2 K is measured, so the second is wrong — but nothing *in the fit*
+says so.  Worse, the whole curve is regime-specific: heating a weakly-pinned
+island off a 300 K coldplate is a different plant from heating it off a 4 K one.
+
+So the controller is now tuned from the two **local** numbers a step test
+actually measures — gain `K = dT/d(pct)` in K/% and time constant `tau` — via
+IMC/pole-cancellation (`control/tuning.py`):
+
+    Ti = tau,  Kp = tau / (K * tau_cl)   =>   closed loop = 1 / (1 + tau_cl*s)
+
+First order, so **no overshoot at any gain**, and `tau_cl` *is* the closed-loop
+response time — one number with a physical meaning instead of two interacting
+gains.  Two regimes with hysteresis: HOLD (`tau_cl` 1800 s, rejects the
+correlated noise) and MOVE (300 s, follows a sweep).
+
+Four things landed with it:
+
+1. **`SetpointSmoother`** (`control/ramp.py`).  A linear ramp has a
+   discontinuous derivative at both ends; the loop cannot follow a corner, so
+   it lags in and overshoots out, and no retuning fixes that.  Measured on a
+   3 K sweep: **464 mK overshoot without, 25 mK with**, independent of rate.
+2. **Velocity feedforward** in `pid.py` — sustains a ramp instead of lagging it,
+   using the scheduled `K` and `tau`, so it improves as the schedule does.
+3. **The anomaly check was rewritten.**  The original form compared total demand
+   against present output, which cannot survive feedforward: a commanded ramp
+   legitimately injects `r*tau/K` at once, the rate limiter needs many cycles to
+   apply it, and for all of those cycles the gap reads as an anomaly — a
+   permanent false positive that escalates to a ramp-down.  It now watches the
+   *feedback terms* directly, which is what a bad reading actually moves.
+4. **`_check_model()`** in the supervisor + `tests/test_regime.py`.  The
+   calibration was measured with the cooler running; with it off the same
+   percent runs far hotter and no temperature log can tell the difference.  A
+   settled measurement disagreeing with the curve by more than `model_trust_k`
+   now raises an alarm and the loop leans on the integral instead.
+
+**`tools/steptest.py`** is the protocol to replace the schedule with measured
+rows.  Only the 137 K row is real today.
+
 ## Answers from Jeff this session
 
 - **Recovery after a fault: always require operator acknowledgement.** No
@@ -146,15 +227,20 @@ Unchanged from last time except where noted.
 - **`RDGST?` bit weights** (1 invalid, 16 under, 32 over, 64 units zero,
   128 units over). Now polled every `status_every_n_cycles` rather than every
   cycle, so a wrong decoding is less costly — but still unconfirmed.
-- **The 218's true analog-output resolution.** 0.01% is assumed and the dither
-  step depends on it. Send a few values and watch `AOUT?`.
+- ~~**The 218's analog-output resolution.**~~ **Resolved from the logs**: a
+  Notes entry shows `AOUT?` returning `+63.070` after `63.076` was commanded,
+  so the box quantises to 0.01%. `dac_step_pct: 0.01` is correct.
 - **The 218's per-input update rate.** 1 Hz is the new default cadence and is
   believed to be comfortably inside what the box produces; confirm against the
   manual before anyone raises it.
-- **The plant exponent.** Still fitted at n≈5.0 from two points; Jeff recalls
-  "65-ish is around 150 K", which wants n≈5.6. `feedforward.fit_exponent()` is
-  provided so this can be re-derived the moment a heated steady-state dataset
-  exists. Feedforward tolerates the error; the *shape* is what matters.
+- **The plant time constant.** τ ≈ 620 s comes from a *single* step response
+  at 137 K; every other command in those logs is a sub-2 K trim. Heat capacity
+  varies with temperature so τ certainly does too, and `plant_lag_s` sets the
+  ramp-error allowance. **A deliberate step test at two or three temperatures
+  is the highest-value hardware measurement available.**
+- **The curve below 63%.** The 43% → 18.2 K anchor is from a different, colder
+  cooldown; base load varies between runs. Everything from 63–68.5% is one
+  self-consistent series. Extend downward with settled steps when convenient.
 - **GPIB timing.** At 1 Hz with `read_status: false` a cycle is ~9
   transactions ≈ 0.45 s at 50 ms pacing. `lschart check` prints the budget and
   `AppConfig.validate()` refuses a cadence the bus cannot sustain — but the
@@ -170,5 +256,5 @@ Unchanged from last time except where noted.
 - **`reference/logs` is ~110 MB and is deliberately *not* gitignored** — it is
   the only empirical record of the plant, and every default in `control/` is
   derived from it. Revisit if the repo needs to stay small.
-- **The repo still has no commits.** `.gitignore` exists now and 49 files are
-  staged; committing was left to Jeff.
+- **The repo has one commit** (`Init`).  The tuning/step-test work above was
+  committed on top of it at the start of the split session.

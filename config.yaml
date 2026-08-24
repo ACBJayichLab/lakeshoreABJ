@@ -73,11 +73,11 @@ control:
   enabled: false
 
   supervisor:
-    operating_point_pct: 63.076   # measured: ~63.076% held ~100 K
-    authority_pct: 1.0            # +/-1% ~= +/-7.6 K of ultimate authority
+    operating_point_pct: 63.076   # measured: 63.076% settles at 99.60 K
+    authority_pct: 1.0            # +/-1% ~= +/-10 K of ultimate authority
     hard_min_pct: 0.0
     hard_max_pct: 70.0
-    max_step_pct: 0.02            # ~150 mK per update: ample for trim
+    max_step_pct: 0.02            # ~200 mK per update: ample for trim
     max_rate_pct_per_min: 0.20
 
     # Premise checks.  An error this large means something is wrong with the
@@ -88,7 +88,7 @@ control:
     # A setpoint ramp of rate r on a plant with time constant tau settles at a
     # tracking error of exactly r*tau, so a commanded move is allowed that much
     # extra and nothing else.  Decays away once the ramp stops.
-    plant_lag_s: 360.0
+    plant_lag_s: 620.0            # measured; ONE step response only
     max_ramp_error_k: 6.0
     approach_rate_k_per_min: 0.25
 
@@ -98,12 +98,16 @@ control:
     require_ack_after_fault: true
 
     dac_step_pct: 0.01
-    dither: true                  # one code is ~76 mK; the plant averages it
+    dither: true                  # one code is ~100 mK; the plant averages it.
+                                  # Averaging voltage is not averaging power
+                                  # (P ~ V^2), but the bias is ~2 uK: ignorable.
     verify_readback: true
     on_exit: hold                 # zeroing a live sample heater is its own hazard
 
+  # PID gains are SCHEDULED from the tuning section below whenever
+  # control.tuning.enabled is true; these are only the starting values.
   pid:
-    kp: 0.02                      # %/K -- loop gain ~0.15 against 7.6 K/%
+    kp: 0.02
     ti: 900.0
     td: 0.0
     setpoint: 96.0                # `run --arm` with no --setpoint holds the
@@ -111,13 +115,31 @@ control:
 
   # Feedforward supplies the bulk of an output change during a sweep, so the
   # gentle gains above do not have to build it through the integral.
+  #
+  # IMPORTANT: the calibration curve was measured with the CRYOCOOLER RUNNING
+  # and the shields cold.  Percent-to-temperature depends on the cooling power
+  # available to fight the heater, so with the cooler off (before a cooldown,
+  # after a warmup) it does not apply -- the same percent runs much hotter and
+  # the gain is higher.  A temperature log cannot tell those regimes apart.
+  #
+  # Three things limit the damage: feedforward enters as a *difference* from
+  # the arming point, so a whole-curve offset cancels; max_feedforward_pct caps
+  # what a wrong slope can do; and the supervisor alarms when a settled
+  # measurement disagrees with the curve by more than model_trust_k.
+  #
+  # In a regime this curve was not measured in, set enabled: false and let the
+  # integral do the work.  It is slower, and it is always correct.
   feedforward:
     enabled: true
     t_bath_k: 4.0
     ref_pct: 63.076
-    ref_rise_k: 96.0
-    exponent: 5.0                 # fitted 43%->18.2 K vs 63.076%->~100 K;
-                                  # UNCONFIRMED, may be nearer 5.6 -- see HANDOFF
+    ref_rise_k: 95.6
+    # The output is a VOLTAGE into a stable 50 ohm heater, so P ~ pct**2
+    # exactly.  Only the thermal part is fitted: dT ~ P**thermal_exponent.
+    # Measured 3.16 (lumped n = 6.32, R^2 = 0.996) over 24 settled heater
+    # steps in cd10 monitor4/5.  Supersedes the old two-point n = 5.0.
+    thermal_exponent: 3.158
+    # Leave `calibration` unset to use the measured curve in lschart/plant.py.
 
   guard:
     valid_min_k: 1.0
@@ -144,6 +166,32 @@ control:
   ramp:
     rate_k_per_min: 0.5           # default sweep rate
     max_rate_k_per_min: 5.0
+    # Round the corners off the ramp.  A linear ramp has a discontinuous
+    # derivative at each end; the loop cannot follow a corner, so it lags in
+    # and overshoots out, and no retuning fixes that.  Measured on a 3 K sweep:
+    # 464 mK overshoot without, 25 mK with -- and independent of sweep rate.
+    smooth_tau_s: 300.0
+
+  # Gain scheduling.  The controller is tuned from two LOCAL numbers -- gain
+  # K(T) in K/% and time constant tau(T) -- because those are what a step test
+  # measures.  A global percent-to-temperature curve cannot serve: two forms
+  # fit the reference data to R^2 0.9969 and 0.99998 and then disagree by tens
+  # of kelvin outside it.
+  #
+  # IMC/pole-cancellation: Ti = tau, Kp = tau/(K*tau_cl).  That makes the
+  # closed loop first order -- no overshoot at any gain -- and tau_cl IS the
+  # closed-loop response time, so it is the only number to choose.
+  #
+  # RUN A STEP TEST AND REPLACE THE SCHEDULE:
+  #     python -m lschart.tools.steptest --points 63.076,65.0,67.0
+  # Only the 137 K row is currently measured.
+  tuning:
+    enabled: true
+    hold_tau_cl_s: 1800.0         # stabilising: slow, rejects correlated noise
+    move_tau_cl_s: 300.0          # sweeping: responsive
+    move_error_k: 0.25            # enter MOVE above this error
+    hold_error_k: 0.10            # return to HOLD below this...
+    hold_settle_s: 120.0          # ...and only after settling this long
 
   filter:
     tau: 60.0

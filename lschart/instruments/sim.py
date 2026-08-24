@@ -5,9 +5,12 @@ The model is *not* an attempt at cryostat physics; it is tuned to reproduce the
 four things the control software actually has to cope with, all measured from
 ``reference/logs/cd10_7_2026_sample_cold.xls``:
 
-1. a steeply nonlinear steady state -- 43% -> 18.2 K, 63.1% -> ~100 K, which is
-   ``T = T_bath + A * pct**5`` and gives a local gain near 7 K/% at 63%;
-2. two very different time constants -- ~6 min fast, ~4 h slow tail;
+1. a steeply nonlinear steady state.  The output is a voltage into a fixed
+   50 ohm heater, so ``P ~ pct**2`` exactly; the rest is thermal, measured as
+   ``dT ~ P**3.16`` over 24 settled heater steps.  Together that is a lumped
+   ``pct**6.32`` and a local gain near 9.5 K/% at 63%;
+2. two very different time constants -- the one clean step response in the logs
+   gives ~620 s at 137 K, against the ~360 s previously assumed;
 3. temperature-dependent sensor noise -- quadratic in T: ~1.8 mK at 18 K,
    ~14 mK at 96 K, ~110 mK at 290 K;
 4. 1 mK reporting quantisation.
@@ -23,6 +26,7 @@ import random
 import time
 from dataclasses import dataclass, field
 
+from ..plant import MEASURED_CURVE, SteadyStateCurve
 from ..transport import TransportError
 
 
@@ -31,10 +35,26 @@ class PlantParams:
     """Calibrated against the 2026-07 cooldown; see module docstring."""
 
     t_bath: float = 4.0
-    exponent: float = 5.0          # T_ss - T_bath  proportional to pct**exponent
+    #: The analog output is a VOLTAGE into a stable 50 ohm heater, so power goes
+    #: as pct**2 exactly.  The remaining nonlinearity is thermal -- changing
+    #: heat capacity and conductance -- and is carried by ``thermal_exponent``:
+    #:
+    #:     P  ~ pct**2                          (exact, temperature-independent)
+    #:     dT ~ P**thermal_exponent             (measured 3.16 over 116-171 K)
+    #:
+    #: so a T-vs-percent plot shows a lumped exponent of 2*3.158 = 6.32, fitted
+    #: over 24 settled heater steps in cd10 monitor4/5 with R^2 = 0.9962.  The
+    #: previous value of 5.0 came from two points and was too shallow.
+    thermal_exponent: float = 3.158
     ref_pct: float = 63.076        # the operating point the rig actually sat at
-    ref_rise: float = 96.0         # T_ss - T_bath there, i.e. ~100 K absolute
-    tau_fast: float = 360.0        # s   (~6 min)
+    ref_rise: float = 95.6         # T_ss - T_bath there: 99.60 K absolute
+    #: Measured steady-state points, shared with the feedforward via
+    #: lschart.plant so the two cannot silently disagree.  Set to () to fall
+    #: back to the pure power law -- which is how model mismatch between the
+    #: plant and the controller's idea of it gets injected in tests.
+    calibration: tuple = MEASURED_CURVE
+    tau_fast: float = 620.0        # s   measured from the one clean step
+                                   #     response in the logs (65.9% -> 137.3 K)
     tau_slow: float = 14400.0      # s   (~4 h)
     fast_fraction: float = 0.90    # of the step lands on the fast pole
     #: Sensor noise, measured by 3-point local detrending over cd9+cd10:
@@ -53,17 +73,32 @@ class PlantParams:
     quantum_k: float = 0.001       # reported resolution
 
     @property
+    def exponent(self) -> float:
+        """Lumped exponent of dT vs percent: twice the thermal exponent."""
+        return 2.0 * self.thermal_exponent
+
+    @property
     def coeff(self) -> float:
         return self.ref_rise / (self.ref_pct**self.exponent)
 
+    @property
+    def curve(self) -> SteadyStateCurve:
+        return SteadyStateCurve(
+            self.calibration, t_bath_k=self.t_bath,
+            thermal_exponent=self.thermal_exponent,
+            ref_pct=self.ref_pct, ref_rise_k=self.ref_rise,
+        )
+
+    def relative_power(self, pct: float) -> float:
+        """Power as a fraction of power at ref_pct.  Exact: V**2 / R."""
+        return (max(pct, 0.0) / self.ref_pct) ** 2
+
     def steady_state(self, pct: float) -> float:
-        return self.t_bath + self.coeff * max(pct, 0.0) ** self.exponent
+        return self.curve.kelvin_for(pct)
 
     def local_gain(self, pct: float) -> float:
         """dT/d(pct) in K/% -- the number that makes this rig hard to control."""
-        if pct <= 0:
-            return 0.0
-        return self.exponent * self.coeff * pct ** (self.exponent - 1)
+        return self.curve.gain_at(pct)
 
 
 class ThermalModel:

@@ -117,9 +117,13 @@ def test_anomaly_hold_does_not_wind_up_the_integral(harness):
     h = armed(harness)
     h.sup.set_setpoint(h.equilibrium_k + 1.5, ramp=False)  # outside max_error_k
     h.step(30)
-    i_after_hold = abs(h.sup.pid.integral)
+    # Assert on the *contribution* ki*I, not the raw integral: gain scheduling
+    # rescales the stored integral whenever ki changes, precisely so that the
+    # contribution is preserved.  Rescaling is not charging.
+    charge_after_hold = abs(h.sup.pid.cfg.ki * h.sup.pid.integral)
     h.step(30)
-    assert abs(h.sup.pid.integral) <= i_after_hold + 1e-6, "integral charged while holding"
+    charge_now = abs(h.sup.pid.cfg.ki * h.sup.pid.integral)
+    assert charge_now <= charge_after_hold + 1e-6, "integral charged while holding"
 
 
 # -- hard limits ------------------------------------------------------------

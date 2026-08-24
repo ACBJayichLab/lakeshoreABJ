@@ -50,8 +50,11 @@ default in `control/`.
 | Sensor noise, sample channel | **quadratic in T**: `rms ~= 1.36e-6 * T**2 K`, floored ~1.8 mK. Measured 1.8 mK @ 18 K, 13.6 mK @ 96 K, 45 mK @ 190 K, **109 mK @ 290 K**. A linear fit from 96 K understates room temperature by ~4x. |
 | Fast thermal time constant | ~5–10 min |
 | Slow thermal tail | hours (3–12 h; poorly constrained) |
-| Steady state | 43% → 18.2 K; 63.076% → ~100 K. Fits `T = T_bath + A·pct^5`. |
-| **Local gain at the 63% operating point** | **~7.6 K/%** |
+| Actuator | The analog output is a **voltage** into a stable 50 Ω heater, so **`P ∝ pct²` exactly** and temperature-independently. |
+| Thermal response | `T − T_bath = A·P^m`, **m ≈ 3.16** (lumped `pct^6.32`, R² = 0.9962) from **24 settled heater steps** in `cd10 monitor4/5`. |
+| Steady state | 43% → 18.2 K; 63.076% → **99.60 K**; 66.95% → 151.05 K. |
+| **Local gain at the 63% operating point** | **~10.0 K/%** |
+| Time constant | **~620 s** @ 137 K — but from the *one* clean step response in the logs. Provisional. |
 | Largest *legitimate* one-sample ΔT | **6.5 K** (−1.63 K/s, `cd8_…_monitor7`, corroborated on all three inputs); ~2.97 K/s just after a heater cut |
 | Normal-operation ΔT, p99 | 0.26 K |
 | Practical stability floor | ~2.5–4 mK near 96 K; **~100 mK near 290 K**. Millikelvin control is a low-temperature capability, not a global one. |
@@ -59,12 +62,33 @@ default in `control/`.
 
 ### The consequence that shapes the whole design
 
-At ~7.6 K/%, one 0.01% DAC code is **~76 mK** — about eight times the sensor
-noise floor and far coarser than the few-mK goal. Rounding to the nearest code
-would make millikelvin control impossible regardless of PID tuning. So the
-output is **sigma-delta dithered** (`control/dither.py`): the rounding error is
-carried forward so the *sequence* of codes averages to the request, and the
-plant's ~360 s pole low-passes the dither to sub-mK ripple.
+At ~10.0 K/%, one 0.01% DAC code is **~100 mK** — roughly forty times the
+sensor noise floor at 96 K and far coarser than the few-mK goal. Rounding to
+the nearest code would make millikelvin control impossible regardless of PID
+tuning. So the output is **sigma-delta dithered** (`control/dither.py`): the
+rounding error is carried forward so the *sequence* of codes averages to the
+request, and the plant's ~620 s pole low-passes the dither to sub-mK ripple.
+
+One subtlety the quadratic actuator introduces: the dither averages *voltage*,
+but the plant responds to *power*, and `⟨V²⟩ = ⟨V⟩² + Var(V)`. So the mean
+power delivered sits slightly **above** the power at the mean voltage. Measured
+at the operating point that bias is **~2 μK** — three orders below the noise
+floor, so it is ignorable, but it is a real systematic and is tested for
+(`tests/test_plant.py`) so nobody has to rediscover it while chasing an offset.
+
+### Why the model is in two stages
+
+`lschart/plant.py` deliberately keeps `P(pct)` and `T(P)` apart, and both the
+simulator and the feedforward import that one curve so they cannot drift.
+Lumping them into a single `T ∝ pct^n` fit — the previous model, n = 5 from two
+points — hid the fact that only one factor is uncertain, and invited re-fitting
+the exponent to absorb error belonging to the fixed quadratic.
+
+**No single exponent spans the range.** The local lumped exponent runs from
+~5.0 near 43% to ~7.8 near 64%, which is what changing conductances imply.
+Extrapolating the high-temperature fit down to 43% predicts 12.8 K where 18.2 K
+was measured. So measured points are interpolated (log-log) where they exist,
+and the power law only extrapolates beyond them.
 
 ### The sensor glitch — the real failure mode
 

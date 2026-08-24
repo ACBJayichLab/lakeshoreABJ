@@ -44,6 +44,8 @@ class PIDTerms:
     p: float = 0.0
     i: float = 0.0
     d: float = 0.0
+    ff: float = 0.0            # positional feedforward (setpoint curve)
+    vff: float = 0.0           # velocity feedforward (commanded ramp rate)
     error: float = 0.0
     unclamped: float = 0.0
     output: float = 0.0
@@ -61,20 +63,77 @@ class PID:
     gentle would otherwise take an integral time to build.
     """
 
-    def __init__(self, config: PIDConfig | None = None, feedforward=None) -> None:
+    def __init__(self, config: PIDConfig | None = None, feedforward=None,
+                 ff_limit_pct: float | None = None) -> None:
         self.cfg = config or PIDConfig()
         self.integral = 0.0          # in kelvin-seconds
         self.bias = 0.0              # the output at handover
         self.feedforward = feedforward
+        #: Hard bound on the feedforward contribution.  The steady-state curve
+        #: is calibrated for ONE regime (cooler running, shields cold); with the
+        #: cooler off the same percent means something else entirely.  The
+        #: incremental form below already cancels any whole-curve *offset*, so
+        #: what a wrong regime costs is a wrong local *slope* -- and this caps
+        #: how far that can push the output before the integral corrects it.
+        self.ff_limit_pct = ff_limit_pct
+        #: Velocity feedforward, in percent, set by the supervisor while a
+        #: setpoint ramp is running.  Following a ramp of rate r on a plant
+        #: ``K/(1+tau s)`` needs a *sustained* extra drive of ``r*tau/K`` on top
+        #: of the steady-state output -- without it the loop lags, the integral
+        #: winds up to supply the lag, and then unwinds past target when the
+        #: ramp stops.  That is where a ramp's overshoot comes from, and no
+        #: amount of retuning removes it: the information needed is the
+        #: commanded trajectory, which only the caller has.
+        self.velocity_ff_pct = 0.0
         self._ff_at_prime = 0.0
+        self.ff_clamped = False
         self.terms = PIDTerms()
 
     def _ff(self, setpoint: float) -> float:
+        """Feedforward as a *difference* from its value at prime.
+
+        Differencing is what makes this robust to the calibration being taken
+        in a different regime: an offset in the curve cancels identically, and
+        only its local slope matters.
+        """
         if self.feedforward is None or not self.feedforward.enabled:
             return 0.0
-        return self.feedforward.percent_for(setpoint) - self._ff_at_prime
+        delta = self.feedforward.percent_for(setpoint) - self._ff_at_prime
+        limit = self.ff_limit_pct
+        if limit is not None and abs(delta) > limit:
+            self.ff_clamped = True
+            return limit if delta > 0 else -limit
+        self.ff_clamped = False
+        return delta
 
     # -- bumpless handover -------------------------------------------------
+
+    def set_gains(self, kp: float, ti: float) -> None:
+        """Retune without bumping the output.
+
+        Two things move when the gains change, and both have to be absorbed:
+
+        * the integral is stored in kelvin-seconds but contributes ``ki * I``
+          percent, so its contribution scales with the new ``ki``;
+        * the proportional term is ``kp * error``, so with any standing error a
+          change in ``kp`` steps the output directly.  Scheduling from the HOLD
+          tuning to the MOVE tuning is a 10x change in ``kp``; against a 3 K
+          error that is a 0.54% step, which on this plant is several kelvin.
+
+        So the integral is re-solved to hold ``P + I`` fixed across the change.
+        Gain scheduling is only safe if it is invisible in the output.
+        """
+        error = self.terms.error
+        before = self.cfg.kp * error + self.cfg.ki * self.integral
+
+        self.cfg.kp, self.cfg.ti = kp, ti
+        new_ki = self.cfg.ki
+        if new_ki > 0:
+            self.integral = (before - kp * error) / new_ki
+            cap = self._integral_cap() / new_ki
+            self.integral = max(-cap, min(cap, self.integral))
+        else:
+            self.integral = 0.0
 
     def prime(self, output: float) -> None:
         """Make the controller currently demand exactly ``output``.
@@ -119,7 +178,9 @@ class PID:
         # temperature always subtracts heat regardless of the setpoint.
         d = -cfg.kd * slope
 
-        unclamped = self.bias + self._ff(cfg.setpoint) + p + i + d
+        ff = self._ff(cfg.setpoint)
+        vff = self.velocity_ff_pct
+        unclamped = self.bias + ff + vff + p + i + d
         output = max(cfg.out_min, min(cfg.out_max, unclamped))
         saturated = output != unclamped
 
@@ -132,7 +193,7 @@ class PID:
             i = cfg.ki * self.integral
 
         self.terms = PIDTerms(
-            p=p, i=i, d=d, error=error,
+            p=p, i=i, d=d, ff=ff, vff=vff, error=error,
             unclamped=unclamped, output=output, saturated=saturated,
         )
         return self.terms
