@@ -1,260 +1,177 @@
-# Handoff — 2026-08-22 (second pass)
+# Handoff — 2026-08-24
 
 Point-in-time status. Durable context lives in `CLAUDE.md`; this goes stale.
 
-## What changed this session, and why it matters
+**Branch `split/generic-lschart`, 5 commits ahead of `main`. 194 tests passing.**
 
-The reference log set grew from 2 files to **24** (1,510 h / 63 days). That
-invalidated several of the previous session's conclusions, and the corrections
-drove most of the work below.
+## The priority changed
 
-### The dropout detector was aimed at the wrong fault
+Jeff, this session: **the GUI and the MATLAB interface are the priority; the
+software PID is not.**
 
-The previous handoff said the logs contained no dropouts and that the detector
-"cannot be calibrated from data". Both were artefacts of searching for the
-wrong signature — zeros, negatives, sub-1 K readings. The real fault never
-reads 0 K. Searching for *single-channel physically-impossible rates* finds
-**9 events**, one roughly every 7 days, always on Input 1, scattering between
-11 K and 298 K for 2–280 s before healing itself. Full description in
-`CLAUDE.md`. The guard is now calibrated against those events rather than from
-first principles.
+That is a reordering, not a cancellation. `ltspm` is finished and tested and
+should be left alone. Everything below is organised around getting `lschart`
+into a coworker's hands and onto a screen.
 
-### Three linked recovery defects, all fixed
+## What happened this session
 
-None were caught by the old suite, because it only tested a 20 s hold where
-neither the output nor the plant had moved.
+### The project split in two
 
-1. **Spike-test deadlock.** The low-pass only advances on accepted samples, so
-   during an outage it froze while the plant moved on — and a fault ramp-down
-   guarantees the plant moves. On recovery every honest reading sat far from
-   the stale prediction, was rejected as an outlier, and so never refreshed it.
-   The guard could not leave FAULT no matter how healthy the sensor became.
-   Fixed with `MeasurementFilter.is_stale()` / `reseed()`.
-2. **PID never re-primed.** `prime()`'s own docstring said it was called on
-   recovery; its only caller was `set_mode`. After a ramp-down the first demand
-   was a phantom step the size of the whole ramp, which the anomaly check read
-   as a broken premise — then ramped down again. A positive-feedback ratchet to
-   zero from one transient.
-3. **`acknowledge()` could not re-arm.** It left `mode` at PID, so the
-   operator's `set_mode(PID)` hit the "already in this mode" short-circuit and
-   never re-primed. It now disarms, making re-arming a real transition.
+`lschart` is now a generic Lake Shore recorder that a coworker can install and
+point at their own rig; `ltspm` is the LTSPM3-specific software PID that
+depends on it. Three couplings had to be cut (config imports, the supervisor
+wiring in `app.py`, and a simulator fused to the calibrated plant); the rest was
+file moves. `lschart` contains no reference to `ltspm` beyond a doc comment.
 
-### The stale-slew-reference hole — found by replay, not by the simulator
+The join that makes it work: a config file carrying a `control:` section is
+**refused** by a recorder-only install, with a message saying to run
+`python -m ltspm`. It is not silently ignored, because silently recording when
+someone asked for a closed heater loop is the wrong failure.
 
-Every rejection ages the slew reference. At the 20 s cadence of
-`cd8_..._sample_cooldown.xls` a *single* rejection pushed it past
-`slew_reference_max_age_s`, disabling the slew test outright — so the glitch's
-own alternation walked straight through the guard, and garbage values became
-the trusted reference:
+### A real Lake Shore 336 got connected
 
-```
-i=1905  150.990  slew_reject   lastgood=296.97
-i=1906  291.530  GOOD (!)      lastgood=291.53
-i=1907   91.846  slew_reject
-i=1908   93.643  GOOD (!)      lastgood=93.643
-```
+A spare 336 on USB — the first hardware this project has ever talked to.
+Read-only first, then every write path, with the instrument's full state
+captured before and confirmed identical after.
 
-Fixed by a reference-free **reversal test** (`curvature_ratio`): a real thermal
-signal is a smooth function of time, so its second difference is small even
-when the first difference is huge; the glitch reverses violently every sample.
-Measured over the logs it fires 7× inside the known glitch, 0× on a genuine
-6.5 K-per-sample cooldown, 0× on a week of quiet holding.
+**It found four defects that no amount of simulation would have.** All four are
+now in `CLAUDE.md` under "Talking to a Lake Shore box: four things that will
+bite". The one that matters most:
 
-**No simulated fault would have exposed this.** Keep `tools/replay.py` in the
-loop for any future guard change.
+> **Lake Shore boxes apply commands asynchronously.** A query issued too soon
+> after a write overtakes it and answers with the *previous* value. At 0 ms
+> every readback was stale; at 50 ms readbacks lagged by exactly one write.
+> Both of those *look like success*.
 
-### Sweeps needed feedforward
+`LakeshoreTransport` had `inter_command_delay=0.0`, so `set --setpoint 77` would
+have printed a confident confirmation of the old value. Fixed twice over: a
+100 ms post-write settle makes the race unlikely, and readback verification in
+`LS33x` makes it detectable. Only the second is worth staking a cryostat on.
 
-The stated requirement is to hold for hours *and* sweep programmatically. A
-stepped setpoint trips `max_error_k` by construction, so setpoint moves now
-ramp (`control/ramp.py`). That alone was not enough: at `kp=0.02 %/K` against a
-7.6 K/% plant the loop gain is ~0.15, and the setpoint reached target while the
-plant was still 3 K behind. `control/feedforward.py` inverts the measured
-steady-state curve so the output moves *with* the setpoint; the PID trims the
-residual. Model error is absorbed by the integral, so the exponent being
-uncertain is tolerable.
+### The 33x family, and the write path
+
+One driver for 335 and 336 with a capability table per model. The write surface
+a hardware-PID rig actually needs — `SETP`, `RANGE`, `PID`, `RAMP` — behind
+`allow_writes` plus a `max_setpoint_k` ceiling, plus a lower-level `read_only`
+interlock that refuses at the point where bytes leave.
+
+The rule that shapes it: **a setpoint does nothing while the heater range is 0,
+and raising the range is what applies power.** So nothing raises a range as a
+side effect, and `set` applies `--range` last.
+
+### Robustness
+
+Reconnection lives in the `Transport` base class: lazy opening, retries backing
+off 1→30 s, and a link only torn down after 3 consecutive failures because one
+GPIB timeout is usually a slow instrument rather than a dead bus. Plus an
+OS-level single-instance lock, since a COM port has exactly one holder and two
+processes on one GPIB board interleave into garbled replies.
 
 ## Current state
 
 | Area | State |
 |---|---|
-| `model/transport/instruments` | Complete. `_status_ok` shared; a failed `AOUT?` no longer discards a whole frame; `TransportError` from `RDGST?` now propagates instead of masquerading as 8 sensor faults. |
-| `control/` | Complete: filters, guard, coherence, PID, feedforward, ramp, dither, supervisor. |
-| `config.py` + `config.yaml` | Complete. Unknown keys are an error. Validates the GPIB transaction budget against the poll interval. |
-| `acquisition/` | Complete: poller, recorder (CSV, no row limit, flushed per sample), ring buffer. |
-| `tools/` | `import_xls.py`, `replay.py`. |
-| `__main__.py` / `app.py` | `run` / `check` / `init`. Going live is two `backend:` lines. |
-| Tests | **102 passing**, incl. 6 replaying real logs. |
-| GUI | **Not started.** |
+| `lschart` transport / instruments | **Exercised against real hardware.** 218 GPIB path is *not* — no 218 has ever been connected. |
+| `lschart` config / app / CLI | Complete. `run` / `probe` / `set` / `check` / `init`. |
+| `lschart` acquisition | Complete. 120 cycles at 1 Hz off the real 336, 0 dropped. |
+| `lschart.ipc` | Only `lock.py`. **Status file and command spool not started.** |
+| **GUI** | **Not started.** The priority. |
+| **MATLAB interface** | **Not started.** The priority. |
+| `ltspm` (software PID) | Complete, 100+ tests, replay over 63 days of real logs. Parked. |
+| Windows deployment | Untested. Development is macOS. |
 
-Replay against the full reference set: **12.8 rejections/day, 0 samples ever
-reaching FAULT** across 63 days.
+## Next steps, in priority order
 
-### Sensor noise is quadratic in T, and that caps the sweep requirement
+### 1. The MATLAB file interface (`lschart/ipc/`)
 
-A full-corpus curvature scan (all 24 files) flagged 21 sub-Kelvin wiggles in
-`cd9_..._sample_cool.xls` that the 4-file validation had not shown. Checking
-them across channels showed they are **not** glitches -- Input 3 wobbles by a
-comparable amount in the same window -- and the shipped guard correctly rejects
-**nothing** there, because it uses a local adaptive noise floor rather than the
-flat file-wide estimate the prototype scan used. It does still catch the two
-real glitches in that file as contiguous 7-sample runs.
+Decided this session: **files, not a socket.** A socket puts a connection state
+machine inside the process that must never die, and its failure is quiet — a
+dead server thread keeps recording perfectly while silently ignoring every
+setpoint. The file version has no connection state at all: Python never learns
+MATLAB exists, which is the strongest form of "don't crash if MATLAB does".
 
-The useful by-product was a proper noise-vs-temperature curve (3-point local
-detrending over cd9+cd10):
+This is *mandatory*, not merely preferable: a Windows COM port has exactly one
+holder, so MATLAB cannot open COM10 while the recorder has it. Talking through
+files is the only shape that works.
 
-| T | 18 K | 96 K | 190 K | 240 K | 290 K |
-|---|---|---|---|---|---|
-| rms | 1.8 mK | 13.6 mK | 45 mK | 73 mK | 109 mK |
+- `status.json`, rewritten atomically each cycle (temp file + `os.replace`).
+  Carries temperatures, link state, a heartbeat, and `last_applied_id`.
+  A failed replace is harmless — the next cycle rewrites it.
+- A maildir-style command spool: MATLAB writes `cmd.tmp`, renames it to
+  `<counter>.json`; the poller scans, applies, deletes. No locking, no
+  contention, and a crash mid-write leaves a `.tmp` nobody picks up.
+- **Commands carry a timestamp and are ignored beyond ~30 s.** Without this, a
+  recorder that was down for an hour comes back and replays a backlog of stale
+  setpoints into a live cryostat.
+- **Commands carry an id, echoed in `status.json`** — the acknowledgement a
+  naive file scheme lacks.
+- `matlab/LakeShore.m`: `temperature()`, `setSetpoint(loop, K)`, `isAlive()`.
 
-That is `~1.36e-6 * T**2`, not linear. The simulator's old linear model was
-calibrated at 96 K and understated 290 K noise by ~4x; it now matches to within
-about 10% across the range.
+### 2. The GUI
 
-**Consequence worth telling Jeff:** millikelvin stability is a low-temperature
-capability. Near 96 K the measurement floor is ~2.5-4 mK; near room temperature
-it is ~100 mK, and no amount of control quality changes that. Sweeps that end
-high will not hold to mK.
+**A separate process** reading `status.json` and tailing the CSV — not a thread
+in the recorder. A Qt bug then cannot take down logging, the viewer can be
+closed and reopened mid-run, and two people can watch at once. It becomes just
+another file-IPC client, same contract as MATLAB, so it costs little extra.
 
-### The plant model was structurally wrong (Jeff, 2026-08-23)
+pyqtgraph strip chart; `pip install "lschart[gui]"`. The GUI dependencies were
+deliberately moved out of the base install this session — the recorder is what
+must stay up for months, and it should not need Qt to do it.
 
-The output percent is a **voltage**, into a stable 50 Ω heater. So `P ∝ pct²`
-exactly, and the observed nonlinearity is thermal — changing heat capacities
-and conductances — not actuator behaviour. The old lumped `T ∝ pct^5` fit
-conflated the two.
+### 3. Windows deployment
 
-Re-fitting properly against **24 settled heater steps** extracted from the
-`ANALOG` commands in the `cd10 monitor4/5` Notes columns:
+The real target. Needs: the vendor USB driver, a Task Scheduler recipe (or a
+service wrapper), and a check that the CP210x/COM-port path behaves as it does
+on macOS. `serial_number` matching already handles re-enumeration, which is the
+common failure for a USB instrument left running for weeks.
 
-| | old | new |
-|---|---|---|
-| lumped exponent | 5.0 (2 points) | **6.32** (24 points, R² = 0.9962) |
-| thermal exponent | — | **3.16** (`ΔT ∝ P^m`) |
-| gain @ 63.076% | 7.6 K/% | **10.0 K/%** |
-| one DAC code | 76 mK | **100 mK** |
-| τ | 360 s (assumed) | **620 s** @ 137 K (measured, one step) |
+### 4. Hand the coworker their build
 
-Consequences: `lschart/plant.py` now holds the single shared curve, imported by
-both the simulator and the feedforward so they cannot disagree by accident;
-`plant_lag_s` is 620 s; the authority band is ±10 K, not ±7.6 K.
+`examples/config-335-usb.yaml` is ready and annotated. Their 335 is on COM10
+with heaters on its own outputs, so `driver: lakeshore` applies and **no VISA
+runtime is needed**. Wants a short README rather than this file.
 
-The exponent question in the old handoff is **answered**: 66.95% → 151.05 K in
-the logs, close to Jeff's "65-ish is around 150 K", and the old n = 5.0 was too
-shallow. But no single exponent spans the range, so a calibration table is used
-where data exists.
+## Not the priority, but do not lose
 
-**Also resolved from the logs:** a Notes entry reads
-`Query sent: AOUT? / Query response: +63.070` after 63.076 was commanded —
-direct evidence the 218 **quantises to 0.01%**, which was an open hardware
-question. `dac_step_pct: 0.01` is confirmed.
+- **`verify_readback` on the 218 may be reading stale values.** The async-write
+  behaviour measured on the 336 very likely applies to the 218 on GPIB too.
+  `SupervisorConfig.verify_readback` reads `AOUT?` after `ANALOG`; it passes in
+  simulation only because the fake applies writes synchronously. **Check this
+  before the LTSPM rig ever runs armed.** This is the highest-value item on the
+  parked list.
+- **Sweep scheduler** — `sweep_to()` exists and is tested; a sequence of
+  setpoints with dwell times does not.
+- **A deliberate step test at two or three temperatures** remains the
+  highest-value LTSPM hardware measurement. `tools/steptest.py` is the protocol;
+  only the 137 K row is real.
 
-### Gain scheduling replaced the fixed gains (2026-08-24)
+## Two open questions worth resolving
 
-The steady-state curve is **underdetermined by the logs** and cannot be the
-control model.  Two forms fit the same 24 settled points and then disagree by
-tens of kelvin outside the fitted band:
+**Is the LTSPM noise model right?** The bench 336 reads 0.44–3.03 mK rms
+(3-point detrended) at ~296 K. `CLAUDE.md` says the 218 sample channel does
+**109 mK at 290 K**. That is 30–200× worse for the same temperature.
 
-| form | R² | extrapolated to 43% |
-|---|---|---|
-| `dT ~ pct^6.51` | 0.9969 | 16.1 K |
-| `dT ~ (pct-56.9)^0.92` | 0.99998 | heater off |
+Three things differ at once — different instrument, different sensors, and a
+completely quiet rig here (cryo off, nothing moving) versus 218 logs taken
+during active cooldowns. Any could dominate, so **neither number is wrong yet**.
+The clean resolution is to record the 218 under the same quiet conditions and
+compare. It matters because "millikelvin is a low-temperature capability" is
+built on the 218 figure.
 
-43% -> 18.2 K is measured, so the second is wrong — but nothing *in the fit*
-says so.  Worse, the whole curve is regime-specific: heating a weakly-pinned
-island off a 300 K coldplate is a different plant from heating it off a 4 K one.
-
-So the controller is now tuned from the two **local** numbers a step test
-actually measures — gain `K = dT/d(pct)` in K/% and time constant `tau` — via
-IMC/pole-cancellation (`control/tuning.py`):
-
-    Ti = tau,  Kp = tau / (K * tau_cl)   =>   closed loop = 1 / (1 + tau_cl*s)
-
-First order, so **no overshoot at any gain**, and `tau_cl` *is* the closed-loop
-response time — one number with a physical meaning instead of two interacting
-gains.  Two regimes with hysteresis: HOLD (`tau_cl` 1800 s, rejects the
-correlated noise) and MOVE (300 s, follows a sweep).
-
-Four things landed with it:
-
-1. **`SetpointSmoother`** (`control/ramp.py`).  A linear ramp has a
-   discontinuous derivative at both ends; the loop cannot follow a corner, so
-   it lags in and overshoots out, and no retuning fixes that.  Measured on a
-   3 K sweep: **464 mK overshoot without, 25 mK with**, independent of rate.
-2. **Velocity feedforward** in `pid.py` — sustains a ramp instead of lagging it,
-   using the scheduled `K` and `tau`, so it improves as the schedule does.
-3. **The anomaly check was rewritten.**  The original form compared total demand
-   against present output, which cannot survive feedforward: a commanded ramp
-   legitimately injects `r*tau/K` at once, the rate limiter needs many cycles to
-   apply it, and for all of those cycles the gap reads as an anomaly — a
-   permanent false positive that escalates to a ramp-down.  It now watches the
-   *feedback terms* directly, which is what a bad reading actually moves.
-4. **`_check_model()`** in the supervisor + `tests/test_regime.py`.  The
-   calibration was measured with the cooler running; with it off the same
-   percent runs far hotter and no temperature log can tell the difference.  A
-   settled measurement disagreeing with the curve by more than `model_trust_k`
-   now raises an alarm and the loop leans on the integral instead.
-
-**`tools/steptest.py`** is the protocol to replace the schedule with measured
-rows.  Only the 137 K row is real today.
-
-## Answers from Jeff this session
-
-- **Recovery after a fault: always require operator acknowledgement.** No
-  automatic resumption, even if the sensor looks healthy.
-- **Usage:** sits at a temperature for a few hours; wants better stability and
-  *programmatic sweeps*.
-- **The glitch:** "sudden jump to a lower value, sometimes flickers back and
-  forth… no way it could cool that quickly and it is very discrete." Matches
-  the 9 events exactly.
-- **Cadence:** was told the 2–20 s variation was driven by file-size limits.
-  Confirmed — it tracks the 65,004-row cap in every long file.
-
-## Not built yet
-
-1. **GUI** — pyqtgraph strip chart + PID panel. PySide6/pyqtgraph are declared
-   in `pyproject.toml` but are *not* in `.venv` (they exist in the system
-   Python). `uv pip install -e ".[dev]"` before starting.
-2. **Sweep scheduler** — `sweep_to()` exists and is tested; a sequence of
-   setpoints with dwell times does not.
-3. **`lschart` is still not installed into `.venv`.** `tests/conftest.py`
-   inserts the repo root on `sys.path`, which papers over it. Only `pyyaml` was
-   added this session.
-
-## Still to verify against real hardware
-
-Unchanged from last time except where noted.
-
-- **`RDGST?` bit weights** (1 invalid, 16 under, 32 over, 64 units zero,
-  128 units over). Now polled every `status_every_n_cycles` rather than every
-  cycle, so a wrong decoding is less costly — but still unconfirmed.
-- ~~**The 218's analog-output resolution.**~~ **Resolved from the logs**: a
-  Notes entry shows `AOUT?` returning `+63.070` after `63.076` was commanded,
-  so the box quantises to 0.01%. `dac_step_pct: 0.01` is correct.
-- **The 218's per-input update rate.** 1 Hz is the new default cadence and is
-  believed to be comfortably inside what the box produces; confirm against the
-  manual before anyone raises it.
-- **The plant time constant.** τ ≈ 620 s comes from a *single* step response
-  at 137 K; every other command in those logs is a sub-2 K trim. Heat capacity
-  varies with temperature so τ certainly does too, and `plant_lag_s` sets the
-  ramp-error allowance. **A deliberate step test at two or three temperatures
-  is the highest-value hardware measurement available.**
-- **The curve below 63%.** The 43% → 18.2 K anchor is from a different, colder
-  cooldown; base load varies between runs. Everything from 63–68.5% is one
-  self-consistent series. Extend downward with settled steps when convenient.
-- **GPIB timing.** At 1 Hz with `read_status: false` a cycle is ~9
-  transactions ≈ 0.45 s at 50 ms pacing. `lschart check` prints the budget and
-  `AppConfig.validate()` refuses a cadence the bus cannot sustain — but the
-  50 ms figure itself is untested on this bus.
+**Does `read_status: true` earn its cost?** On the bench 336 the only cycles
+exceeding 1 s were exactly the every-15th ones adding four `RDGST?` queries
+(~1.25 s vs ~1.00 s). Nothing was dropped — the fixed-deadline schedule absorbs
+it — but the margin is gone. Raising `status_every_n_cycles`, or dropping status
+polling, buys it back.
 
 ## Things worth knowing
 
-- **`sim.speedup` accelerates the plant but not the controller**, which still
-  integrates in real time. Fine for exercising the recorder; meaningless for
-  closed-loop behaviour. Use the virtual-clock harness in `tests/conftest.py`.
-- **Filenames in `reference/logs` lie.** `cd10_7_2026_st2_monitor3.xls` is a
-  218 log. `import_xls` sniffs row 0; never trust the name.
-- **`reference/logs` is ~110 MB and is deliberately *not* gitignored** — it is
-  the only empirical record of the plant, and every default in `control/` is
-  derived from it. Revisit if the repo needs to stay small.
-- **The repo has one commit** (`Init`).  The tuning/step-test work above was
-  committed on top of it at the start of the split session.
+- **`reference/logs` is ~110 MB and deliberately not gitignored** — the only
+  empirical record of the LTSPM plant.
+- **Filenames in `reference/logs` lie.** `import_xls` sniffs row 0.
+- **`sim.speedup` accelerates the plant but not the controller.** Fine for
+  exercising the recorder; meaningless for closed-loop behaviour. Use the
+  virtual-clock harness in `tests_ltspm/conftest.py`.
+- **The bench 336's loops are benign by value, not by configuration.** All four
+  are in closed-loop mode with `powerup_enable=1` on loops 3/4; nothing runs
+  only because every setpoint (275 K) sits below ambient (296 K).
