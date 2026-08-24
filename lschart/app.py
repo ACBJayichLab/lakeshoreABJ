@@ -16,6 +16,8 @@ from .acquisition.ringbuffer import RingBuffer
 from .config import AppConfig, InstrumentConfig
 from .instruments.ls218 import AnalogOutputConfig, LS218
 from .instruments.ls33x import LS33x
+from .ipc.commands import CommandSpool
+from .ipc.service import IpcService
 from .transport import LoopbackTransport, Transport
 
 log = logging.getLogger(__name__)
@@ -122,6 +124,8 @@ class Application:
         self.supervisor = None          # set by controller_factory, if any
         self.recorder: Recorder | None = None
         self.ring = RingBuffer(cfg.acquisition.ringbuffer_size)
+        #: status.json + the command spool.  None when `ipc.enabled` is false.
+        self.ipc: IpcService | None = None
         self.poller: Poller | None = None
         self._build()
 
@@ -244,6 +248,25 @@ class Application:
                 flush_every_sample=cfg.recorder.flush_every_sample,
             )
 
+        # Built before the poller so its `on_frame` hook can be handed over at
+        # construction: the service must see the very first cycle, because a
+        # status file that appears only on cycle two is a status file a client
+        # can catch absent.
+        if cfg.ipc.enabled:
+            self.ipc = IpcService(
+                status_path=cfg.ipc.status_path(),
+                spool=CommandSpool(cfg.ipc.command_path(),
+                                   ttl_s=cfg.ipc.command_ttl_s),
+                instruments=self.instruments,
+                recorder=self.recorder,
+                accept_commands=cfg.ipc.accept_commands,
+                allow_heater_range=cfg.ipc.allow_heater_range,
+                max_commands_per_cycle=cfg.ipc.max_commands_per_cycle,
+                ack_history=cfg.ipc.ack_history,
+                config_path=cfg.source_path,
+                interval_s=cfg.acquisition.interval_s,
+            )
+
         self.poller = Poller(
             self.instruments,
             interval_s=cfg.acquisition.interval_s,
@@ -259,12 +282,17 @@ class Application:
             status_every_n_cycles=min(
                 (c.status_every_n_cycles for c in cfg.enabled_instruments), default=0
             ),
+            on_frame=self.ipc.on_frame if self.ipc is not None else None,
         )
+        if self.ipc is not None:
+            self.ipc.poller = self.poller
 
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
         assert self.poller is not None
+        if self.ipc is not None:
+            self.ipc.start()
         self.poller.start()
 
     def stop(self) -> None:
@@ -276,6 +304,10 @@ class Application:
             self.supervisor.shutdown()
         if self.recorder is not None:
             self.recorder.close()
+        # Last, so the final status file reports the closed log and whatever
+        # the supervisor decided to leave the heater doing.
+        if self.ipc is not None:
+            self.ipc.stop()
 
     def arm(self, setpoint_k: float | None = None) -> None:
         """Close the loop.  Explicit, never automatic on startup.

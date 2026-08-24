@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import time
@@ -118,12 +119,34 @@ def cmd_check(args) -> int:
     print(f"config: {cfg.source_path or '<defaults>'}")
     control = cfg.section("control")
     enabled = bool(getattr(control, "enabled", False))
-    print(f"  backend        : {'visa (HARDWARE)' if cfg.uses_hardware else 'sim'}")
+    drivers = sorted({i.driver for i in cfg.enabled_instruments})
+    print(f"  driver(s)      : {', '.join(drivers) or 'none'}"
+          f"{'  (HARDWARE)' if cfg.uses_hardware else ''}")
     print(f"  control        : {'enabled' if enabled else 'disabled'}")
-    print(f"  control channel: {cfg.control_channel}")
+    # A recorder-only rig -- the coworker's 335, say -- declares no
+    # control_input, and asking for the control channel then raises.  Reporting
+    # that as a traceback from `check`, of all commands, is no way to greet
+    # somebody validating their first config file.
+    if cfg.control_instrument is not None:
+        print(f"  control channel: {cfg.control_channel}")
+    else:
+        print("  control channel: none (no instrument declares a control_input; "
+              "this config records only)")
     print(f"  cadence        : {cfg.acquisition.interval_s} s")
     print(f"  budget         : {cfg.estimated_transactions()} transactions "
           f"~ {cfg.estimated_cycle_s():.2f} s per cycle")
+    ipc = cfg.ipc
+    if ipc.enabled:
+        print(f"  status file    : {ipc.status_path()}")
+        print(f"  commands       : "
+              f"{'accepted from ' + ipc.command_path() if ipc.accept_commands else 'not accepted'}"
+              f"{' (heater range ALLOWED)' if ipc.accept_commands and ipc.allow_heater_range else ''}")
+    else:
+        print("  status file    : disabled (ipc.enabled: false) -- the GUI and "
+              "MATLAB have nothing to read")
+    writable = [i.resolved_name() for i in cfg.enabled_instruments
+                if getattr(i, "allow_writes", False)]
+    print(f"  writable       : {', '.join(writable) if writable else 'nothing (read-only)'}")
     if enabled:
         s = control.supervisor
         lo = max(s.hard_min_pct, s.operating_point_pct - s.authority_pct)
@@ -265,10 +288,124 @@ def cmd_set(args) -> int:
     return 0
 
 
+def cmd_status(args) -> int:
+    """Report what a *running* recorder is doing, by reading its status file.
+
+    Touches no hardware and takes no lock, so it is safe to run at any time and
+    from any number of terminals.  Exit status is the useful part in a script:
+    0 while the recorder is alive and current, 1 when the file is missing,
+    stale, or says the recorder has stopped.
+    """
+    from .ipc.status import read_status, status_age_s
+
+    cfg = config_mod.load(args.config)
+    path = args.file or cfg.ipc.status_path()
+    status = read_status(path)
+    if status is None:
+        print(f"no readable status at {path}. Is the recorder running, and is "
+              "ipc.enabled true in its config?", file=sys.stderr)
+        return 1
+    if args.json:
+        import json
+
+        print(json.dumps(status, indent=2))
+
+    age = status_age_s(status) or 0.0
+    interval = float(status.get("interval_s") or cfg.acquisition.interval_s)
+    # Three intervals of slack: one slow cycle is normal, three in a row is not.
+    stale = age > max(3 * interval, 5.0)
+    running = bool(status.get("running", True))
+
+    if not args.json:
+        print(f"{path}")
+        print(f"  recorder   : pid {status.get('pid')} on {status.get('host')}"
+              f" -- {'RUNNING' if running else 'STOPPED'}")
+        print(f"  last update: {status.get('iso')}  ({age:.1f} s ago)"
+              f"{'  <-- STALE' if stale else ''}")
+        print(f"  cycles     : {status.get('cycle')} "
+              f"({status.get('dropped_cycles')} with errors) "
+              f"at {interval:g} s")
+        for ch in status.get("channels", []):
+            k = ch.get("kelvin")
+            flag = "" if ch.get("usable") else f"   <-- {ch.get('validity')}"
+            print(f"    {ch.get('name', '?'):<24} "
+                  f"{'   n/a' if k is None else format(k, '10.4f')} K{flag}")
+        for link in status.get("links", []):
+            state = "up" if link.get("up") else "DOWN"
+            extra = f" -- {link['last_error']}" if link.get("last_error") else ""
+            print(f"  link {link.get('name'):<10}: {state}, "
+                  f"{link.get('reconnects', 0)} reconnect(s){extra}")
+        rec = status.get("recorder") or {}
+        if rec.get("path"):
+            print(f"  log        : {rec['path']} ({rec.get('rows', 0)} rows)")
+        cmds = status.get("commands") or {}
+        print(f"  commands   : "
+              f"{'accepted' if cmds.get('accepted') else 'NOT accepted'}, "
+              f"{cmds.get('applied', 0)} applied / {cmds.get('refused', 0)} refused")
+        control = status.get("control")
+        if control:
+            print(f"  control    : {control.get('state')} "
+                  f"setpoint {control.get('setpoint_k')} K "
+                  f"output {control.get('output_pct')}%")
+            for alarm in control.get("alarms", []):
+                print(f"    ALARM: {alarm}")
+
+    return 0 if (running and not stale) else 1
+
+
+def cmd_send(args) -> int:
+    """Command a *running* recorder through its file spool, and wait for the ack.
+
+    The difference from `set` matters and is not cosmetic.  `set` opens the
+    instrument itself, so it only works when no recorder holds the port.
+    `send` writes a file that the running recorder picks up on its next cycle,
+    so it only works when one *is* running -- and it is the same path MATLAB
+    uses, which makes this the way to test that path without MATLAB.
+    """
+    import time as _time
+
+    from .ipc.commands import CommandSpool
+    from .ipc.status import read_status, status_age_s
+
+    cfg = config_mod.load(args.config)
+    spool = CommandSpool(cfg.ipc.command_path(), ttl_s=cfg.ipc.command_ttl_s)
+    status_path = cfg.ipc.status_path()
+
+    # Refuse to queue into a spool nobody is reading.  Otherwise the command
+    # sits there until it expires and the operator watches nothing happen.
+    status = read_status(status_path)
+    if status is None:
+        print(f"no recorder is running here: {status_path} is absent or "
+              "unreadable. Use `set` to talk to the instrument directly.",
+              file=sys.stderr)
+        return 1
+    age = status_age_s(status) or 0.0
+    if age > max(3 * cfg.acquisition.interval_s, 5.0) or not status.get("running", True):
+        print(f"the recorder's status file is {age:.0f} s old"
+              f"{'' if status.get('running', True) else ' and says it has stopped'}"
+              " -- not queueing a command it may never read.", file=sys.stderr)
+        return 1
+
+    kwargs = dict(args.args)
+    cid = spool.submit(args.kind, instrument=args.instrument or "",
+                       source=f"lschart-cli/{os.getpid()}", **kwargs)
+    print(f"queued {args.kind} {kwargs or ''} as {cid}")
+
+    deadline = _time.monotonic() + args.timeout
+    while _time.monotonic() < deadline:
+        status = read_status(status_path) or {}
+        for ack in (status.get("commands") or {}).get("recent", []):
+            if ack.get("id") == cid:
+                print(("OK: " if ack.get("ok") else "REFUSED: ") + str(ack.get("message")))
+                return 0 if ack.get("ok") else 1
+        _time.sleep(0.2)
+    print(f"no acknowledgement within {args.timeout:g} s. The command may still "
+          "be applied; check `lschart status`.", file=sys.stderr)
+    return 1
+
+
 def cmd_init(args) -> int:
     """Write a starter config file."""
-    import os
-
     if os.path.exists(args.path) and not args.force:
         print(f"{args.path} exists; pass --force to overwrite", file=sys.stderr)
         return 1
@@ -325,12 +462,68 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
                     metavar=("P", "I", "D"), help="the loop's own gains")
     st.set_defaults(func=cmd_set)
 
+    stat = sub.add_parser(
+        "status",
+        help="report what a running recorder is doing (reads status.json)",
+        description="Reads the status file only: no hardware, no lock, safe at "
+                    "any time. Exits nonzero if the recorder is stale or stopped.",
+    )
+    stat.add_argument("--file", default=None,
+                      help="status file to read, overriding the config")
+    stat.add_argument("--json", action="store_true", help="dump the raw file")
+    stat.set_defaults(func=cmd_status)
+
+    snd = sub.add_parser(
+        "send",
+        help="command a RUNNING recorder through its file spool",
+        description="The same path MATLAB uses. Use `set` instead when no "
+                    "recorder is running and this should open the instrument "
+                    "itself.",
+    )
+    snd.add_argument("--instrument", default=None,
+                     help="which box, if more than one is configured")
+    snd.add_argument("--timeout", type=float, default=10.0,
+                     help="seconds to wait for the acknowledgement")
+    snd_sub = snd.add_subparsers(dest="kind", required=True)
+
+    sp = snd_sub.add_parser("setpoint", help="move a loop's setpoint")
+    sp.add_argument("kelvin", type=float)
+    sp.add_argument("--loop", type=int, default=1)
+
+    rp = snd_sub.add_parser("ramp", help="set the instrument's setpoint ramp")
+    rp.add_argument("rate_k_per_min", type=float,
+                    help="K/min; 0 turns ramping off")
+    rp.add_argument("--loop", type=int, default=1)
+
+    rg = snd_sub.add_parser(
+        "range", help="heater range 0..3 -- 1 and above APPLY POWER")
+    rg.add_argument("value", type=int, choices=[0, 1, 2, 3])
+    rg.add_argument("--output", type=int, default=1)
+
+    snd_sub.add_parser("heaters_off", help="every heater range to 0")
+    snd_sub.add_parser("ping", help="prove the command path works, touching nothing")
+
+    def _collect_send_args(parsed) -> list[tuple]:
+        """Turn the chosen sub-parser's options into the command's arguments."""
+        keys = {
+            "setpoint": ("kelvin", "loop"),
+            "ramp": ("rate_k_per_min", "loop"),
+            "range": ("value", "output"),
+            "heaters_off": (),
+            "ping": (),
+        }[parsed.kind]
+        return [(k, getattr(parsed, k)) for k in keys]
+
+    snd.set_defaults(func=cmd_send, _collect=_collect_send_args)
+
     ini = sub.add_parser("init", help="write a starter config.yaml")
     ini.add_argument("path", nargs="?", default=config_mod.DEFAULT_CONFIG_NAME)
     ini.add_argument("--force", action="store_true")
     ini.set_defaults(func=cmd_init)
 
     args = ap.parse_args(argv)
+    if getattr(args, "_collect", None) is not None:
+        args.args = args._collect(args)
     if args.command is None:
         args.command = "run"
         args.func = cmd_run

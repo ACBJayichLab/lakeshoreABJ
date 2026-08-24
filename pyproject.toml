@@ -22,6 +22,11 @@ dev = ["pytest>=8.0", "xlrd>=2.0"]
 
 [project.scripts]
 lschart = "lschart.__main__:main"
+# The viewer is a separate *process*, so it gets its own entry point rather
+# than a subcommand: `lschart run` and `lschart-view` are meant to be running
+# at the same time, in different terminals, on different machines if the data
+# directory is shared.
+lschart-view = "lschart.gui.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68"]

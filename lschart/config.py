@@ -191,6 +191,57 @@ class AcquisitionConfig:
 
 
 @dataclass
+class IpcConfig:
+    """Talking to MATLAB and the GUI without sharing the instrument.
+
+    The recorder holds the port exclusively -- a Windows COM port has exactly
+    one holder -- so MATLAB *cannot* open the instrument while this is running.
+    Files are therefore not a stylistic preference but the only shape that
+    works, and this section is how it is switched on.
+
+    ``enabled`` writes ``status.json`` every cycle.  It costs one small file
+    write per second and nothing on the bus, and it is what the GUI reads, so
+    it is on by default.
+
+    ``accept_commands`` is the other direction and is **off** by default, for
+    the same reason ``allow_writes`` is: the common case is a shared cryostat
+    where something else is already holding something important.  Turning it on
+    is not by itself enough -- the instrument's own ``allow_writes`` still
+    gates every write, and ``transport.read_only`` still gates every byte.
+    """
+
+    enabled: bool = True
+    #: Where ``status.json`` and the command spool live.  Alongside the CSV by
+    #: default, so one directory is the whole interface.
+    directory: str = "data"
+    status_file: str = "status.json"
+    command_directory: str = "commands"
+
+    #: Read the command spool at all.  See the class docstring.
+    accept_commands: bool = False
+    #: A command older than this is refused, not applied.  A recorder that was
+    #: down for an hour must not come back and replay an hour of setpoints
+    #: into a live cryostat -- the traversal is the hazard, not the target.
+    command_ttl_s: float = 30.0
+    #: A bound on how much bus time one cycle may spend on commands.  Each
+    #: write costs a settle plus a verifying readback, so an unbounded backlog
+    #: could overrun the poll interval.
+    max_commands_per_cycle: int = 4
+    #: Raising a heater range is the act that applies power.  A remote client
+    #: may only do it if this says so; turning a heater OFF is always allowed.
+    allow_heater_range: bool = False
+    #: How many acknowledgements ``status.json`` carries.  A client that polls
+    #: slower than this fills up may miss its own answer.
+    ack_history: int = 20
+
+    def status_path(self) -> str:
+        return os.path.join(self.directory, self.status_file)
+
+    def command_path(self) -> str:
+        return os.path.join(self.directory, self.command_directory)
+
+
+@dataclass
 class RuntimeConfig:
     """Process-level concerns: being the only recorder on this instrument."""
 
@@ -263,6 +314,7 @@ class AppConfig:
     acquisition: AcquisitionConfig = field(default_factory=AcquisitionConfig)
     recorder: RecorderConfig = field(default_factory=RecorderConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    ipc: IpcConfig = field(default_factory=IpcConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     #: Populated from `_SECTIONS` by `load()`; see `register_section`.
     extensions: dict[str, Any] = field(default_factory=dict)
@@ -392,6 +444,28 @@ class AppConfig:
             problems.append("acquisition.interval_s must be positive")
         if self.acquisition.log_every_n < 1:
             problems.append("acquisition.log_every_n must be at least 1")
+
+        if self.ipc.enabled:
+            if self.ipc.command_ttl_s <= 0:
+                problems.append(
+                    "ipc.command_ttl_s must be positive; it is what stops a "
+                    "backlog of stale commands being replayed into a live rig"
+                )
+            if self.ipc.max_commands_per_cycle < 1:
+                problems.append("ipc.max_commands_per_cycle must be at least 1")
+            if not self.ipc.status_file:
+                problems.append("ipc.status_file must be a filename")
+            if self.ipc.command_directory == "":
+                problems.append(
+                    "ipc.command_directory must be a directory name; commands "
+                    "cannot share a directory with the status file they answer"
+                )
+        elif self.ipc.accept_commands:
+            problems.append(
+                "ipc.accept_commands is true but ipc.enabled is false, so "
+                "nothing would ever read the spool -- and a client would have "
+                "no status file in which to see its command refused"
+            )
 
         # A cycle that cannot fit in its own poll interval will silently drift.
         est = self.estimated_cycle_s()

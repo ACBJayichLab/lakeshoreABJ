@@ -84,3 +84,16 @@ recorder:
 
 runtime:
   lock_path: data/ls336.lock
+
+# The file interface: status.json for the viewer, and a command spool.
+#
+# Reading is on; commanding is off, and would be refused twice over anyway --
+# `allow_writes: false` above, and `read_only: true` below it.  This box is
+# for watching.
+#
+#   python -m lschart.gui -c examples/config-336-usb.yaml      the strip chart
+#   python -m lschart -c examples/config-336-usb.yaml status   one-shot digest
+ipc:
+  enabled: true
+  directory: data
+  accept_commands: false

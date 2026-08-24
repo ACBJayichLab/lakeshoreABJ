@@ -1,0 +1,124 @@
+# Lake Shore 336 on USB — WRITABLE.  The bench box, for exercising the write
+# path, the MATLAB interface and the GUI's setpoint control against real
+# hardware rather than against the simulator.
+#
+# This is the same instrument as config-336-usb.yaml, with the interlocks
+# deliberately opened.  Keep both files.  `config-336-usb.yaml` stays the
+# default for watching; this one is picked up on purpose.
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS FILE TURNS OFF
+# ---------------------------------------------------------------------------
+#
+#   transport.read_only: false   bytes that change instrument state may now
+#                                leave this program
+#   allow_writes: true           SETP / RANGE / PID / RAMP are permitted
+#   ipc.accept_commands: true    MATLAB and the GUI may command this recorder
+#
+# Still OFF, deliberately:
+#
+#   ipc.allow_heater_range       a *file* may not raise a heater range.  The
+#                                CLI still can (`set --range`), which keeps
+#                                "apply power" an act someone types.
+#
+# ---------------------------------------------------------------------------
+# THE STATE OF THIS BOX (2026-08-24)
+# ---------------------------------------------------------------------------
+#
+# Cryo OFF, at atmosphere, everything ~295-297 K.
+#
+#   A  Coldplate    ~295 K       C  Rad Shield   ~296 K
+#   B  Stage 2      ~297 K       D  Stage 1      ~295 K
+#
+# All four loops are in CLOSED-LOOP mode, and loops 3/4 have powerup_enable=1.
+# Nothing runs only because every setpoint (275 K) sits BELOW ambient (296 K),
+# so every loop is asking for zero heat.  That is benign **by value, not by
+# configuration** — which is exactly why it matters here:
+#
+#   A setpoint does nothing while the heater range is 0.  But this box is
+#   already in closed-loop mode, so setting a setpoint ABOVE ambient and then
+#   raising a range will genuinely heat a cryostat that is at atmosphere.
+#   Either half alone is inert.  Both together are not.
+#
+# TLIMIT is 330 K on every input.  max_setpoint_k below is set well under that
+# so a typo is refused by this software before the instrument's own limit is
+# ever the thing standing between you and a mistake.
+
+log_level: INFO
+
+instruments:
+  - name: ls336
+    model: "336"
+    driver: lakeshore         # Lake Shore's own driver: USB serial, no VISA
+    transport:
+      # Matching on the serial rather than the port survives a re-enumeration:
+      # after a replug the port number changes and the serial does not.
+      serial_number: "LSA26E0"
+      com_port: ""
+      baud_rate: 57600        # the 336's fixed USB rate (57600, 7-O-1)
+      timeout_ms: 3000
+
+      # <-- OPENED.  The byte-level interlock is off, so a bug above this
+      # layer can now reach the instrument.  `allow_writes` below is the only
+      # remaining driver-level gate.
+      read_only: false
+
+      reconnect: true
+      retry_min_s: 1.0
+      retry_max_s: 30.0
+
+    channels:
+      A: Coldplate
+      B: Stage 2
+      C: Rad Shield
+      D: Stage 1
+
+    read_status: true
+    status_every_n_cycles: 15
+    read_setpoints: true      # SETP? 1-4
+    read_heaters: true        # HTR? and RANGE? on outputs 1 and 2
+
+    # <-- OPENED.  Permits SETP, RANGE, PID and RAMP.  Every one of them is
+    # confirmed by reading the value back, because this box applies commands
+    # asynchronously and an unverified readback can be a whole write behind.
+    allow_writes: true
+
+    # A typo'd setpoint is refused here rather than politely forwarded.  310 K
+    # is above ambient (so a real heating test is still expressible) and well
+    # under the instrument's own 330 K TLIMIT.
+    max_setpoint_k: 310.0
+
+acquisition:
+  interval_s: 1.0
+  log_every_n: 1
+  ringbuffer_size: 43200
+
+recorder:
+  enabled: true
+  directory: data
+  filename_prefix: ls336      # same log as the read-only config: same box
+
+runtime:
+  # Deliberately the SAME lock file as config-336-usb.yaml.  One instrument
+  # has one holder, and running the read-only recorder and this one at once
+  # would be two processes fighting over one USB port.
+  lock_path: data/ls336.lock
+
+ipc:
+  enabled: true
+  directory: data
+
+  # <-- OPENED.  MATLAB and the GUI may now command this recorder.  Note this
+  # is not sufficient on its own: `allow_writes: true` above still gates every
+  # write, and a refused command comes back with the reason.
+  accept_commands: true
+
+  # A command older than this is refused rather than applied, so a recorder
+  # that was down does not come back and replay a backlog of setpoints.
+  command_ttl_s: 30.0
+
+  # LEFT OFF.  Raising a heater range is the command that actually applies
+  # power.  Turn this on only if an unattended script genuinely has to turn a
+  # heater on with nobody at the terminal.  Lowering a range to 0 is always
+  # allowed without it.
+  allow_heater_range: false

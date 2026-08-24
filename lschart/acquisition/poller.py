@@ -68,6 +68,10 @@ class Poller:
         self.dropped_cycles = 0
         self.last_frame: Frame | None = None
         self.last_error: str | None = None
+        #: The supervisor's last answer, kept so the status file can report the
+        #: control loop without `lschart` knowing what a supervisor is.  Read
+        #: duck-typed by `lschart.ipc.service`; stays None on a plain recorder.
+        self.last_control_status = None
 
     # -- one cycle ---------------------------------------------------------
 
@@ -120,6 +124,7 @@ class Poller:
             reading = frame.readings.get(self.control_channel)
             try:
                 status = self.supervisor.step(frame.t_mono, reading, frame.readings)
+                self.last_control_status = status
                 state = status.state.value
                 if status.wrote and status.output_pct is not None:
                     note = f"heater -> {status.output_pct:.3f}%"

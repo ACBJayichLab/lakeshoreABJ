@@ -55,3 +55,41 @@ recorder:
   directory: data
   filename_prefix: ls335
   flush_every_sample: true    # a power cut should cost one sample, not an hour
+
+runtime:
+  lock_path: data/ls335.lock
+
+# The file interface.  This is how MATLAB and the strip chart reach this
+# recorder -- and the only way they can, because a COM port has exactly one
+# holder and this process is holding COM10.
+#
+#   python -m lschart -c CONFIG run           the recorder (holds the port)
+#   python -m lschart.gui -c CONFIG           the strip chart, another process
+#   python -m lschart -c CONFIG send ping     prove the command path works
+#
+# and from MATLAB, with `matlab/` on the path:
+#
+#   ls = LakeShore('C:\lschart\data');
+#   ls.temperature('Sample')
+#   ls.setSetpoint(1, 77.0);
+ipc:
+  enabled: true
+  directory: data           # status.json and commands/ live here, beside the CSV
+
+  # Reading status is one permission; being commanded is another.  This one is
+  # ON here because driving this box from MATLAB is the whole point of this
+  # rig -- but note it is not sufficient on its own: `allow_writes: true` on
+  # the instrument above still gates every write, and a read-only box refuses
+  # a file command exactly as it refuses one typed at the CLI.
+  accept_commands: true
+
+  # A command older than this is refused rather than applied.  Without it, a
+  # recorder that was down for an hour comes back, finds an hour of queued
+  # setpoints, and walks the cryostat through all of them.  The last one would
+  # even be correct -- the hazard is the traversal, not the destination.
+  command_ttl_s: 30.0
+
+  # Raising a heater range is the command that actually applies power.  Leave
+  # this off unless an unattended script genuinely has to turn a heater on
+  # with nobody at the terminal.  Turning one OFF is always allowed.
+  allow_heater_range: false

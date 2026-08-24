@@ -1,177 +1,164 @@
-# Handoff — 2026-08-24
+# Handoff — 2026-08-24 (second session)
 
-Point-in-time status. Durable context lives in `CLAUDE.md`; this goes stale.
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
-**Branch `split/generic-lschart`, 5 commits ahead of `main`. 194 tests passing.**
+**Branch `split/generic-lschart`. 246 tests passing (was 194).**
 
-## The priority changed
+## What this session did
 
-Jeff, this session: **the GUI and the MATLAB interface are the priority; the
-software PID is not.**
+The two things `CLAUDE.md` names as the priority — **the MATLAB interface and
+the GUI** — now exist, and both were exercised against something real rather
+than only against tests.
 
-That is a reordering, not a cancellation. `ltspm` is finished and tested and
-should be left alone. Everything below is organised around getting `lschart`
-into a coworker's hands and onto a screen.
+### The file interface (`lschart/ipc/`)
 
-## What happened this session
+Built to the shape the previous handoff decided: files, not a socket. Three
+new modules — `status.py`, `commands.py`, `service.py` — plus an `ipc:` config
+section and two new CLI verbs. The design and the reasoning are in
+`docs/recorder/file-interface.md`; that is the durable copy and this does not
+repeat it.
 
-### The project split in two
+What is worth knowing here is what it cost to get right:
 
-`lschart` is now a generic Lake Shore recorder that a coworker can install and
-point at their own rig; `ltspm` is the LTSPM3-specific software PID that
-depends on it. Three couplings had to be cut (config imports, the supervisor
-wiring in `app.py`, and a simulator fused to the calibrated plant); the rest was
-file moves. `lschart` contains no reference to `ltspm` beyond a doc comment.
+- **Command ordering needed a sequence number, not just a timestamp.** The
+  first version prefixed filenames with the issuing millisecond. Three
+  commands submitted in one smoke test were applied in *uuid* order, because
+  they shared a millisecond. On Windows this is much worse than it sounds —
+  `time.time()` resolves to about 15 ms there, so a script queueing a setpoint
+  and then a heater range would routinely have them applied backwards.
+- **`lschart check` crashed on `examples/config-335-usb.yaml`** — the very file
+  meant to be handed to the coworker. A recorder-only rig declares no
+  `control_input`, and `cfg.control_channel` raises. Fixed, and `check` now
+  also reports the status file, the command permissions and which instruments
+  are writable.
 
-The join that makes it work: a config file carrying a `control:` section is
-**refused** by a recorder-only install, with a message saying to run
-`python -m ltspm`. It is not silently ignored, because silently recording when
-someone asked for a closed heater loop is the wrong failure.
+### MATLAB (`matlab/`)
 
-### A real Lake Shore 336 got connected
+`LakeShore.m`, `selftest.m`, and a README. **Tested against the real MATLAB
+R2025b on this machine**, driving a live recorder: reads, every command, the
+refusal path, and ordering.
 
-A spare 336 on USB — the first hardware this project has ever talked to.
-Read-only first, then every write path, with the instrument's full state
-captured before and confirmed identical after.
+That testing was worth it, because it found a bug no amount of Python testing
+could have:
 
-**It found four defects that no amount of simulation would have.** All four are
-now in `CLAUDE.md` under "Talking to a Lake Shore box: four things that will
-bite". The one that matters most:
+> **MATLAB reseeds its default RNG identically at every session start.** So
+> ids built from `randi` repeat across sessions, `await()` matched an
+> acknowledgement left in the recorder's ring by the *previous* session, and a
+> `setSetpoint` reported `pong`.
 
-> **Lake Shore boxes apply commands asynchronously.** A query issued too soon
-> after a write overtakes it and answers with the *previous* value. At 0 ms
-> every readback was stale; at 50 ms readbacks lagged by exactly one write.
-> Both of those *look like success*.
+Fixed twice over, in the house style: ids now come from `tempname`, *and*
+`await` ignores any acknowledgement stamped before the command was issued. The
+second is what makes it safe rather than merely unlikely.
 
-`LakeshoreTransport` had `inter_command_delay=0.0`, so `set --setpoint 77` would
-have printed a confident confirmation of the old value. Fixed twice over: a
-100 ms post-write settle makes the race unlikely, and readback verification in
-`LS33x` makes it detectable. Only the second is worth staking a cryostat on.
+Also dropped `java.io.File` for the rename — it warns under `matlab -batch` and
+does not exist under `-nojvm`, and the atomicity it bought is not needed: a
+partially written JSON object has lost its closing brace, so it can only fail
+to parse, never parse into a *different* command.
 
-### The 33x family, and the write path
+### The GUI (`lschart/gui/`)
 
-One driver for 335 and 336 with a capability table per model. The write surface
-a hardware-PID rig actually needs — `SETP`, `RANGE`, `PID`, `RAMP` — behind
-`allow_writes` plus a `max_setpoint_k` ceiling, plus a lower-level `read_only`
-interlock that refuses at the point where bytes leave.
+A separate process, as decided. pyqtgraph strip chart with two x-linked panels
+— kelvin above, output percent below — because 63% and 63 K are different
+quantities and one axis invites reading a trend across them. Live readouts,
+link health, a time-window selector, per-trace toggles, and a setpoint control
+that writes into the same spool MATLAB uses, behind a confirmation dialog.
 
-The rule that shapes it: **a setpoint does nothing while the heater range is 0,
-and raising the range is what applies power.** So nothing raises a range as a
-side effect, and `set` applies `--range` last.
+**Dragging across a panel picks the time window** (`TimeSpanViewBox`), which is
+the gesture the preset combo cannot express: "what happened between there and
+there". Horizontal only — a drag reaching for a time window must not be able to
+crop the temperature axis. A hand-picked window stops following the recorder,
+says so in the status bar, lights the `Live` button, and is left by that
+button, a double-click, or any preset. It refeeds the curves with exactly the
+samples in the span rather than only moving the view, so the kelvin axis
+autoscales to what is on screen. Shift-drag pans; `Shift` and not `Ctrl`
+because macOS turns Ctrl-click into a right-click before Qt sees it.
+`tests/test_gui_window.py` drives it headless.
 
-### Robustness
+Verified headless (`QT_QPA_PLATFORM=offscreen`) against a live recorder,
+including the send path and the acknowledgement round trip.
 
-Reconnection lives in the `Transport` base class: lazy opening, retries backing
-off 1→30 s, and a link only torn down after 3 consecutive failures because one
-GPIB timeout is usually a slow instrument rather than a dead bus. Plus an
-OS-level single-instance lock, since a COM port has exactly one holder and two
-processes on one GPIB board interleave into garbled replies.
+`source.py` holds everything that is not Qt and is what the tests cover; Qt is
+imported by exactly one module in the repo.
 
 ## Current state
 
 | Area | State |
 |---|---|
-| `lschart` transport / instruments | **Exercised against real hardware.** 218 GPIB path is *not* — no 218 has ever been connected. |
-| `lschart` config / app / CLI | Complete. `run` / `probe` / `set` / `check` / `init`. |
-| `lschart` acquisition | Complete. 120 cycles at 1 Hz off the real 336, 0 dropped. |
-| `lschart.ipc` | Only `lock.py`. **Status file and command spool not started.** |
-| **GUI** | **Not started.** The priority. |
-| **MATLAB interface** | **Not started.** The priority. |
-| `ltspm` (software PID) | Complete, 100+ tests, replay over 63 days of real logs. Parked. |
-| Windows deployment | Untested. Development is macOS. |
+| `lschart` transport / instruments | Exercised against a real 336. The 218 GPIB path is still **untouched by hardware**. |
+| `lschart` config / app / CLI | Complete. `run` / `probe` / `set` / `check` / `status` / `send` / `init`. |
+| `lschart` acquisition | Complete. |
+| **`lschart.ipc`** | **Complete and tested** — status file, command spool, four interlocks. |
+| **MATLAB** | **Complete and tested against MATLAB R2025b.** |
+| **GUI** | **Complete** for a first cut; see "What the GUI does not do yet". |
+| `ltspm` (software PID) | Complete, parked, untouched this session. |
+| **Windows deployment** | **Untested. Now the priority.** |
 
 ## Next steps, in priority order
 
-### 1. The MATLAB file interface (`lschart/ipc/`)
+### 1. Windows deployment
 
-Decided this session: **files, not a socket.** A socket puts a connection state
-machine inside the process that must never die, and its failure is quiet — a
-dead server thread keeps recording perfectly while silently ignoring every
-setpoint. The file version has no connection state at all: Python never learns
-MATLAB exists, which is the strongest form of "don't crash if MATLAB does".
+The real target, and now the only unstarted item on the original list. Needs:
 
-This is *mandatory*, not merely preferable: a Windows COM port has exactly one
-holder, so MATLAB cannot open COM10 while the recorder has it. Talking through
-files is the only shape that works.
+- the Silicon Labs CP210x VCP driver (or the vendor's, for a 335 on a COM port);
+- a Task Scheduler recipe or a service wrapper for the recorder;
+- a check that `os.replace` over an open `status.json` behaves. On Windows,
+  replacing a file another process has open can fail with a sharing violation.
+  This is *handled* — the write is counted and logged, and the next cycle
+  rewrites it a second later — but it has never been *observed*, and it is
+  worth knowing whether it happens once an hour or never;
+- confirmation that the ~15 ms clock resolution assumption behind the command
+  sequence number is right, and that `movefile` from MATLAB is a rename there.
 
-- `status.json`, rewritten atomically each cycle (temp file + `os.replace`).
-  Carries temperatures, link state, a heartbeat, and `last_applied_id`.
-  A failed replace is harmless — the next cycle rewrites it.
-- A maildir-style command spool: MATLAB writes `cmd.tmp`, renames it to
-  `<counter>.json`; the poller scans, applies, deletes. No locking, no
-  contention, and a crash mid-write leaves a `.tmp` nobody picks up.
-- **Commands carry a timestamp and are ignored beyond ~30 s.** Without this, a
-  recorder that was down for an hour comes back and replays a backlog of stale
-  setpoints into a live cryostat.
-- **Commands carry an id, echoed in `status.json`** — the acknowledgement a
-  naive file scheme lacks.
-- `matlab/LakeShore.m`: `temperature()`, `setSetpoint(loop, K)`, `isAlive()`.
+### 2. Hand the coworker their build
 
-### 2. The GUI
+`examples/config-335-usb.yaml` is annotated and now carries an `ipc:` section
+with `accept_commands: true`. `matlab/README.md` is written for them.
 
-**A separate process** reading `status.json` and tailing the CSV — not a thread
-in the recorder. A Qt bug then cannot take down logging, the viewer can be
-closed and reopened mid-run, and two people can watch at once. It becomes just
-another file-IPC client, same contract as MATLAB, so it costs little extra.
+The documentation gap this called out is closed: `README.md` covers install →
+run → view → MATLAB, and the design document has been split into
+`docs/recorder/` (generic, any rig) and `docs/ltspm/` (the software PID, one
+rig), so nobody has to read the cryostat's calibration to start a recorder.
+`CLAUDE.md` is now orientation and invariants pointing into those.
 
-pyqtgraph strip chart; `pip install "lschart[gui]"`. The GUI dependencies were
-deliberately moved out of the base install this session — the recorder is what
-must stay up for months, and it should not need Qt to do it.
+### 3. What the GUI does not do yet
 
-### 3. Windows deployment
+Deliberate omissions, not oversights:
 
-The real target. Needs: the vendor USB driver, a Task Scheduler recipe (or a
-service wrapper), and a check that the CP210x/COM-port path behaves as it does
-on macOS. `serial_number` matching already handles re-enumeration, which is the
-common failure for a USB instrument left running for weeks.
-
-### 4. Hand the coworker their build
-
-`examples/config-335-usb.yaml` is ready and annotated. Their 335 is on COM10
-with heaters on its own outputs, so `driver: lakeshore` applies and **no VISA
-runtime is needed**. Wants a short README rather than this file.
+- **no heater range control.** It applies power; doing it from a chart is a
+  different decision from typing it. The spool supports it, gated;
+- **no ramp control** — same file protocol, just no widget yet;
+- **no annotation of the log** from the viewer;
+- **no y-axis autoscale lock** or cursor readout. Both are pyqtgraph one-liners
+  if they turn out to be wanted;
+- **no export of a hand-picked span.** Picking a window is a way to look, not a
+  way to cut the log.
 
 ## Not the priority, but do not lose
 
-- **`verify_readback` on the 218 may be reading stale values.** The async-write
-  behaviour measured on the 336 very likely applies to the 218 on GPIB too.
-  `SupervisorConfig.verify_readback` reads `AOUT?` after `ANALOG`; it passes in
-  simulation only because the fake applies writes synchronously. **Check this
-  before the LTSPM rig ever runs armed.** This is the highest-value item on the
-  parked list.
+- **`verify_readback` on the 218 may be reading stale values.** Unchanged from
+  the last handoff and still the highest-value parked item. The async-write
+  behaviour measured on the 336 very likely applies to the 218 on GPIB too;
+  `SupervisorConfig.verify_readback` reads `AOUT?` after `ANALOG` and may be
+  confirming a stale value. It passes in simulation only because the fake
+  applies writes synchronously. **Check this before the LTSPM rig runs armed.**
 - **Sweep scheduler** — `sweep_to()` exists and is tested; a sequence of
-  setpoints with dwell times does not.
+  setpoints with dwell times does not. Note that the file interface now makes
+  this reasonable to write *in MATLAB* instead, which may be the better home
+  for it: it is an experiment protocol, not a safety mechanism.
 - **A deliberate step test at two or three temperatures** remains the
-  highest-value LTSPM hardware measurement. `tools/steptest.py` is the protocol;
-  only the 137 K row is real.
-
-## Two open questions worth resolving
-
-**Is the LTSPM noise model right?** The bench 336 reads 0.44–3.03 mK rms
-(3-point detrended) at ~296 K. `CLAUDE.md` says the 218 sample channel does
-**109 mK at 290 K**. That is 30–200× worse for the same temperature.
-
-Three things differ at once — different instrument, different sensors, and a
-completely quiet rig here (cryo off, nothing moving) versus 218 logs taken
-during active cooldowns. Any could dominate, so **neither number is wrong yet**.
-The clean resolution is to record the 218 under the same quiet conditions and
-compare. It matters because "millikelvin is a low-temperature capability" is
-built on the 218 figure.
-
-**Does `read_status: true` earn its cost?** On the bench 336 the only cycles
-exceeding 1 s were exactly the every-15th ones adding four `RDGST?` queries
-(~1.25 s vs ~1.00 s). Nothing was dropped — the fixed-deadline schedule absorbs
-it — but the margin is gone. Raising `status_every_n_cycles`, or dropping status
-polling, buys it back.
+  highest-value LTSPM hardware measurement.
+- **Is the LTSPM noise model right?** The bench 336 reads 0.44–3.03 mK rms at
+  ~296 K where `docs/ltspm/plant.md` claims 109 mK at 290 K for the 218 sample channel.
+  Three things differ at once, so neither number is wrong yet. The clean
+  resolution is to record the 218 under the same quiet conditions.
+- **Does `read_status: true` earn its cost?** Unchanged.
 
 ## Things worth knowing
 
-- **`reference/logs` is ~110 MB and deliberately not gitignored** — the only
-  empirical record of the LTSPM plant.
+- **`reference/logs` is ~110 MB and deliberately not gitignored.**
 - **Filenames in `reference/logs` lie.** `import_xls` sniffs row 0.
-- **`sim.speedup` accelerates the plant but not the controller.** Fine for
-  exercising the recorder; meaningless for closed-loop behaviour. Use the
-  virtual-clock harness in `tests_ltspm/conftest.py`.
-- **The bench 336's loops are benign by value, not by configuration.** All four
-  are in closed-loop mode with `powerup_enable=1` on loops 3/4; nothing runs
-  only because every setpoint (275 K) sits below ambient (296 K).
+- **`sim.speedup` accelerates the plant but not the controller.**
+- **The bench 336's loops are benign by value, not by configuration.**
+- **A first `matlab -batch` on a fresh machine can take many minutes** doing
+  first-run setup, with no output at all. It is not hung. Subsequent runs take
+  about 20 s.
