@@ -255,3 +255,84 @@ def test_the_336_defaults_to_read_only():
     """Loop 2 holds THE CHONKE on the LTSPM rig; disturbing it is a hazard."""
     rig = SimulatedRig()
     assert LS336(LoopbackTransport(Sim33x(rig, model="336"))).allow_writes is False
+
+
+# -- writes are confirmed, not assumed --------------------------------------
+
+class DeafSim(Sim33x):
+    """Accepts writes and ignores them -- what a too-fast readback looks like.
+
+    Measured on a real 336 over USB: query immediately after a write and the
+    instrument answers with the PREVIOUS value.  From the driver's side that is
+    indistinguishable from a box that simply did not apply the command, and
+    both must be caught.
+    """
+
+    def handle_write(self, cmd):
+        self.write_log.append(cmd)      # received, and deliberately not applied
+
+
+def test_a_write_that_does_not_take_is_an_error_not_a_success():
+    rig = SimulatedRig()
+    sim = DeafSim(rig, model="335")
+    inst = LS33x(LoopbackTransport(sim), model="335", allow_writes=True)
+    with pytest.raises(Exception, match="did not take"):
+        inst.set_setpoint(1, 77.0)
+    assert sim.write_log, "the command was sent"
+
+
+def test_the_failure_says_not_to_trust_the_instrument_state():
+    """The dangerous outcome is believing a setpoint took when it did not."""
+    rig = SimulatedRig()
+    inst = LS33x(LoopbackTransport(DeafSim(rig, model="335")),
+                 model="335", allow_writes=True)
+    with pytest.raises(Exception, match="do not assume"):
+        inst.set_setpoint(1, 77.0)
+
+
+def test_verification_covers_every_write_path():
+    rig = SimulatedRig()
+    inst = LS33x(LoopbackTransport(DeafSim(rig, model="335")),
+                 model="335", allow_writes=True)
+    for call in (
+        lambda: inst.set_setpoint(1, 77.0),
+        lambda: inst.set_heater_range(1, 2),
+        lambda: inst.set_pid(1, 10.0, 20.0, 0.0),
+        lambda: inst.set_ramp(1, 1.5),
+    ):
+        with pytest.raises(Exception, match="did not take"):
+            call()
+
+
+def test_a_heater_that_refuses_to_switch_off_is_reported():
+    """The most important verification of the lot.
+
+    `all_heaters_off` on already-off heaters legitimately passes -- the state
+    asked for is the state held.  What must never pass silently is a heater
+    that stays ON after being told to stop.
+    """
+    rig = SimulatedRig()
+    sim = DeafSim(rig, model="335")
+    sim.ranges = {1: 3, 2: 3}           # both heaters at full range
+    inst = LS33x(LoopbackTransport(sim), model="335", allow_writes=True)
+    with pytest.raises(Exception, match="did not take"):
+        inst.all_heaters_off()
+
+
+def test_all_heaters_off_is_satisfied_when_they_are_already_off():
+    inst, _ = build("336", allow_writes=True)
+    inst.all_heaters_off()              # no exception: nothing to change
+
+
+def test_verification_can_be_turned_off():
+    """For a box whose readback is unavailable -- explicitly, never by default."""
+    rig = SimulatedRig()
+    inst = LS33x(LoopbackTransport(DeafSim(rig, model="335")),
+                 model="335", allow_writes=True, verify_writes=False)
+    inst.set_setpoint(1, 77.0)          # no exception
+
+
+def test_verification_is_on_by_default():
+    rig = SimulatedRig()
+    inst = LS33x(LoopbackTransport(Sim33x(rig)), model="336")
+    assert inst.verify_writes is True

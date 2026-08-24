@@ -53,6 +53,20 @@ class Transport(ABC):
     #: Minimum seconds between the end of one transaction and the start of the next.
     inter_command_delay: float = 0.05
 
+    #: Minimum seconds after a WRITE before the next transaction.
+    #:
+    #: Lake Shore boxes apply a command asynchronously, so a query issued too
+    #: soon after one overtakes it and answers with the PREVIOUS value.
+    #: Measured on a 336 over USB: at 0 ms every readback was stale, and at
+    #: 50 ms readbacks lagged by exactly one write -- both of which look like
+    #: success while reporting fiction.  100 ms is comfortably past the
+    #: observed threshold (~50-80 ms), and costs nothing in practice because
+    #: writes are occasional while reads are not.
+    #:
+    #: This is a floor, not a guarantee.  The verification in the drivers is
+    #: what makes correctness independent of it.
+    write_settle_s: float = 0.1
+
     def __init__(
         self,
         *,
@@ -65,6 +79,7 @@ class Transport(ABC):
     ) -> None:
         self._lock = threading.RLock()
         self._last_txn = 0.0
+        self._last_was_write = False
         self._clock = clock
         #: Hard interlock: no byte that could change instrument state leaves
         #: this transport.  Belt to `allow_writes`' braces, and deliberately at
@@ -163,7 +178,10 @@ class Transport(ABC):
     # -- transactions ------------------------------------------------------
 
     def _pace(self) -> None:
-        gap = self.inter_command_delay - (self._clock() - self._last_txn)
+        required = self.inter_command_delay
+        if self._last_was_write:
+            required = max(required, self.write_settle_s)
+        gap = required - (self._clock() - self._last_txn)
         if gap > 0:
             time.sleep(gap)
 
@@ -186,6 +204,7 @@ class Transport(ABC):
                 self.consecutive_failures = 0
             finally:
                 self._last_txn = self._clock()
+                self._last_was_write = True
 
     def query(self, cmd: str) -> str:
         with self._lock:
@@ -201,6 +220,7 @@ class Transport(ABC):
                 return reply
             finally:
                 self._last_txn = self._clock()
+                self._last_was_write = False
 
     @abstractmethod
     def _write(self, cmd: str) -> None: ...
@@ -340,7 +360,7 @@ class LakeshoreTransport(Transport):
         ip_address: str | None = None,
         baud_rate: int = 57600,
         timeout_ms: int = 3000,
-        inter_command_delay: float = 0.0,
+        inter_command_delay: float = 0.05,
         tcp_port: int = 7777,
         **kw,
     ) -> None:
@@ -434,6 +454,11 @@ class LoopbackTransport(Transport):
         super().__init__(**kw)
         self.device = device
         self.inter_command_delay = inter_command_delay
+        # An in-process fake applies a write before the call returns, so there
+        # is nothing to settle for.  Leaving the real instrument's 100 ms here
+        # would put a real sleep into every simulated write -- which is most of
+        # the test suite, and all of the virtual-clock control harness.
+        self.write_settle_s = 0.0
         self._opened = True
 
     def __str__(self) -> str:

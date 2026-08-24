@@ -33,11 +33,12 @@ asking it to, in so many words.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 from ..model import Reading
 from ..transport import Transport, TransportError
-from .base import Instrument, parse_float, parse_float_list
+from .base import Instrument, InstrumentError, parse_float, parse_float_list
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,18 @@ CAPS: dict[str, ModelCaps] = {
 HEATER_RANGE_NAMES = {0: "off", 1: "low", 2: "medium", 3: "high"}
 
 
+def _close_enough(got, expected, tol: float) -> bool:
+    """Compare a readback with what was commanded, elementwise for tuples."""
+    if isinstance(expected, tuple):
+        return (
+            isinstance(got, tuple) and len(got) == len(expected)
+            and all(_close_enough(g, e, tol) for g, e in zip(got, expected))
+        )
+    if isinstance(expected, bool):
+        return bool(got) == expected
+    return abs(float(got) - float(expected)) <= tol
+
+
 class LS33x(Instrument):
     """A 33x-family controller.  Read-only until ``allow_writes`` is set."""
 
@@ -88,6 +101,7 @@ class LS33x(Instrument):
         read_analog_outputs: bool = False,
         allow_writes: bool = False,
         max_setpoint_k: float = 350.0,
+        verify_writes: bool = True,
     ) -> None:
         model = str(model)
         if model not in CAPS:
@@ -103,6 +117,7 @@ class LS33x(Instrument):
         self.read_analog_outputs = read_analog_outputs
         self.allow_writes = allow_writes
         self.max_setpoint_k = max_setpoint_k
+        self.verify_writes = verify_writes
 
     # -- identity ---------------------------------------------------------
 
@@ -225,6 +240,44 @@ class LS33x(Instrument):
                 f"on this instrument to {what}"
             )
 
+    def _write_verified(self, cmd: str, read_back, expected, *, what: str,
+                        tol: float = 1e-3, attempts: int = 5,
+                        pause_s: float = 0.1):
+        """Send ``cmd``, then confirm the instrument actually took it.
+
+        These boxes apply a command asynchronously.  Measured on a 336 over
+        USB: query immediately after a write and you get the PREVIOUS value;
+        query 50 ms after and readbacks lag by exactly one write.  Both look
+        like success while reporting fiction, which for a setpoint means
+        printing a confident confirmation of a value the instrument is not
+        holding.
+
+        The transport's ``write_settle_s`` makes that unlikely; this makes it
+        *detectable*.  A threshold tuned on one box over one link is not
+        something to stake a cryostat on, so the write is confirmed by reading
+        it back, and a mismatch raises rather than being reported as success.
+        """
+        self.transport.write(cmd)
+        if not self.verify_writes:
+            return None
+        got = None
+        for attempt in range(attempts):
+            try:
+                got = read_back()
+            except (TransportError, ValueError) as exc:
+                log.debug("%s: readback of %s failed (attempt %d): %s",
+                          self.name, what, attempt + 1, exc)
+                got = None
+            if got is not None and _close_enough(got, expected, tol):
+                return got
+            time.sleep(pause_s)
+        raise InstrumentError(
+            f"{self.name}: {what} did not take. Commanded {expected!r} with "
+            f"{cmd!r}; the instrument still reports {got!r} after "
+            f"{attempts} readbacks. The write was NOT applied -- do not assume "
+            f"the instrument is in the state you asked for."
+        )
+
     def _check_loop(self, loop: int) -> None:
         if loop not in self.caps.loops:
             raise ValueError(
@@ -246,8 +299,12 @@ class LS33x(Instrument):
                 f"setpoint {kelvin} K is outside [0, {self.max_setpoint_k}] "
                 f"for {self.name}; raise max_setpoint_k if this is intended"
             )
-        self.transport.write(f"SETP {loop},{kelvin:.4f}")
-        log.warning("%s: SETP %d,%.4f", self.name, loop, kelvin)
+        self._write_verified(
+            f"SETP {loop},{kelvin:.4f}",
+            lambda: self.setpoint(loop), kelvin,
+            what=f"setpoint on loop {loop}",
+        )
+        log.warning("%s: SETP %d,%.4f (verified)", self.name, loop, kelvin)
 
     def setpoint(self, loop: int) -> float:
         self._check_loop(loop)
@@ -273,9 +330,13 @@ class LS33x(Instrument):
             previous = self.heater_range(output)
         except (TransportError, ValueError):
             previous = None
-        self.transport.write(f"RANGE {output},{int(value)}")
+        self._write_verified(
+            f"RANGE {output},{int(value)}",
+            lambda: self.heater_range(output), int(value),
+            what=f"heater range on output {output}",
+        )
         log.warning(
-            "%s: RANGE %d,%d (%s -> %s)", self.name, output, int(value),
+            "%s: RANGE %d,%d (%s -> %s, verified)", self.name, output, int(value),
             HEATER_RANGE_NAMES.get(previous, previous),
             HEATER_RANGE_NAMES.get(int(value), value),
         )
@@ -291,8 +352,11 @@ class LS33x(Instrument):
         """Panic button.  Ranges to zero on every heater output."""
         self._require_writes("turn heaters off")
         for out in self.caps.heater_outputs:
-            self.transport.write(f"RANGE {out},0")
-        log.warning("%s: all heaters OFF", self.name)
+            self._write_verified(
+                f"RANGE {out},0", lambda o=out: self.heater_range(o), 0,
+                what=f"heater range on output {out}",
+            )
+        log.warning("%s: all heaters OFF (verified)", self.name)
 
     def pid(self, loop: int) -> tuple[float, float, float]:
         self._check_loop(loop)
@@ -303,8 +367,12 @@ class LS33x(Instrument):
         """The instrument's own gains -- nothing to do with the software loop."""
         self._require_writes("change loop PID gains")
         self._check_loop(loop)
-        self.transport.write(f"PID {loop},{p:.1f},{i:.1f},{d:.1f}")
-        log.warning("%s: PID %d,%.1f,%.1f,%.1f", self.name, loop, p, i, d)
+        self._write_verified(
+            f"PID {loop},{p:.1f},{i:.1f},{d:.1f}",
+            lambda: self.pid(loop), (p, i, d),
+            what=f"PID gains on loop {loop}", tol=0.05,
+        )
+        log.warning("%s: PID %d,%.1f,%.1f,%.1f (verified)", self.name, loop, p, i, d)
 
     def set_ramp(self, loop: int, rate_k_per_min: float, *, enable: bool = True) -> None:
         """Use the *instrument's* setpoint ramp.
@@ -322,8 +390,12 @@ class LS33x(Instrument):
                 "a ramp rate of 0 K/min means 'infinitely fast' to the "
                 "instrument; pass enable=False to turn ramping off instead"
             )
-        self.transport.write(f"RAMP {loop},{1 if enable else 0},{rate_k_per_min:.3f}")
-        log.warning("%s: RAMP %d,%d,%.3f", self.name, loop,
+        self._write_verified(
+            f"RAMP {loop},{1 if enable else 0},{rate_k_per_min:.3f}",
+            lambda: self.ramp(loop), (bool(enable), rate_k_per_min),
+            what=f"setpoint ramp on loop {loop}",
+        )
+        log.warning("%s: RAMP %d,%d,%.3f (verified)", self.name, loop,
                     1 if enable else 0, rate_k_per_min)
 
     def ramp(self, loop: int) -> tuple[bool, float]:
