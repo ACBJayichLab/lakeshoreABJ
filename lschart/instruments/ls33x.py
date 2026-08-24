@@ -124,21 +124,32 @@ class LS33x(Instrument):
         return idn
 
     def discover_channel_names(self) -> dict[str, str]:
-        """Pull the operator-assigned labels ("RAD SHIELD", "Sample", ...)."""
+        """Pull the operator-assigned labels ("RAD SHIELD", "Sample", ...).
+
+        Returns ``{}`` if *nothing* came back, so the caller can decline to
+        cache it.  Discovery happens on the first frame, which is exactly when
+        a link may still be coming up -- and caching "Input A" from a failed
+        query would mislabel every column for the rest of the run, in a CSV
+        that might not be looked at for a month.
+        """
         names: dict[str, str] = {}
+        answered = False
         for letter in self.caps.inputs:
             try:
                 label = self.transport.query(f"INNAME? {letter}").strip()
+                answered = True
             except TransportError as exc:
                 log.warning("%s: INNAME? %s failed: %s", self.name, letter, exc)
                 label = ""
             names[letter] = label or f"Input {letter}"
-        return names
+        return names if answered else {}
 
     # -- reading ----------------------------------------------------------
 
     def read_frame(self) -> tuple[dict[str, Reading], dict[str, float]]:
         if not self.channels:
+            # Empty means discovery failed outright; try again next frame
+            # rather than committing to placeholder labels.
             self.channels = self.discover_channel_names()
 
         kelvin = parse_float_list(self.transport.query("KRDG? 0"))

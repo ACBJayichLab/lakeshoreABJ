@@ -62,6 +62,16 @@ class TransportConfig:
     ip_address: str = ""
     tcp_port: int = 7777
 
+    # -- staying connected ---------------------------------------------------
+    #: A dropped link is recovered rather than being terminal.  Turn this off
+    #: only if you would rather a run stop than continue with a gap.
+    reconnect: bool = True
+    retry_min_s: float = 1.0
+    retry_max_s: float = 30.0
+    #: One GPIB timeout is usually a slow instrument, not a dead bus, so the
+    #: link is only torn down after this many consecutive failures.
+    failures_before_reconnect: int = 3
+
 
 @dataclass
 class InstrumentConfig:
@@ -176,6 +186,17 @@ class AcquisitionConfig:
 
 
 @dataclass
+class RuntimeConfig:
+    """Process-level concerns: being the only recorder on this instrument."""
+
+    #: Path to the single-instance lock.  Two recorders on one instrument fight
+    #: over the port, so `run` takes this before opening anything.  Point two
+    #: genuinely-different rigs at two different paths to run both.
+    lock_path: str = "data/lschart.lock"
+    single_instance: bool = True
+
+
+@dataclass
 class RecorderConfig:
     enabled: bool = True
     directory: str = "data"
@@ -236,6 +257,7 @@ class AppConfig:
     instruments: list = field(default_factory=default_instruments)
     acquisition: AcquisitionConfig = field(default_factory=AcquisitionConfig)
     recorder: RecorderConfig = field(default_factory=RecorderConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     #: Populated from `_SECTIONS` by `load()`; see `register_section`.
     extensions: dict[str, Any] = field(default_factory=dict)

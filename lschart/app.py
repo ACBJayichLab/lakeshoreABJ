@@ -31,6 +31,12 @@ def build_transport(cfg: InstrumentConfig, *, device=None) -> Transport:
     reason to install a VISA runtime.
     """
     t = cfg.transport
+    recovery = dict(
+        reconnect=t.reconnect,
+        retry_min_s=t.retry_min_s,
+        retry_max_s=t.retry_max_s,
+        failures_before_reconnect=t.failures_before_reconnect,
+    )
     if cfg.driver == "sim":
         if device is None:
             raise ValueError(f"{cfg.resolved_name()}: sim driver needs a simulated device")
@@ -53,6 +59,7 @@ def build_transport(cfg: InstrumentConfig, *, device=None) -> Transport:
             baud_rate=t.baud_rate,
             data_bits=t.data_bits,
             parity=t.parity,
+            **recovery,
         )
 
     if cfg.driver == "lakeshore":
@@ -67,6 +74,7 @@ def build_transport(cfg: InstrumentConfig, *, device=None) -> Transport:
             timeout_ms=t.timeout_ms,
             inter_command_delay=t.inter_command_delay,
             tcp_port=t.tcp_port,
+            **recovery,
         )
 
     raise ValueError(f"{cfg.resolved_name()}: unknown driver {cfg.driver!r}")

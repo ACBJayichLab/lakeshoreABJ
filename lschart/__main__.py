@@ -16,6 +16,7 @@ import time
 
 from . import config as config_mod
 from .app import Application
+from .ipc import AlreadyRunning, InstanceLock
 
 log = logging.getLogger("lschart")
 
@@ -39,6 +40,16 @@ def cmd_run(args) -> int:
         cfg.acquisition.interval_s = args.interval
         cfg.validate()
     _setup_logging(args.log_level or cfg.log_level)
+
+    # Taken before anything is opened: the point is to lose the race cleanly,
+    # rather than to discover halfway through startup that the port is held.
+    lock = None
+    if cfg.runtime.single_instance:
+        try:
+            lock = InstanceLock(cfg.runtime.lock_path).acquire()
+        except AlreadyRunning as exc:
+            log.error("%s", exc)
+            return 2
 
     app = BUILDER(cfg)
     # Whether a controller exists is the builder's answer, not the config's:
@@ -80,6 +91,8 @@ def cmd_run(args) -> int:
         app.stop()
         if app.recorder is not None:
             log.warning("wrote %d rows to %s", app.recorder.rows_written, app.recorder.path)
+        if lock is not None:
+            lock.release()
     return 0
 
 
