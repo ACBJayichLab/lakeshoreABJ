@@ -111,8 +111,10 @@ lschart/                    GENERIC -- any Lake Shore rig
   gui/               The strip chart. A SEPARATE PROCESS, not a thread.
     source.py        CsvTail + StatusSource. No Qt -- this is what tests cover.
     window.py        pyqtgraph. The only module in the repo that imports Qt.
-                     Left-drag on either panel picks the time window; that is
-                     TimeSpanViewBox, and `_span` is what it sets.
+                     Left-drag on either panel zooms to exactly that rectangle;
+                     that is ZoomViewBox, and `_span` (time, shared) and
+                     `_ylim` (per panel) are what it sets.  The X/Y buttons
+                     take an axis out of the drag.
     __main__.py      `python -m lschart.gui -c CONFIG` / `lschart-view`.
   app.py             Wires config -> transports -> instruments -> poller.
                      `controller_factory` / `plant_factory` are the ltspm seams.
@@ -156,7 +158,7 @@ tests/               Generic. tests_ltspm/ has the virtual-clock control harness
 ```bash
 uv venv --allow-existing .venv
 uv pip install --python .venv/bin/python -e ".[dev,serial]"
-.venv/bin/python -m pytest -q                          # 257 tests
+.venv/bin/python -m pytest -q                          # 319 tests
 
 # generic recorder -- any rig, no control section in the config
 .venv/bin/python -m lschart -c examples/config-336-usb.yaml probe   # read all, write nothing

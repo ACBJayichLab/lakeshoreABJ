@@ -278,16 +278,21 @@ quantities and one axis invites reading a trend across them. Live readouts,
 link health, a time-window selector, per-trace toggles, and a setpoint control
 that writes into the same spool MATLAB uses, behind a confirmation dialog.
 
-**Dragging across a panel picks the time window** (`TimeSpanViewBox`), which is
-the gesture the preset combo cannot express: "what happened between there and
-there". Horizontal only — a drag reaching for a time window must not be able to
-crop the temperature axis. A hand-picked window stops following the recorder,
-says so in the status bar, lights the `Live` button, and is left by that
-button, a double-click, or any preset. It refeeds the curves with exactly the
-samples in the span rather than only moving the view, so the kelvin axis
-autoscales to what is on screen. Shift-drag pans; `Shift` and not `Ctrl`
-because macOS turns Ctrl-click into a right-click before Qt sees it.
-`tests/test_gui_window.py` drives it headless.
+**Dragging a rectangle on a panel zooms to exactly it** (`ZoomViewBox`), which
+is the gesture the preset combo cannot express: "what happened between there
+and there, at this magnification". Both axes, at precisely the edges dragged.
+The time axis is shared over the x-link; the value axis belongs to the panel
+dragged, so a kelvin rectangle leaves the percent panel autoscaling. A drag
+that is flat sets time alone and one that is tall and thin sets value alone —
+reaching for a time window with a level hand must not crop the temperature
+axis to a hair. `Drag zooms: X | Y` beside the combo takes an axis out of the
+gesture entirely, and they cannot both be off. A hand-picked view stops
+following the recorder, says so in the status bar, lights the `Live` button,
+and is left by that button, a double-click, or any preset — all axes at once.
+The time window refeeds the curves with exactly the samples in the span rather
+than only moving the view, so a panel still autoscaling fits what is on screen.
+Shift-drag pans; `Shift` and not `Ctrl` because macOS turns Ctrl-click into a
+right-click before Qt sees it. `tests/test_gui_window.py` drives it headless.
 
 Verified headless (`QT_QPA_PLATFORM=offscreen`) against a live recorder,
 including the send path and the acknowledgement round trip.

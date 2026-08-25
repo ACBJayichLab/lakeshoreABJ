@@ -85,16 +85,28 @@ other control needs an argument that means something on one box; this one means
 "stop heating", which on a two-box rig had better include the box carrying the
 sample heater.
 
-## Picking the time window with the mouse
+## Zooming with the mouse
 
-**Drag across either panel** and that span becomes the window. The drag is
-horizontal by construction — the vertical extent is ignored, so reaching for a
-time window cannot crop the temperature axis by accident — and both panels move
-together, because they are x-linked.
+**Drag a rectangle on either panel** and the view becomes exactly that
+rectangle — both the time axis and the value axis, at precisely the edges
+dragged, with no padding and no autoscale afterwards putting them back.
+
+The time axis is shared: both panels move together, because they are x-linked.
+The value axis is not. A rectangle dragged on the temperature panel crops the
+temperature axis and leaves the percent panel below autoscaling to whatever the
+new window holds, because 63 % and 63 K are different quantities and always
+were.
+
+A drag that is **flat** — under about six pixels tall — sets the time axis
+alone, and one that is tall and thin sets the value axis alone. Reaching for a
+time window with a level hand is the common gesture, and cropping the
+temperature axis to a hair by accident is the common accident. A drag that is
+short both ways is a click that wobbled, and does nothing at all.
 
 | Gesture | |
 |---|---|
-| **left-drag** | pick a time window |
+| **left-drag** | zoom to the rectangle |
+| **flat left-drag** | pick a time window, value axis untouched |
 | **wheel** | zoom about the cursor |
 | **shift-drag**, or middle-drag | pan |
 | **double-click** | follow the recorder again |
@@ -103,17 +115,40 @@ together, because they are x-linked.
 `Shift` rather than `Ctrl` because macOS turns Ctrl-click into a right-click
 before Qt sees it.
 
-A hand-picked window **stops following the recorder**: new samples land off the
-right-hand edge, which is what a fixed window means. While one is in effect the
-`Live` button beside the combo lights up and the status bar names the span and
-says `not following`. The button, a double-click, or picking any preset from
-the combo returns to following.
+### The X and Y buttons
 
-The window is not just a view change: the curves are refed with exactly the
-samples in the span (plus one either side, so a trace crossing the edge is
-drawn leaving it). That is what lets the kelvin axis autoscale to the span —
-zoom into a five-minute wobble and the wobble fills the panel instead of being
-flattened by a day's excursion.
+Beside the window combo, under `Drag zooms`. Both are on, and both on is the
+rectangle above. Switching one off takes that axis out of the drag entirely, so
+the band spans the full width or the full height to show it:
+
+- **Y off** — a drag picks a time window and nothing else, however untidy it
+  is vertically. This is what the viewer used to do always.
+- **X off** — a drag picks a value range and nothing else, and the chart keeps
+  following the recorder in time while it does. Watching a 2 mK wobble live,
+  on an axis that would otherwise autoscale to the whole cooldown, is the case
+  this exists for.
+
+They cannot both be off: a drag that zooms neither axis is a mouse that does
+nothing, so the last one on stays on.
+
+A hand-picked view **stops following the recorder**: new samples land off the
+right-hand edge, which is what a fixed window means, and a fixed value axis
+will not open up for an excursion that leaves it. While either is in effect the
+`Live` button beside the combo lights up, and the status bar names the span,
+says `not following`, and names any axis it is holding. The button, a
+double-click, or picking any preset from the combo returns to following — all
+axes at once.
+
+A value axis moved by the **wheel** or a shift-drag counts as hand-picked too;
+it is just as fixed as one dragged out, and the `Live` button says so.
+
+The time window is not just a view change: the curves are refed with exactly
+the samples in the span (plus one either side, so a trace crossing the edge is
+drawn leaving it). That is what lets a panel still autoscaling fit itself to
+the span — zoom into a five-minute wobble and the wobble fills the panel
+instead of being flattened by a day's excursion. A panel whose value axis was
+dragged out keeps the axis it was given; the cut still matters there, for the
+other panel and for the number of points Qt is asked to draw.
 
 ## What it deliberately does not do
 
@@ -124,8 +159,7 @@ Omissions, not oversights:
   limiting is control policy and belongs to the supervisor; a second set of
   limits in the viewer is a second set of limits that can disagree;
 - **no annotation of the log** from the viewer;
-- **no y-axis autoscale lock or cursor readout.** Both are pyqtgraph one-liners
-  if they turn out to be wanted;
+- **no cursor readout.** A pyqtgraph one-liner if it turns out to be wanted;
 - **no export of the selected span.** Picking a window is a way to look, not a
   way to cut the log; the CSV is the log.
 

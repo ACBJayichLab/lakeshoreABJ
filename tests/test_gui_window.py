@@ -95,20 +95,30 @@ class FakeDoubleClick:
         pass
 
 
-def drag(viewbox, from_frac: float, to_frac: float) -> tuple[float, float]:
-    """Drag horizontally between two fractions of the panel's width."""
+def drag(viewbox, from_frac: float, to_frac: float,
+         y_from: float = 0.5, y_to: float = 0.5):
+    """Drag between two points given as fractions of the panel.
+
+    Level by default -- ``y_from == y_to`` is a flat drag, which is the
+    gesture someone reaching for a time window actually makes.  Returns the
+    ((x0, x1), (y0, y1)) the drag covers, in data coordinates, ordered.
+    """
     rect = viewbox.boundingRect()
-    y = rect.height() * 0.5
-    p0 = QtCore.QPointF(rect.width() * from_frac, y)
-    p1 = QtCore.QPointF(rect.width() * to_frac, y)
+    p0 = QtCore.QPointF(rect.width() * from_frac, rect.height() * y_from)
+    p1 = QtCore.QPointF(rect.width() * to_frac, rect.height() * y_to)
+    # Mapped before the drag, not after: the values the gesture means are the
+    # ones under the mouse when it was pressed, and by the time it is released
+    # the view has moved to them.
+    v0, v1 = viewbox.mapToView(p0), viewbox.mapToView(p1)
     viewbox.mouseDragEvent(FakeDrag(p0, p1, False))
     viewbox.mouseDragEvent(FakeDrag(p0, p1, True))
-    return viewbox.mapToView(p0).x(), viewbox.mapToView(p1).x()
+    return ((min(v0.x(), v1.x()), max(v0.x(), v1.x())),
+            (min(v0.y(), v1.y()), max(v0.y(), v1.y())))
 
 
 def test_a_drag_makes_that_span_the_window(viewer):
     box = viewer.k_plot.getViewBox()
-    x0, x1 = drag(box, 0.4, 0.6)
+    (x0, x1), _ = drag(box, 0.4, 0.6)
     assert viewer._span == pytest.approx((x0, x1))
     assert box.viewRange()[0] == pytest.approx([x0, x1])
     # x-linked: the heater panel below shows the same slice of time, which is
@@ -128,7 +138,7 @@ def test_a_drag_narrows_the_data_and_not_just_the_view(viewer):
 def test_the_window_survives_the_next_poll_of_the_files(viewer):
     """The refresh must not snap the view back to following the recorder."""
     box = viewer.k_plot.getViewBox()
-    x0, x1 = drag(box, 0.4, 0.6)
+    (x0, x1), _ = drag(box, 0.4, 0.6)
     viewer.refresh()
     assert viewer._span == pytest.approx((x0, x1))
     assert box.viewRange()[0] == pytest.approx([x0, x1])
@@ -139,15 +149,16 @@ def test_a_click_that_wobbled_is_not_a_window(viewer):
     box = viewer.k_plot.getViewBox()
     rect = box.boundingRect()
     p0 = QtCore.QPointF(rect.width() * 0.4, rect.height() * 0.5)
-    p1 = QtCore.QPointF(rect.width() * 0.4 + 2, rect.height() * 0.5)
+    p1 = QtCore.QPointF(rect.width() * 0.4 + 2, rect.height() * 0.5 + 2)
     box.mouseDragEvent(FakeDrag(p0, p1, True))
     assert viewer._span is None
+    assert viewer._ylim["K"] is None
 
 
 def test_a_zoom_by_any_other_route_also_moves_the_window(viewer):
     """The wheel and a Shift-drag land here as a range change, and must refeed."""
     box = viewer.k_plot.getViewBox()
-    x0, x1 = drag(box, 0.4, 0.6)
+    (x0, x1), _ = drag(box, 0.4, 0.6)
     box.setXRange(x0 - 600, x1 + 600, padding=0)
     assert viewer._span == pytest.approx((x0 - 600, x1 + 600))
     assert len(viewer.curves["Sample"].getData()[0]) > 1200
@@ -156,7 +167,7 @@ def test_a_zoom_by_any_other_route_also_moves_the_window(viewer):
 @pytest.mark.parametrize("leave", ["double-click", "button", "preset"])
 def test_there_is_a_way_back_to_following_the_recorder(viewer, leave):
     box = viewer.k_plot.getViewBox()
-    drag(box, 0.4, 0.6)
+    drag(box, 0.4, 0.6, 0.2, 0.8)
     assert viewer.live_button.isEnabled()
 
     if leave == "double-click":
@@ -167,8 +178,86 @@ def test_there_is_a_way_back_to_following_the_recorder(viewer, leave):
         viewer.window_combo.setCurrentIndex(0)
 
     assert viewer._span is None
-    assert box.autoRangeEnabled()[0]
+    assert viewer._ylim == {"K": None, "%": None}
+    assert box.autoRangeEnabled() == [True, True]
     assert not viewer.live_button.isEnabled()
+
+
+# -- the rectangle, and the axes it is allowed to set ------------------------
+#
+# The value axis is the half that is new: a 2 mK wobble on an axis autoscaled
+# to a 300 K cooldown is a flat line, and no time window fixes that.
+
+
+def test_a_rectangle_sets_both_axes_to_exactly_itself(viewer):
+    box = viewer.k_plot.getViewBox()
+    (x0, x1), (y0, y1) = drag(box, 0.4, 0.6, 0.25, 0.75)
+    assert viewer._span == pytest.approx((x0, x1))
+    assert viewer._ylim["K"] == pytest.approx((y0, y1))
+    view_x, view_y = box.viewRange()
+    assert view_x == pytest.approx([x0, x1])
+    # Precisely those values: no padding, and no autoscale afterwards putting
+    # the axis back where the data wants it.
+    assert view_y == pytest.approx([y0, y1])
+    assert not box.autoRangeEnabled()[1]
+
+
+def test_the_value_axis_stays_put_across_a_refresh(viewer):
+    box = viewer.k_plot.getViewBox()
+    _, (y0, y1) = drag(box, 0.4, 0.6, 0.25, 0.75)
+    viewer.refresh()
+    assert box.viewRange()[1] == pytest.approx([y0, y1])
+
+
+def test_a_rectangle_leaves_the_other_panel_autoscaling(viewer):
+    """Kelvin and percent share no axis, so a kelvin drag cannot crop percent."""
+    drag(viewer.k_plot.getViewBox(), 0.4, 0.6, 0.25, 0.75)
+    assert viewer._ylim["%"] is None
+    assert viewer.pct_plot.getViewBox().autoRangeEnabled()[1]
+
+
+def test_a_level_drag_is_a_time_window_and_not_a_sliver(viewer):
+    """The common gesture, and the one that must not crop the value axis."""
+    box = viewer.k_plot.getViewBox()
+    (x0, x1), _ = drag(box, 0.4, 0.6)
+    assert viewer._span == pytest.approx((x0, x1))
+    assert viewer._ylim["K"] is None
+    assert box.autoRangeEnabled()[1]
+
+
+def test_the_y_button_takes_the_value_axis_out_of_the_drag(viewer):
+    viewer.zoom_y_button.setChecked(False)
+    box = viewer.k_plot.getViewBox()
+    (x0, x1), _ = drag(box, 0.4, 0.6, 0.25, 0.75)
+    assert viewer._span == pytest.approx((x0, x1))
+    assert viewer._ylim["K"] is None
+
+
+def test_the_x_button_takes_the_time_axis_out_of_the_drag(viewer):
+    viewer.zoom_x_button.setChecked(False)
+    box = viewer.k_plot.getViewBox()
+    _, (y0, y1) = drag(box, 0.4, 0.6, 0.25, 0.75)
+    assert viewer._ylim["K"] == pytest.approx((y0, y1))
+    # The time axis is untouched, so the chart is still following the recorder
+    # in x -- but the view is no longer live, and must say so.
+    assert viewer._span is None
+    assert box.autoRangeEnabled()[0]
+    assert viewer.live_button.isEnabled()
+
+
+def test_the_last_axis_cannot_be_switched_off(viewer):
+    """A drag that zooms neither axis is a mouse that does nothing."""
+    viewer.zoom_x_button.setChecked(False)
+    viewer.zoom_y_button.setChecked(False)
+    assert viewer.zoom_y_button.isChecked()
+    assert viewer.k_plot.getViewBox().zoom_y
+
+
+def test_the_buttons_reach_both_panels(viewer):
+    viewer.zoom_x_button.setChecked(False)
+    for plot in (viewer.k_plot, viewer.pct_plot):
+        assert not plot.getViewBox().zoom_x
+        assert plot.getViewBox().zoom_y
 
 
 # -- the control panel -------------------------------------------------------
