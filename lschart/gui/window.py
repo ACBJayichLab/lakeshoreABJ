@@ -761,9 +761,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         last autoscale on the way out of `enableAutoRange(False)`, so that the
         range someone had been looking at is the one they keep; the range
         change it emits arrives here as a wheel zoom would, and would
-        overwrite the window that had just been chosen with the one being left
-        behind.  Every gesture that fixes an axis goes through here first, and
-        then reads the range it is about to scale.
+        overwrite the window that had just been chosen with the one being
+        left behind.  So a gesture that fixes an axis reads what is on screen
+        into a local *first*, stops the autoscaling second -- eating that
+        signal while its own numbers sit somewhere untouchable -- and only
+        then writes and applies them.
         """
         for plot in self._panels.values():
             plot.enableAutoRange(x=False)
@@ -828,9 +830,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
         Pressing it is a decision, so it fixes the axis the way a drag does --
         the view stops following the recorder, and the `Live` button says so.
         """
-        self._span = _scaled(self.k_plot.getViewBox().viewRange()[0], factor)
-        for plot in self._panels.values():
-            plot.enableAutoRange(x=False)
+        # Read, stop, apply -- in that order.  Disabling an axis enacts one
+        # last autoscale on the way out, and while the recorder runs there is
+        # always one queued: its range-changed signal arrives here as any
+        # other would, so a `_span` assigned before it came back overwritten
+        # by the view being left (the first press of three went missing that
+        # way), and a base read after it zoomed from data nobody had seen.
+        # Reading into a local keeps the press out of the signal's way.
+        base = self.k_plot.getViewBox().viewRange()[0]
+        self._stop_autoscaling()
+        self._span = _scaled(base, factor)
         self.k_plot.setXRange(*self._span, padding=0)
         self._span_changed()
 
@@ -843,10 +852,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         are different quantities and share no scale.
         """
         for unit, plot in self._panels.items():
-            self._ylim[unit] = _scaled(plot.getViewBox().viewRange()[1], factor)
-            # Autoscale off first, or the next redraw refits the axis to the
-            # data and the press does nothing at all.
+            # As in _zoom_x: read, stop, apply.
+            base = plot.getViewBox().viewRange()[1]
             plot.enableAutoRange(y=False)
+            self._ylim[unit] = _scaled(base, factor)
             plot.setYRange(*self._ylim[unit], padding=0)
         # No redraw: the value axis does not decide which samples are drawn.
         self.live_button.setEnabled(not self._is_live())

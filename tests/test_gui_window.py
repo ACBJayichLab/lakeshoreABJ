@@ -268,6 +268,63 @@ def test_the_y_buttons_move_both_panels(viewer):
         assert (now[1] - now[0]) == pytest.approx((was[1] - was[0]) / 1.5)
 
 
+def _grow_the_log(viewer, extra_s: float = 60.0) -> None:
+    """Append samples past the right-hand edge of the view, and poll them.
+
+    This is the state a running recorder keeps the viewer in: the redraw
+    queues an autoscale that has not been enacted yet, because nothing has
+    repainted since.
+    """
+    path = viewer.tail.path
+    end = viewer.curves["Sample"].getData()[0][-1]
+    with open(path, "a") as fh:
+        for i in range(1, int(extra_s) + 1):
+            stamp = _dt.datetime.fromtimestamp(
+                end + i).isoformat(timespec="milliseconds")
+            fh.write(f"{stamp},0.0,{300.0:.4f},77.0,12.5,,,\n")
+    viewer.refresh()
+
+
+@pytest.mark.parametrize("axis", ["x", "y"])
+def test_a_button_press_is_not_swallowed_by_the_queued_autorange(
+        viewer, axis):
+    """The first press must count while the view is still following the data.
+
+    Disabling an axis enacts one last autoscale on the way out
+    (ViewBox.enableAutoRange), and that autoscale's range-changed signal
+    arrives *after* the press has computed its new range -- so computing
+    before disabling let the signal overwrite the press with the very view
+    it was leaving.  New samples keep an autoscale perpetually queued while
+    the recorder runs, which is why this bit on the rig and not in the
+    first single-press test.
+    """
+    _grow_the_log(viewer)
+    before_x = viewer.k_plot.getViewBox().viewRange()[0]
+    if axis == "x":
+        viewer.zoom_buttons["X+"].click()
+        t0, t1 = viewer._span
+        assert (t1 - t0) == pytest.approx((before_x[1] - before_x[0]) / 1.5)
+        assert viewer.k_plot.getViewBox().viewRange()[0] \
+            == pytest.approx([t0, t1])
+    else:
+        before_y = viewer.k_plot.getViewBox().viewRange()[1]
+        viewer.zoom_buttons["Y+"].click()
+        y0, y1 = viewer._ylim["K"]
+        assert (y1 - y0) == pytest.approx((before_y[1] - before_y[0]) / 1.5)
+        assert viewer.k_plot.getViewBox().viewRange()[1] \
+            == pytest.approx([y0, y1])
+
+
+def test_three_presses_are_three_steps(viewer):
+    """Each press reads the range the last one left, compounding to 1.5³."""
+    _grow_the_log(viewer)
+    before = viewer.k_plot.getViewBox().viewRange()[0]
+    for _ in range(3):
+        viewer.zoom_buttons["X+"].click()
+    t0, t1 = viewer._span
+    assert (t1 - t0) == pytest.approx((before[1] - before[0]) / 1.5 ** 3)
+
+
 def test_an_x_zoom_stops_the_chart_following_the_recorder(viewer):
     """Pressing it is a decision, and a decision has to be escapable."""
     assert not viewer.live_button.isEnabled()
