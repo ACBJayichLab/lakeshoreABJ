@@ -164,7 +164,7 @@ def test_a_zoom_by_any_other_route_also_moves_the_window(viewer):
     assert len(viewer.curves["Sample"].getData()[0]) > 1200
 
 
-@pytest.mark.parametrize("leave", ["double-click", "button", "preset"])
+@pytest.mark.parametrize("leave", ["double-click", "button"])
 def test_there_is_a_way_back_to_following_the_recorder(viewer, leave):
     box = viewer.k_plot.getViewBox()
     drag(box, 0.4, 0.6, 0.2, 0.8)
@@ -172,10 +172,8 @@ def test_there_is_a_way_back_to_following_the_recorder(viewer, leave):
 
     if leave == "double-click":
         box.mouseClickEvent(FakeDoubleClick())
-    elif leave == "button":
-        viewer.live_button.click()
     else:
-        viewer.window_combo.setCurrentIndex(0)
+        viewer.live_button.click()
 
     assert viewer._span is None
     assert viewer._ylim == {"K": None, "%": None}

@@ -10,7 +10,25 @@ flags, and command acknowledgements, none of which reach the CSV.
 buffer lives in the recorder's memory and the viewer is a different process, so
 the only history available to it is the log.  Tailing rather than re-reading
 means a viewer left open all week costs one seek and a few hundred bytes per
-second, not a re-parse of a 90 MB file.
+second, not a re-parse of a 90 MB file -- but the *first* read of a day does
+re-read, because a viewer that starts mid-day still owes the operator the
+cooldown that ended at midnight.  So :class:`CsvTail` backfills from the
+finished logs that came before the current one (same directory, same prefix,
+older date), keeps whatever it already holds when the recorder rolls over at
+midnight, and answers a zoom-out with everything it has ever seen rather than
+only what is in today's file.
+
+Thinning and un-thinning
+------------------------
+
+Months of samples cannot stay at full resolution in memory, so each series is
+*decimated* in place once it outgrows ``max_points``: every other sample goes,
+doubling the span the budget covers.  That would make a zoomed-in look at an
+old day quietly wrong -- so every file consumed is remembered, and a
+hand-picked span is **re-read from the logs themselves**
+(:meth:`CsvTail.prepare_span`), at whatever resolution they hold.  The chart
+first draws the thinned overview so the view responds instantly, then swaps in
+the real samples a moment later.
 
 Why the viewer is a separate process
 ------------------------------------
@@ -36,6 +54,7 @@ import datetime as _dt
 import io
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 
 from ..ipc.status import read_status, status_age_s
@@ -98,7 +117,12 @@ class CsvTail:
     """Incremental reader for the recorder's CSV.
 
     Follows whichever file the recorder says it is writing, including across
-    the daily rollover, and keeps at most ``max_points`` samples per column.
+    the daily rollover.  History is kept across a rollover, and a viewer that
+    starts fresh backfills from the finished logs that came before the one now
+    being written -- so zooming out shows every sample the data directory
+    holds, not only today's.  At most ``max_points`` samples per column are
+    held; past that a series is decimated rather than truncated, and
+    :meth:`prepare_span` recovers the full resolution from disk on demand.
     """
 
     def __init__(self, path: str | None = None, *, max_points: int = 200_000) -> None:
@@ -113,26 +137,105 @@ class CsvTail:
         #: every sample, but a read can still land between the write and the
         #: flush, and half a row parses into a plausible wrong number.
         self._remainder = ""
+        #: Every log consumed, as ``(path, bytes-read)`` -- finished days from
+        #: the backfill and rollovers, plus the current file at each rollover.
+        #: This is what lets a hand-picked span be re-read at full resolution
+        #: after thinning has thrown detail away.
+        self._history: list[tuple[str, int | None]] = []
+        #: Full-resolution samples for the last span given to
+        #: :meth:`prepare_span`, keyed by column.  Replaced wholesale by the
+        #: next prepare; bounded by the span, not by the age of the log.
+        self._overlay: dict[str, Series] = {}
+        self._overlay_span: tuple[float, float] | None = None
 
     # -- following the file ------------------------------------------------
 
     def follow(self, path: str | None) -> bool:
-        """Point at ``path``, restarting if it is a different file.
+        """Point at ``path``, restarting the *file* if it is a different one.
 
-        Returns True if the history was reset.  The recorder rolls over at
-        midnight and whenever it adopts a new channel, so a viewer left open
-        overnight has to notice and start the new file from the top.
+        Returns True if the file changed.  The recorder rolls over at midnight
+        and whenever it adopts a new channel, so a viewer left open overnight
+        has to notice and start the new file from the top -- but starting the
+        file is not starting the *history*: whatever has already been read
+        stays on the chart, which is what makes a trace cross midnight
+        without a gap.  Only a viewer with no history at all backfills from
+        the older logs; re-reading files already tailed would duplicate every
+        sample in them.
         """
         if not path or path == self.path:
             return False
         log.info("viewer: following %s", path)
+        if not any(self.series.values()):
+            self._backfill(path)
+        elif self.path is not None:
+            # The file being left is finished as far as this viewer is
+            # concerned; remember it so a zoom back into its span can still be
+            # answered at full resolution.
+            self._history.append((self.path, self._offset))
         self.path = path
         self.header = []
-        self.series = {}
-        self.rows = 0
         self._offset = 0
         self._remainder = ""
         return True
+
+    # -- history from before this file -------------------------------------
+
+    #: The recorder names logs ``{prefix}_{date}.csv`` (plus ``_partN`` when a
+    #: channel is adopted mid-day).  A file that matches is a finished day of
+    #: some run; the prefix keeps another experiment's logs out.
+    _LOG_NAME = re.compile(
+        r"^(?P<prefix>.+)_(?P<date>\d{4}-\d{2}-\d{2})(?:_part(?P<part>\d+))?\.csv$"
+    )
+
+    def _backfill(self, path: str) -> None:
+        """Read the finished logs that came before ``path``, oldest first.
+
+        Runs once, when the viewer first acquires a log to follow -- typically
+        moments after being started, where a second or two of disk I/O costs
+        nothing and buys yesterday's cooldown.  Each file carries its own
+        header, because columns adopted later are absent from earlier days,
+        and the series dict merges them by column name.
+        """
+        older = self._older_logs(path)
+        if not older:
+            return
+        log.info("viewer: backfilling %d earlier log(s)", len(older))
+        for p in older:
+            try:
+                with open(p, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError as exc:
+                log.warning("viewer: cannot backfill %s: %s", p, exc)
+                continue
+            self.header = []             # each file states its own columns
+            added = self._consume(text)
+            if added:
+                self._history.append((p, None))
+                log.info("viewer: backfilled %d rows from %s", added, p)
+
+    @classmethod
+    def _older_logs(cls, path: str) -> list[str]:
+        """Finished logs in the same directory that predate ``path``, ordered."""
+        folder, name = os.path.split(os.path.abspath(path))
+        mine = cls._LOG_NAME.match(name)
+        if mine is None:
+            return []
+        key = (mine.group("prefix"), mine.group("date"), int(mine.group("part") or 0))
+        try:
+            entries = os.listdir(folder)
+        except OSError:
+            return []
+        found = []
+        for other in entries:
+            m = cls._LOG_NAME.match(other)
+            if m is None:
+                continue
+            theirs = (m.group("prefix"), m.group("date"), int(m.group("part") or 0))
+            # Strictly earlier only: the current file belongs to poll(), and
+            # reading it here too would double every sample of today so far.
+            if theirs < key:
+                found.append((theirs, os.path.join(folder, other)))
+        return [p for _, p in sorted(found)]
 
     def poll(self) -> int:
         """Read whatever has been appended since last time.  Never raises."""
@@ -145,7 +248,10 @@ class CsvTail:
         if size < self._offset:
             # Truncated or replaced under us -- the only honest response is to
             # read it again from the beginning rather than to splice the new
-            # contents onto the old history.
+            # contents onto the old history.  That means dropping every series
+            # sample, earlier days included: there is no telling which of them
+            # came from the bytes that were just rewritten.  Rare, and cheaper
+            # than plotting a number twice.
             log.warning("viewer: %s shrank; re-reading from the start", self.path)
             self._offset = 0
             self._remainder = ""
@@ -174,7 +280,7 @@ class CsvTail:
             return 0
         return self._consume(text)
 
-    def _consume(self, text: str) -> int:
+    def _consume(self, text: str, *, sink=None, t_range=None) -> int:
         added = 0
         for row in csv.reader(io.StringIO(text)):
             if not row:
@@ -189,16 +295,20 @@ class CsvTail:
                 log.warning("viewer: %s has no header row; ignoring it", self.path)
                 self.header = []
                 return 0
-            added += self._row(row)
+            added += self._row(row, sink=sink, t_range=t_range)
         return added
 
-    def _row(self, row: list[str]) -> int:
+    def _row(self, row: list[str], *, sink=None, t_range=None) -> int:
         if len(row) < 2:
             return 0
         t = _parse_time(row[0])
         if t is None:
             self.errors += 1
             return 0
+        if t_range is not None and not (t_range[0] <= t <= t_range[1]):
+            return 0
+        if sink is None:
+            sink = self.series
         for name, cell in zip(self.header[1:], row[1:]):
             if name in NON_SERIES_COLUMNS or cell == "":
                 continue
@@ -206,51 +316,105 @@ class CsvTail:
                 value = float(cell)
             except ValueError:
                 continue
-            s = self.series.get(name)
+            s = sink.get(name)
             if s is None:
-                s = self.series[name] = Series(name)
+                s = sink[name] = Series(name)
             s.t.append(t)
             s.v.append(value)
-            if len(s.t) > self.max_points:
-                # Drop the oldest tenth at a time: trimming one sample per row
-                # turns every append into an O(n) memmove once the cap is hit.
-                cut = max(1, self.max_points // 10)
-                del s.t[:cut]
-                del s.v[:cut]
+            if sink is self.series and len(s.t) > self.max_points:
+                # Decimate rather than amputate.  Dropping the oldest samples
+                # would make zooming out quietly lose whole days -- the chart
+                # would answer "show me everything" with "everything since
+                # Tuesday".  Throwing out every other sample instead halves
+                # the length in place, keeps the newest point, and costs an
+                # amortised O(1) per append; each pass doubles the span a
+                # fixed budget of points can hold, and prepare_span() buys
+                # the detail back from disk when someone looks closely.
+                del s.t[::2]
+                del s.v[::2]
         self.rows += 1
         return 1
 
     # -- what the plot asks for -------------------------------------------
 
-    def window(self, name: str, seconds: float | None) -> tuple[list[float], list[float]]:
-        """One column over the last ``seconds``, or all of it for ``None``."""
+    def everything(self, name: str) -> tuple[list[float], list[float]]:
+        """One column's whole retained history -- what the live view draws."""
         s = self.series.get(name)
-        if s is None or not s.t:
+        if s is None:
             return [], []
-        if seconds is None:
-            return s.t, s.v
-        cutoff = s.t[-1] - seconds
-        # The series is in time order, so a scan from the end finds the first
-        # index in the window without touching the rest of a day of samples.
-        lo = len(s.t)
-        while lo > 0 and s.t[lo - 1] >= cutoff:
-            lo -= 1
-        return s.t[lo:], s.v[lo:]
+        return s.t, s.v
+
+    #: Rows kept either side of a requested span in a full-resolution reload,
+    #: so a trace crossing the edge is drawn leaving it.  Wider than any sane
+    #: sample interval; the exact bracketing sample is found by bisect later.
+    SPAN_MARGIN_S = 300.0
+
+    def prepare_span(self, t0: float, t1: float) -> int:
+        """Re-read ``[t0, t1]`` from the logs on disk, at full resolution.
+
+        The overview decimates as it goes, which keeps months of history
+        affordable and close reading impossible in equal measure -- so a
+        hand-picked span is answered from the files themselves rather than
+        from whatever survived thinning.  Every log this viewer has consumed
+        is scanned -- filenames are not trusted enough to skip any, a lesson
+        the legacy .xls logs taught -- and rows outside the span are dropped
+        by their timestamps as they parse.  Returns the number of rows
+        recovered.
+        """
+        lo, hi = t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S
+        sources = list(self._history)
+        if self.path:
+            sources.append((self.path, self._offset))
+        overlay: dict[str, Series] = {}
+        rows = 0
+        for path, upto in sources:
+            text = self._read_prefix(path, upto)
+            if not text:
+                continue
+            # Scan it through the ordinary parser without touching the live
+            # state, then fold what came out into the overlay.
+            saved = (self.header, self.series, self.rows, self.errors)
+            self.header, self.series, self.rows, self.errors = [], {}, 0, 0
+            try:
+                self._consume(text, sink=overlay, t_range=(lo, hi))
+                rows += self.rows
+            finally:
+                (self.header, self.series, self.rows, self.errors) = saved
+        self._overlay = overlay
+        self._overlay_span = (t0, t1)
+        return rows
+
+    @staticmethod
+    def _read_prefix(path: str, upto: int | None) -> str | None:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                if upto is not None:
+                    upto = min(upto, os.fstat(fh.fileno()).st_size)
+                return fh.read(upto if upto is not None else -1)
+        except OSError as exc:
+            log.warning("viewer: cannot re-read %s: %s", path, exc)
+            return None
 
     def between(self, name: str, t0: float, t1: float) -> tuple[list[float], list[float]]:
         """One column between two absolute times, for a hand-picked window.
 
-        One sample beyond each edge is included on purpose: a trace that
-        crosses the edge of the window should be drawn leaving it, not stop
-        short of the axis with a gap the data does not have.  That is also why
-        a window narrower than the sample interval still returns the two
-        samples that bracket it -- the line does cross the screen.
+        Full resolution when :meth:`prepare_span` has loaded this exact span,
+        thinned overview otherwise (the window swaps one for the other a tick
+        after the span settles).  Either way one sample beyond each edge is
+        included on purpose: a trace that crosses the edge of the window
+        should be drawn leaving it, not stop short of the axis with a gap the
+        data does not have.  That is also why a window narrower than the
+        sample interval still returns the two samples that bracket it -- the
+        line does cross the screen.
 
         A window that lies wholly before or after the log is empty, though:
         there the honest drawing is nothing at all, not the nearest sample
         dragged in from an hour away.
         """
-        s = self.series.get(name)
+        source = self.series
+        if self._overlay_span == (t0, t1):
+            source = self._overlay
+        s = source.get(name)
         if s is None or not s.t:
             return [], []
         lo = bisect.bisect_left(s.t, t0)

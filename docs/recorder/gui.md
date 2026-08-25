@@ -35,15 +35,33 @@ break it.
 `gui/source.py` holds everything that is not Qt (`CsvTail`, `StatusSource`) and
 is what the tests cover.
 
+## History across midnight
+
+The recorder writes one CSV per day, and the viewer tails whichever one it is
+currently writing. Two things make zooming out still reach the days before:
+
+- **a rollover keeps the history.** When the recorder moves to a new file the
+  viewer starts that file from the top but keeps everything it has already
+  plotted, so a trace crosses midnight without a gap;
+- **a fresh start backfills.** A viewer started mid-day reads the finished
+  logs that came before today's — same directory, same prefix, older date,
+  oldest first — so yesterday's cooldown is on the chart without anyone
+  having had the viewer open overnight.
+
+Memory stays bounded by `--max-points`: past the cap a trace is decimated
+(every other sample dropped) rather than truncated, so old days lose
+resolution in the overview but never disappear — and a hand-picked span is
+re-read from disk at full resolution (above).
+
 ## What it shows
 
 Two x-linked panels: **kelvin above, output percent below**. They are separate
 because 63% and 63 K are different quantities and one axis invites reading a
 trend across them.
 
-Plus live readouts, link health, a time-window selector, per-trace toggles, and
-the control panel below — all of which write into the same spool MATLAB uses,
-behind a confirmation dialog, with no privileges MATLAB lacks.
+Plus live readouts, link health, per-trace toggles, and the control panel
+below — all of which write into the same spool MATLAB uses, behind a
+confirmation dialog, with no privileges MATLAB lacks.
 
 ## The control panel
 
@@ -117,26 +135,13 @@ before Qt sees it.
 
 ### The X and Y buttons
 
-Beside the window combo, under `Drag zooms`. Both are on, and both on is the
-rectangle above. Switching one off takes that axis out of the drag entirely, so
-the band spans the full width or the full height to show it:
-
-- **Y off** — a drag picks a time window and nothing else, however untidy it
-  is vertically. This is what the viewer used to do always.
-- **X off** — a drag picks a value range and nothing else, and the chart keeps
-  following the recorder in time while it does. Watching a 2 mK wobble live,
-  on an axis that would otherwise autoscale to the whole cooldown, is the case
-  this exists for.
-
-They cannot both be off: a drag that zooms neither axis is a mouse that does
-nothing, so the last one on stays on.
+Both zoom one axis at a time, in steps, about the middle of what is shown.
 
 A hand-picked view **stops following the recorder**: new samples land off the
 right-hand edge, which is what a fixed window means, and a fixed value axis
 will not open up for an excursion that leaves it. While either is in effect the
-`Live` button beside the combo lights up, and the status bar names the span,
-says `not following`, and names any axis it is holding. The button, a
-double-click, or picking any preset from the combo returns to following — all
+`Live (all history)` button lights up, and the status bar names the span and
+says `not following`. The button or a double-click returns to following — all
 axes at once.
 
 A value axis moved by the **wheel** or a shift-drag counts as hand-picked too;
@@ -149,6 +154,17 @@ the span — zoom into a five-minute wobble and the wobble fills the panel
 instead of being flattened by a day's excursion. A panel whose value axis was
 dragged out keeps the axis it was given; the cut still matters there, for the
 other panel and for the number of points Qt is asked to draw.
+
+### Full resolution comes back on zoom-in
+
+The in-memory history is decimated once it outgrows `--max-points` (every
+other sample dropped, doubling the span the budget covers). A picked span is
+not answered from what survived: one quiet tick after the span settles, the
+viewer re-reads that span from the logs on disk at full resolution and swaps
+it in. Zooming out and back in shows real samples again, at whatever cadence
+the recorder wrote. The overview you see for that first tick is thinned; the
+disk read costs nothing during a gesture because it waits for the span to
+stop moving.
 
 ## What it deliberately does not do
 

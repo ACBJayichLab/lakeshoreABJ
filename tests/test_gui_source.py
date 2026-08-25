@@ -92,13 +92,66 @@ def test_half_a_row_is_held_back_until_it_is_complete(tmp_path):
     assert tail.series["Sample"].v == [96.0, 999.5]
 
 
-def test_the_daily_rollover_starts_the_new_file_from_the_top(tmp_path):
-    """A viewer left open overnight has to notice the recorder moved files."""
+def test_the_daily_rollover_keeps_the_history_it_already_had(tmp_path):
+    """A viewer left open overnight has to notice the recorder moved files --
+    without throwing away what it had already plotted of the day before."""
     tail = CsvTail()
     tail.follow(str(log(tmp_path, "day1.csv", rows=3)))
     tail.poll()
     assert tail.follow(str(log(tmp_path, "day2.csv", rows=2))) is True
     assert tail.poll() == 2
+    assert tail.series["Sample"].v == [96.0, 97.0, 98.0, 96.0, 97.0]
+
+
+def test_a_fresh_start_backfills_the_older_logs_in_order(tmp_path):
+    """A viewer started mid-day still owes the operator yesterday's cooldown.
+
+    Zooming out must reach every sample the data directory holds, so the
+    finished logs that predate today's are read oldest first -- and nothing
+    but this run's logs: a different prefix is somebody else's experiment,
+    and a later date has not happened yet.
+    """
+    (tmp_path / "lschart_2026-08-22.csv").write_text(
+        HEADER + "".join(row(1_700_000_000.0 + i, 90.0 + i) for i in range(3)))
+    (tmp_path / "lschart_2026-08-23.csv").write_text(
+        HEADER + "".join(row(1_700_100_000.0 + i, 93.0 + i) for i in range(3)))
+    (tmp_path / "lschart_2026-08-23_part2.csv").write_text(
+        HEADER + "".join(row(1_700_200_000.0 + i, 94.0 + i) for i in range(2)))
+    (tmp_path / "other_2026-08-21.csv").write_text(
+        HEADER + "".join(row(1_699_000_000.0 + i, 1.0) for i in range(5)))
+    (tmp_path / "lschart_2026-08-25.csv").write_text(
+        HEADER + "".join(row(1_700_900_000.0 + i, 2.0) for i in range(5)))
+
+    tail = CsvTail()
+    tail.follow(str(log(tmp_path, "lschart_2026-08-24.csv", rows=2)))
+    tail.poll()
+    # 22nd, then the 23rd, then its part 2 -- each day before today's file.
+    assert tail.series["Sample"].v == [90.0, 91.0, 92.0,
+                                       93.0, 94.0, 95.0,
+                                       94.0, 95.0,
+                                       96.0, 97.0]
+
+
+def test_a_rollover_does_not_re_read_logs_it_already_tailed(tmp_path):
+    """Backfill runs once, when there is no history; after that the retained
+    history IS the previous days, and re-reading would duplicate them."""
+    (tmp_path / "lschart_2026-08-23.csv").write_text(
+        HEADER + "".join(row(1_700_000_000.0 + i, 90.0 + i) for i in range(3)))
+    tail = CsvTail()
+    tail.follow(str(log(tmp_path, "lschart_2026-08-24.csv", rows=3)))
+    tail.poll()
+    tail.follow(str(log(tmp_path, "lschart_2026-08-25.csv", rows=2,
+                        t0=1_700_864_000.0)))
+    tail.poll()
+    assert tail.series["Sample"].v == [90.0, 91.0, 92.0,
+                                       96.0, 97.0, 98.0,
+                                       96.0, 97.0]
+
+
+def test_a_log_with_no_date_in_its_name_has_nothing_to_backfill_from(tmp_path):
+    tail = CsvTail()
+    tail.follow(str(log(tmp_path, "run.csv", rows=2)))
+    tail.poll()   # must not raise, whatever else sits in the directory
     assert tail.series["Sample"].v == [96.0, 97.0]
 
 
@@ -141,23 +194,89 @@ def test_a_missing_file_is_not_an_error(tmp_path):
     assert tail.poll() == 0
 
 
-def test_the_oldest_samples_are_dropped_once_the_cap_is_reached(tmp_path):
+def test_the_cap_decimates_rather_than_amputates(tmp_path):
+    """Past the cap, every other sample goes -- not the oldest ones.
+
+    Dropping the oldest would make zooming out quietly lose whole days; a
+    decimated trace keeps a representative line across the whole span.
+    """
     tail = CsvTail(max_points=20)
     tail.follow(str(log(tmp_path, rows=30)))
     tail.poll()
     assert len(tail.series["Sample"].t) <= 20
     # The newest sample always survives: it is the one being watched.
     assert tail.series["Sample"].v[-1] == 96.0 + 29
+    # And so does the beginning of the log, thinned but present: the first
+    # survivor after one halving pass is sample 1.
+    assert tail.series["Sample"].v[0] == 96.0 + 1
 
 
-def test_the_time_window_returns_only_the_tail(tmp_path):
+def test_everything_is_what_the_live_view_draws(tmp_path):
     tail = CsvTail()
     tail.follow(str(log(tmp_path, rows=10)))
     tail.poll()
-    t, v = tail.window("Sample", 3.0)
-    assert v == [96.0 + 6, 96.0 + 7, 96.0 + 8, 96.0 + 9]
-    assert tail.window("Sample", None)[1] == [96.0 + i for i in range(10)]
-    assert tail.window("nosuch", 10.0) == ([], [])
+    assert tail.everything("Sample")[1] == [96.0 + i for i in range(10)]
+    assert tail.everything("nosuch") == ([], [])
+
+
+def test_a_picked_span_is_re_read_at_full_resolution(tmp_path):
+    """Thinning is for the overview, not for answering a question.
+
+    Zoom out far enough that the cap decimates the history, then zoom into a
+    few seconds of it: the samples there must come back whole, from the log
+    on disk rather than from whatever survived.
+    """
+    t0 = 1_700_000_000.0
+    tail = CsvTail(max_points=8)
+    tail.follow(str(log(tmp_path, rows=40, t0=t0)))
+    tail.poll()
+    assert len(tail.series["Sample"].v) <= 8          # genuinely thinned
+    assert 96.0 + 9 not in tail.series["Sample"].v    # detail really is gone
+    tail.prepare_span(t0 + 10.0, t0 + 14.0)
+    # The span plus one sample either side, all at full resolution again.
+    tt, vv = tail.between("Sample", t0 + 10.0, t0 + 14.0)
+    assert vv == [96.0 + i for i in range(9, 16)]
+    assert tt == [t0 + i for i in range(9, 16)]
+
+
+def test_a_span_can_reach_back_into_a_rolled_over_file(tmp_path):
+    """Yesterday's file was consumed by tailing, not forgotten: a span across
+    midnight re-reads it too."""
+    t1, t2 = 1_700_000_000.0, 1_700_086_400.0
+    tail = CsvTail(max_points=4)
+    tail.follow(str(log(tmp_path, "lschart_2026-08-23.csv", rows=5, t0=t1)))
+    tail.poll()
+    tail.follow(str(log(tmp_path, "lschart_2026-08-24.csv", rows=5, t0=t2)))
+    tail.poll()
+    tail.prepare_span(t1 + 4.0, t2)     # last sample of day 1 to first of day 2
+    _, vv = tail.between("Sample", t1 + 4.0, t2)
+    assert vv == [96.0 + 3, 96.0 + 4, 96.0, 96.0 + 1]
+
+
+def test_a_span_wider_than_any_single_file_is_assembled_in_order(tmp_path):
+    (tmp_path / "lschart_2026-08-22.csv").write_text(
+        HEADER + "".join(row(1_700_000_000.0 + i, 90.0 + i) for i in range(3)))
+    (tmp_path / "lschart_2026-08-23.csv").write_text(
+        HEADER + "".join(row(1_700_100_000.0 + i, 93.0 + i) for i in range(3)))
+    tail = CsvTail()
+    tail.follow(str(log(tmp_path, "lschart_2026-08-24.csv", rows=2,
+                        t0=1_700_200_000.0)))
+    tail.poll()
+    tail.prepare_span(1_700_000_000.0, 1_700_200_001.0)
+    _, vv = tail.between("Sample", 1_689_000_000.0, 1_701_000_000.0)
+    assert vv == [90.0, 91.0, 92.0, 93.0, 94.0, 95.0, 96.0, 97.0]
+
+
+def test_a_picked_span_that_has_never_been_prepared_falls_back_to_the_overview(tmp_path):
+    """The chart draws the thinned history immediately; full resolution
+    arrives a tick later."""
+    tail = CsvTail()
+    t0 = 1_700_000_000.0
+    tail.follow(str(log(tmp_path, rows=10, t0=t0)))
+    tail.poll()
+    tail.prepare_span(t0, t0 + 2)                     # a different span loaded
+    _, vv = tail.between("Sample", t0 + 4, t0 + 6)
+    assert vv == [96.0 + 3, 96.0 + 4, 96.0 + 5, 96.0 + 6, 96.0 + 7]
 
 
 def test_a_hand_picked_window_returns_only_that_span(tmp_path):

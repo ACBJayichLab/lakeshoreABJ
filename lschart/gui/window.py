@@ -20,15 +20,16 @@ the two.  Setpoints go on the kelvin axis, beside the channel they are chasing.
 
 Dragging a rectangle on either panel zooms to exactly that rectangle, because
 the question a strip chart gets asked is "what happened between *there* and
-*there*", and the preset windows in the combo can only answer it when the
-interesting part happens to end now -- and because a 2 mK wobble on a 300 K
-axis is invisible until the value axis is cropped to it too.  The drag is
-always the whole rectangle; `X+ X- Y+ Y-` beside the combo are how one axis
-gets moved on its own, in steps, without drawing a box to do it.  A
-hand-picked view stops following the recorder -- new samples land off the
-right-hand edge, which is what a fixed window means -- so the state is
-announced on the button beside the combo and is left by a double-click, that
-button, or picking a preset.
+*there*" -- and because a 2 mK wobble on a 300 K axis is invisible until the
+value axis is cropped to it too.  The drag is always the whole rectangle;
+`X+ X- Y+ Y-` are how one axis gets moved on its own, in steps.  A hand-picked
+view stops following the recorder -- new samples land off the right-hand edge,
+which is what a fixed window means -- so the state is announced on the Live
+button and is left by a double-click, that button, or nothing else.  While a
+span is picked the chart first draws its thinned overview and then, one quiet
+tick later, swaps in what `CsvTail.prepare_span` re-read from the logs at full
+resolution -- zooming back into an old day shows real samples again, not
+whatever survived decimation.
 """
 
 from __future__ import annotations
@@ -51,12 +52,6 @@ log = logging.getLogger(__name__)
 CURVE_COLORS = [
     "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
     "#8c564b", "#17becf", "#bcbd22", "#e377c2", "#7f7f7f",
-]
-
-#: (label, seconds).  ``None`` means everything the log holds.
-TIME_WINDOWS = [
-    ("10 min", 600.0), ("1 hour", 3600.0), ("6 hours", 21600.0),
-    ("24 hours", 86400.0), ("All", None),
 ]
 
 BANNER_STYLE = {
@@ -200,6 +195,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: per panel and not one shared: a kelvin axis and a percent axis have
         #: nothing to say to each other, which is why there are two panels.
         self._ylim: dict[str, tuple[float, float] | None] = {"K": None, "%": None}
+        #: The span whose full-resolution samples have been loaded (and the one
+        #: seen on the previous tick, for debouncing).  Until they agree with
+        #: ``_span`` the chart draws the thinned overview for that span; once a
+        #: span survives one tick unchanged it is worth a disk read to draw
+        #: properly.  A wheel gesture crosses dozens of spans a second and
+        #: none of them should each cost a file scan.
+        self._loaded_span: tuple[float, float] | None = None
+        self._armed_span: tuple[float, float] | None = None
 
         self.setWindowTitle("lschart — strip chart")
         self.resize(1280, 800)
@@ -259,25 +262,17 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # does not have, while the trace list underneath goes unscrollable.
         box.addWidget(self.readouts, 0)
 
-        window_row = QtWidgets.QHBoxLayout()
-        window_row.addWidget(QtWidgets.QLabel("Show"))
-        self.window_combo = QtWidgets.QComboBox()
-        for label, _ in TIME_WINDOWS:
-            self.window_combo.addItem(label)
-        self.window_combo.setCurrentIndex(1)          # 1 hour
-        # A preset is a decision to follow the recorder again, so picking one
-        # leaves a hand-picked window rather than fighting with it.
-        self.window_combo.currentIndexChanged.connect(self._follow_live)
-        window_row.addWidget(self.window_combo, 1)
-
-        self.live_button = QtWidgets.QPushButton("Live")
+        view_row = QtWidgets.QHBoxLayout()
+        view_row.addWidget(QtWidgets.QLabel("View"))
+        self.live_button = QtWidgets.QPushButton("Live (all history)")
         self.live_button.setEnabled(False)
         self.live_button.setToolTip(
-            "drag across a plot to pick a time window; this returns to "
-            "following the recorder (so does a double-click on the plot)")
+            "return to following the recorder, showing everything the logs "
+            "hold; a double-click on the plot does the same")
         self.live_button.clicked.connect(self._follow_live)
-        window_row.addWidget(self.live_button, 0)
-        box.addLayout(window_row)
+        view_row.addWidget(self.live_button, 0)
+        view_row.addStretch(1)
+        box.addLayout(view_row)
 
         # One axis at a time, in steps, about the middle of what is shown.
         # The drag is always the whole rectangle; these are how a single axis
@@ -509,6 +504,17 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 self._first_load_done = True
                 self._sync_traces()
                 self._redraw()
+            if self._span is not None and self._span != self._loaded_span:
+                if self._span != self._armed_span:
+                    # First tick on this span: wait one quiet tick before the
+                    # disk work, so a gesture in motion costs nothing.
+                    self._armed_span = self._span
+                else:
+                    # Settled: swap the thinned overview for the real samples.
+                    self._armed_span = None
+                    self.tail.prepare_span(*self._span)
+                    self._loaded_span = self._span
+                    self._redraw()
             self._update_statusbar()
         except Exception:  # noqa: BLE001 - a drawing bug must not stop the viewer
             log.exception("refresh failed; the viewer continues")
@@ -721,20 +727,23 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.traces_layout.insertWidget(self.traces_layout.count() - 1, check)
 
     def _redraw(self) -> None:
-        seconds = TIME_WINDOWS[self.window_combo.currentIndex()][1]
         for name, curve in self.curves.items():
             if not self.toggles[name].isChecked():
                 curve.setData([], [])
                 continue
             if self._span is None:
-                t, v = self.tail.window(name, seconds)
+                # Live: everything the logs have given this viewer, thinned to
+                # max_points per trace at worst.
+                t, v = self.tail.everything(name)
             else:
                 # Exactly the visible span, so a panel still autoscaling fits
                 # itself to what is on screen: zoom into a five-minute wobble
                 # and the wobble fills the panel instead of a day's excursion.
-                # A panel whose y axis was dragged out keeps the axis it was
-                # given; the cut still matters, for the other panel and for
-                # the number of points Qt is asked to draw.
+                # Full resolution once prepare_span has caught up with the
+                # span; the thinned overview draws until then.  A panel whose
+                # y axis was dragged out keeps the axis it was given; the cut
+                # still matters, for the other panel and for the number of
+                # points Qt is asked to draw.
                 t, v = self.tail.between(name, *self._span)
             curve.setData(t, v)
 
@@ -812,9 +821,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _follow_live(self, *_ignored) -> None:
         """Drop every hand-picked axis and follow the recorder again.
 
-        Takes and ignores whatever the sender passes -- a combo index, a
-        button's checked flag -- because three different widgets mean it.
+        Takes and ignores whatever the sender passes -- a button's checked
+        flag, anything -- because more than one widget means it.
         """
+        self._armed_span = None
+        # The overlay the tail holds belongs to whatever span was picked last;
+        # coming back here must not assume it still matches a future pick.
+        self._loaded_span = None
         if self._is_live():
             self._redraw()          # a combo change with nothing to leave
             return

@@ -27,7 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--refresh", type=float, default=1.0,
                     help="seconds between redraws (default 1)")
     ap.add_argument("--max-points", type=int, default=200_000,
-                    help="samples kept per trace before the oldest are dropped")
+                    help="samples kept per trace; past this the history is "
+                         "thinned, not truncated")
     ap.add_argument("--read-only", action="store_true",
                     help="open without the ability to send commands at all")
     ap.add_argument("--log-level", default="INFO")
