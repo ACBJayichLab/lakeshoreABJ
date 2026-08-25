@@ -171,7 +171,7 @@ class StatusWriter:
         links = []
         for inst in instruments:
             t = getattr(inst, "transport", None)
-            links.append({
+            link = {
                 "name": getattr(inst, "name", str(inst)),
                 "model": str(getattr(inst, "model", "")),
                 "up": bool(getattr(t, "is_up", False)),
@@ -179,8 +179,46 @@ class StatusWriter:
                 "reconnects": int(getattr(t, "reconnects", 0)),
                 "last_error": str(getattr(t, "last_error", "") or ""),
                 "writable": bool(getattr(inst, "allow_writes", False)),
-            })
+            }
+            link.update(StatusWriter._capabilities(inst))
+            links.append(link)
         return links
+
+    @staticmethod
+    def _capabilities(inst) -> dict:
+        """What this box can be *asked to do*, for a client building controls.
+
+        A viewer that offers a loop selector on a box with no loops, or a
+        heater-range control on a 218, is a viewer that generates refusals for
+        a living.  Rather than have every client keep its own table of what a
+        model number implies -- which is the same table going stale in three
+        places -- the recorder says what the instrument it actually opened can
+        do.
+
+        Read duck-typed and defaulted, like everything else in this module, so
+        an instrument class that does not exist yet does not have to be known
+        here to be reported correctly.  Absent capabilities are empty, never
+        missing: a client can then tell "this box has no loops" from "this
+        recorder is too old to say".
+        """
+        caps = getattr(inst, "caps", None)
+        analog = getattr(inst, "analog", None)
+        return {
+            # 33x: the loops it will accept a setpoint on, and the outputs that
+            # have a power range.
+            "loops": [int(n) for n in getattr(caps, "loops", ()) or ()],
+            "heater_outputs": [
+                int(n) for n in getattr(caps, "heater_outputs", ()) or ()
+            ],
+            # 218: the one output that is a heater, and the ceiling on it.
+            # `None` means this box has no settable analog output at all --
+            # distinct from output 0, which is a real output number.
+            "analog_output": (
+                int(getattr(analog, "output", 1))
+                if hasattr(inst, "set_analog_percent") else None
+            ),
+            "max_output_pct": float(getattr(inst, "max_output_pct", 100.0)),
+        }
 
     @staticmethod
     def _control(status) -> dict | None:

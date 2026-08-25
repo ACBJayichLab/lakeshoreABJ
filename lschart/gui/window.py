@@ -1,10 +1,17 @@
 """The strip-chart window.  Qt lives here and nowhere else in the package.
 
-A viewer, not a controller.  It holds no instrument link, takes no lock, and
-knows nothing the file interface does not tell it -- so it can be opened,
-closed and reopened while the recorder runs, and two people can watch the same
-rig at once.  Sending a setpoint from here writes exactly the file MATLAB
-writes, and is refused by exactly the same interlocks.
+A viewer that can also command, and the distinction matters: it holds no
+instrument link and takes no lock, so it can be opened, closed and reopened
+while the recorder runs, and two people can watch the same rig at once.  Every
+control in it writes exactly the file MATLAB writes and is refused by exactly
+the same interlocks -- it has no privileges MATLAB lacks, and what it has
+instead is a confirmation dialog that says out loud which buttons apply power.
+
+Which controls exist is decided by what the *recorder* says the selected
+instrument has, not by a model-number table kept in here.  A 33x takes a
+setpoint and a range and they are genuinely separate acts; a 218 has neither,
+just one analog percentage that *is* the power.  Keeping that knowledge in the
+recorder means it is not the same table going stale in three clients.
 
 Two plots, not one, and they are stacked and x-linked rather than overlaid.  A
 heater percent and a temperature share no axis: 63% and 63 K are different
@@ -28,8 +35,9 @@ import os
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from ..instruments.ls33x import HEATER_RANGE_NAMES
 from ..ipc.commands import CommandSpool
-from .source import CsvTail, StatusSource, classify_column
+from .source import CsvTail, StatusSource, capabilities, classify_column
 
 log = logging.getLogger(__name__)
 
@@ -188,6 +196,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("waiting for the recorder…")
+        # Settle the control panel before the first poll.  Otherwise a viewer
+        # opened against a recorder with nothing writable shows every control,
+        # greyed out -- which reads as "this rig has all of these" rather than
+        # "this rig has none of them".
+        self._instrument_changed()
 
     def _left_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
@@ -250,11 +263,51 @@ class ViewerWindow(QtWidgets.QMainWindow):
         return panel
 
     def _command_box(self) -> QtWidgets.QWidget:
-        self.command_group = QtWidgets.QGroupBox("Setpoint")
-        form = QtWidgets.QFormLayout(self.command_group)
+        """The control panel: one instrument selector, then whatever it can do.
 
+        Three controls rather than one, because the rigs this drives are not
+        the same shape.  A 33x takes a setpoint and a range and they are
+        genuinely separate acts -- the setpoint is inert until the range is
+        raised.  A 218 has neither: one analog percentage that *is* the power.
+        Which controls appear is decided by what the recorder says the selected
+        box actually has, not by a model-number table kept in here.
+
+        Every one of them writes the same file MATLAB writes and is refused by
+        the same interlocks.  The viewer has no privileges; what it has is a
+        confirmation dialog that says out loud which of these applies power.
+        """
+        self.command_group = QtWidgets.QGroupBox("Command")
+        box = QtWidgets.QVBoxLayout(self.command_group)
+
+        top = QtWidgets.QFormLayout()
         self.instrument_combo = QtWidgets.QComboBox()
-        form.addRow("Instrument", self.instrument_combo)
+        self.instrument_combo.currentIndexChanged.connect(self._instrument_changed)
+        top.addRow("Instrument", self.instrument_combo)
+        box.addLayout(top)
+
+        box.addWidget(self._setpoint_group())
+        box.addWidget(self._range_group())
+        box.addWidget(self._analog_group())
+
+        # Never gated on anything.  The safe direction is always available, and
+        # a panic button that can be greyed out is not one.
+        self.off_button = QtWidgets.QPushButton("All heaters OFF")
+        self.off_button.setToolTip(
+            "Every heater this recorder may write to, to zero: 33x ranges and "
+            "218 analog outputs alike. Boxes it may not write to are left "
+            "alone and named in the reply.")
+        self.off_button.setStyleSheet("font-weight:bold; padding:4px;")
+        self.off_button.clicked.connect(self._send_heaters_off)
+        box.addWidget(self.off_button)
+
+        self.ack_label = QtWidgets.QLabel("")
+        self.ack_label.setWordWrap(True)
+        box.addWidget(self.ack_label)
+        return self.command_group
+
+    def _setpoint_group(self) -> QtWidgets.QWidget:
+        self.setpoint_group = QtWidgets.QGroupBox("Setpoint")
+        form = QtWidgets.QFormLayout(self.setpoint_group)
 
         self.loop_spin = QtWidgets.QSpinBox()
         self.loop_spin.setRange(1, 4)
@@ -265,16 +318,70 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.setpoint_spin.setDecimals(3)
         self.setpoint_spin.setSuffix(" K")
         self.setpoint_spin.setValue(0.0)
-        form.addRow("Setpoint", self.setpoint_spin)
+        form.addRow("Target", self.setpoint_spin)
 
-        self.send_button = QtWidgets.QPushButton("Send…")
+        self.send_button = QtWidgets.QPushButton("Send setpoint…")
         self.send_button.clicked.connect(self._send_setpoint)
         form.addRow(self.send_button)
+        return self.setpoint_group
 
-        self.ack_label = QtWidgets.QLabel("")
-        self.ack_label.setWordWrap(True)
-        form.addRow(self.ack_label)
-        return self.command_group
+    def _range_group(self) -> QtWidgets.QWidget:
+        """Heater range.  Off / low / medium / high, and it applies power.
+
+        Held back from the first cut of this viewer on the grounds that
+        applying power from a chart is a different decision from typing it.
+        That is still true, which is why the dialog for a non-zero range is
+        blunter than the setpoint one -- but refusing to offer the control at
+        all just means the operator walks to another terminal, and does it
+        there without the chart in front of them.
+        """
+        self.range_group = QtWidgets.QGroupBox("Heater range")
+        form = QtWidgets.QFormLayout(self.range_group)
+
+        self.heater_combo = QtWidgets.QComboBox()
+        form.addRow("Output", self.heater_combo)
+
+        self.range_combo = QtWidgets.QComboBox()
+        for value, label in sorted(HEATER_RANGE_NAMES.items()):
+            self.range_combo.addItem(f"{value} — {label}", value)
+        form.addRow("Range", self.range_combo)
+
+        self.range_button = QtWidgets.QPushButton("Set range…")
+        self.range_button.clicked.connect(self._send_range)
+        form.addRow(self.range_button)
+
+        self.range_note = QtWidgets.QLabel("")
+        self.range_note.setWordWrap(True)
+        self.range_note.setStyleSheet("color:#e65100;")
+        form.addRow(self.range_note)
+        return self.range_group
+
+    def _analog_group(self) -> QtWidgets.QWidget:
+        """A 218 analog output, in percent.  The whole heater, in one number.
+
+        The spin box is capped at the recorder's own ``max_output_pct`` rather
+        than at 100, so the widget cannot express a value the recorder is going
+        to refuse -- and so the ceiling is visible without reading the config.
+        """
+        self.analog_group = QtWidgets.QGroupBox("Analog output")
+        form = QtWidgets.QFormLayout(self.analog_group)
+
+        self.analog_spin = QtWidgets.QDoubleSpinBox()
+        self.analog_spin.setRange(0.0, 100.0)
+        self.analog_spin.setDecimals(3)
+        self.analog_spin.setSuffix(" %")
+        self.analog_spin.setValue(0.0)
+        form.addRow("Output", self.analog_spin)
+
+        self.analog_button = QtWidgets.QPushButton("Set output…")
+        self.analog_button.clicked.connect(self._send_analog)
+        form.addRow(self.analog_button)
+
+        self.analog_note = QtWidgets.QLabel("")
+        self.analog_note.setWordWrap(True)
+        self.analog_note.setStyleSheet("color:#e65100;")
+        form.addRow(self.analog_note)
+        return self.analog_group
 
     def _plots(self) -> QtWidgets.QWidget:
         layout = pg.GraphicsLayoutWidget()
@@ -390,12 +497,21 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _update_commands(self) -> None:
         """Keep the command panel honest about what it can actually do."""
-        names = [str(link.get("name", "")) for link in self.source.links()
-                 if link.get("writable")]
+        names = [str(link.get("name", ""))
+                 for link in self.source.writable_links()]
         if [self.instrument_combo.itemText(i)
                 for i in range(self.instrument_combo.count())] != names:
+            # Rebuilding drops the selection, so put it back: this runs on a
+            # one-second timer, and a combo that reset itself every tick would
+            # be unusable.  Only the *list* changing gets here at all.
+            chosen = self.instrument_combo.currentText()
+            self.instrument_combo.blockSignals(True)
             self.instrument_combo.clear()
             self.instrument_combo.addItems(names)
+            if chosen in names:
+                self.instrument_combo.setCurrentIndex(names.index(chosen))
+            self.instrument_combo.blockSignals(False)
+            self._instrument_changed()
 
         accepted = self.source.accepts_commands()
         enabled = bool(self.spool) and accepted and bool(names)
@@ -411,6 +527,61 @@ class ViewerWindow(QtWidgets.QMainWindow):
         else:
             why = "writes a command file the recorder picks up on its next cycle"
         self.command_group.setToolTip(why)
+        self._update_gate_notes()
+
+    def _instrument_changed(self, *_ignored) -> None:
+        """Show the controls the selected box has, and only those.
+
+        Called when the selection changes rather than every tick, because the
+        heater-output combo and the analog ceiling are things the operator may
+        be part-way through using.
+        """
+        link = self.source.link_named(self.instrument_combo.currentText())
+        caps = capabilities(link)
+
+        self.setpoint_group.setVisible(caps["has_loops"])
+        if caps["loops"]:
+            self.loop_spin.setRange(min(caps["loops"]), max(caps["loops"]))
+
+        self.range_group.setVisible(caps["has_heater_range"])
+        outputs = [str(n) for n in caps["heater_outputs"]]
+        if [self.heater_combo.itemText(i)
+                for i in range(self.heater_combo.count())] != outputs:
+            self.heater_combo.clear()
+            self.heater_combo.addItems(outputs)
+
+        self.analog_group.setVisible(caps["has_analog"])
+        if caps["has_analog"]:
+            ceiling = caps["max_output_pct"]
+            self.analog_spin.setMaximum(ceiling)
+            self.analog_group.setTitle(
+                f"Analog output {caps['analog_output']} (max {ceiling:g}%)")
+        self._update_gate_notes()
+
+    def _update_gate_notes(self) -> None:
+        """Say which of the two power gates is open, without disabling anything.
+
+        Greying these out would be the wrong shape.  Both commands are always
+        allowed in the direction that removes heat -- range 0, output 0% -- so a
+        disabled control would take away the one thing that always works, and
+        on a rig you have just decided to make safe that is precisely the wrong
+        moment to hide the button.
+        """
+        if self.source.allows_heater_range():
+            self.range_note.setText("")
+        else:
+            self.range_note.setText(
+                "This recorder will not raise a range from a file "
+                "(ipc.allow_heater_range: false). Setting 0 still works.")
+        if self.source.allows_analog_output():
+            self.analog_note.setText(
+                "No ramp: this is one step, as fast as the plant allows.")
+            self.analog_note.setStyleSheet("color:#37474f;")
+        else:
+            self.analog_note.setText(
+                "This recorder will not drive an output above 0 from a file "
+                "(ipc.allow_analog_output: false). Setting 0 still works.")
+            self.analog_note.setStyleSheet("color:#e65100;")
 
         if self._pending is not None:
             cid, deadline = self._pending
@@ -422,13 +593,15 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 self.ack_label.setStyleSheet(
                     "color:#1b5e20;" if ok else "color:#b71c1c;")
                 self._pending = None
-                self.send_button.setEnabled(True)
+                for button in self._buttons():
+                    button.setEnabled(True)
             elif QtCore.QDateTime.currentSecsSinceEpoch() > deadline:
                 self.ack_label.setText(
                     "no acknowledgement — the recorder may not be reading commands")
                 self.ack_label.setStyleSheet("color:#e65100;")
                 self._pending = None
-                self.send_button.setEnabled(True)
+                for button in self._buttons():
+                    button.setEnabled(True)
 
     def _update_statusbar(self) -> None:
         status = self.source.status or {}
@@ -534,6 +707,53 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     # -- commanding --------------------------------------------------------
 
+    def _buttons(self) -> list[QtWidgets.QPushButton]:
+        """Everything that can queue a command, so one pending command locks all.
+
+        Not just the button that was pressed: commands are applied in order on
+        the recorder's next cycle, and letting a second one be queued while the
+        first is unacknowledged is how you get a range raised against a
+        setpoint that turned out to be refused.
+        """
+        return [self.send_button, self.range_button,
+                self.analog_button, self.off_button]
+
+    def _confirm(self, title: str, text: str) -> bool:
+        return QtWidgets.QMessageBox.question(
+            self, title, text,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
+            QtWidgets.QMessageBox.Cancel,
+        ) == QtWidgets.QMessageBox.Yes
+
+    def _queue(self, kind: str, *, instrument: str | None = None, **args) -> None:
+        """Submit one command and start waiting for its acknowledgement.
+
+        ``instrument=""`` addresses the recorder rather than one box, which is
+        what ``heaters_off`` wants; the default is whatever is selected.
+        """
+        if self.spool is None:
+            return
+        if instrument is None:
+            instrument = self.instrument_combo.currentText()
+        try:
+            cid = self.spool.submit(
+                kind, instrument=instrument, source="lschart-gui", **args,
+            )
+        except OSError as exc:
+            self.ack_label.setText(f"could not queue the command: {exc}")
+            self.ack_label.setStyleSheet("color:#b71c1c;")
+            return
+        self.ack_label.setText(f"queued {kind} {cid}, waiting for the recorder…")
+        self.ack_label.setStyleSheet("color:#37474f;")
+        for button in self._buttons():
+            button.setEnabled(False)
+        # The recorder refuses anything older than its TTL, so waiting longer
+        # than that could only ever report a refusal it has already decided.
+        self._pending = (
+            cid,
+            QtCore.QDateTime.currentSecsSinceEpoch() + int(self.spool.ttl_s),
+        )
+
     def _send_setpoint(self) -> None:
         """Queue a setpoint, after saying out loud what is about to happen."""
         if self.spool is None:
@@ -541,32 +761,108 @@ class ViewerWindow(QtWidgets.QMainWindow):
         instrument = self.instrument_combo.currentText()
         loop = self.loop_spin.value()
         kelvin = self.setpoint_spin.value()
-        answer = QtWidgets.QMessageBox.question(
-            self, "Send setpoint",
+        if not self._confirm(
+            "Send setpoint",
             f"Set loop {loop} of {instrument} to {kelvin:.3f} K?\n\n"
             "This changes where the instrument's own PID loop is going. It "
             "does not turn a heater on: a setpoint does nothing while the "
             "heater range is 0.",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
-            QtWidgets.QMessageBox.Cancel,
-        )
-        if answer != QtWidgets.QMessageBox.Yes:
+        ):
             return
-        try:
-            cid = self.spool.submit(
-                "setpoint", instrument=instrument, source="lschart-gui",
-                loop=loop, kelvin=kelvin,
+        self._queue("setpoint", loop=loop, kelvin=kelvin)
+
+    def _send_range(self) -> None:
+        """Queue a heater range.  Above 0 this is the command that applies power."""
+        if self.spool is None:
+            return
+        instrument = self.instrument_combo.currentText()
+        output = int(self.heater_combo.currentText() or 1)
+        value = int(self.range_combo.currentData())
+        name = HEATER_RANGE_NAMES.get(value, value)
+        if value == 0:
+            text = (f"Turn heater {output} of {instrument} OFF?\n\n"
+                    "The setpoint is left where it is; with the range at 0 it "
+                    "does nothing.")
+        else:
+            # Deliberately blunter than the setpoint dialog.  This is the one
+            # click in the viewer that puts heat into a cryostat.
+            text = (
+                f"Set heater {output} of {instrument} to range {value} "
+                f"({name})?\n\n"
+                "THIS APPLIES POWER. The loop will immediately begin driving "
+                f"toward its setpoint, which reads\n\n    "
+                f"{self._setpoint_now(instrument)}\n\n"
+                "If you have only just changed that setpoint, the recorder may "
+                "not have read it back yet. Check it before continuing."
             )
-        except OSError as exc:
-            self.ack_label.setText(f"could not queue the command: {exc}")
-            self.ack_label.setStyleSheet("color:#b71c1c;")
+        if not self._confirm("Set heater range", text):
             return
-        self.ack_label.setText(f"queued {cid}, waiting for the recorder…")
-        self.ack_label.setStyleSheet("color:#37474f;")
-        self.send_button.setEnabled(False)
-        # The recorder refuses anything older than its TTL, so waiting longer
-        # than that could only ever report a refusal it has already decided.
-        self._pending = (
-            cid,
-            QtCore.QDateTime.currentSecsSinceEpoch() + int(self.spool.ttl_s),
-        )
+        self._queue("range", output=output, value=value)
+
+    def _setpoint_now(self, instrument: str) -> str:
+        """What the box says its setpoint is, for the range dialog.
+
+        Read from the status file rather than asked for, because the viewer
+        holds no instrument link — and therefore **carries an age**, which is
+        quoted rather than hidden. The recorder's cycle order is read → apply
+        commands → write status, so the aux block written alongside a setpoint
+        acknowledgement still holds the value from *before* it. Someone who
+        sets a setpoint and then reaches for the range would otherwise be shown
+        the old number at the exact moment it matters most.
+
+        Polled first so it is as fresh as the file allows, and reported with
+        "unknown" rather than a guess when the recorder does not carry it.
+        """
+        self.source.poll()
+        loop = self.loop_spin.value()
+        for entry in (self.source.status or {}).get("aux", []):
+            if entry.get("name") == f"{instrument}.setpoint{loop}":
+                value = entry.get("value")
+                if value is not None:
+                    return (f"{float(value):.3f} K on loop {loop}, as the "
+                            f"recorder read it {self.source.age_s or 0.0:.0f} s "
+                            f"ago")
+        return f"not reported by the recorder for loop {loop}"
+
+    def _send_analog(self) -> None:
+        """Queue an analog output percentage.  Above 0 this IS the heater."""
+        if self.spool is None:
+            return
+        instrument = self.instrument_combo.currentText()
+        percent = self.analog_spin.value()
+        caps = capabilities(self.source.link_named(instrument))
+        if percent == 0:
+            text = (f"Set the analog output of {instrument} to 0%?\n\n"
+                    "This removes power from the heater on that output.")
+        else:
+            text = (
+                f"Set the analog output of {instrument} to {percent:.3f}%?\n\n"
+                "THIS APPLIES POWER. This box has no loop and no range: the "
+                "percentage is the power, and there is no setpoint that has "
+                "to be reached first.\n\n"
+                "There is NO RAMP. The output goes there in one step and the "
+                "plant follows as fast as it can.\n\n"
+                f"The recorder's ceiling is {caps['max_output_pct']:g}%. Know "
+                "the gain of your heater before confirming — on a cryostat "
+                "sample heater a single percent can be tens of kelvin."
+            )
+        if not self._confirm("Set analog output", text):
+            return
+        self._queue("analog", percent=percent)
+
+    def _send_heaters_off(self) -> None:
+        """The panic button.  Every heater the recorder may write to, to zero."""
+        if self.spool is None:
+            return
+        if not self._confirm(
+            "All heaters off",
+            "Turn OFF every heater this recorder may write to?\n\n"
+            "33x heater ranges to 0 and 218 analog outputs to 0%. "
+            "Instruments the recorder is configured read-only for are left "
+            "alone — on a shared cryostat those are somebody else's.\n\n"
+            "Setpoints are not changed.",
+        ):
+            return
+        # Addressed to the recorder, not to a box: the whole point is that it
+        # does not stop at whichever instrument happens to be selected.
+        self._queue("heaters_off", instrument="")

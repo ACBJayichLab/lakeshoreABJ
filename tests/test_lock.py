@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 
 import pytest
 
@@ -73,14 +74,19 @@ def test_the_file_survives_release(tmp_path):
     assert path.exists()
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="POSIX signal semantics; the Windows path is the same idea")
 def test_a_killed_process_releases_the_lock(tmp_path):
     """The reason this is an OS lock and not a PID file.
 
     A process that is killed -- or that loses power -- never runs cleanup, so
     a lock that depended on cleanup would be stale forever.  The kernel drops
     this one.
+
+    This runs on Windows too.  It used to be skipped there for "POSIX signal
+    semantics", but nothing here is a signal: ``Popen.kill()`` is
+    TerminateProcess, and TerminateProcess drops the handle's locks exactly as
+    SIGKILL does.  Skipping it hid the fact that the Windows lock was taken on
+    a byte that moved with the file position, so a second instance never
+    collided with the first at all.
     """
     path = tmp_path / "run.lock"
     script = textwrap.dedent(f"""
@@ -102,6 +108,25 @@ def test_a_killed_process_releases_the_lock(tmp_path):
         if proc.poll() is None:  # pragma: no cover
             proc.kill()
 
-    # No cleanup ran in that process, and yet:
-    with InstanceLock(path) as lock:
+    # No cleanup ran in that process, and yet the kernel drops the lock.
+    #
+    # Not necessarily by the time `wait()` returns, though.  On Windows the
+    # handle is closed during process *teardown*, which lags the exit code by a
+    # few milliseconds: retrying immediately is refused roughly one attempt in
+    # three.  That is a property of the platform and not of this test, and it
+    # has an operational edge -- a supervisor that restarts the recorder the
+    # instant it dies can be refused its own lock.  See
+    # docs/recorder/windows.md.
+    deadline = time.monotonic() + 5.0
+    while True:
+        try:
+            lock = InstanceLock(path).acquire()
+            break
+        except AlreadyRunning:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
+    try:
         assert lock.held, "the kernel released it when the process died"
+    finally:
+        lock.release()

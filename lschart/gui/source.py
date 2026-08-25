@@ -347,3 +347,57 @@ class StatusSource:
 
     def accepts_commands(self) -> bool:
         return bool(((self.status or {}).get("commands") or {}).get("accepted"))
+
+    def allows_heater_range(self) -> bool:
+        """May a *file* raise a 33x heater range on this recorder?
+
+        Not the same question as :meth:`accepts_commands`, and not a reason to
+        disable a control either: lowering a range to 0 is always permitted, so
+        a widget that greys itself out here would take away the one direction
+        that is always available.  This is for saying so, not for refusing.
+        """
+        cmds = (self.status or {}).get("commands") or {}
+        return bool(cmds.get("allow_heater_range"))
+
+    def allows_analog_output(self) -> bool:
+        """May a *file* drive a 218 analog output above 0?  Same caveat."""
+        cmds = (self.status or {}).get("commands") or {}
+        return bool(cmds.get("allow_analog_output"))
+
+    def writable_links(self) -> list[dict]:
+        """The instruments a command could actually reach, in order."""
+        return [ln for ln in self.links() if ln.get("writable")]
+
+    def link_named(self, name: str) -> dict:
+        for link in self.links():
+            if str(link.get("name", "")) == name:
+                return link
+        return {}
+
+
+def capabilities(link: dict) -> dict:
+    """What controls make sense for one instrument, from its status entry.
+
+    A separate function rather than a method because it is pure and is the
+    thing worth testing: given what the recorder said about a box, which
+    controls should exist and what should their limits be.
+
+    Defaults are chosen so an *older* recorder -- one whose status file predates
+    the capability block -- degrades to the previous behaviour (a 1..4 loop
+    spinner, no analog control) rather than to a window with nothing in it.
+    """
+    loops = [int(n) for n in link.get("loops") or ()]
+    heaters = [int(n) for n in link.get("heater_outputs") or ()]
+    analog = link.get("analog_output")
+    known = ("loops" in link) or ("analog_output" in link)
+    if not known:
+        loops, heaters = [1, 2, 3, 4], [1, 2]
+    return {
+        "loops": loops,
+        "heater_outputs": heaters,
+        "analog_output": None if analog is None else int(analog),
+        "max_output_pct": float(link.get("max_output_pct") or 100.0),
+        "has_loops": bool(loops),
+        "has_heater_range": bool(heaters),
+        "has_analog": analog is not None,
+    }

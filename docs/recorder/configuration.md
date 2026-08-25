@@ -99,6 +99,30 @@ box this software is meant to drive.
 | `control_input` | `1` | which input carries the sample. **Leave 0 on a box that is only being logged** — this is the channel a *software* loop would control |
 | `analog_output` | `1` | |
 | `analog_decimals` | `3` | |
+| **`allow_writes`** | **`false`** | gates the `ANALOG` command — which on this box is the heater |
+| **`max_output_pct`** | `100.0` | blunt ceiling on the commanded percentage. **Set this.** 100 is the instrument's full scale and therefore no restriction at all |
+| `verify_writes` | `true` | confirm each write by reading `AOUT?` back. Turn it **off** for a software loop that writes every cycle and verifies for itself |
+| `readback_tol_pct` | `0.02` | how far the readback may sit from the commanded value and still count |
+
+The 218 needs its own thinking, and `max_output_pct` is why. A 33x setpoint is
+inert until a range is raised, so its two commands can be gated separately and
+a typo'd setpoint sits harmlessly on the display. **A 218 has no inert half**:
+one `ANALOG` command, and the percentage is the power. Nothing about `40` looks
+more dangerous than `4`, and on LTSPM3 the difference between them is about
+350 K.
+
+So the ceiling is the guard that matters, and it is deliberately not defaulted
+to something clever — what a safe percentage is depends entirely on the heater
+on the other end, and generic code guessing that would be worse than useless.
+Set it in the rig's config, with the measurement it came from written next to
+it.
+
+`readback_tol_pct` must exceed the DAC step plus the readback's display
+rounding, or a write that worked perfectly is reported as a failure: the DAC
+quantises to 0.01% and `AOUT?` answers to two decimals, so the rig's own
+63.076% operating point can never read back exactly. It still catches the
+failure that matters — a write that did not land at all sits a whole commanded
+step away.
 
 ---
 
@@ -153,8 +177,14 @@ Full explanation in [file-interface.md](file-interface.md).
 | **`accept_commands`** | **`false`** | read the command spool at all. **Needed to WRITE** |
 | `command_ttl_s` | `30.0` | a command older than this is refused, not applied |
 | `max_commands_per_cycle` | `4` | bounds how much bus time one cycle spends on commands |
-| **`allow_heater_range`** | **`false`** | may a *file* raise a heater range. Turning one **off** is always allowed |
+| **`allow_heater_range`** | **`false`** | may a *file* raise a **33x** heater range. Turning one **off** is always allowed |
+| **`allow_analog_output`** | **`false`** | may a *file* raise a **218** analog output above 0. Commanding 0 is always allowed |
 | `ack_history` | `20` | acknowledgements carried in `status.json`. A client polling slower than this fills up may miss its own answer |
+
+The last two are one gate each rather than one gate for both. They are
+different commands on different boxes, and the common shape on a shared
+cryostat is that exactly one of them should be open: this program drives its
+own sample heater and only *watches* the controller holding somebody else's.
 
 ## `sim:`
 

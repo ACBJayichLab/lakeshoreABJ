@@ -12,7 +12,9 @@ import datetime as _dt
 import json
 import time
 
-from lschart.gui.source import CsvTail, StatusSource, classify_column
+from lschart.gui.source import (
+    CsvTail, StatusSource, capabilities, classify_column,
+)
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
 
@@ -273,3 +275,81 @@ def test_an_acknowledgement_is_found_by_its_own_id(tmp_path):
     src.poll()
     assert src.ack_for("bbb")["message"] == "two"
     assert src.ack_for("ccc") is None
+
+
+# -- what controls a box should get -----------------------------------------
+#
+# The recorder reports what the instrument it actually opened can do, rather
+# than every client keeping its own table of what a model number implies --
+# which is the same table going stale in three places.
+
+
+def test_a_33x_gets_loops_and_heater_ranges_and_no_analog_control():
+    caps = capabilities({
+        "name": "ls336", "model": "336", "writable": True,
+        "loops": [1, 2, 3, 4], "heater_outputs": [1, 2],
+        "analog_output": None, "max_output_pct": 100.0,
+    })
+    assert caps["has_loops"] and caps["has_heater_range"]
+    assert caps["has_analog"] is False
+    assert caps["loops"] == [1, 2, 3, 4] and caps["heater_outputs"] == [1, 2]
+
+
+def test_a_218_gets_an_analog_control_and_neither_of_the_others():
+    """No loop to set a setpoint on, and no range to raise."""
+    caps = capabilities({
+        "name": "ls218", "model": "218", "writable": True,
+        "loops": [], "heater_outputs": [], "analog_output": 1,
+        "max_output_pct": 70.0,
+    })
+    assert caps["has_analog"] and caps["analog_output"] == 1
+    assert caps["max_output_pct"] == 70.0
+    assert not caps["has_loops"] and not caps["has_heater_range"]
+
+
+def test_analog_output_zero_is_an_output_number_not_an_absence():
+    """`None` means "no analog output"; 0 would be a real one."""
+    assert capabilities({"analog_output": 0, "loops": []})["has_analog"] is True
+    assert capabilities({"analog_output": None, "loops": []})["has_analog"] is False
+
+
+def test_a_status_file_from_an_older_recorder_degrades_to_the_old_behaviour():
+    """A viewer newer than the recorder it is watching must still be usable.
+
+    Before the capability block existed the viewer assumed loops 1-4 and no
+    analog control, so that is what an entry without it should still get --
+    rather than a window with no controls at all.
+    """
+    caps = capabilities({"name": "ls336", "up": True, "writable": True})
+    assert caps["loops"] == [1, 2, 3, 4] and caps["heater_outputs"] == [1, 2]
+    assert caps["has_analog"] is False
+
+
+def test_the_two_power_gates_are_reported_separately(tmp_path):
+    src = StatusSource(status_file(tmp_path, commands={
+        "accepted": True, "recent": [],
+        "allow_heater_range": False, "allow_analog_output": True,
+    }))
+    src.poll()
+    assert src.accepts_commands() is True
+    assert src.allows_heater_range() is False
+    assert src.allows_analog_output() is True
+
+
+def test_a_gate_absent_from_the_status_file_reads_as_shut(tmp_path):
+    src = StatusSource(status_file(tmp_path))
+    src.poll()
+    assert src.allows_heater_range() is False
+    assert src.allows_analog_output() is False
+
+
+def test_only_writable_instruments_are_offered_as_targets(tmp_path):
+    """The LTSPM shape: our 218 is writable, their 336 is not."""
+    src = StatusSource(status_file(tmp_path, links=[
+        {"name": "ls218", "up": True, "writable": True, "analog_output": 1},
+        {"name": "ls336", "up": True, "writable": False, "loops": [1, 2]},
+    ]))
+    src.poll()
+    assert [ln["name"] for ln in src.writable_links()] == ["ls218"]
+    assert src.link_named("ls336")["writable"] is False
+    assert src.link_named("nope") == {}

@@ -59,6 +59,14 @@ class Harness:
         self.inst = LS218(
             LoopbackTransport(self.sim),
             channels={1: "Sample", 2: "Cold Head", 3: "Shield"},
+            # What an armed LTSPM config has to say, and for the same two
+            # reasons.  `allow_writes` because the 218's analog output is the
+            # sample heater and the driver now gates it like any other heater;
+            # `verify_writes` off because the supervisor confirms its own
+            # writes (`SupervisorConfig.verify_readback`) and paying twice
+            # would put a second transaction in every control cycle.
+            allow_writes=True,
+            verify_writes=False,
         )
         self.sup = HeaterSupervisor(
             self.inst,

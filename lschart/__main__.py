@@ -131,22 +131,41 @@ def cmd_check(args) -> int:
         print(f"  control channel: {cfg.control_channel}")
     else:
         print("  control channel: none (no instrument declares a control_input; "
-              "this config records only)")
+              "no SOFTWARE loop runs here)")
     print(f"  cadence        : {cfg.acquisition.interval_s} s")
     print(f"  budget         : {cfg.estimated_transactions()} transactions "
           f"~ {cfg.estimated_cycle_s():.2f} s per cycle")
     ipc = cfg.ipc
     if ipc.enabled:
         print(f"  status file    : {ipc.status_path()}")
+        allowed = []
+        if ipc.accept_commands and ipc.allow_heater_range:
+            allowed.append("heater range")
+        if ipc.accept_commands and ipc.allow_analog_output:
+            allowed.append("analog output")
         print(f"  commands       : "
               f"{'accepted from ' + ipc.command_path() if ipc.accept_commands else 'not accepted'}"
-              f"{' (heater range ALLOWED)' if ipc.accept_commands and ipc.allow_heater_range else ''}")
+              f"{'  (' + ' and '.join(allowed) + ' ALLOWED from a file)' if allowed else ''}")
     else:
         print("  status file    : disabled (ipc.enabled: false) -- the GUI and "
               "MATLAB have nothing to read")
-    writable = [i.resolved_name() for i in cfg.enabled_instruments
-                if getattr(i, "allow_writes", False)]
+
+    # Two gates, reported together, because "writable" is a lie about a box
+    # whose transport still refuses the bytes -- and that combination is what a
+    # half-opened config looks like.
+    writable = []
+    for i in cfg.enabled_instruments:
+        if not getattr(i, "allow_writes", False):
+            continue
+        note = " (but transport.read_only: no bytes leave)" if i.transport.read_only else ""
+        writable.append(f"{i.resolved_name()}{note}")
     print(f"  writable       : {', '.join(writable) if writable else 'nothing (read-only)'}")
+    for i in cfg.enabled_instruments:
+        if i.model == "218" and getattr(i, "allow_writes", False):
+            print(f"  {i.resolved_name() + ' analog':<15}: output {i.analog_output}, "
+                  f"ceiling {i.max_output_pct:g}%, "
+                  f"{'verified by readback' if i.verify_writes else 'UNVERIFIED writes'}"
+                  f"  <-- THIS IS A HEATER")
     if enabled:
         s = control.supervisor
         lo = max(s.hard_min_pct, s.operating_point_pct - s.authority_pct)
@@ -330,6 +349,13 @@ def cmd_status(args) -> int:
             flag = "" if ch.get("usable") else f"   <-- {ch.get('validity')}"
             print(f"    {ch.get('name', '?'):<24} "
                   f"{'   n/a' if k is None else format(k, '10.4f')} K{flag}")
+        # Heaters, setpoints and analog outputs.  Printed rather than left to
+        # the raw JSON because on a rig where this program can move a heater,
+        # "what is the heater doing" is the question `status` is being asked.
+        for entry in status.get("aux", []):
+            value = entry.get("value")
+            print(f"    {entry.get('name', '?'):<24} "
+                  f"{'   n/a' if value is None else format(value, '10.4f')}")
         for link in status.get("links", []):
             state = "up" if link.get("up") else "DOWN"
             extra = f" -- {link['last_error']}" if link.get("last_error") else ""
@@ -500,7 +526,20 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     rg.add_argument("value", type=int, choices=[0, 1, 2, 3])
     rg.add_argument("--output", type=int, default=1)
 
-    snd_sub.add_parser("heaters_off", help="every heater range to 0")
+    an = snd_sub.add_parser(
+        "analog",
+        help="218 analog output percent -- ANYTHING ABOVE 0 APPLIES POWER",
+        description="Manual control of a 218 analog output: one number, "
+                    "straight to the DAC. There is no inert half to this the "
+                    "way there is to a 33x setpoint, so it is gated like a "
+                    "heater range and refused above 0 unless the recorder's "
+                    "config sets ipc.allow_analog_output.",
+    )
+    an.add_argument("percent", type=float)
+
+    snd_sub.add_parser(
+        "heaters_off",
+        help="every writable heater to zero: 33x ranges AND 218 analog outputs")
     snd_sub.add_parser("ping", help="prove the command path works, touching nothing")
 
     def _collect_send_args(parsed) -> list[tuple]:
@@ -509,6 +548,7 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "setpoint": ("kelvin", "loop"),
             "ramp": ("rate_k_per_min", "loop"),
             "range": ("value", "output"),
+            "analog": ("percent",),
             "heaters_off": (),
             "ping": (),
         }[parsed.kind]

@@ -60,8 +60,18 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `ping` | proves the whole path, touching no instrument |
 | `setpoint` | `loop`, `kelvin` |
 | `ramp` | `loop`, `rate_k_per_min` (0 disables) |
-| `range` | `output`, `value` 0–3 — **the one that applies power** |
-| `heaters_off` | every heater range to 0 |
+| `range` | `output`, `value` 0–3 — **applies power** on a 33x |
+| `analog` | `percent` — **applies power** on a 218; there is no inert half to it |
+| `heaters_off` | every heater on every writable instrument to zero |
+
+`heaters_off` is the only command that is not aimed at one box. Every other
+handler takes an argument that means something on exactly one instrument;
+this one takes none and means "stop heating", which on a two-box rig had
+better include the box carrying the sample heater. A panic button that leaves
+one heater running is worse than no panic button, because it will be believed.
+Instruments the recorder may not write to are skipped and named in the reply,
+rather than failing the whole command — on a shared cryostat a read-only box
+is somebody else's, and refusing because of it would leave *our* heaters on.
 
 ## Four properties a naive drop-box does not have
 
@@ -94,23 +104,43 @@ CLI passes, in the same order, with the same message.
 transport.read_only      refuses at the byte level, below any policy
 allow_writes             per-instrument driver policy      (default OFF)
 ipc.accept_commands      is this recorder listening at all (default OFF)
-ipc.allow_heater_range   may a *file* raise a heater range (default OFF)
+ipc.allow_heater_range   may a file raise a 33x heater range   (default OFF)
+ipc.allow_analog_output  may a file raise a 218 analog output  (default OFF)
 ```
 
-Turning a heater **off** never needs the fourth: the safe direction is always
-available.
+The last two are one gate each rather than one gate for both, because they are
+different commands on different boxes. On a rig where this program drives its
+own sample heater but only *watches* a controller holding something else, one
+of them wants to be open and the other emphatically does not.
+
+Turning a heater **off** — a range to 0, or an analog output to 0% — never
+needs either of the last two: the safe direction is always available.
+
+A refusal is not a crash. A driver limit saying no (`max_setpoint_k`,
+`max_output_pct`, a loop the box does not have) comes back as
+`refused: <reason>` and is logged at WARNING, not as an ERROR with a traceback
+— on a live rig, an operator's typo must not look like a fault in the log.
 
 ## Switching it on
 
 ```yaml
 ipc:
-  enabled: true              # writes status.json -- needed to READ
-  accept_commands: true      # reads commands/    -- needed to WRITE
-  allow_heater_range: false  # may a file turn a heater ON
+  enabled: true               # writes status.json -- needed to READ
+  accept_commands: true       # reads commands/    -- needed to WRITE
+  allow_heater_range: false   # may a file turn a 33x heater ON
+  allow_analog_output: false  # may a file drive a 218 output above 0
 ```
 
 Reading and commanding are separate permissions, and commanding *also* needs
 `allow_writes: true` on the instrument itself.
+
+## One cycle of lag on the readback
+
+Order within a cycle is read → record → apply commands → write status. So the
+`aux` block in the status file written immediately after a command still
+carries the value read *before* it was applied; the next cycle catches up. The
+acknowledgement itself does not lag — it reports the value the driver read back
+from the instrument to confirm the write.
 
 ## Clients
 

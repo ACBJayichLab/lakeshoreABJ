@@ -18,6 +18,13 @@ system_profiler SPUSBDataType | grep -i -A6 'lake\|CP210'
 interface card's driver). Or avoid it entirely: a box on a COM port should use
 `driver: lakeshore`, which needs no VISA.
 
+**`pyvisa` warns "read string doesn't end with termination characters".**
+The configured `read_termination` is not what the box actually sends. A 218
+ends a reply with `LF`, a 335/336 with `CR LF`, and the default is `CR LF` --
+so a 218 on GPIB needs `read_termination: "\n"`. The readings are still
+correct, which is why this is easy to ignore and worth not ignoring; see
+[instruments](instruments.md).
+
 **It worked yesterday and now the COM port is wrong.** The device
 re-enumerated. Match on `transport.serial_number` instead of `com_port`.
 

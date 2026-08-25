@@ -15,16 +15,22 @@ What a command may do
 ---------------------
 
 Everything a command can do is something :mod:`lschart.instruments.ls33x`
-already exposes, behind the gates that module already has.  Nothing new is
-possible through this door -- it is a second way to reach the same guarded
-methods, not a way around them.  In particular:
+and :mod:`lschart.instruments.ls218` already expose, behind the gates those
+modules already have.  Nothing new is possible through this door -- it is a
+second way to reach the same guarded methods, not a way around them.  In
+particular:
 
 * ``allow_writes`` on the instrument still applies.  A read-only box refuses a
   file command exactly as it refuses a CLI one, with the same message.
 * ``transport.read_only`` still applies, one layer lower again.
-* raising a heater range is the command that actually applies power, so it
-  needs its own opt-in (``ipc.allow_heater_range``) on top of both.  Turning a
-  heater **off** never does: the safe direction is always available.
+* a command that *applies power* needs its own opt-in on top of both:
+  ``ipc.allow_heater_range`` for a 33x range, ``ipc.allow_analog_output`` for a
+  218 analog output.  Two switches and not one, because they are two different
+  commands on two different boxes -- a rig that wants its sample heater driven
+  from a file has no business also being able to raise the range on a
+  controller that is holding something else.
+* the safe direction is always available.  Turning a heater **off**, or
+  commanding an analog output to zero, needs neither extra opt-in.
 
 Failure policy: no command, however malformed, may stop the recording.  Every
 handler's exceptions are caught and turned into a refusal that the client can
@@ -84,6 +90,7 @@ class IpcService:
         recorder=None,
         accept_commands: bool = False,
         allow_heater_range: bool = False,
+        allow_analog_output: bool = False,
         max_commands_per_cycle: int = 4,
         config_path: str | None = None,
         ack_history: int = 20,
@@ -95,6 +102,7 @@ class IpcService:
         self.recorder = recorder
         self.accept_commands = accept_commands
         self.allow_heater_range = allow_heater_range
+        self.allow_analog_output = allow_analog_output
         self.max_commands_per_cycle = max(1, int(max_commands_per_cycle))
         self.interval_s = interval_s
         #: Set by the application once the poller exists; read duck-typed so
@@ -124,10 +132,11 @@ class IpcService:
                         if getattr(i, "allow_writes", False)]
             log.warning(
                 "IPC: status -> %s; accepting commands from %s "
-                "(writable instruments: %s; heater range %s)",
+                "(writable instruments: %s; heater range %s; analog output %s)",
                 self.writer.path, self.spool.directory,
                 ", ".join(writable) or "NONE -- every command will be refused",
                 "ALLOWED" if self.allow_heater_range else "refused",
+                "ALLOWED" if self.allow_analog_output else "refused",
             )
         else:
             log.info("IPC: status -> %s; commands are NOT accepted "
@@ -199,6 +208,15 @@ class IpcService:
             # An interlock said no.  That is a correct outcome, not a fault.
             log.warning("IPC: %s refused: %s", cmd.kind, exc)
             return CommandResult(cmd.id, cmd.kind, False, f"refused: {exc}")
+        except ValueError as exc:
+            # A driver limit said no: a setpoint past `max_setpoint_k`, a
+            # percentage past `max_output_pct`, a loop the box does not have.
+            # Same category as the above -- the guard worked -- so it must not
+            # come out as an ERROR with a traceback.  On a live rig those
+            # tracebacks are what an operator's typo would look like in the
+            # log, and they would bury the real ones.
+            log.warning("IPC: %s refused: %s", cmd.kind, exc)
+            return CommandResult(cmd.id, cmd.kind, False, f"refused: {exc}")
         except Exception as exc:  # noqa: BLE001 - a bad command must not stop logging
             log.exception("IPC: command %s (%s) failed", cmd.id, cmd.kind)
             return CommandResult(
@@ -217,11 +235,33 @@ class IpcService:
             if hasattr(i, "set_setpoint") and hasattr(i, "caps")
         }
 
+    def _analog_boxes(self) -> dict:
+        """Instruments carrying a settable analog output, by name."""
+        return {
+            i.name: i for i in self.instruments if hasattr(i, "set_analog_percent")
+        }
+
     def _target(self, cmd: Command):
-        boxes = self._controllers()
+        return self._pick(cmd, self._controllers(), "controller", "controllers")
+
+    def _analog_target(self, cmd: Command):
+        """A 218, or whatever else grows an analog output.
+
+        Resolved separately from :meth:`_target` rather than by widening it,
+        because on the LTSPM rig *both* boxes are present and they take
+        different commands.  "Several controllers are configured, name one"
+        would be a confusing answer to an analog command on a rig that has
+        exactly one box with an analog output.
+        """
+        return self._pick(
+            cmd, self._analog_boxes(),
+            "instrument with an analog output", "instruments with analog outputs",
+        )
+
+    def _pick(self, cmd: Command, boxes: dict, singular: str, plural: str):
         if not boxes:
             raise CommandError(
-                "no controller is configured on this recorder; it can only log"
+                f"no {singular} is configured on this recorder; it can only log"
             )
         if cmd.instrument:
             if cmd.instrument not in boxes:
@@ -232,7 +272,7 @@ class IpcService:
             return boxes[cmd.instrument]
         if len(boxes) > 1:
             raise CommandError(
-                f"several controllers are configured ({sorted(boxes)}); "
+                f"several {plural} are configured ({sorted(boxes)}); "
                 "name one in the command's `instrument` field"
             )
         return next(iter(boxes.values()))
@@ -285,11 +325,68 @@ class IpcService:
         inst.set_heater_range(output, value)
         return f"{inst.name} heater {output} range -> {value}"
 
+    def _do_analog(self, cmd: Command) -> str:
+        """Drive a 218 analog output directly.  Manual control, in one number.
+
+        The 218's equivalent of ``range`` and ``setpoint`` at once: there is no
+        inert half, so the percentage is the power and it is gated like a range
+        rather than like a setpoint.  Zero is exempt, as it is everywhere else
+        here -- the direction that removes heat is never the one that needs
+        another permission.
+        """
+        inst = self._analog_target(cmd)
+        percent = _as_float(cmd.args, "percent")
+        if percent > 0 and not self.allow_analog_output:
+            raise CommandError(
+                "driving a 218 analog output above zero applies power to the "
+                "rig, and this recorder does not accept that from a file; set "
+                "ipc.allow_analog_output: true if a remote client really "
+                "should be able to move the heater. Commanding it to 0 is "
+                "always allowed"
+            )
+        inst.set_analog_percent(percent)
+        return (f"{inst.name} analog output {inst.analog.output} -> "
+                f"{percent:.3f}% (verified)" if inst.verify_writes else
+                f"{inst.name} analog output {inst.analog.output} -> "
+                f"{percent:.3f}% (NOT verified)")
+
     def _do_heaters_off(self, cmd: Command) -> str:
-        """Always available: lowering power is the safe direction."""
-        inst = self._target(cmd)
-        inst.all_heaters_off()
-        return f"{inst.name}: all heater ranges 0"
+        """The panic button.  Always available: lowering power is the safe direction.
+
+        Deliberately *not* routed through :meth:`_target`.  Every other handler
+        acts on one box because it needs an argument that only means something
+        on one box; this one takes no arguments and means "stop heating", which
+        on a two-box rig had better include the box carrying the sample heater.
+        A panic button that leaves one heater running is worse than no panic
+        button, because it will be believed.
+
+        Instruments this recorder may not write to are skipped rather than
+        failed on: on a shared cryostat a read-only box is somebody else's, and
+        refusing the whole command because of it would leave *our* heaters on.
+        """
+        done: list[str] = []
+        skipped: list[str] = []
+        for inst in self.instruments:
+            if not getattr(inst, "allow_writes", False):
+                if hasattr(inst, "all_heaters_off") or hasattr(inst, "analog_off"):
+                    skipped.append(inst.name)
+                continue
+            if hasattr(inst, "all_heaters_off"):
+                inst.all_heaters_off()
+                done.append(f"{inst.name}: all heater ranges 0")
+            elif hasattr(inst, "analog_off"):
+                inst.analog_off()
+                done.append(f"{inst.name}: analog output 0%")
+        if not done:
+            raise CommandError(
+                "nothing to turn off: no instrument on this recorder is "
+                "writable"
+                + (f" (read-only here: {', '.join(skipped)})" if skipped else "")
+            )
+        message = "; ".join(done)
+        if skipped:
+            message += f"; left alone (read-only): {', '.join(skipped)}"
+        return message
 
     # -- status ------------------------------------------------------------
 
@@ -299,6 +396,7 @@ class IpcService:
             "directory": str(self.spool.directory),
             "ttl_s": self.spool.ttl_s,
             "allow_heater_range": bool(self.allow_heater_range),
+            "allow_analog_output": bool(self.allow_analog_output),
             "queued": len(self.spool.pending()) if self.accept_commands else 0,
             "applied": self.applied,
             "refused": self.refused,

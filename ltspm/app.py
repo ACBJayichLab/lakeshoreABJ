@@ -40,6 +40,19 @@ def controller_factory(app: Application):
             "control.enabled requires ls218.enabled -- the sample heater is "
             "the 218's analog output"
         )
+    # The 218's write gate is generic `lschart` policy and knows nothing about
+    # a software loop, so a control config that forgets it would build fine and
+    # then raise PermissionError on the poll thread at the first output.  Say so
+    # here instead, where it is a startup error somebody can act on.
+    if not app.ls218.allow_writes:
+        raise ValueError(
+            f"control.enabled but {app.ls218.name} has allow_writes: false -- "
+            "the software loop drives that box's analog output and every write "
+            "would be refused. Set allow_writes: true on it, and set "
+            "verify_writes: false there too: the supervisor confirms its own "
+            "writes, and doing it in both places costs a second transaction "
+            "every control cycle"
+        )
     return HeaterSupervisor(
         app.ls218,
         channel=app.cfg.control_channel,

@@ -1,3 +1,218 @@
+# Handoff — 2026-08-24 (fourth session: the sample heater becomes drivable)
+
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
+**311 tests passing (was 257). Nothing has been written to any heater.** The
+read-only recorder from the third session is still running on the rig — sample
+4.742 K, `ls218.aout1` 0.0%, 336 loop 2 still railed.
+
+## What this session did
+
+Made manual control of the **218's analog output 1** — the sample heater —
+possible through the running recorder's file spool, at Jeff's request, and
+explicitly *not* by enabling the software PID. `ltspm/control/` was not touched.
+
+The 218 previously had **no write gate at all**. `set_analog_percent` was
+reachable only from `HeaterSupervisor`, so it had never needed one, and none of
+the CLI, the spool or MATLAB could reach it. Adding a manual path meant adding
+the gate first.
+
+### The design point worth carrying forward
+
+**A 218 has no inert half.** Every safety story in this repo up to now leaned on
+the 33x split: `SETP` says where to go and does nothing, `RANGE` applies power,
+and you gate them separately. A 218 has no loop, no range and no setpoint —
+one `ANALOG` command, and the percentage *is* the power. Nothing about `40`
+looks more dangerous than `4`, and on this plant (~10 K/%) the difference
+between them is about 350 K.
+
+So the ceiling does the work the `RANGE` split used to do:
+
+| | |
+|---|---|
+| `allow_writes` on the 218 | new, off by default, same shape as the 33x gate |
+| `max_output_pct` | new. **70.0** in the rig config — the supervisor's own `hard_max_pct`, just above the hottest step in the reference logs |
+| `verify_writes` / `readback_tol_pct` | new. Confirms by `AOUT?`; tolerance must clear the 0.01% DAC step *and* the two-decimal readback, or a good write reads as a failure |
+| `ipc.allow_analog_output` | new, fifth interlock. Deliberately **not** folded into `allow_heater_range` — this rig wants exactly one of them open |
+
+`heaters_off` now covers **every** writable instrument rather than one, 33x
+ranges and 218 analog outputs alike, skipping read-only boxes and naming them.
+A panic button that leaves the sample heater running is worse than none,
+because it will be believed.
+
+A driver limit refusing a command (`max_output_pct`, `max_setpoint_k`, a
+missing loop) now comes back as `refused: …` at WARNING instead of an ERROR
+with a traceback. An operator's typo must not look like a fault in a live run's
+log.
+
+### `config-ltspm3-heater.yaml`
+
+New sibling to `config-ltspm3.yaml`, following the `-writable` pattern from
+`examples/`. Opens the 218 only — the 336 stays `read_only: true` *and*
+`allow_writes: false`, because loop 2 is holding THE CHONKE at 100% and has no
+headroom. Same lock file, so the two recorders cannot both run. Different
+`filename_prefix`, because a run where the heater could move is a different
+kind of record from one where it could not, and in six months the filename is
+the only thing that will still say which.
+
+### What was verified, and what was not
+
+- **Verified against the simulator, end to end through the real CLI**: queue →
+  apply → readback → acknowledge, the ceiling refusing 400%, `heaters_off`
+  zeroing the output, and the audit line
+  `ls218: ANALOG 1, 0, 2, 1, 1,1,1,43.000  (5.000% -> 43.000%)` at WARNING.
+- **Not verified against hardware.** Nothing was sent to the real 218. The
+  GPIB board was left alone entirely — the read-only recorder holds it, and a
+  second opener is the garbled-reply hazard. **The first real write is Jeff's,
+  with him watching.**
+- `ltspm` was left parked. One consequence: `LS218Config.allow_writes` defaults
+  false, so **an armed `ltspm` run now needs `allow_writes: true` and
+  `verify_writes: false` on its 218**. `controller_factory` raises at startup
+  saying exactly that, rather than letting the poll thread hit a
+  `PermissionError` on the first output.
+
+### The GUI got both controls, at Jeff's request
+
+The third session listed "no heater range control" as a deliberate omission.
+That is now reversed on purpose: refusing to offer it just meant the operator
+walked to another terminal and applied power *without* the chart in front of
+them, which is worse. The viewer now has a four-part control panel — setpoint,
+heater range, analog output, and an always-live **All heaters OFF**.
+
+Which controls appear is decided by capability data the **recorder** now
+publishes in `status.json` (`links[].loops`, `heater_outputs`,
+`analog_output`, `max_output_pct`), not by a model-number table in the viewer.
+A viewer newer than the recorder it is watching degrades to the old assumption
+(loops 1–4, no analog control) rather than to an empty panel.
+
+Four decisions in there worth not undoing:
+
+- **the analog spin box is capped at the recorder's `max_output_pct`**, so the
+  widget cannot express a value that will be refused, and the ceiling is
+  visible in the group title;
+- **a shut gate is announced, not greyed out.** 0 is always permitted, so
+  disabling the control would remove the button at exactly the moment somebody
+  wants to make the rig safe;
+- **the range dialog quotes the setpoint with its age.** This was a real defect
+  caught by driving the GUI against a live recorder, not by a test: the cycle
+  order is read → apply → write status, so a setpoint set seconds ago is *not*
+  in the file yet, and the first version showed the stale number as current;
+- **one unacknowledged command locks every button**, so a range cannot be
+  queued against a setpoint that turned out to be refused.
+
+Verified headless against a live simulated recorder, both boxes: the controls
+switch with the instrument, a click reaches the spool, and the acknowledgement
+comes back — including `✓ ls218: analog output 0%; ls336: all heater ranges 0`
+from the panic button while the 336 was selected.
+
+### Still not done, deliberately
+
+- **No direct CLI path to the 218.** `lschart set` remains 33x-only; the 218 is
+  reachable only through a running recorder's spool. That was the requested
+  shape (keep the log unbroken), not an oversight.
+- **No ramp or step limit on the manual path**, in the CLI or the GUI.
+  `analog 60` from 0 is one step. Rate limiting is control policy and belongs
+  to the supervisor; duplicating it would give the rig two sets of limits that
+  can disagree.
+
+---
+
+# Handoff — 2026-08-24 (third session: first live deployment)
+
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
+**On the LTSPM3 rig itself, on `main`. 257 tests passing on the rig's own
+interpreter. Recording a cold cryostat, read-only, at 2 s.**
+
+## What this session did
+
+Took a fresh clone onto the LTSPM3 machine and made it record the real
+instruments. Scope was deliberately narrow: **monitoring only**. No control
+section, no writes, nothing in `ltspm/` touched.
+
+`config-ltspm3.yaml` is the new file — a plain `lschart` config with
+`read_only: true` on both transports, `allow_writes: false` on the 336, and
+`accept_commands: false`. `check` reports `writable: nothing (read-only)`.
+
+### The bug worth knowing about: the Windows lock did not work
+
+`runtime.single_instance` was **ineffective on Windows**, and had been all
+along. `msvcrt.locking` locks a byte range from the *current file position*,
+and the lock file is opened `"a+"` — so every holder locked a different byte
+and no second instance ever collided with the first.
+
+It looked like it worked only because of an accident further down: the second
+process truncated the file and wrote its own record, and that write failed with
+a `PermissionError` against the first holder's lock on byte 0. A second
+recorder was refused — by the wrong error, after erasing the running recorder's
+diagnostics.
+
+Now taken on a fixed byte past the record. Verified live: a second `run` exits
+2 naming the holder, before opening any transport. `tests/test_lock.py` no
+longer skips the killed-holder case on Windows — that skip is what hid this.
+
+Un-skipping that test then exposed a second Windows fact: the kernel releases
+the lock during process *teardown*, which lags `wait()` returning, so an
+immediate reacquire is refused about one attempt in three. That is not a test
+artefact — **a supervisor that restarts the recorder the instant it dies can be
+refused its own lock**, and `run` exits 2 without retrying. Relevant to the
+still-undecided Task Scheduler / NSSM question.
+
+Full reasoning in [`docs/recorder/windows.md`](docs/recorder/windows.md).
+
+### Two smaller things the hardware settled
+
+- **The 218 ends a GPIB reply with `LF`, the 336 with `CR LF`.** The default is
+  `CR LF`, so the 218 needs `read_termination` set. A wrong terminator is not a
+  visible failure — EOI ends the read anyway — it just costs a warning per read
+  and a hidden dependence on EOI.
+- **The machine had only Python 3.10.0** and `pyproject.toml` asks for 3.11.
+  Nothing in the codebase needs 3.11; the full suite passes on 3.10.0, so it
+  was installed with `--ignore-requires-python` rather than installing a second
+  Python onto a machine running a live experiment. The metadata was left alone.
+
+### The rig, as measured 2026-08-24 16:10
+
+Cold, and someone else's. Recorded here because the numbers, not memory, are
+what a later session should trust.
+
+| 218 | | 336 | |
+|---|---|---|---|
+| Sample | 4.742 K | A RAD SHIELD | 39.27 K |
+| Cold Head | 5.494 K | B THE CHONKE | 289.182 K |
+| Shield | 4.810 K | C 1st Stage | 28.32 K |
+| | | D 2nd Stage | 3.36 K |
+
+Loop 1: setpoint 295.0 K, heater 1 at 0%, range 0. Loop 2: setpoint **289.2 K**
+(memory said 290.6), heater 2 at **100%**, range 3.
+
+> **Heater 2 is railed.** It sat between 90.8% and 100% for three days and is
+> at 100% now, holding THE CHONKE 18 mK *below* a setpoint it is supposed to
+> reach from underneath. Loop 2 has no headroom left. Nothing here caused that
+> and nothing here can fix it, but anything that adds heat to THE CHONKE will
+> now simply lose, and that is worth knowing before the next run.
+
+The 218's analog output 1 — the sample heater — reads 0.0% and is logged every
+cycle as `ls218.aout1`.
+
+## What is still not verified on Windows
+
+The first deployment records only, so the whole command path is untested here:
+the ~15 ms clock resolution behind command sequencing, and MATLAB's `movefile`
+rename into the spool. `os.replace` over an open `status.json` did not fail in
+this run, but note `_write_status` discards the write result and logs failures
+at `DEBUG`, so at `INFO` that failure mode is silent. All three are in
+`docs/recorder/windows.md`.
+
+## Priorities are unchanged
+
+`ltspm/` was not touched and should not be. Next up is the same list
+`CLAUDE.md` gives: running the recorder unattended (Task Scheduler vs a service
+wrapper is still undecided), and exercising the MATLAB half against this
+machine's own MATLAB.
+
+---
+
 # Handoff — 2026-08-24 (second session)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.

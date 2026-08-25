@@ -1,0 +1,225 @@
+# LTSPM3 -- the two boxes on the GPIB board, with the SAMPLE HEATER LIVE.
+#
+# This is `config-ltspm3.yaml` with exactly one thing opened up: manual control
+# of the 218's analog output 1, which on this rig is the sample heater.  Keep
+# both files.  `config-ltspm3.yaml` stays the default for watching; this one is
+# picked up on purpose, and choosing it is the first half of the decision to
+# heat something.
+#
+#   python -m lschart -c config-ltspm3-heater.yaml check     validate, touch nothing
+#   python -m lschart -c config-ltspm3-heater.yaml probe     read everything once
+#   python -m lschart -c config-ltspm3-heater.yaml run       record, and listen
+#   python -m lschart -c config-ltspm3-heater.yaml send analog 5.0
+#   python -m lschart -c config-ltspm3-heater.yaml send heaters_off
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS FILE TURNS OFF, AND WHAT IT LEAVES ON
+# ---------------------------------------------------------------------------
+#
+# Opened, on the 218 ONLY:
+#
+#   transport.read_only: false      bytes that change state may now leave this
+#                                   program -- for the 218 and nothing else
+#   allow_writes: true              the ANALOG command is permitted
+#   ipc.accept_commands: true       a file may command this recorder
+#   ipc.allow_analog_output: true   ...including moving that output above 0
+#
+# Still shut, deliberately:
+#
+#   the whole 336                   read_only AND allow_writes: false.  Loop 2
+#                                   holds THE CHONKE and heater 2 is RAILED at
+#                                   100%.  Nothing here may touch it.
+#   ipc.allow_heater_range: false   moot while the 336 is read-only, and left
+#                                   explicit so it stays moot if that changes
+#   max_output_pct: 70.0            a ceiling BELOW full scale.  See below --
+#                                   this is the guard that matters most
+#
+# ---------------------------------------------------------------------------
+# WHY THE CEILING IS THE GUARD THAT MATTERS
+# ---------------------------------------------------------------------------
+#
+# The 218 has no heater loop and no range.  A 336 separates "where to go"
+# (SETP, inert on its own) from "how much power you may use" (RANGE, the act
+# that applies it), and you can gate those separately.  Here there is one
+# number and it IS the power.  Nothing about `analog 40` looks more dangerous
+# than `analog 4`.
+#
+# From `docs/ltspm/plant.md`, measured over 24 settled heater steps:
+#
+#     43%     ->   18.2 K
+#     63.076% ->   99.6 K          local gain here: ~10 KELVIN PER PERCENT
+#     66.95%  ->  151.0 K
+#
+# So a decimal point in the wrong place is not a small mistake, and "0 to 100
+# is a valid percentage" is not a useful bound.  70% is the supervisor's own
+# `hard_max_pct` and sits just above the hottest step in the reference logs;
+# above it the fit is extrapolation and nobody has measured what happens.
+#
+# Note also what the ceiling is NOT: it is not a ramp and not a step limit.
+# `send analog 60` from 0 is one command and the heater goes there as fast as
+# the plant allows.  Walking up in steps is an operator discipline here, not
+# something the software enforces -- enforcing it is what `ltspm`'s supervisor
+# is for, and that is a different program.
+#
+# ---------------------------------------------------------------------------
+# THE RIG, AS MEASURED 2026-08-24 16:10
+# ---------------------------------------------------------------------------
+#
+#   218  Sample      4.742 K     336  A RAD SHIELD   39.227 K
+#        Cold Head   5.494 K          B THE CHONKE  289.182 K  <- loop 2
+#        Shield      4.809 K          C 1st Stage    28.279 K
+#                                     D 2nd Stage     3.346 K
+#
+#   218 analog out 1 (SAMPLE HEATER)  0.0%    <- what this file can move
+#   336 loop 1  setpoint 295.0 K, heater 1 at 0.0%, range 0
+#   336 loop 2  setpoint 289.2 K, heater 2 at 100.0%, RAILED
+#
+# The sample is at 4.7 K and the heater is at 0%.  The plant curve above was
+# measured from a bath, not from 4.7 K, so treat the first few steps as
+# measurement rather than prediction.
+
+log_level: INFO
+
+# ---------------------------------------------------------------- instruments
+
+instruments:
+  # The 218: three thermometers, and the sample heater on analog output 1.
+  - name: ls218
+    model: "218"
+    enabled: true
+    driver: visa                # pyvisa -> NI-VISA -> the NI PXI-GPIB board
+    transport:
+      resource: GPIB0::15::INSTR
+
+      # <-- OPENED.  The byte-level interlock is off for this box, so a bug
+      # above this layer can now reach the instrument.  `allow_writes` below
+      # is the only remaining driver-level gate.
+      read_only: false
+
+      timeout_ms: 3000
+      # MEASURED on this box, 2026-08-24: the 218 ends a reply with a bare LF
+      # and the 336 ends one with CRLF.  The default is CRLF, so the 218 needs
+      # this line and the 336 does not.  Getting it wrong is not a visible
+      # failure -- GPIB's EOI ends the read anyway -- it just costs a warning
+      # per read and a hidden dependence on EOI.
+      read_termination: "\n"
+      inter_command_delay: 0.05
+      reconnect: true
+      retry_min_s: 1.0
+      retry_max_s: 30.0
+
+    channels:
+      1: Sample
+      2: Cold Head
+      3: Shield
+
+    # Still 0.  This config has no `control:` section and computes no heater
+    # output: every percentage it sends was typed by a person.  `control_input`
+    # is what a SOFTWARE loop would steer by, and there is no software loop
+    # here -- that is `ltspm`, and it is a different program.
+    control_input: 0
+
+    analog_output: 1
+    analog_decimals: 3
+
+    # <-- OPENED.  Permits the ANALOG command, and nothing else exists on this
+    # box.  Read the ceiling below before changing anything here.
+    allow_writes: true
+
+    # THE CEILING.  ~10 K/% near the operating point; see the header.  Raise
+    # this only with a reason you would write down.
+    max_output_pct: 70.0
+
+    # Every write is confirmed by reading AOUT? back.  These boxes apply
+    # commands asynchronously -- measured on the 336, never disproved on the
+    # 218 -- and an unverified readback can be a whole write behind, which
+    # looks exactly like success.  Leave this on for manual control: the cost
+    # is one extra query per command, and commands are rare.
+    verify_writes: true
+
+    # How far the readback may sit from what was commanded and still count.
+    # The DAC steps 0.01% and AOUT? answers to two decimals, so an exact
+    # comparison would fail on writes that worked perfectly.  0.02% is two DAC
+    # codes -- far tighter than any step an operator will type, so a write that
+    # did not land is still caught.
+    readback_tol_pct: 0.02
+
+    read_status: true
+    status_every_n_cycles: 15
+
+  # The 336: watched, never touched.  Loop 2 is holding THE CHONKE and heater 2
+  # is railed at 100%; it has no headroom and it is not ours.
+  - name: ls336
+    model: "336"
+    enabled: true
+    driver: visa
+    transport:
+      resource: GPIB0::12::INSTR
+      read_only: true           # <-- INTERLOCK.  Leave this on.
+      timeout_ms: 3000
+      inter_command_delay: 0.05
+      reconnect: true
+      retry_min_s: 1.0
+      retry_max_s: 30.0
+
+    channels: {}                # ask the box for its own front-panel labels
+
+    read_setpoints: true
+    read_heaters: true
+    read_analog_outputs: false
+    read_status: true
+    status_every_n_cycles: 15
+
+    allow_writes: false         # <-- INTERLOCK.  Leave this off.
+
+# ---------------------------------------------------------------- acquisition
+
+acquisition:
+  # 2 s, as in the read-only config.  Note that a command is applied once per
+  # cycle, between two frames, so this is also the worst-case latency from
+  # `send` to the heater moving -- plus the settle and the verifying readback.
+  interval_s: 2.0
+  log_every_n: 1
+  ringbuffer_size: 43200
+
+recorder:
+  enabled: true
+  directory: data
+  # A DIFFERENT prefix from the read-only config, on purpose.  A run in which
+  # the heater could move is a different kind of record from a run in which it
+  # could not, and six months from now the filename is the only thing that will
+  # still say which one you are looking at.
+  filename_prefix: ltspm3-heater
+  flush_every_sample: true
+
+runtime:
+  # Deliberately the SAME lock file as config-ltspm3.yaml.  One GPIB board has
+  # one holder; running the watching recorder and this one at once would be two
+  # processes interleaving transactions on one bus.
+  lock_path: data/ltspm3.lock
+  single_instance: true
+
+# ------------------------------------------------------------------------ ipc
+
+ipc:
+  enabled: true
+  directory: data
+
+  # <-- OPENED.  The recorder owns the GPIB board exclusively while it runs, so
+  # this is the ONLY way to move the heater without stopping the log.  MATLAB,
+  # the GUI and `lschart send` all write into the same spool.
+  accept_commands: true
+
+  # A command older than this is refused rather than applied.  A recorder that
+  # was down must not come back and replay a backlog into a live cryostat: the
+  # traversal is the hazard, not the destination.
+  command_ttl_s: 30.0
+
+  # <-- OPENED.  Permits `analog` above 0%.  This is the switch that makes the
+  # sample heater movable from a file; `analog 0` never needed it.
+  allow_analog_output: true
+
+  # LEFT OFF.  Moot while the 336 is read-only, and stated anyway so that
+  # opening the 336 someday does not silently also hand a file the ability to
+  # raise a range on it.
+  allow_heater_range: false

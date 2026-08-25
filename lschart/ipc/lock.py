@@ -51,6 +51,20 @@ log = logging.getLogger(__name__)
 #: survives however the caller chose to store it (or not).
 _HELD: set = set()
 
+#: The byte the Windows lock is taken on, far past any record this file will
+#: ever hold.
+#:
+#: Two things force it.  ``msvcrt.locking`` locks a byte *range* starting at
+#: the current file position -- so the position is part of the primitive, not
+#: housekeeping -- and a file opened ``"a+"`` sits at end-of-file.  Every
+#: holder would lock a different byte, and no second instance would ever
+#: collide with the first.  A Windows lock is also *mandatory*, not advisory,
+#: so a range overlapping the record would stop a refused starter from reading
+#: who holds it -- the one thing it has to be able to say.  A byte nothing is
+#: ever written to answers both.  (SQLite takes its locks this way, for the
+#: same reason.)
+_LOCK_OFFSET = 1 << 30
+
 
 class AlreadyRunning(RuntimeError):
     """Another process holds the lock.  Carries whatever it said about itself."""
@@ -104,6 +118,7 @@ class InstanceLock:
             if sys.platform == "win32":
                 import msvcrt
 
+                fh.seek(_LOCK_OFFSET)
                 msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
@@ -119,7 +134,7 @@ class InstanceLock:
             if sys.platform == "win32":
                 import msvcrt
 
-                fh.seek(0)
+                fh.seek(_LOCK_OFFSET)
                 msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 import fcntl

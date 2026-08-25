@@ -229,8 +229,36 @@ classdef LakeShore < handle
                 struct('output', output, 'value', value), nargout);
         end
 
+        function [ok, message, id] = setAnalog(obj, percent)
+            %SETANALOG  Drive a 218 analog output, in percent of full scale.
+            %
+            %   Manual control of a heater that has no loop behind it.  A 218
+            %   has no range to raise and no setpoint to be inert: one number
+            %   goes out and the heater dissipates accordingly, so THIS IS THE
+            %   COMMAND THAT APPLIES POWER on such a box.  The recorder refuses
+            %   anything above 0 unless its config says
+            %   `ipc.allow_analog_output: true`, and refuses anything above its
+            %   own `max_output_pct` regardless.  Commanding 0 is always
+            %   allowed.
+            %
+            %   Know the gain before you type a number.  On the LTSPM3 sample
+            %   heater it is about 10 KELVIN PER PERCENT near the operating
+            %   point, so a misplaced decimal is worth tens of kelvin.
+            %
+            %   There is no ramp here.  setAnalog(60) from 0 is one step and
+            %   the plant goes there as fast as it can; walk it up yourself if
+            %   that matters.
+            [ok, message, id] = obj.run('analog', ...
+                struct('percent', percent), nargout);
+        end
+
         function [ok, message, id] = heatersOff(obj)
-            %HEATERSOFF  Every heater range to 0 on the target instrument.
+            %HEATERSOFF  Stop heating: every heater this recorder may write to.
+            %
+            %   33x heater ranges to 0 AND 218 analog outputs to 0%, on every
+            %   writable instrument rather than on one.  Boxes the recorder is
+            %   configured read-only for are left alone and named in the
+            %   message -- on a shared cryostat those are somebody else's.
             [ok, message, id] = obj.run('heaters_off', struct(), nargout);
         end
 

@@ -107,7 +107,14 @@ class InstrumentConfig:
 
 @dataclass
 class LS218Config(InstrumentConfig):
-    """The 8-input monitor.  Its analog output is the LTSPM sample heater."""
+    """The 8-input monitor.  Its analog output is the LTSPM sample heater.
+
+    ``allow_writes`` gates the one write this box has, and it is off by default
+    for a blunter reason than on a 33x.  A 33x setpoint is inert until a range
+    is raised, so its two commands can be separately gated; the 218's analog
+    output has no inert half.  The percentage *is* the power, so the driver
+    policy gate and the ceiling are the whole of the protection.
+    """
 
     model: str = "218"
     name: str = "ls218"
@@ -123,6 +130,20 @@ class LS218Config(InstrumentConfig):
     control_input: int = 1
     analog_output: int = 1
     analog_decimals: int = 3
+    #: Permit ANALOG writes at all.  Off by default; see the class docstring.
+    allow_writes: bool = False
+    #: Blunt ceiling on the commanded percentage, refused in software.  100 is
+    #: the instrument's own full scale and therefore no restriction: what the
+    #: ceiling is *worth* depends entirely on the heater on the other end, so
+    #: the rig's config sets it and this generic default does not guess.
+    max_output_pct: float = 100.0
+    #: Confirm every write by reading ``AOUT?`` back.  Turn this off for a
+    #: software loop that writes every cycle and verifies for itself.
+    verify_writes: bool = True
+    #: How far a readback may sit from the commanded value and still count.
+    #: Must exceed the DAC step plus the readback's display rounding, or a
+    #: write that worked perfectly will be reported as a failure.
+    readback_tol_pct: float = 0.02
 
 
 @dataclass
@@ -230,6 +251,12 @@ class IpcConfig:
     #: Raising a heater range is the act that applies power.  A remote client
     #: may only do it if this says so; turning a heater OFF is always allowed.
     allow_heater_range: bool = False
+    #: The same permission for the 218's analog output, which needs its own
+    #: switch because it is a different command with the same consequence:
+    #: there is no range on a 218, so the percentage is the power.  A remote
+    #: client may only raise it above zero if this says so; commanding it to
+    #: zero is always allowed.
+    allow_analog_output: bool = False
     #: How many acknowledgements ``status.json`` carries.  A client that polls
     #: slower than this fills up may miss its own answer.
     ack_history: int = 20

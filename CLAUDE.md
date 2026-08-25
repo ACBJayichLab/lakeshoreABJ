@@ -48,13 +48,20 @@ in the linked document.
 2. **The recorder owns the port, exclusively.** A COM port has exactly one
    holder; two processes on one GPIB board garble replies. Everything else goes
    through files. → [file-interface](docs/recorder/file-interface.md)
-3. **Four write interlocks, all off by default**: `transport.read_only` (byte
+3. **Five write interlocks, all off by default**: `transport.read_only` (byte
    level) · `allow_writes` (driver policy) · `ipc.accept_commands` ·
-   `ipc.allow_heater_range`. A command arriving by file passes exactly the gates
-   a command typed at the CLI passes. Turning a heater **off** never needs the
-   fourth. → [instruments](docs/recorder/instruments.md)
+   `ipc.allow_heater_range` (a 33x range) · `ipc.allow_analog_output` (a 218
+   analog output). A command arriving by file passes exactly the gates a command
+   typed at the CLI passes. The last two are separate on purpose: different
+   commands, different boxes, and a rig usually wants one open and not the
+   other. Turning a heater **off** needs neither of them.
+   → [instruments](docs/recorder/instruments.md)
 4. **Nothing raises a heater range as a side effect of anything.** A setpoint
    does nothing while the range is 0; raising it is what applies power.
+   **The 218 is the exception and has no inert half** — no loop, no range, one
+   `ANALOG` command whose percentage *is* the power. Hence its own
+   `allow_writes` gate and a `max_output_pct` ceiling in config, never a
+   constant in code.
 5. **Writes are applied asynchronously** — a query issued too soon answers with
    the previous value, and both wrong regimes *look like success*. Hence
    `write_settle_s` **and** readback verification. **Unverified on the 218 over

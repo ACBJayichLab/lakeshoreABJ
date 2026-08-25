@@ -67,7 +67,8 @@ T = ls.readLog();            % the CSV as a table, safe to read mid-run
 ls.setSetpoint(1, 77.0);     % blocks until the recorder confirms
 ls.setRamp(1, 2.5);          % K/min, run by the instrument's own firmware
 ls.setRange(1, 0);           % heater range — 0 is off
-ls.heatersOff();
+ls.setAnalog(5.0);           % 218 analog output percent — see the warning below
+ls.heatersOff();             % everything the recorder may write to, to zero
 ```
 
 Every command method blocks until the recorder acknowledges it, and **raises
@@ -86,6 +87,22 @@ Use `submit` and `await` to queue without blocking.
 **A setpoint does not turn a heater on.** On a Lake Shore box a setpoint does
 nothing at all while that output's heater range is 0. Raising the range is the
 act that applies power, and nothing does it as a side effect of anything else.
+
+**`setAnalog` is the exception, and it is a big one.** A 218 has no loop, no
+range and no setpoint — its analog output is driven in manual mode, so the
+percentage *is* the power and there is no inert half to the command. Two
+consequences:
+
+- **Know the gain before you type a number.** On the LTSPM3 sample heater it is
+  about **10 kelvin per percent** near the operating point. A misplaced decimal
+  is worth tens of kelvin, which is why the recorder carries a `max_output_pct`
+  ceiling and refuses anything above it.
+- **There is no ramp.** `setAnalog(60)` from 0 is a single step and the plant
+  goes there as fast as it can. Walking up in stages is your discipline, not
+  the software's.
+
+Like `setRange`, it needs the recorder's own opt-in — `ipc.allow_analog_output:
+true` — for anything above zero. `setAnalog(0)` is always allowed.
 
 **Ramp in the instrument, not in MATLAB.** `setRamp` uses the box's own
 firmware ramp, which carries on if MATLAB stops, if the laptop sleeps, or if

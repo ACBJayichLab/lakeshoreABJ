@@ -13,8 +13,9 @@ import time
 
 import pytest
 
+from lschart.instruments.ls218 import LS218
 from lschart.instruments.ls33x import LS33x
-from lschart.instruments.sim import Sim33x, SimulatedRig
+from lschart.instruments.sim import Sim218, Sim33x, SimulatedRig
 from lschart.ipc.commands import CommandSpool
 from lschart.ipc.service import IpcService
 from lschart.ipc.status import read_status
@@ -29,6 +30,17 @@ def instrument(name="ls336", *, allow_writes=True, read_only=False) -> LS33x:
         LoopbackTransport(dev, inter_command_delay=0.0, read_only=read_only),
         model="336", name=name, allow_writes=allow_writes,
         channels={"A": f"{name}-A"},
+    )
+
+
+def monitor(name="ls218", *, allow_writes=True, read_only=False) -> LS218:
+    """A 218: no loop, one analog output, and that output is a heater."""
+    rig = SimulatedRig(None, start_k=96.0)
+    dev = Sim218(rig)
+    return LS218(
+        LoopbackTransport(dev, inter_command_delay=0.0, read_only=read_only),
+        name=name, allow_writes=allow_writes, max_output_pct=70.0,
+        channels={1: f"{name}-Sample"},
     )
 
 
@@ -256,3 +268,152 @@ def test_a_recorder_with_ipc_disabled_builds_no_service(tmp_path):
     assert app.ipc is None
     app.poller.step()
     assert not (tmp_path / "status.json").exists()
+
+
+# -- the 218's analog output -------------------------------------------------
+#
+# The sample heater on the LTSPM rig.  It needs its own gate rather than
+# reusing `allow_heater_range` because it is a different command on a different
+# box -- and because a rig that wants its sample heater driven from a file has
+# no business also being able to raise a range on a controller holding
+# something else.
+
+
+def test_driving_the_analog_output_is_refused_by_default(tmp_path):
+    """The percentage IS the power here; there is no inert half to it."""
+    svc = service(tmp_path, monitor(), allow_analog_output=False)
+    cid = svc.spool.submit("analog", percent=40.0)
+    message = ack(tick(svc), cid)["message"]
+    assert "applies power" in message and "ipc.allow_analog_output" in message
+
+
+def test_driving_the_analog_output_works_once_it_is_allowed(tmp_path):
+    inst = monitor()
+    svc = service(tmp_path, inst, allow_analog_output=True)
+    cid = svc.spool.submit("analog", percent=40.0)
+    assert ack(tick(svc), cid)["ok"]
+    assert inst.get_analog_percent() == pytest.approx(40.0, abs=0.02)
+
+
+def test_commanding_the_analog_output_to_zero_never_needs_permission(tmp_path):
+    """The direction that removes heat is never the one that needs another key."""
+    inst = monitor()
+    inst.set_analog_percent(30.0)
+    svc = service(tmp_path, inst, allow_analog_output=False)
+    cid = svc.spool.submit("analog", percent=0)
+    assert ack(tick(svc), cid)["ok"]
+    assert inst.get_analog_percent() == 0.0
+
+
+def test_the_heater_gate_does_not_open_the_analog_one(tmp_path):
+    """Two switches, and neither stands in for the other."""
+    svc = service(tmp_path, monitor(), allow_heater_range=True,
+                  allow_analog_output=False)
+    cid = svc.spool.submit("analog", percent=40.0)
+    assert ack(tick(svc), cid)["ok"] is False
+
+
+def test_the_analog_gate_does_not_open_the_heater_one(tmp_path):
+    svc = service(tmp_path, instrument(), allow_analog_output=True,
+                  allow_heater_range=False)
+    cid = svc.spool.submit("range", output=1, value=2)
+    assert ack(tick(svc), cid)["ok"] is False
+
+
+def test_a_read_only_218_refuses_the_analog_command(tmp_path):
+    """`allow_writes` gates this door exactly as it gates the CLI."""
+    svc = service(tmp_path, monitor(allow_writes=False), allow_analog_output=True)
+    cid = svc.spool.submit("analog", percent=40.0)
+    assert "read-only" in ack(tick(svc), cid)["message"]
+
+
+def test_the_transport_interlock_still_refuses_the_analog_command(tmp_path):
+    svc = service(tmp_path, monitor(allow_writes=True, read_only=True),
+                  allow_analog_output=True)
+    cid = svc.spool.submit("analog", percent=40.0)
+    assert ack(tick(svc), cid)["ok"] is False
+
+
+def test_the_ceiling_refuses_a_fat_finger_from_a_file_too(tmp_path):
+    """~10 K/% near the operating point: a decimal point is worth tens of K."""
+    inst = monitor()
+    before = inst.get_analog_percent()
+    svc = service(tmp_path, inst, allow_analog_output=True)
+    cid = svc.spool.submit("analog", percent=400.0)
+    message = ack(tick(svc), cid)["message"]
+    # A guard doing its job, reported as a refusal rather than as a crash.
+    assert message.startswith("refused:") and "outside" in message
+    assert inst.get_analog_percent() == before
+
+
+def test_an_analog_command_needs_its_percentage(tmp_path):
+    svc = service(tmp_path, monitor(), allow_analog_output=True)
+    cid = svc.spool.submit("analog")
+    assert "percent" in ack(tick(svc), cid)["message"]
+
+
+def test_an_analog_command_on_a_rig_with_no_analog_output_says_so(tmp_path):
+    """Not "several controllers, name one" -- there is no candidate at all."""
+    svc = service(tmp_path, instrument(), allow_analog_output=True)
+    cid = svc.spool.submit("analog", percent=10.0)
+    assert "analog output" in ack(tick(svc), cid)["message"]
+
+
+def test_the_two_boxes_do_not_compete_to_answer_a_command(tmp_path):
+    """The LTSPM shape: one 33x and one 218, neither needing to be named."""
+    ctl, mon = instrument(), monitor()
+    svc = service(tmp_path, ctl, mon,
+                  allow_analog_output=True, allow_heater_range=True)
+    cid = svc.spool.submit("analog", percent=12.0)
+    assert ack(tick(svc), cid)["ok"]
+    cid = svc.spool.submit("setpoint", loop=1, kelvin=77.0)
+    assert ack(tick(svc), cid)["ok"]
+    assert mon.get_analog_percent() == pytest.approx(12.0, abs=0.02)
+    assert ctl.setpoint(1) == pytest.approx(77.0)
+
+
+def test_the_status_file_reports_both_power_gates(tmp_path):
+    svc = service(tmp_path, monitor(), allow_analog_output=True)
+    commands = tick(svc)["commands"]
+    assert commands["allow_analog_output"] is True
+    assert commands["allow_heater_range"] is False
+
+
+# -- the panic button --------------------------------------------------------
+
+
+def test_heaters_off_kills_the_analog_output_too(tmp_path):
+    """A panic button that leaves one heater running is worse than none."""
+    ctl, mon = instrument(), monitor()
+    ctl.set_heater_range(1, 3)
+    mon.set_analog_percent(40.0)
+    svc = service(tmp_path, ctl, mon)
+
+    cid = svc.spool.submit("heaters_off")
+    assert ack(tick(svc), cid)["ok"]
+    assert ctl.heater_range(1) == 0
+    assert mon.get_analog_percent() == 0.0
+
+
+def test_heaters_off_skips_a_box_it_may_not_write_to(tmp_path):
+    """The LTSPM shape exactly: our 218 is writable, their 336 is not.
+
+    Failing the whole command because somebody else's controller is read-only
+    would leave our own heater running.
+    """
+    theirs, ours = instrument("ls336", allow_writes=False), monitor()
+    ours.set_analog_percent(40.0)
+    svc = service(tmp_path, theirs, ours)
+
+    cid = svc.spool.submit("heaters_off")
+    message = ack(tick(svc), cid)["message"]
+    assert ours.get_analog_percent() == 0.0
+    assert "ls336" in message and "read-only" in message
+
+
+def test_heaters_off_says_so_when_there_is_nothing_it_may_turn_off(tmp_path):
+    """Silence here would be read as "done"."""
+    svc = service(tmp_path, monitor(allow_writes=False))
+    cid = svc.spool.submit("heaters_off")
+    result = ack(tick(svc), cid)
+    assert result["ok"] is False and "writable" in result["message"]
