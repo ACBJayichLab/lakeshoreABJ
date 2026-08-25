@@ -22,12 +22,13 @@ Dragging a rectangle on either panel zooms to exactly that rectangle, because
 the question a strip chart gets asked is "what happened between *there* and
 *there*", and the preset windows in the combo can only answer it when the
 interesting part happens to end now -- and because a 2 mK wobble on a 300 K
-axis is invisible until the value axis is cropped to it too.  The X and Y
-buttons take an axis out of the drag for the times when only one of them is
-the question.  A hand-picked view stops following the recorder -- new samples
-land off the right-hand edge, which is what a fixed window means -- so the
-state is announced on the button beside the combo and is left by a
-double-click, that button, or picking a preset.
+axis is invisible until the value axis is cropped to it too.  The drag is
+always the whole rectangle; `X+ X- Y+ Y-` beside the combo are how one axis
+gets moved on its own, in steps, without drawing a box to do it.  A
+hand-picked view stops following the recorder -- new samples land off the
+right-hand edge, which is what a fixed window means -- so the state is
+announced on the button beside the combo and is left by a double-click, that
+button, or picking a preset.
 """
 
 from __future__ import annotations
@@ -66,6 +67,21 @@ BANNER_STYLE = {
 }
 
 
+#: What one press of a zoom button does to the visible range.  A factor and
+#: not a number of seconds or kelvin, because the axis it lands on may be a
+#: minute wide or a day.  1.5 is a step you can hold down without overshooting
+#: and still get somewhere in three presses.
+ZOOM_STEP = 1.5
+
+
+def _scaled(rng, factor: float) -> tuple[float, float]:
+    """`rng` narrowed by `factor` -- widened, for a factor below one -- about
+    its own middle, which is the part the eye is already on."""
+    middle = (rng[0] + rng[1]) / 2
+    half = (rng[1] - rng[0]) / 2 / factor
+    return middle - half, middle + half
+
+
 def _duration(seconds: float) -> str:
     """A span in whatever unit keeps it to a couple of digits."""
     if seconds < 90:
@@ -78,17 +94,16 @@ def _duration(seconds: float) -> str:
 class ZoomViewBox(pg.ViewBox):
     """A view box whose left-drag picks a zoom rectangle instead of panning.
 
-    The rectangle is taken literally: drag one out and both axes become
-    exactly its edges, the value axis included.  A drag that is flat in one
-    direction -- shorter than ``MIN_DRAG_PX`` across, or shorter than that
-    tall -- sets only the axis it actually spans, because reaching for a time
-    window with a level hand is the common gesture and cropping the
-    temperature axis to a hair by accident is the common accident.  A drag
-    that is short both ways is a click that wobbled, and does nothing.
+    The rectangle is taken literally, always: drag one out and both axes
+    become exactly its edges, the value axis included.  There is no
+    one-axis form of the gesture -- the drag means the box that was drawn,
+    and the zoom buttons beside the window combo are what move one axis on
+    its own.
 
-    ``zoom_x`` and ``zoom_y`` take an axis out of the gesture altogether; the
-    X and Y buttons beside the window combo are what set them, and with one of
-    them off the band spans the full width or height to show it.
+    A drag has to clear ``MIN_DRAG_PX`` in *both* directions to be a
+    rectangle at all.  Below that it is a click that wobbled, or a stripe so
+    thin the axis it selected would be degenerate, and either way nothing
+    happens and no band is drawn to suggest otherwise.
 
     Panning is still on the mouse, under ``Shift`` -- not ``Ctrl``, which macOS
     turns into a right-click before Qt ever sees it -- and so is the wheel
@@ -96,21 +111,18 @@ class ZoomViewBox(pg.ViewBox):
     offered before is taken away; the left drag is the only gesture reassigned.
     """
 
-    #: ``((t0, t1) or None, (y0, y1) or None)`` -- each pair ordered, and
-    #: ``None`` for an axis the drag did not span.  Emitted once, on release.
+    #: ``((t0, t1), (y0, y1))``, both ordered, in data coordinates.  Emitted
+    #: once, on release, and only for a drag that was a rectangle.
     sigRegionSelected = QtCore.Signal(object, object)
     #: A double-click anywhere in the panel: go back to following the recorder.
     sigViewReset = QtCore.Signal()
 
-    #: A drag shorter than this is a click that wobbled, not a selection.  In
-    #: pixels, because that is the unit of the wobble.
+    #: A drag shorter than this, either way, is not a rectangle.  In pixels,
+    #: because that is the unit of the wobble it is there to reject.
     MIN_DRAG_PX = 6.0
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        #: Which axes the left-drag may set.  Both, until a button says else.
-        self.zoom_x = True
-        self.zoom_y = True
         self._band = QtWidgets.QGraphicsRectItem()
         # Width 0 keeps the pen cosmetic: the item lives in data coordinates,
         # where one x unit is a second and a scaled pen would be a smear.
@@ -128,19 +140,19 @@ class ZoomViewBox(pg.ViewBox):
             return
         ev.accept()
         down, here = ev.buttonDownPos(), ev.pos()
-        # The thresholds are judged in pixels, on the way in; what comes back
-        # out is in data coordinates, where one x unit is a second.
-        wide = self.zoom_x and abs(here.x() - down.x()) >= self.MIN_DRAG_PX
-        tall = self.zoom_y and abs(here.y() - down.y()) >= self.MIN_DRAG_PX
+        # The threshold is judged in pixels, on the way in; what comes back out
+        # is in data coordinates, where one x unit is a second.
+        if (abs(here.x() - down.x()) < self.MIN_DRAG_PX
+                or abs(here.y() - down.y()) < self.MIN_DRAG_PX):
+            self._band.hide()
+            return
         p0, p1 = self.mapToView(down), self.mapToView(here)
-        x = (min(p0.x(), p1.x()), max(p0.x(), p1.x())) if wide else None
-        y = (min(p0.y(), p1.y()), max(p0.y(), p1.y())) if tall else None
+        x = (min(p0.x(), p1.x()), max(p0.x(), p1.x()))
+        y = (min(p0.y(), p1.y()), max(p0.y(), p1.y()))
         if not ev.isFinish():
             self._show_band(x, y)
             return
         self._band.hide()
-        if x is None and y is None:
-            return
         self.sigRegionSelected.emit(x, y)
 
     def mouseClickEvent(self, ev) -> None:  # noqa: N802 - Qt/pyqtgraph name
@@ -151,17 +163,8 @@ class ZoomViewBox(pg.ViewBox):
         super().mouseClickEvent(ev)   # the right-click menu still belongs here
 
     def _show_band(self, x, y) -> None:
-        """Preview the drag.  An axis it does not span is drawn edge to edge."""
-        if x is None and y is None:
-            # Nothing has crossed the threshold yet, and shading the whole
-            # panel for a click-and-hold would promise a zoom that is not
-            # coming.
-            self._band.hide()
-            return
-        view_x, view_y = self.viewRange()
-        x0, x1 = x if x is not None else view_x
-        y0, y1 = y if y is not None else view_y
-        self._band.setRect(QtCore.QRectF(x0, y0, x1 - x0, y1 - y0))
+        """Preview the rectangle the release would zoom to, exactly."""
+        self._band.setRect(QtCore.QRectF(x[0], y[0], x[1] - x[0], y[1] - y[0]))
         self._band.show()
 
 
@@ -227,12 +230,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
         splitter.setSizes([380, 900])
         outer.addWidget(splitter, 1)
 
-        # Connected here rather than where the buttons are built, because the
-        # panels they aim at do not exist until the line above has run.
-        for button in (self.zoom_x_button, self.zoom_y_button):
-            button.toggled.connect(
-                lambda _checked, b=button: self._zoom_axes_changed(b))
-
         self.setCentralWidget(central)
         self.statusBar().showMessage("waiting for the recorder…")
         # Settle the control panel before the first poll.  Otherwise a viewer
@@ -282,24 +279,27 @@ class ViewerWindow(QtWidgets.QMainWindow):
         window_row.addWidget(self.live_button, 0)
         box.addLayout(window_row)
 
+        # One axis at a time, in steps, about the middle of what is shown.
+        # The drag is always the whole rectangle; these are how a single axis
+        # gets moved without redrawing a box to do it.
         zoom_row = QtWidgets.QHBoxLayout()
-        zoom_row.addWidget(QtWidgets.QLabel("Drag zooms"))
-        # Checkable rather than momentary: which axes the mouse is about to
-        # take is a mode, and a mode that is not visible is a mode that gets
-        # blamed on the plot.  Both on is a rectangle; one on is a band.
-        self.zoom_x_button = QtWidgets.QPushButton("X")
-        self.zoom_x_button.setToolTip(
-            "let a drag set the time axis\n"
-            "turn off to zoom the value axis alone")
-        self.zoom_y_button = QtWidgets.QPushButton("Y")
-        self.zoom_y_button.setToolTip(
-            "let a drag set the value axis of the panel dragged\n"
-            "turn off to pick a time window without touching it")
-        for button in (self.zoom_x_button, self.zoom_y_button):
-            button.setCheckable(True)
-            button.setChecked(True)     # connected in _build, once plots exist
-            button.setMaximumWidth(44)
+        zoom_row.addWidget(QtWidgets.QLabel("Zoom"))
+        self.zoom_buttons: dict[str, QtWidgets.QPushButton] = {}
+        for label, tip, zoom, factor in (
+            ("X+", "zoom in on time", self._zoom_x, ZOOM_STEP),
+            ("X−", "zoom out on time", self._zoom_x, 1 / ZOOM_STEP),
+            ("Y+", "zoom in on the value axis of both panels",
+             self._zoom_y, ZOOM_STEP),
+            ("Y−", "zoom out on the value axis of both panels",
+             self._zoom_y, 1 / ZOOM_STEP),
+        ):
+            button = QtWidgets.QPushButton(label)
+            button.setToolTip(f"{tip}, about the middle of what is shown")
+            button.setMaximumWidth(40)
+            button.clicked.connect(
+                lambda _checked=False, z=zoom, f=factor: z(f))
             zoom_row.addWidget(button, 0)
+            self.zoom_buttons[label] = button
         zoom_row.addStretch(1)
         box.addLayout(zoom_row)
 
@@ -488,7 +488,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # documentation, which is everyone standing at a cryostat at 2 a.m.
         layout.setToolTip(
             "Drag a rectangle on either panel to zoom to exactly it.\n"
-            "The X and Y buttons take an axis out of the drag.\n"
+            "The X± and Y± buttons zoom one axis at a time.\n"
             "Shift-drag pans · wheel zooms · double-click follows the "
             "recorder again.")
         return layout
@@ -747,18 +747,28 @@ class ViewerWindow(QtWidgets.QMainWindow):
         value axis is not, so it goes only to the panel that was dragged --
         the other one keeps autoscaling to whatever the new window holds.
         """
-        if y is not None:
-            self._ylim[unit] = (y[0], y[1])
-            # Autoscale off first, or the next redraw refits the axis to the
-            # data and the rectangle that was just dragged is gone.
-            self._panels[unit].enableAutoRange(y=False)
-            self._panels[unit].setYRange(y[0], y[1], padding=0)
-        if x is not None:
-            self._span = (x[0], x[1])
-            for plot in self._panels.values():
-                plot.enableAutoRange(x=False)
-            self.k_plot.setXRange(x[0], x[1], padding=0)
+        self._stop_autoscaling(unit)
+        self._ylim[unit] = (y[0], y[1])
+        self._panels[unit].setYRange(y[0], y[1], padding=0)
+        self._span = (x[0], x[1])
+        self.k_plot.setXRange(x[0], x[1], padding=0)
         self._span_changed()
+
+    def _stop_autoscaling(self, unit: str | None = None) -> None:
+        """Take the time axis, and one panel's value axis, off autoscale.
+
+        Before anything is recorded, and never after.  pyqtgraph enacts one
+        last autoscale on the way out of `enableAutoRange(False)`, so that the
+        range someone had been looking at is the one they keep; the range
+        change it emits arrives here as a wheel zoom would, and would
+        overwrite the window that had just been chosen with the one being left
+        behind.  Every gesture that fixes an axis goes through here first, and
+        then reads the range it is about to scale.
+        """
+        for plot in self._panels.values():
+            plot.enableAutoRange(x=False)
+        if unit is not None:
+            self._panels[unit].enableAutoRange(y=False)
 
     def _x_range_changed(self, _vb, rng) -> None:
         """The time axis moved by any other route -- wheel, Shift-drag, link.
@@ -812,18 +822,35 @@ class ViewerWindow(QtWidgets.QMainWindow):
             plot.enableAutoRange(x=True, y=True)
         self._span_changed()
 
-    def _zoom_axes_changed(self, source: QtWidgets.QPushButton) -> None:
-        """The X or Y button moved: hand the new mode to both panels."""
-        if not self.zoom_x_button.isChecked() and not self.zoom_y_button.isChecked():
-            # A drag that zooms neither axis is a dead gesture.  The one just
-            # switched off comes back on rather than leaving the mouse inert,
-            # and re-entry here through `toggled` settles the panels.
-            source.setChecked(True)
-            return
+    def _zoom_x(self, factor: float) -> None:
+        """An X button: scale the time axis about the middle of the window.
+
+        Pressing it is a decision, so it fixes the axis the way a drag does --
+        the view stops following the recorder, and the `Live` button says so.
+        """
+        self._span = _scaled(self.k_plot.getViewBox().viewRange()[0], factor)
         for plot in self._panels.values():
-            vb = plot.getViewBox()
-            vb.zoom_x = self.zoom_x_button.isChecked()
-            vb.zoom_y = self.zoom_y_button.isChecked()
+            plot.enableAutoRange(x=False)
+        self.k_plot.setXRange(*self._span, padding=0)
+        self._span_changed()
+
+    def _zoom_y(self, factor: float) -> None:
+        """A Y button: scale both value axes, each about its own middle.
+
+        Both, because the buttons name an axis and not a panel, and letting
+        one press mean the kelvin panel on Tuesdays is worse than moving a
+        percent axis nobody was looking at.  Each keeps its own centre: they
+        are different quantities and share no scale.
+        """
+        for unit, plot in self._panels.items():
+            self._ylim[unit] = _scaled(plot.getViewBox().viewRange()[1], factor)
+            # Autoscale off first, or the next redraw refits the axis to the
+            # data and the press does nothing at all.
+            plot.enableAutoRange(y=False)
+            plot.setYRange(*self._ylim[unit], padding=0)
+        # No redraw: the value axis does not decide which samples are drawn.
+        self.live_button.setEnabled(not self._is_live())
+        self._update_statusbar()
 
     def _span_changed(self) -> None:
         self.live_button.setEnabled(not self._is_live())

@@ -96,11 +96,11 @@ class FakeDoubleClick:
 
 
 def drag(viewbox, from_frac: float, to_frac: float,
-         y_from: float = 0.5, y_to: float = 0.5):
+         y_from: float = 0.25, y_to: float = 0.75):
     """Drag between two points given as fractions of the panel.
 
-    Level by default -- ``y_from == y_to`` is a flat drag, which is the
-    gesture someone reaching for a time window actually makes.  Returns the
+    A rectangle by default, because that is the only gesture there is; pass
+    ``y_from == y_to`` for the flat drag that must be refused.  Returns the
     ((x0, x1), (y0, y1)) the drag covers, in data coordinates, ordered.
     """
     rect = viewbox.boundingRect()
@@ -216,48 +216,91 @@ def test_a_rectangle_leaves_the_other_panel_autoscaling(viewer):
     assert viewer.pct_plot.getViewBox().autoRangeEnabled()[1]
 
 
-def test_a_level_drag_is_a_time_window_and_not_a_sliver(viewer):
-    """The common gesture, and the one that must not crop the value axis."""
+def test_a_flat_drag_is_not_a_rectangle_and_does_nothing(viewer):
+    """There is no one-axis form of the drag: that is what the buttons are for.
+
+    A stripe with no height would otherwise select a degenerate value axis.
+    """
     box = viewer.k_plot.getViewBox()
-    (x0, x1), _ = drag(box, 0.4, 0.6)
-    assert viewer._span == pytest.approx((x0, x1))
-    assert viewer._ylim["K"] is None
-    assert box.autoRangeEnabled()[1]
-
-
-def test_the_y_button_takes_the_value_axis_out_of_the_drag(viewer):
-    viewer.zoom_y_button.setChecked(False)
-    box = viewer.k_plot.getViewBox()
-    (x0, x1), _ = drag(box, 0.4, 0.6, 0.25, 0.75)
-    assert viewer._span == pytest.approx((x0, x1))
-    assert viewer._ylim["K"] is None
-
-
-def test_the_x_button_takes_the_time_axis_out_of_the_drag(viewer):
-    viewer.zoom_x_button.setChecked(False)
-    box = viewer.k_plot.getViewBox()
-    _, (y0, y1) = drag(box, 0.4, 0.6, 0.25, 0.75)
-    assert viewer._ylim["K"] == pytest.approx((y0, y1))
-    # The time axis is untouched, so the chart is still following the recorder
-    # in x -- but the view is no longer live, and must say so.
+    drag(box, 0.3, 0.7, 0.5, 0.5)           # level, so no height at all
     assert viewer._span is None
-    assert box.autoRangeEnabled()[0]
+    assert viewer._ylim["K"] is None
+    assert box.autoRangeEnabled() == [True, True]
+
+
+# -- the zoom buttons --------------------------------------------------------
+
+
+def test_the_x_buttons_zoom_the_time_axis_about_its_middle(viewer):
+    before = viewer.k_plot.getViewBox().viewRange()[0]
+    middle = (before[0] + before[1]) / 2
+
+    viewer.zoom_buttons["X+"].click()
+    t0, t1 = viewer._span
+    assert (t0 + t1) / 2 == pytest.approx(middle)
+    assert (t1 - t0) == pytest.approx((before[1] - before[0]) / 1.5)
+
+    viewer.zoom_buttons["X−"].click()
+    assert viewer._span == pytest.approx(before)
+
+
+def test_the_y_buttons_zoom_the_value_axis_about_its_middle(viewer):
+    before = viewer.k_plot.getViewBox().viewRange()[1]
+    middle = (before[0] + before[1]) / 2
+
+    viewer.zoom_buttons["Y+"].click()
+    y0, y1 = viewer._ylim["K"]
+    assert (y0 + y1) / 2 == pytest.approx(middle)
+    assert (y1 - y0) == pytest.approx((before[1] - before[0]) / 1.5)
+    assert viewer.k_plot.getViewBox().viewRange()[1] == pytest.approx([y0, y1])
+
+    viewer.zoom_buttons["Y−"].click()
+    assert viewer._ylim["K"] == pytest.approx(before)
+
+
+def test_the_y_buttons_move_both_panels(viewer):
+    """They name an axis, not a panel, so both of them had better move."""
+    before = {u: p.getViewBox().viewRange()[1] for u, p in viewer._panels.items()}
+    viewer.zoom_buttons["Y+"].click()
+    for unit, was in before.items():
+        now = viewer._ylim[unit]
+        assert now is not None
+        assert (now[1] - now[0]) == pytest.approx((was[1] - was[0]) / 1.5)
+
+
+def test_an_x_zoom_stops_the_chart_following_the_recorder(viewer):
+    """Pressing it is a decision, and a decision has to be escapable."""
+    assert not viewer.live_button.isEnabled()
+    viewer.zoom_buttons["X+"].click()
     assert viewer.live_button.isEnabled()
+    assert not viewer.k_plot.getViewBox().autoRangeEnabled()[0]
+    assert "not following" in viewer.statusBar().currentMessage()
 
 
-def test_the_last_axis_cannot_be_switched_off(viewer):
-    """A drag that zooms neither axis is a mouse that does nothing."""
-    viewer.zoom_x_button.setChecked(False)
-    viewer.zoom_y_button.setChecked(False)
-    assert viewer.zoom_y_button.isChecked()
-    assert viewer.k_plot.getViewBox().zoom_y
+def test_a_y_zoom_stops_the_axis_autoscaling(viewer):
+    assert not viewer.live_button.isEnabled()
+    viewer.zoom_buttons["Y+"].click()
+    assert viewer.live_button.isEnabled()
+    assert not viewer.k_plot.getViewBox().autoRangeEnabled()[1]
+    # The time axis is untouched: the chart still follows the recorder in x.
+    assert viewer._span is None
+    assert viewer.k_plot.getViewBox().autoRangeEnabled()[0]
 
 
-def test_the_buttons_reach_both_panels(viewer):
-    viewer.zoom_x_button.setChecked(False)
-    for plot in (viewer.k_plot, viewer.pct_plot):
-        assert not plot.getViewBox().zoom_x
-        assert plot.getViewBox().zoom_y
+def test_a_y_zoom_survives_the_next_poll_of_the_files(viewer):
+    viewer.zoom_buttons["Y+"].click()
+    fixed = viewer._ylim["K"]
+    viewer.refresh()
+    assert viewer.k_plot.getViewBox().viewRange()[1] == pytest.approx(list(fixed))
+
+
+def test_live_undoes_the_buttons_too(viewer):
+    viewer.zoom_buttons["X+"].click()
+    viewer.zoom_buttons["Y+"].click()
+    viewer.live_button.click()
+    assert viewer._span is None
+    assert viewer._ylim == {"K": None, "%": None}
+    assert viewer.k_plot.getViewBox().autoRangeEnabled() == [True, True]
 
 
 # -- the control panel -------------------------------------------------------
