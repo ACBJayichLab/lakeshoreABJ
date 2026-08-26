@@ -782,3 +782,84 @@ def test_fields_without_a_readback_are_left_alone(tmp_path, qt_app):
     assert w.setpoint_spin.value() == 0.0
     assert w.range_combo.currentData() == 0         # the combo's own default
     w.close()
+
+
+def test_a_readback_that_lands_somewhere_else_is_shown_rather_than_waited_on(
+        tmp_path, qt_app, monkeypatch):
+    """The guard is about the OLD value, not about getting the asked-for one.
+
+    A box that rounds, clamps, or is simply set elsewhere still moves off the
+    value it held before the command.  Once it has, there is no snap-back
+    left to protect against, and the honest thing on screen is what the
+    instrument now reads -- not the number that was typed at it.
+    """
+    from lschart.ipc.commands import CommandSpool
+
+    path = aux_status(tmp_path, [MON], {"ls218.aout1": 0.0})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000,
+                     spool=CommandSpool(tmp_path / "cmd-elsewhere"))
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.analog_spin.setValue(43.0)
+    w.analog_button.click()
+
+    cid = w._pending[0]
+    status = json.loads(open(w.source.path).read())
+    status["cycle"] = 4
+    status["t_wall"] = time.time()
+    status["commands"]["recent"] = [{"id": cid, "ok": True, "message": "set"}]
+    # Acknowledged, and the readback has moved -- but not to 43.0.
+    status["aux"] = [{"name": "ls218.aout1", "value": 42.5}]
+    open(w.source.path, "w").write(json.dumps(status))
+    w.refresh()
+
+    assert w.analog_spin.value() == pytest.approx(42.5)
+    assert w._awaiting is None
+    w.close()
+
+
+def test_a_readback_that_never_agrees_stops_holding_the_field(
+        tmp_path, qt_app, monkeypatch):
+    """A field that is wrong for ever is worse than one wrong for half a minute.
+
+    Nothing but agreement used to release the guard on an accepted command,
+    and the comparison was exact -- so a readback the driver had already
+    confirmed to its own tolerance could hold a heater field at the number
+    that was asked for, indefinitely, while the box sat somewhere else.
+    """
+    from lschart.ipc.commands import CommandSpool
+
+    path = aux_status(tmp_path, [MON], {"ls218.aout1": 5.0})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000,
+                     spool=CommandSpool(tmp_path / "cmd-stuck"))
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.analog_spin.setValue(43.0)
+    w.analog_button.click()
+
+    cid = w._pending[0]
+    status = json.loads(open(w.source.path).read())
+    status["cycle"] = 4
+    status["t_wall"] = time.time()
+    status["commands"]["recent"] = [{"id": cid, "ok": True, "message": "set"}]
+    open(w.source.path, "w").write(json.dumps(status))
+    w.refresh()
+    # The readback is still the old value, so the field rightly holds.
+    assert w.analog_spin.value() == pytest.approx(43.0)
+    assert w._awaiting is not None
+
+    # Let the grace period lapse with the readback never having moved.
+    w._awaiting = w._awaiting._replace(deadline=time.time() - 1.0)
+    w.refresh()
+
+    assert w.analog_spin.value() == pytest.approx(5.0)   # what the box reads
+    assert w._awaiting is None
+    w.close()
+
+
+def test_a_fill_leaves_the_widget_able_to_signal_again(tmp_path, qt_app):
+    """Signals are blocked around a fill; a widget left blocked is a dead control."""
+    path = aux_status(tmp_path, [CTRL], {"ls336.setpoint1": 4.2})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000)
+    w.refresh()
+    assert not w.setpoint_spin.signalsBlocked()
+    assert not w.range_combo.signalsBlocked()
+    w.close()
