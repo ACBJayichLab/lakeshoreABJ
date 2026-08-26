@@ -266,7 +266,8 @@ class CsvTail:
         mine = cls._LOG_NAME.match(name)
         if mine is None:
             return []
-        key = (mine.group("prefix"), mine.group("date"), int(mine.group("part") or 0))
+        prefix = mine.group("prefix")
+        key = (mine.group("date"), int(mine.group("part") or 0))
         try:
             entries = os.listdir(folder)
         except OSError:
@@ -276,7 +277,17 @@ class CsvTail:
             m = cls._LOG_NAME.match(other)
             if m is None:
                 continue
-            theirs = (m.group("prefix"), m.group("date"), int(m.group("part") or 0))
+            # Same recorder only.  One directory routinely holds several --
+            # `ls336_*.csv` beside `ltspm3-heater_*.csv` -- and they share no
+            # columns, no cryostat and no business being spliced into one
+            # history.  Comparing the prefix as part of an ordered tuple is
+            # not the same test: it accepts every prefix that merely sorts
+            # below this one, which is how a viewer following the heater log
+            # came to backfill a 336 log that another recorder was still
+            # writing.
+            if m.group("prefix") != prefix:
+                continue
+            theirs = (m.group("date"), int(m.group("part") or 0))
             # Strictly earlier only: the current file belongs to poll(), and
             # reading it here too would double every sample of today so far.
             if theirs < key:

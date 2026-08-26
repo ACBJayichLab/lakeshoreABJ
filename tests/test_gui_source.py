@@ -541,3 +541,36 @@ def test_only_writable_instruments_are_offered_as_targets(tmp_path):
     assert [ln["name"] for ln in src.writable_links()] == ["ls218"]
     assert src.link_named("ls336")["writable"] is False
     assert src.link_named("nope") == {}
+
+
+def test_a_foreign_prefix_is_excluded_even_when_it_sorts_below_this_one(tmp_path):
+    """"Different recorder" is a question about the prefix, not about ordering.
+
+    One data directory routinely holds several recorders' logs side by side.
+    Deciding which are "earlier" by comparing (prefix, date, part) as one
+    ordered tuple accepts every prefix that merely sorts below this one --
+    so a viewer following `ltspm3-heater_*.csv` backfilled `ls336_*.csv`,
+    including the file another recorder was still writing.  The names below
+    are the real ones this was found with.
+    """
+    t0 = 1_700_000_000.0
+    (tmp_path / "ls336_2026-08-24.csv").write_text(
+        HEADER + "".join(row(t0 + i, 1.0) for i in range(4)))
+    (tmp_path / "ls336_2026-08-26.csv").write_text(
+        HEADER + "".join(row(t0 + 100 + i, 2.0) for i in range(4)))
+    (tmp_path / "lschart_2026-08-23.csv").write_text(
+        HEADER + "".join(row(t0 + 200 + i, 3.0) for i in range(4)))
+    (tmp_path / "ltspm3-heater_2026-08-25.csv").write_text(
+        HEADER + "".join(row(t0 + 300 + i, 90.0 + i) for i in range(3)))
+
+    mine = tmp_path / "ltspm3-heater_2026-08-26.csv"
+    mine.write_text(HEADER + "".join(row(t0 + 400 + i, 96.0 + i) for i in range(2)))
+
+    assert CsvTail._older_logs(str(mine)) == [
+        str(tmp_path / "ltspm3-heater_2026-08-25.csv")]
+
+    tail = CsvTail()
+    tail.follow(str(mine))
+    tail.poll()
+    # Yesterday's heater log, then today's.  Nothing from the 336.
+    assert tail.series["Sample"].v == [90.0, 91.0, 92.0, 96.0, 97.0]
