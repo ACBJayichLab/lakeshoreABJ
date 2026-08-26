@@ -574,3 +574,49 @@ def test_a_foreign_prefix_is_excluded_even_when_it_sorts_below_this_one(tmp_path
     tail.poll()
     # Yesterday's heater log, then today's.  Nothing from the 336.
     assert tail.series["Sample"].v == [90.0, 91.0, 92.0, 96.0, 97.0]
+
+
+def test_a_prepared_span_keeps_up_with_samples_that_land_inside_it(tmp_path):
+    """A fixed zoom window must not freeze at the moment it was drawn.
+
+    `prepare_span` loads the span from disk at full resolution, and `between`
+    prefers that overlay over the decimated live series.  The overlay is a
+    snapshot, so rows appended afterwards have to be folded into it -- and
+    folded in, not thrown away: dropping it would send the view back to the
+    thinned overview and quietly lose the resolution the span was picked to
+    see.
+    """
+    t0 = 1_700_000_000.0
+    path = log(tmp_path, rows=20, t0=t0)
+    tail = CsvTail(max_points=8)
+    tail.follow(str(path))
+    tail.poll()
+    assert len(tail.series["Sample"].v) <= 8          # the overview is thinned
+
+    tail.prepare_span(t0 + 10.0, t0 + 30.0)
+    with open(path, "a") as fh:
+        fh.write("".join(row(t0 + 20 + i, 96.0 + 20 + i) for i in range(5)))
+    tail.poll()
+
+    tt, vv = tail.between("Sample", t0 + 10.0, t0 + 30.0)
+    # Every sample from the span's start to the newest, none of them missing
+    # and none of them decimated away.
+    assert vv == [96.0 + i for i in range(9, 25)]
+    assert tt == [t0 + i for i in range(9, 25)]
+
+
+def test_a_file_that_shrank_drops_the_overlay_rather_than_double_counting(tmp_path):
+    """Re-reading from the start would fold rows the overlay already holds."""
+    t0 = 1_700_000_000.0
+    path = log(tmp_path, rows=10, t0=t0)
+    tail = CsvTail(max_points=8)
+    tail.follow(str(path))
+    tail.poll()
+    tail.prepare_span(t0, t0 + 30.0)
+
+    path.write_text(HEADER + "".join(row(t0 + i, 96.0 + i) for i in range(4)))
+    tail.poll()
+
+    tt, vv = tail.between("Sample", t0, t0 + 30.0)
+    assert vv == [96.0 + i for i in range(4)]
+    assert tt == sorted(tt)

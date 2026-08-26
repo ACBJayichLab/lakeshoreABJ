@@ -553,13 +553,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._sync_command_values()
             if self.tail.follow(self.source.log_path()):
                 self._first_load_done = False
-            new_data = self.tail.poll()
-            if new_data or not self._first_load_done:
+            if self.tail.poll() or not self._first_load_done:
                 self._first_load_done = True
                 self._sync_traces()
                 self._redraw()
-                if self._span is not None and self.tail._overlay_span == self._span:
-                    self.tail._overlay_span = None
             if self._span is not None and self._span != self._loaded_span:
                 if self._span != self._armed_span:
                     # First tick on this span: wait one quiet tick before the

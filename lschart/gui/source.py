@@ -315,6 +315,12 @@ class CsvTail:
             self.series = {}
             self.header = []
             self.rows = 0
+            # The overlay was folded forward from bytes that are no longer
+            # there.  Extending it with the re-read would count them twice,
+            # so it goes; the window asks for the span again and gets a
+            # clean one.
+            self._overlay = {}
+            self._overlay_span = None
         if size == self._offset:
             return 0
 
@@ -335,7 +341,45 @@ class CsvTail:
             text, _, self._remainder = text.rpartition("\n")
         if not text:
             return 0
-        return self._consume(text)
+        added = self._consume(text)
+        if added:
+            self._extend_overlay(text)
+        return added
+
+    def _extend_overlay(self, text: str) -> None:
+        """Fold newly-tailed rows into a loaded overlay.
+
+        A hand-picked span that reaches the live edge keeps growing, and the
+        overlay :meth:`prepare_span` built for it was a snapshot of the file
+        as it stood.  Leaving it alone means `between` keeps answering from
+        that snapshot and the newest samples never appear -- a fixed zoom
+        window frozen at the moment it was drawn.
+
+        Dropping the overlay instead would be worse than it looks: nothing
+        would rebuild it until the span changed, so the view would fall back
+        to the decimated overview and silently lose the resolution the span
+        was picked to see.  Rebuilding it every tick is not the answer
+        either, because `prepare_span` rescans every log on disk and the
+        live edge grows once a cycle.
+
+        So the rows that were just appended to the live series are folded
+        into the overlay as well, bounded by the span it was built for.
+        They arrive newest-last, which is the order the overlay is already
+        in, and they cost no disk I/O because they have just been read.
+        """
+        if self._overlay_span is None:
+            return
+        t0, t1 = self._overlay_span
+        # The same margin prepare_span read, so the overlay keeps bracketing
+        # its span the way `between` expects.
+        window = (t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S)
+        # _consume keeps its tallies on self; the live series has already
+        # counted these rows and must not count them twice.
+        saved = (self.rows, self.errors)
+        try:
+            self._consume(text, sink=self._overlay, t_range=window)
+        finally:
+            (self.rows, self.errors) = saved
 
     def _consume(self, text: str, *, sink=None, t_range=None) -> int:
         added = 0
