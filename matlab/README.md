@@ -52,6 +52,17 @@ crash if the client does".
    That reads the status file and issues a `ping`, which is the one command
    that proves the whole command path works without touching an instrument.
 
+4. For a worked example rather than a pass/fail check, run the demo:
+
+   ```matlab
+   lschart_demo('C:\lschart\data')
+   ```
+
+   It is the shape a real experiment script takes — guard on `isAlive`, read
+   by channel name, sample at the recorder's cadence, then pull the log as a
+   table. It moves nothing. `selftest` answers "is this installed right?";
+   `lschart_demo` answers "how do I write my own script?".
+
 ## Use
 
 ```matlab
@@ -62,6 +73,7 @@ ls.channels()                % {'Sample', 'Cold Head', 'Shield'}
 ls.temperature()             % all of them, as a struct
 ls.temperature('Sample')     % one, in kelvin
 ls.aux('ls336.setpoint1')    % setpoints, heater percents
+ls.links()                   % per-instrument health: up, writable, loops
 T = ls.readLog();            % the CSV as a table, safe to read mid-run
 
 ls.setSetpoint(1, 77.0);     % blocks until the recorder confirms

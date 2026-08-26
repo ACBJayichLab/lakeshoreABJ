@@ -24,6 +24,7 @@ classdef LakeShore < handle
 %       ls.isAlive()                    % is the recorder actually running?
 %       ls.temperature()                % every channel, as a struct
 %       ls.temperature('Sample')        % one channel, in kelvin
+%       ls.links()                      % per-instrument health and capability
 %       ls.setSetpoint(1, 77.0);        % blocks until the recorder confirms
 %
 %   Every command method blocks until the recorder acknowledges it, and raises
@@ -158,6 +159,25 @@ classdef LakeShore < handle
             %CHANNELS  The channel names, exactly as the recorder logs them.
             chans = obj.channelStruct(obj.status());
             names = {chans.name};
+        end
+
+        function items = links(obj, s)
+            %LINKS  Per-instrument health and capability, as a struct array.
+            %
+            %   Fields: name, model, up, consecutive_failures, reconnects,
+            %   last_error, writable, loops, heater_outputs, analog_output,
+            %   max_output_pct.
+            %
+            %   `writable` is the driver's own allow_writes policy, and it is
+            %   separate from whether the recorder accepts commands at all --
+            %   a command needs both.  Reach for this before assuming a write
+            %   will land, and to tell a refusal apart from a dead link.
+            %
+            %   Pass a status struct to read it from a snapshot you already
+            %   have, rather than making a second read that could disagree
+            %   with the first.
+            if nargin < 2, s = obj.status(); end
+            items = obj.asStructArray(s, 'links');
         end
 
         function out = aux(obj, key)
