@@ -1,10 +1,15 @@
 """Sub-code output resolution by first-order sigma-delta modulation.
 
-The 218's analog output resolves 0.01%.  With a local gain near 7.6 K/%
-at the 63% operating point, one code is ~76 mK -- roughly eight times the
+The 218's analog output resolves 0.01%.  With a local gain near 10 K/%
+at the 63% operating point, one code is ~100 mK -- roughly ten times the
 sensor noise floor and far coarser than the few-mK stabilisation goal.  Plain
 rounding would therefore make millikelvin control impossible no matter how good
 the PID is.
+
+(The 7.6 K/% and ~76 mK quoted here previously came from the superseded n = 5
+single-power-law fit.  The measured curve is steeper at the operating point --
+see `test_one_dac_code_is_about_100_mK` -- so the code is coarser than was
+believed, and dithering matters more, not less.)
 
 The fix is to let time carry the extra bits.  The requested value is quantised
 to the nearest code and the rounding error is carried forward, so the *sequence*

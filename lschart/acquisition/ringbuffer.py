@@ -1,7 +1,7 @@
 """Bounded in-memory history, for plotting only.
 
 Deliberately separate from the recorder.  The log is the record of record and
-has no cap; this exists so the GUI can draw a strip chart without holding a
+has no cap; this exists so the viewer can draw a strip chart without holding a
 day of samples per curve.  Nothing here is ever the source of truth, and
 nothing downstream should read it expecting completeness.
 """

@@ -1,4 +1,4 @@
-"""A drop-box for commands from MATLAB, the GUI, or anything else.
+"""A drop-box for commands from MATLAB, the viewer, or anything else.
 
 The shape is a maildir: a client writes ``<name>.json.tmp``, then renames it to
 ``<name>.json``.  Rename within a directory is atomic on POSIX and on Windows,
@@ -115,7 +115,7 @@ class CommandResult:
 class CommandSpool:
     """The directory itself, with the two halves of the protocol.
 
-    :meth:`submit` is the client half -- used by the GUI, by the tests, and
+    :meth:`submit` is the client half -- used by the viewer, by the tests, and
     mirrored line for line by ``matlab/LakeShore.m``.  :meth:`collect` is the
     recorder half.
     """

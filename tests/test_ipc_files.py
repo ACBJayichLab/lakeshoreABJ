@@ -1,4 +1,4 @@
-"""The file interface MATLAB and the GUI use: status out, commands in.
+"""The file interface MATLAB and the viewer use: status out, commands in.
 
 Everything here is about the *contract*, because that contract is the only
 thing holding a MATLAB script and a Python recorder together.  Nothing checks

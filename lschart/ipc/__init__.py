@@ -9,7 +9,7 @@ through here rather than through the bus.
 leaves open instead: `status.py` writes what the cryostat is doing, `commands.py` is
 the drop-box for requests coming the other way, and `service.py` joins the two
 onto the acquisition cycle.  MATLAB's half of the same protocol is
-`matlab/LakeShore.m`; the GUI is another client of it, with no privileges the
+`matlab/LakeShore.m`; the viewer is another client of it, with no privileges the
 MATLAB one lacks.
 """
 

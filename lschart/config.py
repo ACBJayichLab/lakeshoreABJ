@@ -213,7 +213,7 @@ class AcquisitionConfig:
 
 @dataclass
 class IpcConfig:
-    """Talking to MATLAB and the GUI without sharing the instrument.
+    """Talking to MATLAB and the viewer without sharing the instrument.
 
     The recorder holds the port exclusively -- a Windows COM port has exactly
     one holder -- so MATLAB *cannot* open the instrument while this is running.
@@ -221,7 +221,7 @@ class IpcConfig:
     works, and this section is how it is switched on.
 
     ``enabled`` writes ``status.json`` every cycle.  It costs one small file
-    write per second and nothing on the bus, and it is what the GUI reads, so
+    write per second and nothing on the bus, and it is what the viewer reads, so
     it is on by default.
 
     ``accept_commands`` is the other direction and is **off** by default, for
@@ -498,7 +498,7 @@ class AppConfig:
         est = self.estimated_cycle_s()
         if est > self.acquisition.interval_s:
             problems.append(
-                f"a poll cycle needs about {est:.2f} s "
+                f"a cycle needs about {est:.2f} s "
                 f"({self.estimated_transactions()} transactions at "
                 f"{self.max_pacing_s() * 1000:.0f} ms pacing) but "
                 f"acquisition.interval_s is {self.acquisition.interval_s} s. "
@@ -519,7 +519,7 @@ class AppConfig:
     # -- budgeting ----------------------------------------------------------
 
     def estimated_transactions(self) -> int:
-        """Bus transactions per poll cycle, for the interval sanity check.
+        """Bus transactions per cycle, for the interval sanity check.
 
         Counted from configuration rather than from live instruments, because
         `check` has to answer this without opening anything.

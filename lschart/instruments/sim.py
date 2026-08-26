@@ -79,7 +79,7 @@ class FirstOrderResponse:
 
 @dataclass
 class FaultInjection:
-    """Knobs the tests and the GUI's 'fault drill' use to abuse the pipeline.
+    """Knobs the tests and the viewer's 'fault drill' use to abuse the pipeline.
 
     ``glitch_channels`` is the one that matters.  It reproduces the failure
     actually present in the reference logs -- 9 events in 1,510 h, always on

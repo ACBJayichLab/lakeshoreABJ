@@ -2,7 +2,7 @@
 
 The recorder owns the instrument link exclusively, so every other program that
 wants to know the temperature has to be told rather than go and look.  This is
-how it is told: one small JSON file, rewritten in full every poll cycle.
+how it is told: one small JSON file, rewritten in full every cycle.
 
 Why a whole file every second, and not a socket
 -----------------------------------------------
@@ -10,7 +10,7 @@ Why a whole file every second, and not a socket
 A socket puts a connection state machine inside the process that must never
 die, and its failure mode is quiet -- a dead server thread keeps recording
 perfectly while silently ignoring every reader.  A file has no connection
-state at all: the recorder never learns that MATLAB or the GUI exists, which
+state at all: the recorder never learns that MATLAB or the viewer exists, which
 is the strongest available form of "do not crash if the client does".
 
 Rewritten in *full* rather than appended to, because a reader must never see

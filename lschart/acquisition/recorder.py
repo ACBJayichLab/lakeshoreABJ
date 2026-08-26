@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 class Recorder:
     """Append-only CSV writer with daily rollover.
 
-    Thread-safe: the poller writes, the GUI may ask for :attr:`path`.
+    Thread-safe: the poller writes, the viewer may ask for :attr:`path`.
     """
 
     def __init__(
