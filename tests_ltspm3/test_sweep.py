@@ -9,16 +9,8 @@ once without weakening the check.
 
 import pytest
 
-from ltspm3.control import LoopMode, SupervisorState
+from ltspm3.control import SupervisorState
 from ltspm3.control.ramp import RampConfig, SetpointRamp
-
-
-def armed(harness, **kw):
-    h = harness(**kw)
-    h.settle_filter(40)
-    h.sup.set_mode(LoopMode.PID)
-    h.step(10)
-    return h
 
 
 # -- the ramp generator on its own -----------------------------------------
@@ -63,9 +55,9 @@ def test_abort_holds_where_it_stands():
 
 # -- closed loop ------------------------------------------------------------
 
-def test_a_ramped_sweep_keeps_the_error_inside_the_premise_check(harness):
+def test_a_ramped_sweep_keeps_the_error_inside_the_premise_check(armed):
     """The whole point: sweeping must not look like a broken premise."""
-    h = armed(harness)
+    h = armed()
     h.sup.sweep_to(h.equilibrium_k + 3.0, rate_k_per_min=0.5)
     h.step(400)
 
@@ -79,17 +71,17 @@ def test_a_ramped_sweep_keeps_the_error_inside_the_premise_check(harness):
         "sweep never arrived"
 
 
-def test_a_stepped_setpoint_still_stalls_the_loop(harness):
+def test_a_stepped_setpoint_still_stalls_the_loop(armed):
     """The check keeps its teeth: only ramping is exempt, because only ramping
     keeps the error small."""
-    h = armed(harness)
+    h = armed()
     h.sup.set_setpoint(h.equilibrium_k + 3.0, ramp=False)
     h.step(5)
     assert h.sup.state is SupervisorState.HOLDING
 
 
-def test_sweep_actually_moves_the_heater_in_the_right_direction(harness):
-    h = armed(harness)
+def test_sweep_actually_moves_the_heater_in_the_right_direction(armed):
+    h = armed()
     start = h.sup.output_pct
     h.sup.sweep_to(h.equilibrium_k + 2.0, rate_k_per_min=0.5)
     h.step(300)
@@ -97,18 +89,18 @@ def test_sweep_actually_moves_the_heater_in_the_right_direction(harness):
     assert h.sup.output_pct <= 63.076 + h.sup.cfg.authority_pct + 1e-9
 
 
-def test_sweep_stays_inside_the_authority_band(harness):
+def test_sweep_stays_inside_the_authority_band(armed):
     """A sweep is not a licence to leave the band -- the band caps heat
     unconditionally, so an out-of-reach target simply saturates."""
-    h = armed(harness)
+    h = armed()
     h.sup.sweep_to(h.equilibrium_k + 40.0, rate_k_per_min=5.0)
     h.step(400)
     outs = [s.output_pct for s in h.history[-400:] if s.output_pct is not None]
     assert max(outs) <= 63.076 + h.sup.cfg.authority_pct + 1e-9
 
 
-def test_abort_mid_sweep_holds_temperature(harness):
-    h = armed(harness)
+def test_abort_mid_sweep_holds_temperature(armed):
+    h = armed()
     h.sup.sweep_to(h.equilibrium_k + 5.0, rate_k_per_min=0.5)
     h.step(100)
     held = h.sup.abort_ramp()

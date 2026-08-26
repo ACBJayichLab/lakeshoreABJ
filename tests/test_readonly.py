@@ -132,7 +132,6 @@ def test_probe_forces_read_only_even_when_the_config_allows_writes(tmp_path, cap
     Here the config is as permissive as it can be -- writes allowed, interlock
     off -- and probe must still transmit nothing that could change state.
     """
-    pytest.importorskip("yaml")
     from lschart import __main__ as cli
     from lschart.app import Application
 
