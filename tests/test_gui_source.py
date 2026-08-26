@@ -155,6 +155,75 @@ def test_a_log_with_no_date_in_its_name_has_nothing_to_backfill_from(tmp_path):
     assert tail.series["Sample"].v == [96.0, 97.0]
 
 
+# -- how much history a fresh start reads ------------------------------------
+#
+# The whole point of a viewer is what the rig is doing *now*; weeks of
+# samples nobody asked for are dead weight in memory.  The backfill therefore
+# stops once it covers its budget -- and anything older stays reachable,
+# because a picked span is answered from disk regardless of what is held.
+
+
+def test_the_backfill_stops_once_its_coverage_is_met(tmp_path):
+    base = _dt.datetime.now().replace(hour=12, minute=0, second=0,
+                                      microsecond=0)
+    day = _dt.timedelta(days=1)
+
+    def day_log(age_days, name):
+        t = (base - age_days * day).timestamp()
+        (tmp_path / name).write_text(
+            HEADER + "".join(row(t + i, 90.0 + age_days + i) for i in range(3)))
+        return t
+
+    day_log(3, f"lschart_{(base - 3 * day).date().isoformat()}.csv")
+    day_log(2, f"lschart_{(base - 2 * day).date().isoformat()}.csv")
+    t_yesterday = day_log(1, f"lschart_{(base - 1 * day).date().isoformat()}.csv")
+    tail = CsvTail(backfill_s=30 * 3600.0)     # covers yesterday, not the day before
+    tail.follow(str(log(tmp_path,
+                        f"lschart_{base.date().isoformat()}.csv",
+                        rows=2, t0=base.timestamp())))
+    tail.poll()
+    # Two days ago was inside the budget only as a *probe*: reading stopped
+    # there, so three days ago never left the disk.
+    assert tail.series["Sample"].v == [
+        92.0, 93.0, 94.0,          # two days ago
+        91.0, 92.0, 93.0,          # yesterday
+        96.0, 97.0,                # today
+    ]
+    assert t_yesterday < base.timestamp()
+
+
+def test_a_picked_span_fetches_logs_the_backfill_never_read(tmp_path):
+    base = _dt.datetime.now().replace(hour=12, minute=0, second=0,
+                                      microsecond=0)
+    day = _dt.timedelta(days=1)
+    t_old = (base - 2 * day).timestamp()
+    (tmp_path / f"lschart_{(base - 2 * day).date().isoformat()}.csv").write_text(
+        HEADER + "".join(row(t_old + i, 80.0 + i) for i in range(4)))
+    (tmp_path / f"lschart_{(base - 1 * day).date().isoformat()}.csv").write_text(
+        HEADER + "".join(row((base - day).timestamp() + i, 90.0 + i)
+                         for i in range(2)))
+    tail = CsvTail(backfill_s=3600.0)      # yesterday satisfies this at once
+    tail.follow(str(log(tmp_path,
+                        f"lschart_{base.date().isoformat()}.csv",
+                        rows=2, t0=base.timestamp())))
+    tail.poll()
+    assert 80.0 not in tail.series["Sample"].v     # two days ago: never read
+    tail.prepare_span(t_old, t_old + 4.0)
+    _, vv = tail.between("Sample", t_old, t_old + 4.0)
+    assert vv == [80.0, 81.0, 82.0, 83.0]           # fetched from disk, whole
+
+
+def test_recent_returns_only_the_last_seconds(tmp_path):
+    tail = CsvTail()
+    t0 = 1_700_000_000.0
+    tail.follow(str(log(tmp_path, rows=10, t0=t0)))
+    tail.poll()
+    t, v = tail.recent("Sample", 3.0)
+    assert v == [96.0 + i for i in range(6, 10)]
+    assert t == [t0 + i for i in range(6, 10)]
+    assert tail.recent("nosuch", 10.0) == ([], [])
+
+
 def test_following_the_same_path_again_does_not_reset(tmp_path):
     tail = CsvTail()
     path = str(log(tmp_path))

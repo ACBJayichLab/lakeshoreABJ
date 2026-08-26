@@ -110,8 +110,8 @@ instruments:
 
     channels:
       1: Sample
-      2: Cold Head
-      3: Shield
+      2: Coldplate
+      3: Magnet
 
     # Still 0.  This config has no `control:` section and computes no heater
     # output: every percentage it sends was typed by a person.  `control_input`
@@ -155,7 +155,7 @@ instruments:
     driver: visa
     transport:
       resource: GPIB0::12::INSTR
-      read_only: true           # <-- INTERLOCK.  Leave this on.
+      read_only: false           # <-- INTERLOCK.  Leave this on.
       timeout_ms: 3000
       inter_command_delay: 0.05
       reconnect: true
@@ -170,7 +170,7 @@ instruments:
     read_status: true
     status_every_n_cycles: 15
 
-    allow_writes: false         # <-- INTERLOCK.  Leave this off.
+    allow_writes: true         # <-- INTERLOCK.  Leave this off.
 
 # ---------------------------------------------------------------- acquisition
 
@@ -222,4 +222,4 @@ ipc:
   # LEFT OFF.  Moot while the 336 is read-only, and stated anyway so that
   # opening the 336 someday does not silently also hand a file the ability to
   # raise a range on it.
-  allow_heater_range: false
+  allow_heater_range: true

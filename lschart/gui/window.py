@@ -24,12 +24,16 @@ the question a strip chart gets asked is "what happened between *there* and
 value axis is cropped to it too.  The drag is always the whole rectangle;
 `X+ X- Y+ Y-` are how one axis gets moved on its own, in steps.  A hand-picked
 view stops following the recorder -- new samples land off the right-hand edge,
-which is what a fixed window means -- so the state is announced on the Live
-button and is left by a double-click, that button, or nothing else.  While a
-span is picked the chart first draws its thinned overview and then, one quiet
-tick later, swaps in what `CsvTail.prepare_span` re-read from the logs at full
-resolution -- zooming back into an old day shows real samples again, not
-whatever survived decimation.
+which is what a fixed window means -- so the state is announced in the status
+bar (no view button checked) and is left by a double-click or any button in
+the `View` row.  That row holds live-referenced windows -- the last
+6/12/24/48 hours, riding forward with the recorder -- plus `All`; a fresh
+viewer backfills only about that widest window, and older spans are re-read
+from disk when a drag reaches them.  While a span is picked the chart first
+draws its thinned overview and then, one quiet tick later, swaps in what
+`CsvTail.prepare_span` re-read from the logs at full resolution -- zooming
+back into an old day shows real samples again, not whatever survived
+decimation.
 """
 
 from __future__ import annotations
@@ -53,6 +57,18 @@ CURVE_COLORS = [
     "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
     "#8c564b", "#17becf", "#bcbd22", "#e377c2", "#7f7f7f",
 ]
+
+#: (label, seconds) for the live-referenced view buttons: the last N hours,
+#: riding forward with the recorder.  The widest of these is also how much
+#: history a fresh viewer backfills from the finished logs.
+VIEW_WINDOWS = [
+    ("6 h", 6 * 3600.0), ("12 h", 12 * 3600.0),
+    ("24 h", 24 * 3600.0), ("48 h", 48 * 3600.0),
+]
+
+#: How far back a fresh start reads by default: the widest view button, plus
+#: an hour so the edge of a full window has samples to bracket it.
+BACKFILL_COVERAGE_S = VIEW_WINDOWS[-1][1] + 3600.0
 
 BANNER_STYLE = {
     "ok":      "background:#e8f5e9; color:#1b5e20; padding:6px; border-radius:4px;",
@@ -177,7 +193,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
     ) -> None:
         super().__init__()
         self.source = StatusSource(status_path)
-        self.tail = CsvTail(max_points=max_points)
+        self.tail = CsvTail(max_points=max_points,
+                            backfill_s=BACKFILL_COVERAGE_S)
         self.spool = spool
         self.config_label = config_label
 
@@ -203,6 +220,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: none of them should each cost a file scan.
         self._loaded_span: tuple[float, float] | None = None
         self._armed_span: tuple[float, float] | None = None
+        #: The live-referenced window currently shown, in seconds, or None for
+        #: "All".  While it is set the x axis is not hand-picked: each redraw
+        #: shows the newest sample minus this many seconds, so it rides
+        #: forward with the recorder.  A drag supersedes it; its button
+        #: reselects it.
+        self._follow_span_s: float | None = None
 
         self.setWindowTitle("lschart — strip chart")
         self.resize(1280, 800)
@@ -264,13 +287,27 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         view_row = QtWidgets.QHBoxLayout()
         view_row.addWidget(QtWidgets.QLabel("View"))
-        self.live_button = QtWidgets.QPushButton("Live (all history)")
-        self.live_button.setEnabled(False)
+        # Live-referenced windows: the last N hours, riding forward with the
+        # recorder.  "All" is the one that is not referenced to anything but
+        # what this viewer happens to hold.
+        self.live_button = QtWidgets.QPushButton("All")
+        self.live_button.setCheckable(True)
+        self.live_button.setChecked(True)
         self.live_button.setToolTip(
-            "return to following the recorder, showing everything the logs "
-            "hold; a double-click on the plot does the same")
+            "everything this viewer holds (the backfill covers only about "
+            "two days; older spans are fetched from disk when you zoom to "
+            "them)")
         self.live_button.clicked.connect(self._follow_live)
         view_row.addWidget(self.live_button, 0)
+        self.span_buttons: dict[float, QtWidgets.QPushButton] = {}
+        for label, seconds in VIEW_WINDOWS:
+            button = QtWidgets.QPushButton(label)
+            button.setCheckable(True)
+            button.setToolTip(f"the last {label}, following the recorder")
+            button.clicked.connect(
+                lambda _checked=False, s=seconds: self._follow_window(s))
+            view_row.addWidget(button, 0)
+            self.span_buttons[seconds] = button
         view_row.addStretch(1)
         box.addLayout(view_row)
 
@@ -696,6 +733,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 f"window {stamp(int(t0)).toString('HH:mm:ss')}–"
                 f"{stamp(int(t1)).toString('HH:mm:ss')} "
                 f"({_duration(t1 - t0)}) · not following")
+        elif self._follow_span_s is not None:
+            bits.append(f"last {_duration(self._follow_span_s)} · live")
         for unit, fixed in self._ylim.items():
             if fixed is not None:
                 bits.append(f"y {fixed[0]:g}–{fixed[1]:g} {unit} fixed")
@@ -732,9 +771,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 curve.setData([], [])
                 continue
             if self._span is None:
-                # Live: everything the logs have given this viewer, thinned to
-                # max_points per trace at worst.
-                t, v = self.tail.everything(name)
+                if self._follow_span_s is None:
+                    # All: everything the logs have given this viewer,
+                    # thinned to max_points per trace at worst.
+                    t, v = self.tail.everything(name)
+                else:
+                    # A live-referenced window: the newest sample is the
+                    # right edge, and each redraw rides forward with it.
+                    t, v = self.tail.recent(name, self._follow_span_s)
             else:
                 # Exactly the visible span, so a panel still autoscaling fits
                 # itself to what is on screen: zoom into a five-minute wobble
@@ -811,7 +855,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._ylim[unit] = fixed
         # Deliberately not `_span_changed`: the value axis does not decide
         # which samples are drawn, so there is nothing to redraw for.
-        self.live_button.setEnabled(not self._is_live())
+        self._sync_view_buttons()
         self._update_statusbar()
 
     def _is_live(self) -> bool:
@@ -819,23 +863,42 @@ class ViewerWindow(QtWidgets.QMainWindow):
         return self._span is None and not any(self._ylim.values())
 
     def _follow_live(self, *_ignored) -> None:
-        """Drop every hand-picked axis and follow the recorder again.
+        """The `All` button, or a double-click: show everything held."""
+        self._set_follow(None)
 
-        Takes and ignores whatever the sender passes -- a button's checked
-        flag, anything -- because more than one widget means it.
-        """
+    def _follow_window(self, seconds: float) -> None:
+        """A live-referenced window button: the last ``seconds``, riding."""
+        self._set_follow(seconds)
+
+    def _set_follow(self, seconds: float | None) -> None:
+        """Enter a live-referenced view and drop every hand-picked axis."""
+        self._span = None
         self._armed_span = None
         # The overlay the tail holds belongs to whatever span was picked last;
         # coming back here must not assume it still matches a future pick.
         self._loaded_span = None
-        if self._is_live():
-            self._redraw()          # a combo change with nothing to leave
-            return
-        self._span = None
+        self._follow_span_s = seconds
         for unit, plot in self._panels.items():
             self._ylim[unit] = None
             plot.enableAutoRange(x=True, y=True)
-        self._span_changed()
+        self._sync_view_buttons()
+        if self._is_live():
+            self._redraw()          # a re-click with nothing to leave
+            self._update_statusbar()
+        else:
+            self._span_changed()
+
+    def _sync_view_buttons(self) -> None:
+        """Make the view row say which window is showing.
+
+        While a span is hand-picked no live-referenced view is, so nothing is
+        checked -- the buttons are a way *back*, not a description of a fixed
+        view.
+        """
+        following = self._span is None
+        self.live_button.setChecked(following and self._follow_span_s is None)
+        for seconds, button in self.span_buttons.items():
+            button.setChecked(following and seconds == self._follow_span_s)
 
     def _zoom_x(self, factor: float) -> None:
         """An X button: scale the time axis about the middle of the window.
@@ -871,11 +934,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._ylim[unit] = _scaled(base, factor)
             plot.setYRange(*self._ylim[unit], padding=0)
         # No redraw: the value axis does not decide which samples are drawn.
-        self.live_button.setEnabled(not self._is_live())
+        self._sync_view_buttons()
         self._update_statusbar()
 
     def _span_changed(self) -> None:
-        self.live_button.setEnabled(not self._is_live())
+        self._sync_view_buttons()
         self._redraw()
         self._update_statusbar()
 

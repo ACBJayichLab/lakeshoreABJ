@@ -38,15 +38,23 @@ is what the tests cover.
 ## History across midnight
 
 The recorder writes one CSV per day, and the viewer tails whichever one it is
-currently writing. Two things make zooming out still reach the days before:
+currently writing. Three things make history reachable without weighing the
+viewer down:
 
 - **a rollover keeps the history.** When the recorder moves to a new file the
   viewer starts that file from the top but keeps everything it has already
   plotted, so a trace crosses midnight without a gap;
-- **a fresh start backfills.** A viewer started mid-day reads the finished
-  logs that came before today's — same directory, same prefix, older date,
-  oldest first — so yesterday's cooldown is on the chart without anyone
-  having had the viewer open overnight.
+- **a fresh start backfills just over the widest view window** (48 h). A
+  viewer opened mid-day still gets yesterday's cooldown; weeks of samples
+  nobody asked for are not dragged into memory;
+- **older spans are fetched on demand.** Picking a span re-reads it from the
+  logs on disk at full resolution — whether or not that day was ever
+  backfilled.
+
+The `View` row holds live-referenced windows — **6 h, 12 h, 24 h, 48 h** —
+whose right edge is always the newest sample, riding forward with the
+recorder, plus **All**, which shows everything this viewer happens to hold.
+A drag supersedes any of them; clicking one again is the way back.
 
 Memory stays bounded by `--max-points`: past the cap a trace is decimated
 (every other sample dropped) rather than truncated, so old days lose
@@ -139,10 +147,10 @@ Both zoom one axis at a time, in steps, about the middle of what is shown.
 
 A hand-picked view **stops following the recorder**: new samples land off the
 right-hand edge, which is what a fixed window means, and a fixed value axis
-will not open up for an excursion that leaves it. While either is in effect the
-`Live (all history)` button lights up, and the status bar names the span and
-says `not following`. The button or a double-click returns to following — all
-axes at once.
+will not open up for an excursion that leaves it. While a span is picked the
+status bar names it and says `not following`, no view button is checked, and
+`All`, a double-click, or any view button returns to a live-referenced view —
+all axes at once.
 
 A value axis moved by the **wheel** or a shift-drag counts as hand-picked too;
 it is just as fixed as one dragged out, and the `Live` button says so.

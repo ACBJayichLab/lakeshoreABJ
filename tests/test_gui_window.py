@@ -168,7 +168,7 @@ def test_a_zoom_by_any_other_route_also_moves_the_window(viewer):
 def test_there_is_a_way_back_to_following_the_recorder(viewer, leave):
     box = viewer.k_plot.getViewBox()
     drag(box, 0.4, 0.6, 0.2, 0.8)
-    assert viewer.live_button.isEnabled()
+    assert not viewer.live_button.isChecked()
 
     if leave == "double-click":
         box.mouseClickEvent(FakeDoubleClick())
@@ -178,7 +178,7 @@ def test_there_is_a_way_back_to_following_the_recorder(viewer, leave):
     assert viewer._span is None
     assert viewer._ylim == {"K": None, "%": None}
     assert box.autoRangeEnabled() == [True, True]
-    assert not viewer.live_button.isEnabled()
+    assert viewer.live_button.isChecked()
 
 
 # -- the rectangle, and the axes it is allowed to set ------------------------
@@ -325,17 +325,18 @@ def test_three_presses_are_three_steps(viewer):
 
 def test_an_x_zoom_stops_the_chart_following_the_recorder(viewer):
     """Pressing it is a decision, and a decision has to be escapable."""
-    assert not viewer.live_button.isEnabled()
+    assert viewer.live_button.isChecked()
     viewer.zoom_buttons["X+"].click()
-    assert viewer.live_button.isEnabled()
+    assert not viewer.live_button.isChecked()
     assert not viewer.k_plot.getViewBox().autoRangeEnabled()[0]
     assert "not following" in viewer.statusBar().currentMessage()
 
 
 def test_a_y_zoom_stops_the_axis_autoscaling(viewer):
-    assert not viewer.live_button.isEnabled()
     viewer.zoom_buttons["Y+"].click()
-    assert viewer.live_button.isEnabled()
+    # The view row describes the *time* window, and time still follows: the
+    # button stays checked.  The fixed kelvin axis is named in the status bar.
+    assert viewer.live_button.isChecked()
     assert not viewer.k_plot.getViewBox().autoRangeEnabled()[1]
     # The time axis is untouched: the chart still follows the recorder in x.
     assert viewer._span is None
@@ -356,6 +357,71 @@ def test_live_undoes_the_buttons_too(viewer):
     assert viewer._span is None
     assert viewer._ylim == {"K": None, "%": None}
     assert viewer.k_plot.getViewBox().autoRangeEnabled() == [True, True]
+
+
+# -- the live-referenced view buttons ----------------------------------------
+#
+# The last N hours, ending at the newest sample and riding forward with the
+# recorder.  Worth testing: that a button cuts the data to its window, that
+# the buttons keep their state honest across a drag, and that new samples
+# extend the window rather than being cut off by it.
+
+
+def test_a_view_button_cuts_the_data_to_its_window(tmp_path, qt_app):
+    """Ten hours of samples, a six-hour button: four hours leave the screen."""
+    t0 = time.time() - 10 * 3600
+    csv = tmp_path / "log.csv"
+    with csv.open("w") as fh:
+        fh.write(HEADER)
+        for i in range(600):                      # one sample per minute
+            stamp = _dt.datetime.fromtimestamp(t0 + i * 60).isoformat(
+                timespec="milliseconds")
+            fh.write(f"{stamp},{i}.0,{96.0:.4f},77.0,12.5,,,\n")
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({
+        "t_wall": time.time(), "cycle": 3, "running": True, "interval_s": 60.0,
+        "channels": [{"name": "Sample", "kelvin": 96.0, "usable": True}],
+        "links": [{"name": "ls336", "up": True, "writable": True}],
+        "recorder": {"path": str(csv), "rows": 600},
+        "commands": {"accepted": True, "recent": []},
+    }))
+    w = ViewerWindow(str(status), refresh_ms=10_000_000)
+    qt_app.processEvents()
+
+    assert len(w.curves["Sample"].getData()[0]) == 600   # All shows everything
+    w.span_buttons[6 * 3600.0].click()
+    shown = len(w.curves["Sample"].getData()[0])
+    assert 360 <= shown <= 362          # 6 h at one minute, plus the bracket
+    assert "last 6.0 h" in w.statusBar().currentMessage()
+    assert w.span_buttons[6 * 3600.0].isChecked()
+    assert not w.live_button.isChecked()
+
+    # New samples extend into the window's frame: still live-referenced.  The
+    # far edge slides forward with the newest sample, dropping about as many
+    # old samples as the new one advanced the clock.
+    with csv.open("a") as fh:
+        stamp = _dt.datetime.fromtimestamp(time.time() + 120).isoformat(
+            timespec="milliseconds")
+        fh.write(f"{stamp},999.0,{96.5:.4f},77.0,12.5,,,\n")
+    w.refresh()
+    w.refresh()                          # second tick settles the debounce
+    data = w.curves["Sample"].getData()
+    assert data[1][-1] == pytest.approx(96.5)
+    assert abs(len(data[0]) - shown) <= 4
+    w.close()
+
+
+def test_a_drag_leaves_no_view_button_checked(viewer):
+    viewer.span_buttons[24 * 3600.0].click()
+    assert viewer.span_buttons[24 * 3600.0].isChecked()
+    drag(viewer.k_plot.getViewBox(), 0.4, 0.6)
+    assert not any(b.isChecked() for b in viewer.span_buttons.values())
+    assert not viewer.live_button.isChecked()
+    # And a view button is a way back out of the hand-picked span.
+    viewer.span_buttons[12 * 3600.0].click()
+    assert viewer._span is None
+    assert viewer._follow_span_s == 12 * 3600.0
+    assert viewer.live_button.isChecked() is False
 
 
 # -- the control panel -------------------------------------------------------

@@ -125,8 +125,23 @@ class CsvTail:
     :meth:`prepare_span` recovers the full resolution from disk on demand.
     """
 
-    def __init__(self, path: str | None = None, *, max_points: int = 200_000) -> None:
+    def __init__(
+        self,
+        path: str | None = None,
+        *,
+        max_points: int = 200_000,
+        backfill_s: float | None = None,
+    ) -> None:
         self.max_points = max_points
+        #: How much history a fresh start reads back from the finished logs.
+        #:
+        #: ``None`` -- the default, and what the tests mostly use -- takes
+        #: everything.  The viewer passes its widest live-referenced window
+        #: plus a margin instead: there is no reason to hold three weeks of
+        #: samples nobody has asked for, and anything older than the cap
+        #: remains reachable, at full resolution, by picking a span that
+        #: reaches it (:meth:`prepare_span` goes back to disk either way).
+        self._backfill_s = backfill_s
         self.path: str | None = None
         self.header: list[str] = []
         self.series: dict[str, Series] = {}
@@ -188,15 +203,33 @@ class CsvTail:
     )
 
     def _backfill(self, path: str) -> None:
-        """Read the finished logs that came before ``path``, oldest first.
+        """Read finished logs from before ``path``, oldest first.
 
         Runs once, when the viewer first acquires a log to follow -- typically
         moments after being started, where a second or two of disk I/O costs
         nothing and buys yesterday's cooldown.  Each file carries its own
         header, because columns adopted later are absent from earlier days,
         and the series dict merges them by column name.
+
+        Only enough files are read to cover ``backfill_s`` of wall clock (all
+        of them when it is ``None``).  Which ones is decided by probing each
+        file's first data row -- one line, not a re-parse -- walking newest to
+        oldest until one starts before the cutoff; the chosen set is then
+        read in chronological order, because the series must stay
+        time-sorted for the bisections.
         """
         older = self._older_logs(path)
+        if not older:
+            return
+        if self._backfill_s is not None:
+            cutoff = _dt.datetime.now().timestamp() - self._backfill_s
+            selected = []
+            for p in reversed(older):
+                selected.append(p)
+                start = self._file_start(p)
+                if start is not None and start <= cutoff:
+                    break
+            older = list(reversed(selected))
         if not older:
             return
         log.info("viewer: backfilling %d earlier log(s)", len(older))
@@ -212,6 +245,19 @@ class CsvTail:
             if added:
                 self._history.append((p, None))
                 log.info("viewer: backfilled %d rows from %s", added, p)
+
+    @staticmethod
+    def _file_start(path: str) -> float | None:
+        """The timestamp of a log's first data row, from its first two lines."""
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                fh.readline()            # the header
+                first = fh.readline()
+        except OSError:
+            return None
+        if not first:
+            return None
+        return _parse_time(first.split(",", 1)[0])
 
     @classmethod
     def _older_logs(cls, path: str) -> list[str]:
@@ -344,6 +390,23 @@ class CsvTail:
             return [], []
         return s.t, s.v
 
+    def recent(self, name: str, seconds: float) -> tuple[list[float], list[float]]:
+        """One column over the last ``seconds`` of what this viewer holds.
+
+        The live-referenced view buttons draw through here: the newest sample
+        is one edge, and each redraw rides forward with it.  The series is in
+        time order, so a scan from the end finds the cut without touching a
+        day of older samples.
+        """
+        s = self.series.get(name)
+        if s is None or not s.t:
+            return [], []
+        cutoff = s.t[-1] - seconds
+        lo = len(s.t)
+        while lo > 0 and s.t[lo - 1] >= cutoff:
+            lo -= 1
+        return s.t[lo:], s.v[lo:]
+
     #: Rows kept either side of a requested span in a full-resolution reload,
     #: so a trace crossing the edge is drawn leaving it.  Wider than any sane
     #: sample interval; the exact bracketing sample is found by bisect later.
@@ -362,12 +425,22 @@ class CsvTail:
         recovered.
         """
         lo, hi = t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S
-        sources = list(self._history)
+        # Every log this run has produced, whether or not this viewer has
+        # read it yet -- a picked span may reach back past the backfill cap,
+        # and the disk is where the full-resolution answer lives either way.
+        # The history entries carry precise byte offsets for files already
+        # tailed; discovered ones are read whole.  Current file last.
+        sources: dict[str, int | None] = {}
         if self.path:
-            sources.append((self.path, self._offset))
+            for p in self._older_logs(self.path):
+                sources[p] = None
+        for p, upto in self._history:
+            sources[p] = upto
+        if self.path:
+            sources[self.path] = self._offset
         overlay: dict[str, Series] = {}
         rows = 0
-        for path, upto in sources:
+        for path, upto in sources.items():
             text = self._read_prefix(path, upto)
             if not text:
                 continue
