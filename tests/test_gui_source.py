@@ -541,3 +541,82 @@ def test_only_writable_instruments_are_offered_as_targets(tmp_path):
     assert [ln["name"] for ln in src.writable_links()] == ["ls218"]
     assert src.link_named("ls336")["writable"] is False
     assert src.link_named("nope") == {}
+
+
+def test_a_foreign_prefix_is_excluded_even_when_it_sorts_below_this_one(tmp_path):
+    """"Different recorder" is a question about the prefix, not about ordering.
+
+    One data directory routinely holds several recorders' logs side by side.
+    Deciding which are "earlier" by comparing (prefix, date, part) as one
+    ordered tuple accepts every prefix that merely sorts below this one --
+    so a viewer following `ltspm3-heater_*.csv` backfilled `ls336_*.csv`,
+    including the file another recorder was still writing.  The names below
+    are the real ones this was found with.
+    """
+    t0 = 1_700_000_000.0
+    (tmp_path / "ls336_2026-08-24.csv").write_text(
+        HEADER + "".join(row(t0 + i, 1.0) for i in range(4)))
+    (tmp_path / "ls336_2026-08-26.csv").write_text(
+        HEADER + "".join(row(t0 + 100 + i, 2.0) for i in range(4)))
+    (tmp_path / "lschart_2026-08-23.csv").write_text(
+        HEADER + "".join(row(t0 + 200 + i, 3.0) for i in range(4)))
+    (tmp_path / "ltspm3-heater_2026-08-25.csv").write_text(
+        HEADER + "".join(row(t0 + 300 + i, 90.0 + i) for i in range(3)))
+
+    mine = tmp_path / "ltspm3-heater_2026-08-26.csv"
+    mine.write_text(HEADER + "".join(row(t0 + 400 + i, 96.0 + i) for i in range(2)))
+
+    assert CsvTail._older_logs(str(mine)) == [
+        str(tmp_path / "ltspm3-heater_2026-08-25.csv")]
+
+    tail = CsvTail()
+    tail.follow(str(mine))
+    tail.poll()
+    # Yesterday's heater log, then today's.  Nothing from the 336.
+    assert tail.series["Sample"].v == [90.0, 91.0, 92.0, 96.0, 97.0]
+
+
+def test_a_prepared_span_keeps_up_with_samples_that_land_inside_it(tmp_path):
+    """A fixed zoom window must not freeze at the moment it was drawn.
+
+    `prepare_span` loads the span from disk at full resolution, and `between`
+    prefers that overlay over the decimated live series.  The overlay is a
+    snapshot, so rows appended afterwards have to be folded into it -- and
+    folded in, not thrown away: dropping it would send the view back to the
+    thinned overview and quietly lose the resolution the span was picked to
+    see.
+    """
+    t0 = 1_700_000_000.0
+    path = log(tmp_path, rows=20, t0=t0)
+    tail = CsvTail(max_points=8)
+    tail.follow(str(path))
+    tail.poll()
+    assert len(tail.series["Sample"].v) <= 8          # the overview is thinned
+
+    tail.prepare_span(t0 + 10.0, t0 + 30.0)
+    with open(path, "a") as fh:
+        fh.write("".join(row(t0 + 20 + i, 96.0 + 20 + i) for i in range(5)))
+    tail.poll()
+
+    tt, vv = tail.between("Sample", t0 + 10.0, t0 + 30.0)
+    # Every sample from the span's start to the newest, none of them missing
+    # and none of them decimated away.
+    assert vv == [96.0 + i for i in range(9, 25)]
+    assert tt == [t0 + i for i in range(9, 25)]
+
+
+def test_a_file_that_shrank_drops_the_overlay_rather_than_double_counting(tmp_path):
+    """Re-reading from the start would fold rows the overlay already holds."""
+    t0 = 1_700_000_000.0
+    path = log(tmp_path, rows=10, t0=t0)
+    tail = CsvTail(max_points=8)
+    tail.follow(str(path))
+    tail.poll()
+    tail.prepare_span(t0, t0 + 30.0)
+
+    path.write_text(HEADER + "".join(row(t0 + i, 96.0 + i) for i in range(4)))
+    tail.poll()
+
+    tt, vv = tail.between("Sample", t0, t0 + 30.0)
+    assert vv == [96.0 + i for i in range(4)]
+    assert tt == sorted(tt)

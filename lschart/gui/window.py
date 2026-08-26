@@ -38,8 +38,10 @@ decimation.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+from typing import NamedTuple
 
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -83,6 +85,62 @@ BANNER_STYLE = {
 #: minute wide or a day.  1.5 is a step you can hold down without overshooting
 #: and still get somewhere in three presses.
 ZOOM_STEP = 1.5
+
+
+#: How long a command's readback guard may hold a field before it gives up.
+#: The guard bridges the gap between an acknowledgement and the readback that
+#: reflects it, which is a few poll cycles -- longer when the recorder reads
+#: status only every Nth one.  It is a backstop, not a schedule: what it
+#: bounds is how long a field may keep showing what was *asked for* when the
+#: readback never comes back close enough to agree.  A field that is wrong
+#: forever is worse than one that is wrong for half a minute, and on these
+#: instruments the number in the box is a heater setting.
+READBACK_GRACE_S = 30.0
+
+
+class _Awaiting(NamedTuple):
+    """The one readback a queued command is still owed.
+
+    ``tolerance`` is the precision the widget itself displays.  Comparing any
+    tighter than that asks a question the operator cannot see the answer to:
+    the drivers confirm their own writes at 1e-3 (33x) and 0.02 % (218), so a
+    readback they consider a match can differ in a digit far below what is on
+    screen, and an exact comparison would wait for ever on an agreement that
+    has already happened.
+
+    ``previous`` is what the readback said *before* the command, and it is
+    what the guard is really about.  The hazard is one specific wrong
+    picture: the seconds between an acknowledgement and the readback that
+    reflects it, where the aux block still holds the old value and a fill
+    would snap the field back to it -- showing 0 % just after someone asked
+    for 43 %.  So the guard lifts the moment the readback moves off the old
+    value, whether or not it landed where it was asked to.  A box that
+    rounded, clamped, or did something else entirely should be shown doing
+    it, promptly; only agreement with a value nobody can see the difference
+    from is worth waiting on.
+    """
+
+    aux: str
+    expected: float
+    previous: float | None
+    tolerance: float
+    deadline: float
+
+
+@contextlib.contextmanager
+def _quiet(widget):
+    """Set a widget's value without its ``valueChanged`` calling back in.
+
+    A fill is not an edit: it must not set the dirty flag that stops the
+    field tracking the cryostat.  The ``finally`` matters -- a widget left
+    with its signals blocked is a control that has stopped working, and
+    nothing about the failure would say so.
+    """
+    widget.blockSignals(True)
+    try:
+        yield
+    finally:
+        widget.blockSignals(False)
 
 
 def _scaled(rng, factor: float) -> tuple[float, float]:
@@ -204,7 +262,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: ``(aux name, value)`` of the readback that would confirm the last
         #: queued command, while that readback has not caught up yet.  One at
         #: a time, because one unacknowledged command locks every button.
-        self._awaiting: tuple[str, float] | None = None
+        self._awaiting: _Awaiting | None = None
         self._first_load_done = False
         #: The hand-picked window, (t0, t1) in epoch seconds, or None while the
         #: view is following the recorder.  When it is set it is the authority
@@ -553,13 +611,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._sync_command_values()
             if self.tail.follow(self.source.log_path()):
                 self._first_load_done = False
-            new_data = self.tail.poll()
-            if new_data or not self._first_load_done:
+            if self.tail.poll() or not self._first_load_done:
                 self._first_load_done = True
                 self._sync_traces()
                 self._redraw()
-                if self._span is not None and self.tail._overlay_span == self._span:
-                    self.tail._overlay_span = None
             if self._span is not None and self._span != self._loaded_span:
                 if self._span != self._armed_span:
                     # First tick on this span: wait one quiet tick before the
@@ -766,32 +821,38 @@ class ViewerWindow(QtWidgets.QMainWindow):
             return
         awaiting = self._awaiting
         if awaiting is not None:
-            name, expected = awaiting
-            actual = self._aux_value(name)
-            if actual is not None and abs(actual - expected) <= 1e-6:
+            actual = self._aux_value(awaiting.aux)
+            answered = actual is not None and (
+                # Nothing to snap back to, so nothing to guard against.
+                awaiting.previous is None
+                # It landed where it was asked to.
+                or abs(actual - awaiting.expected) <= awaiting.tolerance
+                # Or it landed somewhere else -- which is news, not noise.
+                or abs(actual - awaiting.previous) > awaiting.tolerance
+            )
+            expired = QtCore.QDateTime.currentSecsSinceEpoch() > awaiting.deadline
+            if answered or expired:
                 self._awaiting = None
                 awaiting = None
 
         def held(aux_name: str) -> bool:
             """True while this control's readback is still owed."""
-            return awaiting is not None and awaiting[0] == aux_name
+            return awaiting is not None and awaiting.aux == aux_name
 
         if not self._setpoint_dirty:
             name = f"{instrument}.setpoint{self.loop_spin.value()}"
             value = self._aux_value(name)
             if value is not None and not held(name):
-                self.setpoint_spin.blockSignals(True)
-                self.setpoint_spin.setValue(value)
-                self.setpoint_spin.blockSignals(False)
+                with _quiet(self.setpoint_spin):
+                    self.setpoint_spin.setValue(value)
         if not self._analog_dirty:
             caps = capabilities(self.source.link_named(instrument))
             if caps["has_analog"]:
                 name = f"{instrument}.aout{caps['analog_output']}"
                 value = self._aux_value(name)
                 if value is not None and not held(name):
-                    self.analog_spin.blockSignals(True)
-                    self.analog_spin.setValue(value)
-                    self.analog_spin.blockSignals(False)
+                    with _quiet(self.analog_spin):
+                        self.analog_spin.setValue(value)
         if not self._range_dirty and self.heater_combo.currentText():
             output = int(self.heater_combo.currentText())
             name = f"{instrument}.range{output}"
@@ -799,12 +860,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
             if value is not None and not held(name):
                 index = self.range_combo.findData(int(value))
                 if index >= 0:
-                    self.range_combo.blockSignals(True)
-                    self.range_combo.setCurrentIndex(index)
-                    self.range_combo.blockSignals(False)
+                    with _quiet(self.range_combo):
+                        self.range_combo.setCurrentIndex(index)
 
     def _update_gate_notes(self) -> None:
         """Say which of the two power gates is open, without disabling anything.
+
+        Then settle any command still waiting, which is the other thing that
+        decides what the command box is currently saying.
 
         Greying these out would be the wrong shape.  Both commands are always
         allowed in the direction that removes heat -- range 0, output 0% -- so a
@@ -828,37 +891,48 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 "(ipc.allow_analog_output: false). Setting 0 still works.")
             self.analog_note.setStyleSheet("color:#e65100;")
 
-        if self._pending is not None:
-            cid, deadline = self._pending
-            ack = self.source.ack_for(cid)
-            if ack is not None:
-                ok = bool(ack.get("ok"))
-                self.ack_label.setText(
-                    ("✓ " if ok else "✗ ") + str(ack.get("message", "")))
-                self.ack_label.setStyleSheet(
-                    "color:#1b5e20;" if ok else "color:#b71c1c;")
-                self._pending = None
-                # The question the fields were answering has been settled one
-                # way or the other; let them track the cryostat's readback again.
-                # A refused command has no readback to wait for -- and an
-                # accepted one keeps its guard until the readback agrees,
-                # which is what stops a stale aux value snapping the field
-                # back to where the cryostat was before the command landed.
-                if not ok:
-                    self._awaiting = None
-                self._setpoint_dirty = False
-                self._range_dirty = False
-                self._analog_dirty = False
-                for button in self._buttons():
-                    button.setEnabled(True)
-            elif QtCore.QDateTime.currentSecsSinceEpoch() > deadline:
-                self.ack_label.setText(
-                    "no acknowledgement — the recorder may not be reading commands")
-                self.ack_label.setStyleSheet("color:#e65100;")
-                self._pending = None
+        self._update_pending()
+
+    def _update_pending(self) -> None:
+        """Settle the one command that is waiting to be acknowledged.
+
+        Either the recorder has answered it or the spool's TTL has run out;
+        both release the buttons, because a command the recorder can no
+        longer apply is not one worth going on waiting for.
+        """
+        if self._pending is None:
+            return
+        cid, deadline = self._pending
+        ack = self.source.ack_for(cid)
+        if ack is not None:
+            ok = bool(ack.get("ok"))
+            self.ack_label.setText(
+                ("✓ " if ok else "✗ ") + str(ack.get("message", "")))
+            self.ack_label.setStyleSheet(
+                "color:#1b5e20;" if ok else "color:#b71c1c;")
+            self._pending = None
+            # The question the fields were answering has been settled one way
+            # or the other; let them track the cryostat's readback again.  A
+            # refused command has no readback coming, so its guard goes at
+            # once; an accepted one keeps its guard a little longer, until the
+            # readback moves off the value it held before the command -- which
+            # is what stops a stale aux value snapping the field back to where
+            # the cryostat was.  See `_Awaiting`.
+            if not ok:
                 self._awaiting = None
-                for button in self._buttons():
-                    button.setEnabled(True)
+            self._setpoint_dirty = False
+            self._range_dirty = False
+            self._analog_dirty = False
+        elif QtCore.QDateTime.currentSecsSinceEpoch() > deadline:
+            self.ack_label.setText(
+                "no acknowledgement — the recorder may not be reading commands")
+            self.ack_label.setStyleSheet("color:#e65100;")
+            self._pending = None
+            self._awaiting = None
+        else:
+            return                       # still waiting; leave the buttons locked
+        for button in self._buttons():
+            button.setEnabled(True)
 
     def _update_statusbar(self) -> None:
         status = self.source.status or {}
@@ -1103,6 +1177,29 @@ class ViewerWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.Cancel,
         ) == QtWidgets.QMessageBox.Yes
 
+    def _await_readback(self, aux: str, expected: float, tolerance: float) -> None:
+        """Hold one field at what was asked for until its readback agrees.
+
+        Only after the command was actually queued -- there is nothing to wait
+        for otherwise, and a guard set on a command that never left would hold
+        the field against the cryostat for no reason.
+        """
+        if self._pending is None:
+            return
+        self._awaiting = _Awaiting(
+            aux, float(expected), self._aux_value(aux), tolerance,
+            QtCore.QDateTime.currentSecsSinceEpoch() + READBACK_GRACE_S,
+        )
+
+    @staticmethod
+    def _display_tolerance(spin) -> float:
+        """Half of the smallest step the spin box can show.
+
+        Anything closer than this rounds to the same thing on screen, so it
+        is the finest difference worth calling a disagreement.
+        """
+        return 0.5 * 10.0 ** -spin.decimals()
+
     def _queue(self, kind: str, *, instrument: str | None = None, **args) -> None:
         """Submit one command and start waiting for its acknowledgement.
 
@@ -1148,8 +1245,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         ):
             return
         self._queue("setpoint", loop=loop, kelvin=kelvin)
-        if self._pending is not None:
-            self._awaiting = (f"{instrument}.setpoint{loop}", kelvin)
+        self._await_readback(f"{instrument}.setpoint{loop}", kelvin,
+                             self._display_tolerance(self.setpoint_spin))
 
     def _send_range(self) -> None:
         """Queue a heater range.  Above 0 this is the command that applies power."""
@@ -1178,8 +1275,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if not self._confirm("Set heater range", text):
             return
         self._queue("range", output=output, value=value)
-        if self._pending is not None:
-            self._awaiting = (f"{instrument}.range{output}", float(value))
+        # A range is one of a handful of named steps, not a measured
+        # quantity: it reads back as the integer it was set to or it did not
+        # take, so half a step is all the slack it needs.
+        self._await_readback(f"{instrument}.range{output}", float(value), 0.5)
 
     def _setpoint_now(self, instrument: str) -> str:
         """What the box says its setpoint is, for the range dialog.
@@ -1228,9 +1327,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if not self._confirm("Set analog output", text):
             return
         self._queue("analog", percent=percent)
-        if self._pending is not None:
-            self._awaiting = (f"{instrument}.aout{caps['analog_output']}",
-                              percent)
+        self._await_readback(f"{instrument}.aout{caps['analog_output']}", percent,
+                             self._display_tolerance(self.analog_spin))
 
     def _send_heaters_off(self) -> None:
         """The panic button.  Every heater the recorder may write to, to zero."""
