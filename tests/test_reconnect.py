@@ -59,7 +59,7 @@ class FlakyTransport(Transport):
 # -- lazy opening -----------------------------------------------------------
 
 def test_constructing_a_transport_touches_no_hardware():
-    """A recorder must start on a rig that is only half powered on."""
+    """A recorder must start on a cryostat that is only half powered on."""
     t = FlakyTransport(Clock())
     assert t.connects == 0
     assert not t.is_up

@@ -50,7 +50,7 @@ def test_releasing_lets_the_next_one_in(tmp_path):
 
 
 def test_two_different_paths_do_not_collide(tmp_path):
-    """The escape hatch: two genuinely different rigs, two lock files."""
+    """The escape hatch: two genuinely different cryostats, two lock files."""
     with InstanceLock(tmp_path / "a.lock"), InstanceLock(tmp_path / "b.lock"):
         pass
 

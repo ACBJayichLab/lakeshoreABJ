@@ -27,18 +27,18 @@ The dependency runs one way.
 
 | | |
 |---|---|
-| **`lschart`** | The generic recorder. **Any rig.** Records everything continuously and drives the *instrument's own* PID loop by setpoint. This is what a coworker installs. |
-| **`ltspm`** | The LTSPM3 cryostat's **software** PID, on the 218's analog output. Calibrated to one rig. Imports `lschart`; nothing in `lschart` may import it. |
+| **`lschart`** | The generic recorder. **Any cryostat.** Records everything continuously and drives the *instrument's own* PID loop by setpoint. This is what a coworker installs. |
+| **`ltspm3`** | The LTSPM3 cryostat's **software** PID, on the 218's analog output. Calibrated to one cryostat. Imports `lschart`; nothing in `lschart` may import it. |
 
 If you are not working on LTSPM3, you need only the first — and you can ignore
-`ltspm/` and `docs/ltspm/` entirely.
+`ltspm3/` and `docs/ltspm3/` entirely.
 
 ## Documentation
 
 | | |
 |---|---|
-| **[docs/recorder/](docs/recorder/)** | **The chart recorder — generic, any rig.** Install, CLI, configuration, instruments, the file interface, the GUI, Windows, troubleshooting |
-| **[docs/ltspm/](docs/ltspm/)** | **The LTSPM3 software PID — one rig only.** The hardware, the measured plant, the control loop, the safety rules |
+| **[docs/recorder/](docs/recorder/)** | **The chart recorder — generic, any cryostat.** Install, CLI, configuration, instruments, the file interface, the GUI, Windows, troubleshooting |
+| **[docs/ltspm3/](docs/ltspm3/)** | **The LTSPM3 software PID — one cryostat only.** The hardware, the measured thermal response, the control loop, the safety rules |
 | [matlab/README.md](matlab/README.md) | Driving a running recorder from MATLAB |
 | [CLAUDE.md](CLAUDE.md) | Orientation and the load-bearing invariants, for anyone (or anything) changing the code |
 | [HANDOFF.md](HANDOFF.md) | Point-in-time status. Goes stale; the docs above do not |
@@ -61,11 +61,11 @@ anything. Writes are off by default at four independent layers; see
 
 ```
 lschart/      the generic recorder    (docs/recorder/)
-ltspm/        the LTSPM3 software PID (docs/ltspm/)
-matlab/       LakeShore.m + selftest  -- copied to the rig, not built
+ltspm3/        the LTSPM3 software PID (docs/ltspm3/)
+matlab/       LakeShore.m + selftest  -- copied to the cryostat, not built
 examples/     annotated configs for a 335 on COM and a 336 on USB
 reference/    legacy MATLAB and 24 .xls logs -- reference only, not built
-tests/        generic;  tests_ltspm/ is the control half
+tests/        generic;  tests_ltspm3/ is the control half
 ```
 
 ## Development

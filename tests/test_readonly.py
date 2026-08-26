@@ -16,12 +16,12 @@ import pytest
 from lschart.app import Application, build_transport
 from lschart.config import AppConfig, LS33xConfig
 from lschart.instruments.ls33x import LS33x
-from lschart.instruments.sim import Sim33x, SimulatedRig
+from lschart.instruments.sim import Sim33x, SimulatedCryostat
 from lschart.transport import LoopbackTransport
 
 
-def rig(read_only=False, allow_writes=False, model="336"):
-    sim = Sim33x(SimulatedRig(), model=model)
+def cryostat(read_only=False, allow_writes=False, model="336"):
+    sim = Sim33x(SimulatedCryostat(), model=model)
     inst = LS33x(
         LoopbackTransport(sim, read_only=read_only),
         model=model,
@@ -34,7 +34,7 @@ def rig(read_only=False, allow_writes=False, model="336"):
 
 def test_reads_are_unaffected():
     """A read-only link is still a working link."""
-    inst, _ = rig(read_only=True)
+    inst, _ = cryostat(read_only=True)
     readings, aux = inst.read_frame()
     assert len(readings) == 4
     assert aux["ls336.setpoint2"] == pytest.approx(290.6)
@@ -42,14 +42,14 @@ def test_reads_are_unaffected():
 
 def test_the_interlock_beats_allow_writes():
     """The point of having two: policy defeated, interlock holds."""
-    inst, sim = rig(read_only=True, allow_writes=True)
+    inst, sim = cryostat(read_only=True, allow_writes=True)
     with pytest.raises(PermissionError, match="READ-ONLY"):
         inst.set_setpoint(1, 200.0)
     assert sim.write_log == [], "nothing reached the instrument"
 
 
 def test_every_write_path_is_blocked():
-    inst, sim = rig(read_only=True, allow_writes=True)
+    inst, sim = cryostat(read_only=True, allow_writes=True)
     for call in (
         lambda: inst.set_setpoint(1, 200.0),
         lambda: inst.set_heater_range(1, 3),
@@ -64,7 +64,7 @@ def test_every_write_path_is_blocked():
 
 def test_the_refusal_names_the_command_it_refused():
     """"Something was blocked" is not a useful thing to read in a log."""
-    inst, _ = rig(read_only=True, allow_writes=True)
+    inst, _ = cryostat(read_only=True, allow_writes=True)
     with pytest.raises(PermissionError, match=r"SETP 1,200\.0000"):
         inst.set_setpoint(1, 200.0)
 
@@ -111,7 +111,7 @@ def test_every_driver_carries_read_only_through(driver):
     cfg.transport.read_only = True
     cfg.transport.resource = "GPIB0::12::INSTR"
     cfg.transport.com_port = "COM10"
-    device = Sim33x(SimulatedRig(), model="336") if driver == "sim" else None
+    device = Sim33x(SimulatedCryostat(), model="336") if driver == "sim" else None
     # Constructing touches no hardware: opening is lazy, by design.
     t = build_transport(cfg, device=device)
     assert t.read_only is True

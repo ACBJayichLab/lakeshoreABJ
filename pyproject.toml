@@ -33,10 +33,10 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 # Explicit, because auto-discovery cannot cope with `reference/` and `data/`
-# sitting alongside the packages -- and because the split adds `ltspm`, which
+# sitting alongside the packages -- and because the split adds `ltspm3`, which
 # must be picked up without anything else changing here.
 [tool.setuptools.packages.find]
-include = ["lschart*", "ltspm*"]
+include = ["lschart*", "ltspm3*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "tests_ltspm"]
+testpaths = ["tests", "tests_ltspm3"]

@@ -224,7 +224,7 @@ class StatusWriter:
     def _control(status) -> dict | None:
         """A software loop's state, projected generically.
 
-        ``lschart`` must not import ``ltspm``, so nothing here knows what a
+        ``lschart`` must not import ``ltspm3``, so nothing here knows what a
         ``SupervisorStatus`` is -- every field is read by name and defaulted.
         A recorder-only install passes ``None`` and the key is simply absent.
         """

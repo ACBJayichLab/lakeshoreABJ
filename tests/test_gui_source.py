@@ -157,7 +157,7 @@ def test_a_log_with_no_date_in_its_name_has_nothing_to_backfill_from(tmp_path):
 
 # -- how much history a fresh start reads ------------------------------------
 #
-# The whole point of a viewer is what the rig is doing *now*; weeks of
+# The whole point of a viewer is what the cryostat is doing *now*; weeks of
 # samples nobody asked for are dead weight in memory.  The backfill therefore
 # stops once it covers its budget -- and anything older stays reachable,
 # because a picked span is answered from disk regardless of what is held.
@@ -532,7 +532,7 @@ def test_a_gate_absent_from_the_status_file_reads_as_shut(tmp_path):
 
 
 def test_only_writable_instruments_are_offered_as_targets(tmp_path):
-    """The LTSPM shape: our 218 is writable, their 336 is not."""
+    """The LTSPM3 shape: our 218 is writable, their 336 is not."""
     src = StatusSource(status_file(tmp_path, links=[
         {"name": "ls218", "up": True, "writable": True, "analog_output": 1},
         {"name": "ls336", "up": True, "writable": False, "loops": [1, 2]},

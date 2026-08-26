@@ -1,8 +1,8 @@
 # Configuration
 
-One YAML file describes the whole rig. `python -m lschart init config.yaml`
+One YAML file describes the whole cryostat. `python -m lschart init config.yaml`
 writes a starter; the annotated examples in [`examples/`](../../examples/) are
-closer to a real rig.
+closer to a real cryostat.
 
 **Unknown keys are an error.** A misspelled setting fails at load rather than
 being silently ignored, so `check` catches typos before hardware does.
@@ -26,7 +26,7 @@ recorder:    {...}
 runtime:     {...}
 ipc:         {...}
 sim:         {...}
-control:     {...}   # only when `ltspm` is installed -- see ../ltspm/
+control:     {...}   # only when `ltspm3` is installed -- see ../ltspm3/
 ```
 
 ---
@@ -114,12 +114,12 @@ more dangerous than `4`, and on LTSPM3 the difference between them is about
 So the ceiling is the guard that matters, and it is deliberately not defaulted
 to something clever — what a safe percentage is depends entirely on the heater
 on the other end, and generic code guessing that would be worse than useless.
-Set it in the rig's config, with the measurement it came from written next to
+Set it in the cryostat's config, with the measurement it came from written next to
 it.
 
 `readback_tol_pct` must exceed the DAC step plus the readback's display
 rounding, or a write that worked perfectly is reported as a failure: the DAC
-quantises to 0.01% and `AOUT?` answers to two decimals, so the rig's own
+quantises to 0.01% and `AOUT?` answers to two decimals, so the cryostat's own
 63.076% operating point can never read back exactly. It still catches the
 failure that matters — a write that did not land at all sits a whole commanded
 step away.
@@ -135,7 +135,7 @@ step away.
 | `ringbuffer_size` | `43200` | frames kept in memory **for plotting only** — never the log |
 
 **1 Hz is the recommendation.** The legacy logs run 2–20 s, but that was the
-65,536-row Excel limit forcing slower polling on long runs, not a rig
+65,536-row Excel limit forcing slower polling on long runs, not a cryostat
 constraint. Sampling much faster buys little: the measured noise is strongly
 correlated (lag-1 autocorrelation 0.51), so it does *not* average down as
 1/√N.
@@ -161,7 +161,7 @@ exceeds `interval_s`, raise the interval or drop `read_status`.
 | `single_instance` | `true` | |
 
 `run` takes this lock before opening anything, so a second recorder loses
-cleanly rather than fighting for the port. Point two genuinely different rigs
+cleanly rather than fighting for the port. Point two genuinely different cryostats
 at two different paths to run both.
 
 ## `ipc:` — the file interface
@@ -192,9 +192,9 @@ own sample heater and only *watches* the controller holding somebody else's.
 |---|---|---|
 | `start_k` | `96.0` | |
 | `seed` | `0xC01D` | |
-| `speedup` | `1.0` | accelerates the plant but **not** the controller |
+| `speedup` | `1.0` | accelerates the thermal response but **not** the controller |
 
 ## `control:`
 
-Registered by `ltspm` on import; `lschart` alone rejects it as an unknown
-section, which is deliberate. See [../ltspm/control.md](../ltspm/control.md).
+Registered by `ltspm3` on import; `lschart` alone rejects it as an unknown
+section, which is deliberate. See [../ltspm3/control.md](../ltspm3/control.md).

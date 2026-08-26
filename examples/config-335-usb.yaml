@@ -2,7 +2,7 @@
 #
 # The 335 runs its own PID loop into its own heaters.  This software records
 # every input continuously and hands that loop a setpoint; it never computes a
-# control output itself.  (The software PID is a separate package, `ltspm`,
+# control output itself.  (The software PID is a separate package, `ltspm3`,
 # and is specific to one cryostat.)
 #
 #   python -m lschart -c config-335-usb.yaml check     validate, touch nothing
@@ -41,7 +41,7 @@ instruments:
     allow_writes: true
 
     # A blunt guard against a typo'd setpoint: refused in software rather than
-    # politely forwarded to a cryostat.  Set it to whatever your rig should
+    # politely forwarded to a cryostat.  Set it to whatever your cryostat should
     # never exceed.
     max_setpoint_k: 330.0
 
@@ -78,7 +78,7 @@ ipc:
 
   # Reading status is one permission; being commanded is another.  This one is
   # ON here because driving this box from MATLAB is the whole point of this
-  # rig -- but note it is not sufficient on its own: `allow_writes: true` on
+  # cryostat -- but note it is not sufficient on its own: `allow_writes: true` on
   # the instrument above still gates every write, and a read-only box refuses
   # a file command exactly as it refuses one typed at the CLI.
   accept_commands: true

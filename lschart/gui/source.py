@@ -2,7 +2,7 @@
 
 The strip chart needs two things that arrive by different routes:
 
-**What the rig is doing now** -- from ``status.json``, which the recorder
+**What the cryostat is doing now** -- from ``status.json``, which the recorder
 rewrites every cycle.  That file carries link health, the sensor validity
 flags, and command acknowledgements, none of which reach the CSV.
 

@@ -5,7 +5,7 @@ output 1 is wired into an op-amp that drives the sample heater, so the 218 is
 also the actuator -- driven in ANALOG "manual" mode, where the output percentage
 is simply a number we set.
 
-The exact command in use on this rig (verified against the chart-recorder log's
+The exact command in use on this cryostat (verified against the chart-recorder log's
 Notes column) is::
 
     ANALOG 1, 0, 2, 1, 1,1,1,<percent>
@@ -31,8 +31,8 @@ the same shape of gate:
     ``transport.read_only`` still refuses the bytes.
 
 ``max_output_pct``
-    A blunt ceiling.  On the LTSPM rig the measured local gain is **~10 K per
-    percent** near the operating point (``docs/ltspm/plant.md``), so a fat
+    A blunt ceiling.  On the LTSPM3 cryostat the measured local gain is **~10 K per
+    percent** near the operating point (``docs/ltspm3/thermal-response.md``), so a fat
     finger is worth tens of kelvin and "0 to 100 is a valid percentage" is not
     a useful bound.  The number is configuration; it is never a constant in
     here.
@@ -75,7 +75,7 @@ class AnalogOutputConfig:
     source: int = 1           # 1 = kelvin
     high_value: float = 1
     low_value: float = 1
-    decimals: int = 3         # the rig's own log shows 3 d.p. in use (63.076)
+    decimals: int = 3         # the cryostat's own log shows 3 d.p. in use (63.076)
 
     def command(self, percent: float) -> str:
         return (
@@ -155,7 +155,7 @@ class LS218(Instrument):
             raise PermissionError(
                 f"{self.name} is configured read-only; set allow_writes: true on "
                 f"this instrument to drive analog output {self.analog.output}. "
-                f"Note that on this rig that output IS the sample heater"
+                f"Note that on this cryostat that output IS the sample heater"
             )
 
     def set_analog_percent(self, percent: float) -> str:
@@ -169,7 +169,7 @@ class LS218(Instrument):
 
         What is deliberately *not* here is any notion of a safe operating
         point, a step limit, or a ramp.  Those are control policy, they belong
-        to the supervisor, and duplicating them would give the rig two sets of
+        to the supervisor, and duplicating them would give the cryostat two sets of
         limits that can disagree.
         """
         self._require_writes()
@@ -234,7 +234,7 @@ class LS218(Instrument):
         """Command the analog output to zero.  The safe direction, always.
 
         Still needs ``allow_writes`` -- a box this program may not write to is
-        one it may not write *zero* to either, because on a shared rig that
+        one it may not write *zero* to either, because on a shared cryostat that
         output may be somebody else's.  What it does not need is the extra
         opt-in that *raising* the output needs.
         """

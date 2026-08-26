@@ -246,7 +246,7 @@ classdef LakeShore < handle
             %   point, so a misplaced decimal is worth tens of kelvin.
             %
             %   There is no ramp here.  setAnalog(60) from 0 is one step and
-            %   the plant goes there as fast as it can; walk it up yourself if
+            %   the sample goes there as fast as it can; walk it up yourself if
             %   that matters.
             [ok, message, id] = obj.run('analog', ...
                 struct('percent', percent), nargout);

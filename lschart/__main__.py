@@ -21,8 +21,8 @@ from .ipc import AlreadyRunning, InstanceLock
 
 log = logging.getLogger("lschart")
 
-#: How to build the Application.  `ltspm.__main__` swaps this for its own
-#: builder, which adds the heater loop and the calibrated plant.  Everything
+#: How to build the Application.  `ltspm3.__main__` swaps this for its own
+#: builder, which adds the heater loop and the calibrated thermal response.  Everything
 #: else in this module is shared, so the two CLIs cannot drift apart.
 BUILDER = Application
 
@@ -123,7 +123,7 @@ def cmd_check(args) -> int:
     print(f"  driver(s)      : {', '.join(drivers) or 'none'}"
           f"{'  (HARDWARE)' if cfg.uses_hardware else ''}")
     print(f"  control        : {'enabled' if enabled else 'disabled'}")
-    # A recorder-only rig -- the coworker's 335, say -- declares no
+    # A recorder-only cryostat -- the coworker's 335, say -- declares no
     # control_input, and asking for the control channel then raises.  Reporting
     # that as a traceback from `check`, of all commands, is no way to greet
     # somebody validating their first config file.
@@ -350,7 +350,7 @@ def cmd_status(args) -> int:
             print(f"    {ch.get('name', '?'):<24} "
                   f"{'   n/a' if k is None else format(k, '10.4f')} K{flag}")
         # Heaters, setpoints and analog outputs.  Printed rather than left to
-        # the raw JSON because on a rig where this program can move a heater,
+        # the raw JSON because on a cryostat where this program can move a heater,
         # "what is the heater doing" is the question `status` is being asked.
         for entry in status.get("aux", []):
             value = entry.get("value")

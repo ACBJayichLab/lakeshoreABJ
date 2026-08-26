@@ -12,7 +12,7 @@ That starter file uses `driver: sim`, so it runs with nothing plugged in. To
 go live, edit the `driver:` and `transport:` lines — the two annotated examples
 are the fastest way there:
 
-| Example | Rig |
+| Example | Cryostat |
 |---|---|
 | [`examples/config-335-usb.yaml`](../../examples/config-335-usb.yaml) | a 335 on a COM port, heaters on its own outputs, commandable from MATLAB |
 | [`examples/config-336-usb.yaml`](../../examples/config-336-usb.yaml) | a 336 on USB, **read-only**, for watching |
@@ -55,7 +55,7 @@ python -m lschart -c config.yaml run
 
 Runs until Ctrl-C. It writes a CSV under `recorder.directory` with no row limit,
 flushed every sample, and rewrites `status.json` every cycle. Only one recorder
-may run per rig; a second one loses the lock cleanly and exits rather than
+may run per cryostat; a second one loses the lock cleanly and exits rather than
 fighting for the port.
 
 ## 5. Watch it

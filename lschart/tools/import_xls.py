@@ -17,7 +17,7 @@ Two things bite:
   ``cd10_7_2026_st2_monitor3.xls`` is a 218 log.  Always sniff row 0.
 * **Files stop at 65,004 rows** -- the 65,536-row BIFF limit.  That is why the
   cadence in these logs varies from 2 s to 20 s: the recorder was slowed down
-  to fit longer runs in one file, not because the rig changed.  A run is
+  to fit longer runs in one file, not because the cryostat changed.  A run is
   therefore spread across ``monitor1..monitor7``, and ``Time`` restarts at 0 in
   each.  :func:`load` returns absolute wall-clock timestamps so the pieces can
   be concatenated.
@@ -115,7 +115,7 @@ class ChartLog:
 
 def _parse_started(text: str) -> _dt.datetime | None:
     """``Thu Jul 23 10:26:48 PDT 2026`` -- the zone abbreviation is not parseable
-    portably, so it is dropped; every log is local time on the rig anyway."""
+    portably, so it is dropped; every log is local time on the cryostat anyway."""
     parts = str(text).split()
     if len(parts) < 6:
         return None

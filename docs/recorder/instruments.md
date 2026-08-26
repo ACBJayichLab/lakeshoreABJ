@@ -42,7 +42,7 @@ the timeout instead of returning.
 | `base.py` | the ABC, Lake Shore number parsing, `RDGST?` decoding |
 | `ls218.py` | 8 inputs, plus the analog output used as an actuator |
 | `ls33x.py` | 335 and 336 in one driver with a capability table per model. **Every write is confirmed by readback.** Read-only by default |
-| `sim.py` | rig-agnostic fakes (`Sim218`, `Sim33x`) and `FirstOrderPlant`, a deliberately boring one-pole default |
+| `sim.py` | cryostat-agnostic fakes (`Sim218`, `Sim33x`) and `FirstOrderResponse`, a deliberately boring one-pole default |
 
 A per-channel failure marks that channel's `Reading` — only a **link-level**
 failure may raise. One bad thermometer does not stop a run.
@@ -119,15 +119,15 @@ The percentage **is** the power, so:
   `RANGE` is, and defaults off;
 - there is a `max_output_pct` ceiling in configuration, because `0 ≤ pct ≤ 100`
   is not a useful bound when the local gain is tens of kelvin per percent (on
-  LTSPM3 it is ~10 K/% — see [`../ltspm/plant.md`](../ltspm/plant.md)). What
+  LTSPM3 it is ~10 K/% — see [`../ltspm3/thermal-response.md`](../ltspm3/thermal-response.md)). What
   the ceiling should be depends entirely on the heater on the other end, so the
-  generic default is 100 and the rig's config supplies the real number;
+  generic default is 100 and the cryostat's config supplies the real number;
 - every write is confirmed by reading `AOUT?` back. Mind the granularity: the
   DAC steps 0.01% and `AOUT?` answers to two decimals, so `readback_tol_pct`
   must exceed both or a write that worked perfectly is reported as a failure;
-- **nothing here ramps.** One command, one step, as fast as the plant allows.
+- **nothing here ramps.** One command, one step, as fast as the cryostat allows.
   Rate limiting is control policy and lives in the supervisor; duplicating it
-  here would give the rig two sets of limits that can disagree.
+  here would give the cryostat two sets of limits that can disagree.
 
 A software loop writing this output every cycle should set `verify_writes:
 false` and confirm for itself (`SupervisorConfig.verify_readback`), rather than
@@ -147,7 +147,7 @@ common ones plus whichever of the last two matches the box it is aimed at.
 | `ipc.allow_analog_output` | may a *file* raise a **218** analog output | **off** |
 
 The last two are deliberately not one switch. They are different commands on
-different boxes, and a rig that wants its own sample heater driven from a file
+different boxes, and a cryostat that wants its own sample heater driven from a file
 has no business also being able to raise a range on a controller that is
 holding something else.
 

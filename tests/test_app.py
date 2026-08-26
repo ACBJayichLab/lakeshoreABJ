@@ -105,7 +105,7 @@ def test_a_sim_rig_costs_no_bus_time():
 
 
 def test_a_control_input_is_not_required():
-    """A recorder-only rig has no control channel and must not need one."""
+    """A recorder-only cryostat has no control channel and must not need one."""
     cfg = cfg_with(LS33xConfig(model="335", name="ls335"))
     cfg.validate()
     assert cfg.control_instrument is None

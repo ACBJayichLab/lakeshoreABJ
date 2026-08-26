@@ -1,22 +1,22 @@
-"""In-process fakes for the Lake Shore boxes, plus a plain default plant.
+"""In-process fakes for the Lake Shore boxes, plus a plain default response.
 
 There is no hardware on the bench, so this is the primary development target.
 The fakes answer the subset of each command set the real drivers use, and they
-are deliberately *rig-agnostic*: what makes a simulated cryostat behave like
-one particular cryostat is the plant object handed to :class:`SimulatedRig`.
+are deliberately *cryostat-agnostic*: what makes a simulated cryostat behave like
+one particular cryostat is the response object handed to :class:`SimulatedCryostat`.
 
-A plant is anything with this shape::
+A response is anything with this shape::
 
-    plant.pct          float, written by the fake when the heater is commanded
-    plant.temperature  float, the true temperature right now
-    plant.advance(dt)  integrate dt seconds forward
-    plant.observe(rng) the temperature as the *sensor* would report it
+    response.pct          float, written by the fake when the heater is commanded
+    response.temperature  float, the true temperature right now
+    response.advance(dt)  integrate dt seconds forward
+    response.observe(rng) the temperature as the *sensor* would report it
 
-:class:`FirstOrderPlant` is the default and is intentionally boring -- one pole
+:class:`FirstOrderResponse` is the default and is intentionally boring -- one pole
 onto a linear steady state.  The calibrated LTSPM3 model lives in
-:mod:`ltspm.sim_plant`, which builds a rig around this same class.
+:mod:`ltspm3.sim_response`, which builds a cryostat around this same class.
 
-Faults are injected explicitly -- see :meth:`SimulatedRig.inject`.
+Faults are injected explicitly -- see :meth:`SimulatedCryostat.inject`.
 """
 
 from __future__ import annotations
@@ -30,10 +30,10 @@ from ..transport import TransportError
 
 
 @dataclass
-class SimplePlantParams:
-    """A single-pole plant with a linear steady state.
+class SimpleResponseParams:
+    """A single-pole thermal response with a linear steady state.
 
-    Enough to exercise the recorder, the fakes and the IPC layer on any rig.
+    Enough to exercise the recorder, the fakes and the IPC layer on any cryostat.
     It is not calibrated to anything, and it is not meant to be: a controller
     tuned against this has learned nothing about a real cryostat.
     """
@@ -45,16 +45,16 @@ class SimplePlantParams:
     quantum_k: float = 0.001        # reported resolution
 
 
-class FirstOrderPlant:
+class FirstOrderResponse:
     """``T -> t_bath + gain*pct`` through one pole, integrated exactly.
 
     Exact exponential updates rather than Euler, so the step size never affects
     stability -- the tests drive this with a virtual clock at wildly varying dt.
     """
 
-    def __init__(self, params: SimplePlantParams | None = None, *,
+    def __init__(self, params: SimpleResponseParams | None = None, *,
                  start_k: float | None = None) -> None:
-        self.p = params or SimplePlantParams()
+        self.p = params or SimpleResponseParams()
         self._rise = (self.p.t_bath if start_k is None else start_k) - self.p.t_bath
         self.pct = 0.0
 
@@ -84,7 +84,7 @@ class FaultInjection:
     ``glitch_channels`` is the one that matters.  It reproduces the failure
     actually present in the reference logs -- 9 events in 1,510 h, always on
     the sample input -- rather than the tidy drop-to-zero this simulator used
-    to model, which has never once occurred on this rig:
+    to model, which has never once occurred on this cryostat:
 
     * the value scatters in *both* directions, between ``glitch_low_k`` and
       roughly the true temperature;
@@ -110,8 +110,8 @@ class FaultInjection:
     extra_noise_k: float = 0.0
 
 
-class SimulatedRig:
-    """Holds the shared clock, the plant and the fault state for both fakes."""
+class SimulatedCryostat:
+    """Holds the shared clock, the response and the fault state for both fakes."""
 
     #: Resting values for the ancillary channels, so a chart has something to
     #: show.  Plausible rather than calibrated -- they are scenery.
@@ -121,13 +121,13 @@ class SimulatedRig:
         "335.B": 77.4,
     }
 
-    #: Channels whose value *is* the plant rather than scenery around it.  On a
+    #: Channels whose value *is* the cryostat rather than scenery around it.  On a
     #: 335 the sample sits on input A, so that is the one the heater moves.
     CONTROL_KEYS = ("218.1", "335.A")
 
     def __init__(
         self,
-        plant=None,
+        response=None,
         *,
         seed: int = 0xC01D,
         start_k: float = 96.0,
@@ -136,10 +136,10 @@ class SimulatedRig:
         aux_base: dict[str, float] | None = None,
         aux_coupling: dict[str, float] | None = None,
     ) -> None:
-        # A rig with no plant gets the boring one.  Anything rig-specific --
+        # A cryostat with no response gets the boring one.  Anything cryostat-specific --
         # the LTSPM3 two-pole model, say -- is injected, so this module never
         # has to know which cryostat it is pretending to be.
-        self.plant = plant if plant is not None else FirstOrderPlant(start_k=start_k)
+        self.response = response if response is not None else FirstOrderResponse(start_k=start_k)
         self.rng = random.Random(seed)
         self.faults = FaultInjection()
         self.speedup = speedup
@@ -148,12 +148,12 @@ class SimulatedRig:
         self._last = self._t0
         self._aux_base = dict(aux_base) if aux_base else dict(self.DEFAULT_AUX_BASE)
         #: How strongly each ancillary channel follows the control channel, in
-        #: K per K.  Empty by default: on an unknown rig we have no business
+        #: K per K.  Empty by default: on an unknown cryostat we have no business
         #: inventing a correlation, and cross-channel corroboration should see
         #: nothing rather than something fictitious.  The LTSPM3 numbers,
-        #: measured from the reference logs, are in :mod:`ltspm.sim_plant`.
+        #: measured from the reference logs, are in :mod:`ltspm3.sim_response`.
         self._aux_coupling = dict(aux_coupling) if aux_coupling else {}
-        self._plant_ref_k = self.plant.temperature
+        self._response_ref_k = self.response.temperature
         self._stuck_values: dict[str, float] = {}
 
     # -- clock -------------------------------------------------------------
@@ -162,10 +162,10 @@ class SimulatedRig:
         now = self._time()
         dt = (now - self._last) * self.speedup
         self._last = now
-        self.plant.advance(dt)
+        self.response.advance(dt)
 
     def inject(self, **kw) -> None:
-        """``rig.inject(dropout_channels={'Sample'}, comms_fail=True)``"""
+        """``cryostat.inject(dropout_channels={'Sample'}, comms_fail=True)``"""
         for k, v in kw.items():
             if not hasattr(self.faults, k):
                 raise AttributeError(f"no such fault knob: {k}")
@@ -182,7 +182,7 @@ class SimulatedRig:
 
     def aux_base(self, key: str) -> float | None:
         """Resting value for an ancillary channel; ``None`` means "this is the
-        plant", which is how :meth:`value` decides whether to read it."""
+        control channel", which is how :meth:`value` decides whether to read it."""
         if key in self.CONTROL_KEYS:
             return None
         return self._aux_base.get(key, 0.0)
@@ -191,7 +191,7 @@ class SimulatedRig:
         if key in self.faults.dropout_channels:
             return self.faults.dropout_value
         if key in self.faults.glitch_channels:
-            true_k = self.plant.temperature if base is None else base
+            true_k = self.response.temperature if base is None else base
             hi = self.faults.glitch_high_k
             hi = true_k if hi is None else hi
             lo = min(self.faults.glitch_low_k, hi)
@@ -199,10 +199,10 @@ class SimulatedRig:
         if key in self.faults.stuck_channels:
             return self._stuck_values.setdefault(key, base if base is not None else 0.0)
         if base is None:
-            v = self.plant.observe(self.rng)
+            v = self.response.observe(self.rng)
         else:
             coupled = base + self._aux_coupling.get(key, 0.0) * (
-                self.plant.temperature - self._plant_ref_k
+                self.response.temperature - self._response_ref_k
             )
             v = coupled + self.rng.gauss(0, 0.002)
         if self.faults.extra_noise_k:
@@ -216,17 +216,17 @@ class SimulatedRig:
 class Sim218:
     """Answers the subset of the 218 command set that :class:`LS218` uses."""
 
-    def __init__(self, rig: SimulatedRig) -> None:
-        self.rig = rig
+    def __init__(self, cryostat: SimulatedCryostat) -> None:
+        self.cryostat = cryostat
         self.analog_pct = 63.076
         self.analog_settings = [1, 0, 2, 1, 1, 1, 1, self.analog_pct]
         self.write_log: list[str] = []
         #: The instrument's own DAC resolution.  0.01% here is ~75 mK on this
-        #: plant, which is exactly why the supervisor dithers.
+        #: response, which is exactly why the supervisor dithers.
         self.dac_step = 0.01
 
     def handle_write(self, cmd: str) -> None:
-        self.rig._guard_comms()
+        self.cryostat._guard_comms()
         self.write_log.append(cmd)
         head, _, args = cmd.partition(" ")
         if head.upper() == "ANALOG":
@@ -236,11 +236,11 @@ class Sim218:
             requested = float(parts[7])
             quantised = round(requested / self.dac_step) * self.dac_step
             self.analog_pct = min(100.0, max(0.0, quantised))
-            self.rig.plant.pct = self.analog_pct
+            self.cryostat.response.pct = self.analog_pct
 
     def handle_query(self, cmd: str) -> str:
-        self.rig._guard_comms()
-        self.rig.tick()
+        self.cryostat._guard_comms()
+        self.cryostat.tick()
         head, _, arg = cmd.partition(" ")
         head = head.upper()
         arg = arg.strip()
@@ -249,17 +249,17 @@ class Sim218:
         if head == "KRDG?":
             if arg == "0":
                 vals = [
-                    self.rig.value("218.1"),
-                    self.rig.value("218.2", self.rig.aux_base("218.2")),
-                    self.rig.value("218.3", self.rig.aux_base("218.3")),
+                    self.cryostat.value("218.1"),
+                    self.cryostat.value("218.2", self.cryostat.aux_base("218.2")),
+                    self.cryostat.value("218.3", self.cryostat.aux_base("218.3")),
                     0.0, 0.0, 0.0, 0.0, 0.0,
                 ]
                 return ",".join(f"{v:+09.4f}" for v in vals)
-            return f"{self.rig.value(f'218.{arg}'):+09.4f}"
+            return f"{self.cryostat.value(f'218.{arg}'):+09.4f}"
         if head == "SRDG?":
             return ",".join("+0.00000" for _ in range(8))
         if head == "RDGST?":
-            return str(self.rig.rdgst(f"218.{arg}"))
+            return str(self.cryostat.rdgst(f"218.{arg}"))
         if head == "AOUT?":
             return f"{self.analog_pct:+07.2f}"
         if head == "ANALOG?":
@@ -281,10 +281,10 @@ class Sim33x:
         "335": {"A": "Sample", "B": "Cold Head"},
     }
 
-    def __init__(self, rig: SimulatedRig, *, model: str = "336") -> None:
+    def __init__(self, cryostat: SimulatedCryostat, *, model: str = "336") -> None:
         from .ls33x import CAPS
 
-        self.rig = rig
+        self.cryostat = cryostat
         self.model = str(model)
         self.caps = CAPS[self.model]
         self.names = dict(self.DEFAULT_NAMES.get(self.model, {}))
@@ -295,14 +295,14 @@ class Sim33x:
         self.ramps = {loop: (0, 0.0) for loop in self.caps.loops}
         self.write_log: list[str] = []
         if self.model == "336":
-            # The LTSPM 336: loop 2 independently holds THE CHONKE, heater near
+            # The LTSPM3 336: loop 2 independently holds THE CHONKE, heater near
             # full range.  Anything that disturbs this in a test is a bug.
             self.setpoints[2] = 290.6
             self.heaters[2] = 97.9
             self.ranges[2] = 3
 
     def handle_write(self, cmd: str) -> None:
-        self.rig._guard_comms()
+        self.cryostat._guard_comms()
         self.write_log.append(cmd)
         head, _, args = cmd.partition(" ")
         head = head.upper()
@@ -317,8 +317,8 @@ class Sim33x:
             self.ramps[int(parts[0])] = (int(float(parts[1])), float(parts[2]))
 
     def handle_query(self, cmd: str) -> str:
-        self.rig._guard_comms()
-        self.rig.tick()
+        self.cryostat._guard_comms()
+        self.cryostat.tick()
         head, _, arg = cmd.partition(" ")
         head = head.upper()
         arg = arg.strip()
@@ -328,12 +328,12 @@ class Sim33x:
             keys = [f"{self.model}.{letter}" for letter in self.caps.inputs]
             if arg == "0":
                 return ",".join(
-                    f"{self.rig.value(k, self.rig.aux_base(k)):+09.4f}" for k in keys
+                    f"{self.cryostat.value(k, self.cryostat.aux_base(k)):+09.4f}" for k in keys
                 )
             k = f"{self.model}.{arg}"
-            return f"{self.rig.value(k, self.rig.aux_base(k)):+09.4f}"
+            return f"{self.cryostat.value(k, self.cryostat.aux_base(k)):+09.4f}"
         if head == "RDGST?":
-            return str(self.rig.rdgst(f"{self.model}.{arg}"))
+            return str(self.cryostat.rdgst(f"{self.model}.{arg}"))
         if head == "INNAME?":
             return self.names.get(arg, f"Input {arg}")
         if head == "SETP?":
@@ -356,19 +356,19 @@ class Sim33x:
 
 
 class Sim336(Sim33x):
-    """The LTSPM 336, for callers that want it by name."""
+    """The LTSPM3 336, for callers that want it by name."""
 
     NAMES = Sim33x.DEFAULT_NAMES["336"]
 
-    def __init__(self, rig: SimulatedRig) -> None:
-        super().__init__(rig, model="336")
+    def __init__(self, cryostat: SimulatedCryostat) -> None:
+        super().__init__(cryostat, model="336")
 
 
 class Sim335(Sim33x):
-    def __init__(self, rig: SimulatedRig) -> None:
-        super().__init__(rig, model="335")
+    def __init__(self, cryostat: SimulatedCryostat) -> None:
+        super().__init__(cryostat, model="335")
 
 
-def build_simulated_rig(**kw) -> tuple[SimulatedRig, Sim218, Sim336]:
-    rig = SimulatedRig(**kw)
-    return rig, Sim218(rig), Sim336(rig)
+def build_simulated_cryostat(**kw) -> tuple[SimulatedCryostat, Sim218, Sim336]:
+    cryostat = SimulatedCryostat(**kw)
+    return cryostat, Sim218(cryostat), Sim336(cryostat)

@@ -3,7 +3,7 @@
 **This is the real target.** Development is macOS; everything below that is
 not marked as verified is an expectation, not a measurement.
 
-First deployed to the LTSPM3 rig on **2026-08-24**: Windows 10 Pro 19045, an
+First deployed to the LTSPM3 cryostat on **2026-08-24**: Windows 10 Pro 19045, an
 NI PXI-GPIB board, a 218 at `GPIB0::15` and a 336 at `GPIB0::12`, recording a
 cold cryostat at a 2 s cadence. What that run settled is marked *verified*
 below. It also found one real bug — see **The single-instance lock** — which
@@ -83,7 +83,7 @@ which fixes both halves: holders contend for the same byte, and because a
 Windows lock is *mandatory* rather than advisory, keeping it clear of the
 record is what lets a refused starter still read who holds it.
 
-Confirmed on the rig: a second `run` against a live recorder exits 2 with
+Confirmed on the cryostat: a second `run` against a live recorder exits 2 with
 `another lschart instance already holds data/ltspm3.lock (pid ..., since ...)`,
 and does so **before** any transport opens, so it never touches the bus. A
 killed holder's lock is released by the kernel; `tests/test_lock.py` now

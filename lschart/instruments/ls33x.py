@@ -23,7 +23,7 @@ commands the whole control surface::
 act that applies power to a heater, so it is never done implicitly: no method
 here turns a heater on as a side effect of setting a temperature, and
 ``allow_writes`` gates every one of them.  That mirrors the rule the software
-loop obeys on the LTSPM rig -- nothing raises a heater except an operator
+loop obeys on the LTSPM3 cryostat -- nothing raises a heater except an operator
 asking it to, in so many words.
 
 ``max_setpoint_k`` is a second, blunter guard: a typo that asks a cryostat for

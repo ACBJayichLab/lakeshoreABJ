@@ -39,7 +39,7 @@ python -m lschart -c config.yaml run --interval 2 --duration 3600
 |---|---|
 | `--interval S` | override the poll cadence |
 | `--duration S` | stop after N seconds (otherwise: until Ctrl-C / SIGTERM) |
-| `--arm` | close a **software** control loop — only meaningful for `ltspm`, see [../ltspm/running.md](../ltspm/running.md). Plain `lschart` reports an error rather than ignoring it |
+| `--arm` | close a **software** control loop — only meaningful for `ltspm3`, see [../ltspm3/running.md](../ltspm3/running.md). Plain `lschart` reports an error rather than ignoring it |
 | `--setpoint K` | the target to arm at |
 
 Takes a single-instance lock before opening anything, so a second recorder
@@ -157,14 +157,14 @@ Refuses to overwrite without `--force`.
 
 ---
 
-## `ltspm`: the same CLI, one thing swapped
+## `ltspm3`: the same CLI, one thing swapped
 
 ```bash
-python -m ltspm -c config.yaml check
-python -m ltspm -c config.yaml run --arm --setpoint 96.0
+python -m ltspm3 -c config.yaml check
+python -m ltspm3 -c config.yaml run --arm --setpoint 96.0
 ```
 
-`ltspm` is a thin shim that swaps what builds the application, so every command,
+`ltspm3` is a thin shim that swaps what builds the application, so every command,
 flag and interlock above is shared and cannot drift. `python -m lschart` on the
 same config still works and simply records — it has no controller, so `--arm`
-is refused rather than silently ignored. See [../ltspm/](../ltspm/).
+is refused rather than silently ignored. See [../ltspm3/](../ltspm3/).

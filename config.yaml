@@ -5,13 +5,13 @@
 # a silently-dropped typo in a safety limit is exactly the failure this file is
 # meant to prevent.
 #
-# This file carries a `control:` section, so it is an LTSPM config: run it with
-# `ltspm`, not with `lschart`.  Plain `lschart` will refuse it and say so --
+# This file carries a `control:` section, so it is an LTSPM3 config: run it with
+# `ltspm3`, not with `lschart`.  Plain `lschart` will refuse it and say so --
 # a recorder-only install must not silently ignore a request to drive a heater.
 #
-#   .venv/bin/python -m ltspm -c config.yaml check     validate, touch nothing
-#   .venv/bin/python -m ltspm -c config.yaml run       record
-#   .venv/bin/python -m ltspm -c config.yaml run --arm close the heater loop
+#   .venv/bin/python -m ltspm3 -c config.yaml check     validate, touch nothing
+#   .venv/bin/python -m ltspm3 -c config.yaml run       record
+#   .venv/bin/python -m ltspm3 -c config.yaml run --arm close the heater loop
 #
 # GOING LIVE is the two `driver:` lines below.  Nothing else changes, and no
 # code changes.  On Windows that also needs the NI-VISA runtime installed for
@@ -96,14 +96,14 @@ control:
     max_rate_pct_per_min: 0.20
 
     # Premise checks.  An error this large means something is wrong with the
-    # RIG, not with the control, so hold -- and ramp down only if it persists.
+    # CRYOSTAT, not with the control, so hold -- and ramp down only if it persists.
     max_error_k: 1.0
     anomaly_demand_pct: 0.50
     anomaly_hold_s: 180.0
-    # A setpoint ramp of rate r on a plant with time constant tau settles at a
+    # A setpoint ramp of rate r on a first-order response with time constant tau settles at a
     # tracking error of exactly r*tau, so a commanded move is allowed that much
     # extra and nothing else.  Decays away once the ramp stops.
-    plant_lag_s: 620.0            # measured; ONE step response only
+    response_lag_s: 620.0            # measured; ONE step response only
     max_ramp_error_k: 6.0
     approach_rate_k_per_min: 0.25
 
@@ -113,7 +113,7 @@ control:
     require_ack_after_fault: true
 
     dac_step_pct: 0.01
-    dither: true                  # one code is ~100 mK; the plant averages it.
+    dither: true                  # one code is ~100 mK; the sample averages it.
                                   # Averaging voltage is not averaging power
                                   # (P ~ V^2), but the bias is ~2 uK: ignorable.
     verify_readback: true
@@ -154,7 +154,7 @@ control:
     # Measured 3.16 (lumped n = 6.32, R^2 = 0.996) over 24 settled heater
     # steps in cd10 monitor4/5.  Supersedes the old two-point n = 5.0.
     thermal_exponent: 3.158
-    # Leave `calibration` unset to use the measured curve in lschart/plant.py.
+    # Leave `calibration` unset to use the measured curve in ltspm3/thermal_response.py.
 
   guard:
     valid_min_k: 1.0
@@ -219,7 +219,7 @@ control:
 sim:
   start_k: 96.0
   seed: 49181
-  # NOTE: speedup accelerates the plant but NOT the controller, which still
+  # NOTE: speedup accelerates the thermal response but NOT the controller, which still
   # integrates in real time.  Fine for exercising the recorder; meaningless for
   # closed-loop behaviour.  Use the virtual-clock harness in tests/ for that.
   speedup: 1.0

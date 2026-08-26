@@ -1,16 +1,54 @@
+# Handoff — 2026-08-25 (fifth session: command fields learn where the cryostat is)
+
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
+**343 tests: 342 passing, plus one pre-existing failure
+(`test_the_backfill_stops_once_its_coverage_is_met`, which fails on a clean
+tree too). Small GUI session; nothing else touched.**
+
+## What this session did
+
+The viewer's command fields now **fill with what the recorder's readback says
+the box is at** instead of opening at zero: setpoint from the selected loop,
+analog output from the 218's current percentage (so swapping to it finds the
+power it is already driving rather than presenting 0% as if that were neutral),
+range combo from the box's current range. All read from the `aux` block of
+`status.json` — no new protocol, no link, same file MATLAB reads.
+
+Three decisions in there worth not undoing:
+
+- **fields track the readback every tick until edited**, so a value changed
+  from MATLAB or another viewer shows up here too; an edit stops tracking
+  until the selection changes or the pending command settles;
+- **a queued command holds its field at the commanded value until the readback
+  confirms it.** Without this guard the stale pre-command aux value snapped the
+  field back — showing 0% again in the seconds after someone asked for 43%;
+- **no aux entry means no fill.** An older recorder without the name in its
+  status file leaves the widget alone rather than guessing.
+
+Documented in [gui.md](docs/recorder/gui.md). Also corrected there: the drag
+section still described the *flat drag picks time alone* behaviour that an
+earlier session replaced with always-the-whole-rectangle; the docs now match
+`ZoomViewBox` as it is.
+
+---
+
 # Handoff — 2026-08-24 (fourth session: the sample heater becomes drivable)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
+
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
 **311 tests passing (was 257). Nothing has been written to any heater.** The
-read-only recorder from the third session is still running on the rig — sample
+read-only recorder from the third session is still running on the cryostat — sample
 4.742 K, `ls218.aout1` 0.0%, 336 loop 2 still railed.
 
 ## What this session did
 
 Made manual control of the **218's analog output 1** — the sample heater —
 possible through the running recorder's file spool, at Jeff's request, and
-explicitly *not* by enabling the software PID. `ltspm/control/` was not touched.
+explicitly *not* by enabling the software PID. `ltspm3/control/` was not touched.
 
 The 218 previously had **no write gate at all**. `set_analog_percent` was
 reachable only from `HeaterSupervisor`, so it had never needed one, and none of
@@ -23,7 +61,7 @@ the gate first.
 the 33x split: `SETP` says where to go and does nothing, `RANGE` applies power,
 and you gate them separately. A 218 has no loop, no range and no setpoint —
 one `ANALOG` command, and the percentage *is* the power. Nothing about `40`
-looks more dangerous than `4`, and on this plant (~10 K/%) the difference
+looks more dangerous than `4`, and on this cryostat (~10 K/%) the difference
 between them is about 350 K.
 
 So the ceiling does the work the `RANGE` split used to do:
@@ -31,9 +69,9 @@ So the ceiling does the work the `RANGE` split used to do:
 | | |
 |---|---|
 | `allow_writes` on the 218 | new, off by default, same shape as the 33x gate |
-| `max_output_pct` | new. **70.0** in the rig config — the supervisor's own `hard_max_pct`, just above the hottest step in the reference logs |
+| `max_output_pct` | new. **70.0** in the cryostat config — the supervisor's own `hard_max_pct`, just above the hottest step in the reference logs |
 | `verify_writes` / `readback_tol_pct` | new. Confirms by `AOUT?`; tolerance must clear the 0.01% DAC step *and* the two-decimal readback, or a good write reads as a failure |
-| `ipc.allow_analog_output` | new, fifth interlock. Deliberately **not** folded into `allow_heater_range` — this rig wants exactly one of them open |
+| `ipc.allow_analog_output` | new, fifth interlock. Deliberately **not** folded into `allow_heater_range` — this cryostat wants exactly one of them open |
 
 `heaters_off` now covers **every** writable instrument rather than one, 33x
 ranges and 218 analog outputs alike, skipping read-only boxes and naming them.
@@ -65,8 +103,8 @@ the only thing that will still say which.
   GPIB board was left alone entirely — the read-only recorder holds it, and a
   second opener is the garbled-reply hazard. **The first real write is Jeff's,
   with him watching.**
-- `ltspm` was left parked. One consequence: `LS218Config.allow_writes` defaults
-  false, so **an armed `ltspm` run now needs `allow_writes: true` and
+- `ltspm3` was left parked. One consequence: `LS218Config.allow_writes` defaults
+  false, so **an armed `ltspm3` run now needs `allow_writes: true` and
   `verify_writes: false` on its 218**. `controller_factory` raises at startup
   saying exactly that, rather than letting the poll thread hit a
   `PermissionError` on the first output.
@@ -92,7 +130,7 @@ Four decisions in there worth not undoing:
   visible in the group title;
 - **a shut gate is announced, not greyed out.** 0 is always permitted, so
   disabling the control would remove the button at exactly the moment somebody
-  wants to make the rig safe;
+  wants to make the cryostat safe;
 - **the range dialog quotes the setpoint with its age.** This was a real defect
   caught by driving the GUI against a live recorder, not by a test: the cycle
   order is read → apply → write status, so a setpoint set seconds ago is *not*
@@ -112,7 +150,7 @@ from the panic button while the 336 was selected.
   shape (keep the log unbroken), not an oversight.
 - **No ramp or step limit on the manual path**, in the CLI or the GUI.
   `analog 60` from 0 is one step. Rate limiting is control policy and belongs
-  to the supervisor; duplicating it would give the rig two sets of limits that
+  to the supervisor; duplicating it would give the cryostat two sets of limits that
   can disagree.
 
 ---
@@ -121,14 +159,14 @@ from the panic button while the 336 was selected.
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
-**On the LTSPM3 rig itself, on `main`. 257 tests passing on the rig's own
+**On the LTSPM3 cryostat itself, on `main`. 257 tests passing on the cryostat's own
 interpreter. Recording a cold cryostat, read-only, at 2 s.**
 
 ## What this session did
 
 Took a fresh clone onto the LTSPM3 machine and made it record the real
 instruments. Scope was deliberately narrow: **monitoring only**. No control
-section, no writes, nothing in `ltspm/` touched.
+section, no writes, nothing in `ltspm3/` touched.
 
 `config-ltspm3.yaml` is the new file — a plain `lschart` config with
 `read_only: true` on both transports, `allow_writes: false` on the 336, and
@@ -171,7 +209,7 @@ Full reasoning in [`docs/recorder/windows.md`](docs/recorder/windows.md).
   was installed with `--ignore-requires-python` rather than installing a second
   Python onto a machine running a live experiment. The metadata was left alone.
 
-### The rig, as measured 2026-08-24 16:10
+### The cryostat, as measured 2026-08-24 16:10
 
 Cold, and someone else's. Recorded here because the numbers, not memory, are
 what a later session should trust.
@@ -206,7 +244,7 @@ at `DEBUG`, so at `INFO` that failure mode is silent. All three are in
 
 ## Priorities are unchanged
 
-`ltspm/` was not touched and should not be. Next up is the same list
+`ltspm3/` was not touched and should not be. Next up is the same list
 `CLAUDE.md` gives: running the recorder unattended (Task Scheduler vs a service
 wrapper is still undecided), and exercising the MATLAB half against this
 machine's own MATLAB.
@@ -242,7 +280,7 @@ What is worth knowing here is what it cost to get right:
   `time.time()` resolves to about 15 ms there, so a script queueing a setpoint
   and then a heater range would routinely have them applied backwards.
 - **`lschart check` crashed on `examples/config-335-usb.yaml`** — the very file
-  meant to be handed to the coworker. A recorder-only rig declares no
+  meant to be handed to the coworker. A recorder-only cryostat declares no
   `control_input`, and `cfg.control_channel` raises. Fixed, and `check` now
   also reports the status file, the command permissions and which instruments
   are writable.
@@ -310,7 +348,7 @@ imported by exactly one module in the repo.
 | **`lschart.ipc`** | **Complete and tested** — status file, command spool, four interlocks. |
 | **MATLAB** | **Complete and tested against MATLAB R2025b.** |
 | **GUI** | **Complete** for a first cut; see "What the GUI does not do yet". |
-| `ltspm` (software PID) | Complete, parked, untouched this session. |
+| `ltspm3` (software PID) | Complete, parked, untouched this session. |
 | **Windows deployment** | **Untested. Now the priority.** |
 
 ## Next steps, in priority order
@@ -336,8 +374,8 @@ with `accept_commands: true`. `matlab/README.md` is written for them.
 
 The documentation gap this called out is closed: `README.md` covers install →
 run → view → MATLAB, and the design document has been split into
-`docs/recorder/` (generic, any rig) and `docs/ltspm/` (the software PID, one
-rig), so nobody has to read the cryostat's calibration to start a recorder.
+`docs/recorder/` (generic, any cryostat) and `docs/ltspm3/` (the software PID, one
+cryostat), so nobody has to read the cryostat's calibration to start a recorder.
 `CLAUDE.md` is now orientation and invariants pointing into those.
 
 ### 3. What the GUI does not do yet
@@ -360,15 +398,15 @@ Deliberate omissions, not oversights:
   behaviour measured on the 336 very likely applies to the 218 on GPIB too;
   `SupervisorConfig.verify_readback` reads `AOUT?` after `ANALOG` and may be
   confirming a stale value. It passes in simulation only because the fake
-  applies writes synchronously. **Check this before the LTSPM rig runs armed.**
+  applies writes synchronously. **Check this before the LTSPM3 cryostat runs armed.**
 - **Sweep scheduler** — `sweep_to()` exists and is tested; a sequence of
   setpoints with dwell times does not. Note that the file interface now makes
   this reasonable to write *in MATLAB* instead, which may be the better home
   for it: it is an experiment protocol, not a safety mechanism.
 - **A deliberate step test at two or three temperatures** remains the
-  highest-value LTSPM hardware measurement.
-- **Is the LTSPM noise model right?** The bench 336 reads 0.44–3.03 mK rms at
-  ~296 K where `docs/ltspm/plant.md` claims 109 mK at 290 K for the 218 sample channel.
+  highest-value LTSPM3 hardware measurement.
+- **Is the LTSPM3 noise model right?** The bench 336 reads 0.44–3.03 mK rms at
+  ~296 K where `docs/ltspm3/thermal-response.md` claims 109 mK at 290 K for the 218 sample channel.
   Three things differ at once, so neither number is wrong yet. The clean
   resolution is to record the 218 under the same quiet conditions.
 - **Does `read_status: true` earn its cost?** Unchanged.
@@ -377,7 +415,7 @@ Deliberate omissions, not oversights:
 
 - **`reference/logs` is ~110 MB and deliberately not gitignored.**
 - **Filenames in `reference/logs` lie.** `import_xls` sniffs row 0.
-- **`sim.speedup` accelerates the plant but not the controller.**
+- **`sim.speedup` accelerates the thermal response but not the controller.**
 - **The bench 336's loops are benign by value, not by configuration.**
 - **A first `matlab -batch` on a fresh machine can take many minutes** doing
   first-run setup, with no output at all. It is not hung. Subsequent runs take

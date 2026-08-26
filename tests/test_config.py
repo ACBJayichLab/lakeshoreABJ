@@ -1,7 +1,7 @@
 """Config loading and the checks that make a bad config fail loudly.
 
-Generic only.  The `control:` section belongs to `ltspm`, and its tests live in
-`tests_ltspm/test_config_control.py`.
+Generic only.  The `control:` section belongs to `ltspm3`, and its tests live in
+`tests_ltspm3/test_config_control.py`.
 """
 
 import pytest
@@ -50,7 +50,7 @@ def test_unknown_key_is_rejected(tmp_path):
 
 
 def test_an_unregistered_extension_section_is_unknown(tmp_path):
-    """`control:` is only a legal key once `ltspm` has registered it.
+    """`control:` is only a legal key once `ltspm3` has registered it.
 
     A recorder-only install must refuse a config that asks it to close a heater
     loop, rather than ignoring the section and quietly recording instead.

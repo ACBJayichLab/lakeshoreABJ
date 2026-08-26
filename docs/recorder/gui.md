@@ -95,7 +95,7 @@ ceiling is visible in the group title without reading the config file.
 **A shut gate is announced, not enforced by greying out.** If the recorder has
 `allow_heater_range: false` or `allow_analog_output: false` the control says so
 and stays live, because 0 is always permitted. Disabling it would take the
-button away at exactly the moment somebody wants to make the rig safe.
+button away at exactly the moment somebody wants to make the cryostat safe.
 
 **The range dialog quotes the setpoint the loop is about to chase, with its
 age.** "Range 3" means nothing on its own. The age is not decoration: the
@@ -103,12 +103,29 @@ recorder's cycle is read → apply commands → write status, so a setpoint you 
 seconds ago may not be in the status file yet, and the dialog says so rather
 than showing a stale number as current.
 
+**The fields fill with what the cryostat is at now.** Each one starts from the
+recorder's readback in `status.json` (`aux`): the setpoint field from the
+selected loop's setpoint, the analog output from the 218's current percentage,
+the range combo from the box's current range. Swapping to a 218 therefore finds
+the power it is already driving instead of presenting a misleading 0%, and a
+setpoint starts from the value being chased rather than zero — which on these
+widgets reads as a plausible number to send. Fields keep tracking the readback
+until edited (so a setpoint changed from MATLAB or another viewer shows up
+here too); an edit stops the tracking until the selection changes or the
+pending command settles.
+
+**A sent value is not snapped back by a stale readback.** Between an
+acknowledged command and the next readback, `aux` still holds the *old* value.
+Until the readback confirms what was asked for, the field holds at the
+commanded number — so asking for 43% never shows 0% again in the seconds while
+power is the question.
+
 **One unacknowledged command locks every button.** Otherwise a range can be
 queued against a setpoint that turned out to be refused.
 
 The panic button is deliberately *not* aimed at the selected instrument. Every
 other control needs an argument that means something on one box; this one means
-"stop heating", which on a two-box rig had better include the box carrying the
+"stop heating", which on a two-box cryostat had better include the box carrying the
 sample heater.
 
 ## Zooming with the mouse
@@ -123,16 +140,16 @@ temperature axis and leaves the percent panel below autoscaling to whatever the
 new window holds, because 63 % and 63 K are different quantities and always
 were.
 
-A drag that is **flat** — under about six pixels tall — sets the time axis
-alone, and one that is tall and thin sets the value axis alone. Reaching for a
-time window with a level hand is the common gesture, and cropping the
-temperature axis to a hair by accident is the common accident. A drag that is
-short both ways is a click that wobbled, and does nothing at all.
+A drag has to be a rectangle in **both** directions — under about six pixels
+either way and it is treated as a click that wobbled, and does nothing at all.
+There is no one-axis form of the gesture: the drag means exactly the box that
+was drawn, and the `X±` / `Y±` buttons are how a single axis gets moved in
+steps without redrawing a rectangle to do it.
 
 | Gesture | |
 |---|---|
-| **left-drag** | zoom to the rectangle |
-| **flat left-drag** | pick a time window, value axis untouched |
+| **left-drag** | zoom to exactly that rectangle |
+| **X+ X− Y+ Y−** | zoom one axis at a time about its middle |
 | **wheel** | zoom about the cursor |
 | **shift-drag**, or middle-drag | pan |
 | **double-click** | follow the recorder again |

@@ -6,7 +6,7 @@ anything else that wants the data or wants to command a setpoint has to go
 through here rather than through the bus.
 
 `lock.InstanceLock` is what makes "exclusively" true.  The rest is the door it
-leaves open instead: `status.py` writes what the rig is doing, `commands.py` is
+leaves open instead: `status.py` writes what the cryostat is doing, `commands.py` is
 the drop-box for requests coming the other way, and `service.py` joins the two
 onto the acquisition cycle.  MATLAB's half of the same protocol is
 `matlab/LakeShore.m`; the GUI is another client of it, with no privileges the

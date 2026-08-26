@@ -26,7 +26,7 @@ particular:
 * a command that *applies power* needs its own opt-in on top of both:
   ``ipc.allow_heater_range`` for a 33x range, ``ipc.allow_analog_output`` for a
   218 analog output.  Two switches and not one, because they are two different
-  commands on two different boxes -- a rig that wants its sample heater driven
+  commands on two different boxes -- a cryostat that wants its sample heater driven
   from a file has no business also being able to raise the range on a
   controller that is holding something else.
 * the safe direction is always available.  Turning a heater **off**, or
@@ -212,7 +212,7 @@ class IpcService:
             # A driver limit said no: a setpoint past `max_setpoint_k`, a
             # percentage past `max_output_pct`, a loop the box does not have.
             # Same category as the above -- the guard worked -- so it must not
-            # come out as an ERROR with a traceback.  On a live rig those
+            # come out as an ERROR with a traceback.  On a live cryostat those
             # tracebacks are what an operator's typo would look like in the
             # log, and they would bury the real ones.
             log.warning("IPC: %s refused: %s", cmd.kind, exc)
@@ -248,9 +248,9 @@ class IpcService:
         """A 218, or whatever else grows an analog output.
 
         Resolved separately from :meth:`_target` rather than by widening it,
-        because on the LTSPM rig *both* boxes are present and they take
+        because on the LTSPM3 cryostat *both* boxes are present and they take
         different commands.  "Several controllers are configured, name one"
-        would be a confusing answer to an analog command on a rig that has
+        would be a confusing answer to an analog command on a cryostat that has
         exactly one box with an analog output.
         """
         return self._pick(
@@ -316,7 +316,7 @@ class IpcService:
         value = _as_int(cmd.args, "value")
         if value > 0 and not self.allow_heater_range:
             raise CommandError(
-                "raising a heater range applies power to the rig, and this "
+                "raising a heater range applies power to the cryostat, and this "
                 "recorder does not accept that from a file; set "
                 "ipc.allow_heater_range: true if a remote client really should "
                 "be able to turn a heater on. Turning one OFF (value 0) is "
@@ -339,7 +339,7 @@ class IpcService:
         if percent > 0 and not self.allow_analog_output:
             raise CommandError(
                 "driving a 218 analog output above zero applies power to the "
-                "rig, and this recorder does not accept that from a file; set "
+                "cryostat, and this recorder does not accept that from a file; set "
                 "ipc.allow_analog_output: true if a remote client really "
                 "should be able to move the heater. Commanding it to 0 is "
                 "always allowed"
@@ -356,7 +356,7 @@ class IpcService:
         Deliberately *not* routed through :meth:`_target`.  Every other handler
         acts on one box because it needs an argument that only means something
         on one box; this one takes no arguments and means "stop heating", which
-        on a two-box rig had better include the box carrying the sample heater.
+        on a two-box cryostat had better include the box carrying the sample heater.
         A panic button that leaves one heater running is worse than no panic
         button, because it will be believed.
 

@@ -54,7 +54,7 @@ log = logging.getLogger(__name__)
 _ENVELOPE = ("id", "kind", "issued_at", "instrument", "source")
 
 #: Default lifetime.  Long enough to survive a slow cycle and a busy bus,
-#: short enough that a command is always about the rig as it is now.
+#: short enough that a command is always about the cryostat as it is now.
 DEFAULT_TTL_S = 30.0
 
 
@@ -82,7 +82,7 @@ class Command:
         if age > ttl_s:
             return (
                 f"issued {age:.1f} s ago, older than the {ttl_s:.0f} s limit; "
-                "refused rather than applied to a rig that has moved on since"
+                "refused rather than applied to a cryostat that has moved on since"
             )
         if age < -ttl_s:
             return (

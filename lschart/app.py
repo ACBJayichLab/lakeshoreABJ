@@ -95,8 +95,8 @@ class Application:
     """Everything wired together, with a lifecycle."""
 
     def __init__(self, cfg: AppConfig, *, controller_factory=None,
-                 plant_factory=None) -> None:
-        """``controller_factory`` and ``plant_factory`` are the extension seams.
+                 response_factory=None) -> None:
+        """``controller_factory`` and ``response_factory`` are the extension seams.
 
         The recorder knows nothing about software control loops or about any
         particular cryostat's thermal model, so both are injected:
@@ -105,17 +105,17 @@ class Application:
             Anything with ``step(t, reading, readings) -> status`` and
             ``shutdown()``.  The poller steps it once per frame and already
             isolates it -- an exception there is logged and logging continues.
-        ``plant_factory(cfg.sim) -> plant``
-            The simulated plant; see :mod:`lschart.instruments.sim`.  Defaults
+        ``response_factory(cfg.sim) -> response``
+            The simulated thermal response; see :mod:`lschart.instruments.sim`.  Defaults
             to the plain one-pole model.
 
-        :mod:`ltspm.app` passes both.
+        :mod:`ltspm3.app` passes both.
         """
         cfg.validate()
         self.cfg = cfg
         self._controller_factory = controller_factory
-        self._plant_factory = plant_factory
-        self.rig = None                 # SimulatedRig, when simulating
+        self._response_factory = response_factory
+        self.cryostat = None                 # SimulatedCryostat, when simulating
         self.instruments: list = []
         #: By config name, so a controller or a tool can find one box among
         #: several without caring what order they were declared in.
@@ -132,31 +132,31 @@ class Application:
     # -- construction ------------------------------------------------------
 
     def _sim_device(self, cfg: InstrumentConfig):
-        """A fake for one instrument, all sharing one plant and one clock.
+        """A fake for one instrument, all sharing one response and one clock.
 
-        The shared rig is what makes the fakes' channels agree with each other,
+        The shared cryostat is what makes the fakes' channels agree with each other,
         which is what makes cross-channel corroboration testable at all.
         """
-        from .instruments.sim import Sim218, Sim33x, SimulatedRig
+        from .instruments.sim import Sim218, Sim33x, SimulatedCryostat
 
-        if self.rig is None:
-            plant = (
-                self._plant_factory(self.cfg.sim)
-                if self._plant_factory is not None else None
+        if self.cryostat is None:
+            response = (
+                self._response_factory(self.cfg.sim)
+                if self._response_factory is not None else None
             )
-            self.rig = SimulatedRig(
-                plant,
+            self.cryostat = SimulatedCryostat(
+                response,
                 start_k=self.cfg.sim.start_k,
                 seed=self.cfg.sim.seed,
                 speedup=self.cfg.sim.speedup,
             )
         if cfg.model == "218":
-            dev = Sim218(self.rig)
-            # The plant starts wherever the fake's analog output already is,
+            dev = Sim218(self.cryostat)
+            # The cryostat starts wherever the fake's analog output already is,
             # so an unarmed run does not begin with a phantom step.
-            self.rig.plant.pct = dev.analog_pct
+            self.cryostat.response.pct = dev.analog_pct
             return dev
-        return Sim33x(self.rig, model=cfg.model)
+        return Sim33x(self.cryostat, model=cfg.model)
 
     def _build_instrument(self, c: InstrumentConfig):
         device = self._sim_device(c) if c.driver == "sim" else None
@@ -210,7 +210,7 @@ class Application:
         because the legacy logs put the commanded output first and analysis
         scripts expect it.
         """
-        # `heater_pct` is what a *software* loop commanded.  On a rig whose
+        # `heater_pct` is what a *software* loop commanded.  On a cryostat whose
         # box runs its own PID there is no such number, and an always-empty
         # column in a months-long CSV is just a question every reader has to
         # ask once.
@@ -236,9 +236,9 @@ class Application:
             if self.supervisor is not None and cfg.sim.speedup != 1.0 \
                     and not cfg.uses_hardware:
                 log.warning(
-                    "sim.speedup=%.1f accelerates the plant but NOT the controller, "
+                    "sim.speedup=%.1f accelerates the thermal response but NOT the controller, "
                     "which still integrates in real time -- closed-loop behaviour in "
-                    "this run does not represent the rig.  Use the virtual-clock "
+                    "this run does not represent the cryostat.  Use the virtual-clock "
                     "harness in tests/ for accelerated closed-loop work.",
                     cfg.sim.speedup,
                 )
@@ -317,7 +317,7 @@ class Application:
     def arm(self, setpoint_k: float | None = None) -> None:
         """Close the loop.  Explicit, never automatic on startup.
 
-        With no setpoint, arm to *hold the temperature the rig is at now*.
+        With no setpoint, arm to *hold the temperature the cryostat is at now*.
         That is what arming means to an operator, and it is the only choice
         that is bumpless: adopting a stale configured setpoint instead asks the
         loop to move somewhere the heater is not currently set for, which the

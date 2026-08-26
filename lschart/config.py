@@ -107,7 +107,7 @@ class InstrumentConfig:
 
 @dataclass
 class LS218Config(InstrumentConfig):
-    """The 8-input monitor.  Its analog output is the LTSPM sample heater.
+    """The 8-input monitor.  Its analog output is the LTSPM3 sample heater.
 
     ``allow_writes`` gates the one write this box has, and it is off by default
     for a blunter reason than on a 33x.  A 33x setpoint is inert until a range
@@ -135,7 +135,7 @@ class LS218Config(InstrumentConfig):
     #: Blunt ceiling on the commanded percentage, refused in software.  100 is
     #: the instrument's own full scale and therefore no restriction: what the
     #: ceiling is *worth* depends entirely on the heater on the other end, so
-    #: the rig's config sets it and this generic default does not guess.
+    #: the cryostat's config sets it and this generic default does not guess.
     max_output_pct: float = 100.0
     #: Confirm every write by reading ``AOUT?`` back.  Turn this off for a
     #: software loop that writes every cycle and verifies for itself.
@@ -152,7 +152,7 @@ class LS33xConfig(InstrumentConfig):
 
     ``allow_writes`` gates every command that can change what the box does.  It
     is off by default because the common case on a shared cryostat is that some
-    other loop is already holding something important -- on the LTSPM rig, the
+    other loop is already holding something important -- on the LTSPM3 cryostat, the
     336's loop 2 holds THE CHONKE at 290.6 K, and disturbing it is a real
     hazard.  Turn it on for a box this software is meant to drive.
     """
@@ -182,7 +182,7 @@ INSTRUMENT_CONFIGS: dict[str, type] = {
 
 
 def default_instruments() -> list[InstrumentConfig]:
-    """The LTSPM rig, which is what this software was written against."""
+    """The LTSPM3 cryostat, which is what this software was written against."""
     return [LS218Config(), LS33xConfig()]
 
 
@@ -192,7 +192,7 @@ class AcquisitionConfig:
 
     The reference logs run anywhere from 2 s to 20 s, but that variation was an
     artefact of the 65,536-row Excel limit -- the recorder was slowed down to
-    fit longer runs in one file, not because the rig needed it.  A CSV recorder
+    fit longer runs in one file, not because the cryostat needed it.  A CSV recorder
     has no such limit, so cadence can be chosen on merit.
 
     1 Hz is the recommendation.  The measured noise is strongly correlated
@@ -274,7 +274,7 @@ class RuntimeConfig:
 
     #: Path to the single-instance lock.  Two recorders on one instrument fight
     #: over the port, so `run` takes this before opening anything.  Point two
-    #: genuinely-different rigs at two different paths to run both.
+    #: genuinely-different cryostats at two different paths to run both.
     lock_path: str = "data/lschart.lock"
     single_instance: bool = True
 
@@ -297,7 +297,7 @@ class RecorderConfig:
 # file is still one file and unknown keys are still an error.  So a dependent
 # package registers its own top-level section and its own validator, and both
 # are honoured by `load()` and `AppConfig.validate()` exactly as the built-in
-# sections are.  `ltspm.config` registers `control:` this way.
+# sections are.  `ltspm3.config` registers `control:` this way.
 
 _SECTIONS: dict[str, type] = {}
 _VALIDATORS: dict[str, Any] = {}
@@ -305,11 +305,11 @@ _VALIDATORS: dict[str, Any] = {}
 #: Section name -> the package that provides it.  Purely a diagnostic: it turns
 #: "unknown key ['control']" into a sentence that says what to do about it.
 #: Nothing here is imported, so the dependency stays one-way.
-_SECTION_HINTS = {"control": "ltspm"}
+_SECTION_HINTS = {"control": "ltspm3"}
 
 
 def register_section(name: str, cls: type, *, validator=None) -> None:
-    """Attach an extension config section, e.g. ltspm's ``control:``.
+    """Attach an extension config section, e.g. ltspm3's ``control:``.
 
     ``validator`` is called as ``validator(section, app_cfg, problems)`` during
     :meth:`AppConfig.validate` and appends strings to ``problems``.  Registering
@@ -476,7 +476,7 @@ class AppConfig:
             if self.ipc.command_ttl_s <= 0:
                 problems.append(
                     "ipc.command_ttl_s must be positive; it is what stops a "
-                    "backlog of stale commands being replayed into a live rig"
+                    "backlog of stale commands being replayed into a live cryostat"
                 )
             if self.ipc.max_commands_per_cycle < 1:
                 problems.append("ipc.max_commands_per_cycle must be at least 1")

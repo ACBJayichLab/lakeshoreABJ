@@ -66,7 +66,7 @@ Handled on the acquisition thread, because that thread owns the bus.
 
 `heaters_off` is the only command that is not aimed at one box. Every other
 handler takes an argument that means something on exactly one instrument;
-this one takes none and means "stop heating", which on a two-box rig had
+this one takes none and means "stop heating", which on a two-box cryostat had
 better include the box carrying the sample heater. A panic button that leaves
 one heater running is worse than no panic button, because it will be believed.
 Instruments the recorder may not write to are skipped and named in the reply,
@@ -109,7 +109,7 @@ ipc.allow_analog_output  may a file raise a 218 analog output  (default OFF)
 ```
 
 The last two are one gate each rather than one gate for both, because they are
-different commands on different boxes. On a rig where this program drives its
+different commands on different boxes. On a cryostat where this program drives its
 own sample heater but only *watches* a controller holding something else, one
 of them wants to be open and the other emphatically does not.
 
@@ -119,7 +119,7 @@ needs either of the last two: the safe direction is always available.
 A refusal is not a crash. A driver limit saying no (`max_setpoint_k`,
 `max_output_pct`, a loop the box does not have) comes back as
 `refused: <reason>` and is logged at WARNING, not as an ERROR with a traceback
-— on a live rig, an operator's typo must not look like a fault in the log.
+— on a live cryostat, an operator's typo must not look like a fault in the log.
 
 ## Switching it on
 

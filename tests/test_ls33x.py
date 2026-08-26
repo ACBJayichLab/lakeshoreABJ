@@ -8,13 +8,13 @@ guards around them.
 import pytest
 
 from lschart.instruments.ls33x import CAPS, LS33x, LS335, LS336
-from lschart.instruments.sim import Sim33x, SimulatedRig
+from lschart.instruments.sim import Sim33x, SimulatedCryostat
 from lschart.transport import LoopbackTransport, TransportError
 
 
 def build(model="335", **kw):
-    rig = SimulatedRig()
-    sim = Sim33x(rig, model=model)
+    cryostat = SimulatedCryostat()
+    sim = Sim33x(cryostat, model=model)
     inst = LS33x(LoopbackTransport(sim), model=model, **kw)
     return inst, sim
 
@@ -37,9 +37,9 @@ def test_both_models_drive_two_heaters():
 
 
 def test_an_unknown_model_is_refused_at_construction():
-    rig = SimulatedRig()
+    cryostat = SimulatedCryostat()
     with pytest.raises(ValueError, match="unsupported model"):
-        LS33x(LoopbackTransport(Sim33x(rig)), model="999")
+        LS33x(LoopbackTransport(Sim33x(cryostat)), model="999")
 
 
 # -- reading ----------------------------------------------------------------
@@ -111,8 +111,8 @@ def test_transaction_budget_matches_what_a_frame_actually_costs():
 
 def test_a_model_mismatch_is_caught_at_startup():
     """A 335 config pointed at a 336 would misread every input."""
-    rig = SimulatedRig()
-    inst = LS33x(LoopbackTransport(Sim33x(rig, model="336")), model="335")
+    cryostat = SimulatedCryostat()
+    inst = LS33x(LoopbackTransport(Sim33x(cryostat, model="336")), model="335")
     with pytest.raises(TransportError, match="config says model 335"):
         inst.verify_model()
 
@@ -245,16 +245,16 @@ def test_ramping_can_be_turned_off_explicitly():
 # -- the model-named subclasses ---------------------------------------------
 
 def test_the_named_subclasses_carry_their_model_and_default_name():
-    rig = SimulatedRig()
-    assert LS335(LoopbackTransport(Sim33x(rig, model="335"))).name == "ls335"
-    assert LS336(LoopbackTransport(Sim33x(rig, model="336"))).name == "ls336"
-    assert LS336(LoopbackTransport(Sim33x(rig, model="336"))).model == "336"
+    cryostat = SimulatedCryostat()
+    assert LS335(LoopbackTransport(Sim33x(cryostat, model="335"))).name == "ls335"
+    assert LS336(LoopbackTransport(Sim33x(cryostat, model="336"))).name == "ls336"
+    assert LS336(LoopbackTransport(Sim33x(cryostat, model="336"))).model == "336"
 
 
 def test_the_336_defaults_to_read_only():
-    """Loop 2 holds THE CHONKE on the LTSPM rig; disturbing it is a hazard."""
-    rig = SimulatedRig()
-    assert LS336(LoopbackTransport(Sim33x(rig, model="336"))).allow_writes is False
+    """Loop 2 holds THE CHONKE on the LTSPM3 cryostat; disturbing it is a hazard."""
+    cryostat = SimulatedCryostat()
+    assert LS336(LoopbackTransport(Sim33x(cryostat, model="336"))).allow_writes is False
 
 
 # -- writes are confirmed, not assumed --------------------------------------
@@ -273,8 +273,8 @@ class DeafSim(Sim33x):
 
 
 def test_a_write_that_does_not_take_is_an_error_not_a_success():
-    rig = SimulatedRig()
-    sim = DeafSim(rig, model="335")
+    cryostat = SimulatedCryostat()
+    sim = DeafSim(cryostat, model="335")
     inst = LS33x(LoopbackTransport(sim), model="335", allow_writes=True)
     with pytest.raises(Exception, match="did not take"):
         inst.set_setpoint(1, 77.0)
@@ -283,16 +283,16 @@ def test_a_write_that_does_not_take_is_an_error_not_a_success():
 
 def test_the_failure_says_not_to_trust_the_instrument_state():
     """The dangerous outcome is believing a setpoint took when it did not."""
-    rig = SimulatedRig()
-    inst = LS33x(LoopbackTransport(DeafSim(rig, model="335")),
+    cryostat = SimulatedCryostat()
+    inst = LS33x(LoopbackTransport(DeafSim(cryostat, model="335")),
                  model="335", allow_writes=True)
     with pytest.raises(Exception, match="do not assume"):
         inst.set_setpoint(1, 77.0)
 
 
 def test_verification_covers_every_write_path():
-    rig = SimulatedRig()
-    inst = LS33x(LoopbackTransport(DeafSim(rig, model="335")),
+    cryostat = SimulatedCryostat()
+    inst = LS33x(LoopbackTransport(DeafSim(cryostat, model="335")),
                  model="335", allow_writes=True)
     for call in (
         lambda: inst.set_setpoint(1, 77.0),
@@ -311,8 +311,8 @@ def test_a_heater_that_refuses_to_switch_off_is_reported():
     asked for is the state held.  What must never pass silently is a heater
     that stays ON after being told to stop.
     """
-    rig = SimulatedRig()
-    sim = DeafSim(rig, model="335")
+    cryostat = SimulatedCryostat()
+    sim = DeafSim(cryostat, model="335")
     sim.ranges = {1: 3, 2: 3}           # both heaters at full range
     inst = LS33x(LoopbackTransport(sim), model="335", allow_writes=True)
     with pytest.raises(Exception, match="did not take"):
@@ -326,13 +326,13 @@ def test_all_heaters_off_is_satisfied_when_they_are_already_off():
 
 def test_verification_can_be_turned_off():
     """For a box whose readback is unavailable -- explicitly, never by default."""
-    rig = SimulatedRig()
-    inst = LS33x(LoopbackTransport(DeafSim(rig, model="335")),
+    cryostat = SimulatedCryostat()
+    inst = LS33x(LoopbackTransport(DeafSim(cryostat, model="335")),
                  model="335", allow_writes=True, verify_writes=False)
     inst.set_setpoint(1, 77.0)          # no exception
 
 
 def test_verification_is_on_by_default():
-    rig = SimulatedRig()
-    inst = LS33x(LoopbackTransport(Sim33x(rig)), model="336")
+    cryostat = SimulatedCryostat()
+    inst = LS33x(LoopbackTransport(Sim33x(cryostat)), model="336")
     assert inst.verify_writes is True

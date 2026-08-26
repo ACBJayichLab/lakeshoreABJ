@@ -48,7 +48,7 @@ instruments:
       retry_min_s: 1.0
       retry_max_s: 30.0
 
-    # The rig as labelled.  Set explicitly rather than read from the front
+    # The cryostat as labelled.  Set explicitly rather than read from the front
     # panel, so a column never silently changes meaning if someone relabels
     # the instrument mid-run.
     channels:

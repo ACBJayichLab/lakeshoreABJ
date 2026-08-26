@@ -15,7 +15,7 @@ import pytest
 
 from lschart.instruments.ls218 import LS218
 from lschart.instruments.ls33x import LS33x
-from lschart.instruments.sim import Sim218, Sim33x, SimulatedRig
+from lschart.instruments.sim import Sim218, Sim33x, SimulatedCryostat
 from lschart.ipc.commands import CommandSpool
 from lschart.ipc.service import IpcService
 from lschart.ipc.status import read_status
@@ -24,8 +24,8 @@ from lschart.transport import LoopbackTransport
 
 
 def instrument(name="ls336", *, allow_writes=True, read_only=False) -> LS33x:
-    rig = SimulatedRig(None, start_k=96.0)
-    dev = Sim33x(rig, model="336")
+    cryostat = SimulatedCryostat(None, start_k=96.0)
+    dev = Sim33x(cryostat, model="336")
     return LS33x(
         LoopbackTransport(dev, inter_command_delay=0.0, read_only=read_only),
         model="336", name=name, allow_writes=allow_writes,
@@ -35,8 +35,8 @@ def instrument(name="ls336", *, allow_writes=True, read_only=False) -> LS33x:
 
 def monitor(name="ls218", *, allow_writes=True, read_only=False) -> LS218:
     """A 218: no loop, one analog output, and that output is a heater."""
-    rig = SimulatedRig(None, start_k=96.0)
-    dev = Sim218(rig)
+    cryostat = SimulatedCryostat(None, start_k=96.0)
+    dev = Sim218(cryostat)
     return LS218(
         LoopbackTransport(dev, inter_command_delay=0.0, read_only=read_only),
         name=name, allow_writes=allow_writes, max_output_pct=70.0,
@@ -272,9 +272,9 @@ def test_a_recorder_with_ipc_disabled_builds_no_service(tmp_path):
 
 # -- the 218's analog output -------------------------------------------------
 #
-# The sample heater on the LTSPM rig.  It needs its own gate rather than
+# The sample heater on the LTSPM3 cryostat.  It needs its own gate rather than
 # reusing `allow_heater_range` because it is a different command on a different
-# box -- and because a rig that wants its sample heater driven from a file has
+# box -- and because a cryostat that wants its sample heater driven from a file has
 # no business also being able to raise a range on a controller holding
 # something else.
 
@@ -360,7 +360,7 @@ def test_an_analog_command_on_a_rig_with_no_analog_output_says_so(tmp_path):
 
 
 def test_the_two_boxes_do_not_compete_to_answer_a_command(tmp_path):
-    """The LTSPM shape: one 33x and one 218, neither needing to be named."""
+    """The LTSPM3 shape: one 33x and one 218, neither needing to be named."""
     ctl, mon = instrument(), monitor()
     svc = service(tmp_path, ctl, mon,
                   allow_analog_output=True, allow_heater_range=True)
@@ -396,7 +396,7 @@ def test_heaters_off_kills_the_analog_output_too(tmp_path):
 
 
 def test_heaters_off_skips_a_box_it_may_not_write_to(tmp_path):
-    """The LTSPM shape exactly: our 218 is writable, their 336 is not.
+    """The LTSPM3 shape exactly: our 218 is writable, their 336 is not.
 
     Failing the whole command because somebody else's controller is read-only
     would leave our own heater running.

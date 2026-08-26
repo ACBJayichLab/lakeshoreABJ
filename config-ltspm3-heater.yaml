@@ -1,7 +1,7 @@
 # LTSPM3 -- the two boxes on the GPIB board, with the SAMPLE HEATER LIVE.
 #
 # This is `config-ltspm3.yaml` with exactly one thing opened up: manual control
-# of the 218's analog output 1, which on this rig is the sample heater.  Keep
+# of the 218's analog output 1, which on this cryostat is the sample heater.  Keep
 # both files.  `config-ltspm3.yaml` stays the default for watching; this one is
 # picked up on purpose, and choosing it is the first half of the decision to
 # heat something.
@@ -44,7 +44,7 @@
 # number and it IS the power.  Nothing about `analog 40` looks more dangerous
 # than `analog 4`.
 #
-# From `docs/ltspm/plant.md`, measured over 24 settled heater steps:
+# From `docs/ltspm3/thermal-response.md`, measured over 24 settled heater steps:
 #
 #     43%     ->   18.2 K
 #     63.076% ->   99.6 K          local gain here: ~10 KELVIN PER PERCENT
@@ -57,12 +57,12 @@
 #
 # Note also what the ceiling is NOT: it is not a ramp and not a step limit.
 # `send analog 60` from 0 is one command and the heater goes there as fast as
-# the plant allows.  Walking up in steps is an operator discipline here, not
-# something the software enforces -- enforcing it is what `ltspm`'s supervisor
+# the cryostat allows.  Walking up in steps is an operator discipline here, not
+# something the software enforces -- enforcing it is what `ltspm3`'s supervisor
 # is for, and that is a different program.
 #
 # ---------------------------------------------------------------------------
-# THE RIG, AS MEASURED 2026-08-24 16:10
+# THE CRYOSTAT, AS MEASURED 2026-08-24 16:10
 # ---------------------------------------------------------------------------
 #
 #   218  Sample      4.742 K     336  A RAD SHIELD   39.227 K
@@ -74,7 +74,7 @@
 #   336 loop 1  setpoint 295.0 K, heater 1 at 0.0%, range 0
 #   336 loop 2  setpoint 289.2 K, heater 2 at 100.0%, RAILED
 #
-# The sample is at 4.7 K and the heater is at 0%.  The plant curve above was
+# The sample is at 4.7 K and the heater is at 0%.  The curve above was
 # measured from a bath, not from 4.7 K, so treat the first few steps as
 # measurement rather than prediction.
 
@@ -116,7 +116,7 @@ instruments:
     # Still 0.  This config has no `control:` section and computes no heater
     # output: every percentage it sends was typed by a person.  `control_input`
     # is what a SOFTWARE loop would steer by, and there is no software loop
-    # here -- that is `ltspm`, and it is a different program.
+    # here -- that is `ltspm3`, and it is a different program.
     control_input: 0
 
     analog_output: 1

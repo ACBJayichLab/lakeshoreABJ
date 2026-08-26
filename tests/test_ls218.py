@@ -1,7 +1,7 @@
 """The 218 driver, and the one write it has.
 
 The 218 is a monitor with an actuator bolted on: eight inputs it can only read,
-and an analog output that on the LTSPM rig is the sample heater.  A 33x can
+and an analog output that on the LTSPM3 cryostat is the sample heater.  A 33x can
 separate a setpoint from the range that makes it matter, and be gated in two
 places accordingly.  Here there is one number and it *is* the power, so the
 guards around that single command are the whole of the safety story and are
@@ -12,13 +12,13 @@ import pytest
 
 from lschart.instruments.base import InstrumentError
 from lschart.instruments.ls218 import LS218, AnalogOutputConfig
-from lschart.instruments.sim import Sim218, SimulatedRig
+from lschart.instruments.sim import Sim218, SimulatedCryostat
 from lschart.transport import LoopbackTransport, TransportError
 
 
 def build(**kw):
-    rig = SimulatedRig(None, start_k=96.0)
-    sim = Sim218(rig)
+    cryostat = SimulatedCryostat(None, start_k=96.0)
+    sim = Sim218(cryostat)
     kw.setdefault("channels", {1: "Sample", 2: "Cold Head", 3: "Shield"})
     inst = LS218(LoopbackTransport(sim, inter_command_delay=0.0), **kw)
     return inst, sim
@@ -67,7 +67,7 @@ def test_the_analog_output_is_read_only_by_default():
 def test_even_zero_is_refused_without_the_gate():
     """A box we may not write to is one we may not write zero to.
 
-    On a shared rig that output may be somebody else's, and 0% is as much of a
+    On a shared cryostat that output may be somebody else's, and 0% is as much of a
     change to it as 60% is.
     """
     inst, sim = build()
@@ -82,8 +82,8 @@ def test_the_transport_interlock_beats_the_gate():
     The refusal comes from the transport, not the driver, which is the whole
     point: a bug that flipped `allow_writes` still cannot reach the heater.
     """
-    rig = SimulatedRig(None, start_k=96.0)
-    sim = Sim218(rig)
+    cryostat = SimulatedCryostat(None, start_k=96.0)
+    sim = Sim218(cryostat)
     inst = LS218(
         LoopbackTransport(sim, inter_command_delay=0.0, read_only=True),
         allow_writes=True,
@@ -98,7 +98,7 @@ def test_the_transport_interlock_beats_the_gate():
 # -- the ceiling ------------------------------------------------------------
 
 def test_a_percentage_above_the_ceiling_is_refused():
-    """~10 K/% on this plant: the ceiling is the guard, not `0 <= pct <= 100`."""
+    """~10 K/% on this cryostat: the ceiling is the guard, not `0 <= pct <= 100`."""
     inst, sim = build(allow_writes=True, max_output_pct=70.0)
     with pytest.raises(ValueError, match="70"):
         inst.set_analog_percent(85.0)
@@ -119,7 +119,7 @@ def test_the_ceiling_itself_is_allowed():
 
 
 def test_the_default_ceiling_does_not_restrict():
-    """Generic code must not invent a rig's limit; the config supplies it."""
+    """Generic code must not invent a cryostat's limit; the config supplies it."""
     inst, _ = build(allow_writes=True)
     assert inst.max_output_pct == 100.0
 
@@ -157,10 +157,10 @@ def test_a_write_is_confirmed_by_reading_it_back():
 def test_dac_quantisation_is_not_mistaken_for_a_failed_write():
     """The DAC steps 0.01% and AOUT? answers to two decimals.
 
-    An exact comparison would fail on the very value this rig actually uses.
+    An exact comparison would fail on the very value this cryostat actually uses.
     """
     inst, sim = build(allow_writes=True)
-    inst.set_analog_percent(63.076)          # the rig's own operating point
+    inst.set_analog_percent(63.076)          # the cryostat's own operating point
     assert sim.analog_pct == pytest.approx(63.08, abs=1e-9)
 
 

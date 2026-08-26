@@ -16,7 +16,7 @@ under the same serial number.  Recovery therefore lives in this base class, so
 every transport gets it and no driver has to think about it:
 
 * **opening is lazy.**  Constructing a transport never touches hardware, so a
-  recorder starts, records what it can, and keeps trying for the rest.  A rig
+  recorder starts, records what it can, and keeps trying for the rest.  A cryostat
   that is half-powered-on at boot converges instead of failing.
 * **a single failed transaction does not condemn the link.**  It takes
   ``failures_before_reconnect`` consecutive failures, because one GPIB timeout
@@ -446,7 +446,7 @@ class LoopbackTransport(Transport):
 
     There is no link to lose, so it is open from the start and reconnection is
     off: a simulated comms failure should surface as the error it is, not be
-    smoothed over by a retry the real rig would not get either.
+    smoothed over by a retry the real cryostat would not get either.
     """
 
     def __init__(self, device, *, inter_command_delay: float = 0.0, **kw) -> None:

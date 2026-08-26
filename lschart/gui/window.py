@@ -2,7 +2,7 @@
 
 A viewer that can also command, and the distinction matters: it holds no
 instrument link and takes no lock, so it can be opened, closed and reopened
-while the recorder runs, and two people can watch the same rig at once.  Every
+while the recorder runs, and two people can watch the same cryostat at once.  Every
 control in it writes exactly the file MATLAB writes and is refused by exactly
 the same interlocks -- it has no privileges MATLAB lacks, and what it has
 instead is a confirmation dialog that says out loud which buttons apply power.
@@ -264,8 +264,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("waiting for the recorder…")
         # Settle the control panel before the first poll.  Otherwise a viewer
         # opened against a recorder with nothing writable shows every control,
-        # greyed out -- which reads as "this rig has all of these" rather than
-        # "this rig has none of them".
+        # greyed out -- which reads as "this cryostat has all of these" rather than
+        # "this cryostat has none of them".
         self._instrument_changed()
 
     def _left_panel(self) -> QtWidgets.QWidget:
@@ -284,7 +284,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.readouts.setFont(font)
         self.readouts.setSizePolicy(QtWidgets.QSizePolicy.Preferred,
                                     QtWidgets.QSizePolicy.Fixed)
-        # Sized to its rows in _update_readouts, not given a stretch: a rig
+        # Sized to its rows in _update_readouts, not given a stretch: a cryostat
         # with four channels should not reserve half the panel for the six it
         # does not have, while the trace list underneath goes unscrollable.
         box.addWidget(self.readouts, 0)
@@ -346,7 +346,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setWidget(traces)
         scroll.setMinimumHeight(160)
-        # The one thing in this panel that should absorb spare height: a rig
+        # The one thing in this panel that should absorb spare height: a cryostat
         # with two instruments has a dozen traces, and hunting for one of them
         # through a three-line window is the difference between a usable
         # viewer and a tolerated one.
@@ -361,7 +361,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _command_box(self) -> QtWidgets.QWidget:
         """The control panel: one instrument selector, then whatever it can do.
 
-        Three controls rather than one, because the rigs this drives are not
+        Three controls rather than one, because the cryostats this drives are not
         the same shape.  A 33x takes a setpoint and a range and they are
         genuinely separate acts -- the setpoint is inert until the range is
         raised.  A 218 has neither: one analog percentage that *is* the power.
@@ -415,7 +415,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.setpoint_spin.setDecimals(3)
         self.setpoint_spin.setSuffix(" K")
         self.setpoint_spin.setValue(0.0)
-        # The box tracks the rig's own setpoint until the operator touches it;
+        # The box tracks the cryostat's own setpoint until the operator touches it;
         # the flag is what stops a fill from fighting a number being typed.
         self._setpoint_dirty = False
         self.setpoint_spin.valueChanged.connect(self._setpoint_edited)
@@ -475,7 +475,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.analog_spin.setDecimals(3)
         self.analog_spin.setSuffix(" %")
         self.analog_spin.setValue(0.0)
-        # Same arrangement as the setpoint: the rig's live output until edited.
+        # Same arrangement as the setpoint: the cryostat's live output until edited.
         self._analog_dirty = False
         self.analog_spin.valueChanged.connect(self._analog_edited)
         form.addRow("Output", self.analog_spin)
@@ -698,7 +698,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._sync_command_values()
         self._update_gate_notes()
 
-    # -- filling the command widgets with what the rig is at -----------------
+    # -- filling the command widgets with what the cryostat is at -----------------
 
     def _aux_value(self, name: str) -> float | None:
         """One scalar from the status file's aux block, by its full name.
@@ -743,7 +743,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         The values come from the recorder's readback (the aux block), so they
         carry the cycle delay; they are what the box says, not a promise.
 
-        Filling repeats every tick while a widget still shows the rig's value,
+        Filling repeats every tick while a widget still shows the cryostat's value,
         so a setpoint changed elsewhere (MATLAB, another viewer) arrives here
         too.  Once the operator edits a field it stops tracking -- a fill that
         fought the number being typed would be worse than a stale one -- until
@@ -806,7 +806,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         Greying these out would be the wrong shape.  Both commands are always
         allowed in the direction that removes heat -- range 0, output 0% -- so a
         disabled control would take away the one thing that always works, and
-        on a rig you have just decided to make safe that is precisely the wrong
+        on a cryostat you have just decided to make safe that is precisely the wrong
         moment to hide the button.
         """
         if self.source.allows_heater_range():
@@ -817,7 +817,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 "(ipc.allow_heater_range: false). Setting 0 still works.")
         if self.source.allows_analog_output():
             self.analog_note.setText(
-                "No ramp: this is one step, as fast as the plant allows.")
+                "No ramp: this is one step, as fast as the cryostat allows.")
             self.analog_note.setStyleSheet("color:#37474f;")
         else:
             self.analog_note.setText(
@@ -836,11 +836,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
                     "color:#1b5e20;" if ok else "color:#b71c1c;")
                 self._pending = None
                 # The question the fields were answering has been settled one
-                # way or the other; let them track the rig's readback again.
+                # way or the other; let them track the cryostat's readback again.
                 # A refused command has no readback to wait for -- and an
                 # accepted one keeps its guard until the readback agrees,
                 # which is what stops a stale aux value snapping the field
-                # back to where the rig was before the command landed.
+                # back to where the cryostat was before the command landed.
                 if not ok:
                     self._awaiting = None
                 self._setpoint_dirty = False
@@ -1217,7 +1217,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 "percentage is the power, and there is no setpoint that has "
                 "to be reached first.\n\n"
                 "There is NO RAMP. The output goes there in one step and the "
-                "plant follows as fast as it can.\n\n"
+                "cryostat follows as fast as it can.\n\n"
                 f"The recorder's ceiling is {caps['max_output_pct']:g}%. Know "
                 "the gain of your heater before confirming — on a cryostat "
                 "sample heater a single percent can be tens of kelvin."

@@ -293,7 +293,7 @@ def test_a_button_press_is_not_swallowed_by_the_queued_autorange(
     arrives *after* the press has computed its new range -- so computing
     before disabling let the signal overwrite the press with the very view
     it was leaving.  New samples keep an autoscale perpetually queued while
-    the recorder runs, which is why this bit on the rig and not in the
+    the recorder runs, which is why this bit on the cryostat and not in the
     first single-press test.
     """
     _grow_the_log(viewer)
@@ -432,7 +432,7 @@ def test_a_drag_leaves_no_view_button_checked(viewer):
 # button is not aimed at whichever instrument happens to be selected.
 
 
-def rig(tmp_path, qt_app, links, commands=None, csv_name="log.csv"):
+def cryostat(tmp_path, qt_app, links, commands=None, csv_name="log.csv"):
     """A viewer watching a recorder with the given instruments."""
     from lschart.ipc.commands import CommandSpool
 
@@ -485,7 +485,7 @@ def queued(window) -> list[dict]:
 
 def test_a_controller_gets_a_setpoint_and_a_range_but_no_analog_control(
         tmp_path, qt_app):
-    w = rig(tmp_path, qt_app, [CTRL])
+    w = cryostat(tmp_path, qt_app, [CTRL])
     assert showing(w.setpoint_group) and showing(w.range_group)
     assert not showing(w.analog_group)
     assert w.loop_spin.maximum() == 4
@@ -496,7 +496,7 @@ def test_a_controller_gets_a_setpoint_and_a_range_but_no_analog_control(
 
 def test_a_218_gets_an_analog_control_and_neither_of_the_others(tmp_path, qt_app):
     """It has no loop to aim a setpoint at, and no range to raise."""
-    w = rig(tmp_path, qt_app, [MON])
+    w = cryostat(tmp_path, qt_app, [MON])
     assert showing(w.analog_group)
     assert not showing(w.setpoint_group) and not showing(w.range_group)
     w.close()
@@ -504,7 +504,7 @@ def test_a_218_gets_an_analog_control_and_neither_of_the_others(tmp_path, qt_app
 
 def test_the_recorders_ceiling_caps_the_spin_box(tmp_path, qt_app):
     """The widget must not be able to express a value that will be refused."""
-    w = rig(tmp_path, qt_app, [MON])
+    w = cryostat(tmp_path, qt_app, [MON])
     assert w.analog_spin.maximum() == 70.0
     w.analog_spin.setValue(90.0)
     assert w.analog_spin.value() == 70.0
@@ -513,8 +513,8 @@ def test_the_recorders_ceiling_caps_the_spin_box(tmp_path, qt_app):
 
 
 def test_switching_instrument_switches_the_controls(tmp_path, qt_app):
-    """The LTSPM shape, if both boxes were writable: one panel, two shapes."""
-    w = rig(tmp_path, qt_app, [CTRL, MON])
+    """The LTSPM3 shape, if both boxes were writable: one panel, two shapes."""
+    w = cryostat(tmp_path, qt_app, [CTRL, MON])
     w.instrument_combo.setCurrentIndex(0)
     assert showing(w.setpoint_group) and not showing(w.analog_group)
     w.instrument_combo.setCurrentIndex(1)
@@ -524,7 +524,7 @@ def test_switching_instrument_switches_the_controls(tmp_path, qt_app):
 
 def test_a_read_only_box_is_not_offered_as_a_target(tmp_path, qt_app):
     theirs = dict(CTRL, writable=False)
-    w = rig(tmp_path, qt_app, [theirs, MON])
+    w = cryostat(tmp_path, qt_app, [theirs, MON])
     assert [w.instrument_combo.itemText(i)
             for i in range(w.instrument_combo.count())] == ["ls218"]
     w.close()
@@ -535,9 +535,9 @@ def test_a_shut_gate_is_announced_and_does_not_disable_the_control(
     """Greying it out would remove the one direction that always works.
 
     Range 0 and 0% are always permitted, so a disabled control would take the
-    button away at exactly the moment somebody wants to make the rig safe.
+    button away at exactly the moment somebody wants to make the cryostat safe.
     """
-    w = rig(tmp_path, qt_app, [MON],
+    w = cryostat(tmp_path, qt_app, [MON],
             commands={"accepted": True, "recent": [],
                       "allow_analog_output": False})
     assert "allow_analog_output" in w.analog_note.text()
@@ -546,7 +546,7 @@ def test_a_shut_gate_is_announced_and_does_not_disable_the_control(
 
 
 def test_an_open_gate_still_warns_that_there_is_no_ramp(tmp_path, qt_app):
-    w = rig(tmp_path, qt_app, [MON],
+    w = cryostat(tmp_path, qt_app, [MON],
             commands={"accepted": True, "recent": [],
                       "allow_analog_output": True})
     assert "No ramp" in w.analog_note.text()
@@ -555,7 +555,7 @@ def test_an_open_gate_still_warns_that_there_is_no_ramp(tmp_path, qt_app):
 
 def test_sending_an_analog_percent_queues_the_right_command(
         tmp_path, qt_app, monkeypatch):
-    w = rig(tmp_path, qt_app, [MON])
+    w = cryostat(tmp_path, qt_app, [MON])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
     w.analog_spin.setValue(43.0)
     w.analog_button.click()
@@ -568,7 +568,7 @@ def test_sending_an_analog_percent_queues_the_right_command(
 
 def test_sending_a_heater_range_queues_the_right_command(
         tmp_path, qt_app, monkeypatch):
-    w = rig(tmp_path, qt_app, [CTRL])
+    w = cryostat(tmp_path, qt_app, [CTRL])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
     w.heater_combo.setCurrentIndex(1)                 # output 2
     w.range_combo.setCurrentIndex(3)                  # range 3, high
@@ -580,7 +580,7 @@ def test_sending_a_heater_range_queues_the_right_command(
 
 
 def test_cancelling_the_dialog_queues_nothing(tmp_path, qt_app, monkeypatch):
-    w = rig(tmp_path, qt_app, [MON])
+    w = cryostat(tmp_path, qt_app, [MON])
     monkeypatch.setattr(w, "_confirm", lambda *a: False)
     w.analog_spin.setValue(43.0)
     w.analog_button.click()
@@ -592,7 +592,7 @@ def test_raising_power_is_confirmed_in_blunter_terms_than_lowering_it(
         tmp_path, qt_app, monkeypatch):
     """The dialog is the only thing between a click and heat in a cryostat."""
     seen = []
-    w = rig(tmp_path, qt_app, [MON])
+    w = cryostat(tmp_path, qt_app, [MON])
     monkeypatch.setattr(w, "_confirm", lambda title, text: seen.append(text) or True)
 
     w.analog_spin.setValue(43.0)
@@ -612,7 +612,7 @@ def test_the_range_dialog_quotes_the_setpoint_it_is_about_to_chase(
         tmp_path, qt_app, monkeypatch):
     """Range 3 means nothing without the number the loop will drive toward."""
     seen = []
-    w = rig(tmp_path, qt_app, [CTRL])
+    w = cryostat(tmp_path, qt_app, [CTRL])
     monkeypatch.setattr(w, "_confirm", lambda title, text: seen.append(text) or True)
     w.range_combo.setCurrentIndex(2)
     w.range_button.click()
@@ -622,8 +622,8 @@ def test_the_range_dialog_quotes_the_setpoint_it_is_about_to_chase(
 
 def test_the_panic_button_is_not_aimed_at_the_selected_instrument(
         tmp_path, qt_app, monkeypatch):
-    """It means stop heating, which on a two-box rig is not one box."""
-    w = rig(tmp_path, qt_app, [CTRL, MON])
+    """It means stop heating, which on a two-box cryostat is not one box."""
+    w = cryostat(tmp_path, qt_app, [CTRL, MON])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
     w.instrument_combo.setCurrentIndex(0)
     w.off_button.click()
@@ -635,7 +635,7 @@ def test_the_panic_button_is_not_aimed_at_the_selected_instrument(
 
 def test_one_unacknowledged_command_locks_every_button(tmp_path, qt_app, monkeypatch):
     """Otherwise a range can be queued against a setpoint that was refused."""
-    w = rig(tmp_path, qt_app, [CTRL])
+    w = cryostat(tmp_path, qt_app, [CTRL])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
     w.send_button.click()
     assert not any(b.isEnabled() for b in w._buttons())
@@ -643,7 +643,7 @@ def test_one_unacknowledged_command_locks_every_button(tmp_path, qt_app, monkeyp
 
 
 def test_an_acknowledgement_releases_every_button(tmp_path, qt_app, monkeypatch):
-    w = rig(tmp_path, qt_app, [CTRL])
+    w = cryostat(tmp_path, qt_app, [CTRL])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
     w.send_button.click()
     cid = w._pending[0]
@@ -660,10 +660,10 @@ def test_an_acknowledgement_releases_every_button(tmp_path, qt_app, monkeypatch)
     w.close()
 
 
-# -- the fields fill with what the rig is at ---------------------------------
+# -- the fields fill with what the cryostat is at ---------------------------------
 #
 # A command box that opens at zero invites sending zero-adjacent numbers at a
-# rig that is nowhere near them.  What each field should start from is the
+# cryostat that is nowhere near them.  What each field should start from is the
 # recorder's own readback -- and swapping to a 218 should find the percentage
 # it is already at, not present 0% as if that were a neutral choice.
 

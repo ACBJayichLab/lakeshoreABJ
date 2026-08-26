@@ -97,7 +97,7 @@ consequences:
   about **10 kelvin per percent** near the operating point. A misplaced decimal
   is worth tens of kelvin, which is why the recorder carries a `max_output_pct`
   ceiling and refuses anything above it.
-- **There is no ramp.** `setAnalog(60)` from 0 is a single step and the plant
+- **There is no ramp.** `setAnalog(60)` from 0 is a single step and the sample
   goes there as fast as it can. Walking up in stages is your discipline, not
   the software's.
 

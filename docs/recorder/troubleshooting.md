@@ -38,13 +38,13 @@ this, the filtering has been bypassed.
 
 **`already running` and exit 2.** Another recorder holds the lock
 (`runtime.lock_path`). That is the design: two recorders on one instrument
-fight over the port. Two genuinely different rigs need two different lock paths.
+fight over the port. Two genuinely different cryostats need two different lock paths.
 
 **`check` says `INVALID:`.** Unknown keys are errors. Read the message — it
 names the key.
 
 **`--arm was given but no controller is configured`.** `--arm` only means
-something for `ltspm` with a `control:` section. Plain `lschart` records.
+something for `ltspm3` with a `control:` section. Plain `lschart` records.
 
 ## Running
 
