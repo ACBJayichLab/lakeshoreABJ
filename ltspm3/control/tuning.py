@@ -63,7 +63,7 @@ from __future__ import annotations
 import bisect
 import enum
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 class ControlPhase(enum.Enum):

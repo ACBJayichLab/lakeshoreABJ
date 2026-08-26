@@ -12,7 +12,8 @@ __all__ = [
     "ExponentialFilter", "MeasurementFilter", "MedianFilter", "SlopeEstimator",
     "HealthState", "SensorGuard", "SensorGuardConfig",
     "CoherenceConfig", "CoherenceMonitor",
-    "Feedforward", "FeedforwardConfig", "PID", "PIDConfig", "RampConfig", "SetpointRamp", "SetpointSmoother",
+    "Feedforward", "FeedforwardConfig", "PID", "PIDConfig",
+    "RampConfig", "SetpointRamp", "SetpointSmoother",
     "ControlPhase", "OperatingPoint", "PlantSchedule", "Tuner", "TuningConfig", "SigmaDeltaDither",
     "HeaterSupervisor", "SupervisorConfig", "SupervisorState", "LoopMode",
 ]

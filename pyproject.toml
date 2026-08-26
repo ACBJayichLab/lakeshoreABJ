@@ -18,7 +18,7 @@ dependencies = [
 # the supported path for a 335 on a COM port; the pyvisa path stays for GPIB.
 serial = ["lakeshore>=1.10"]
 gui = ["pyqtgraph>=0.13", "PySide6>=6.6"]
-dev = ["pytest>=8.0", "xlrd>=2.0"]
+dev = ["pytest>=8.0", "xlrd>=2.0", "ruff>=0.6"]
 
 [project.scripts]
 lschart = "lschart.__main__:main"
@@ -37,6 +37,18 @@ build-backend = "setuptools.build_meta"
 # must be picked up without anything else changing here.
 [tool.setuptools.packages.find]
 include = ["lschart*", "ltspm3*"]
+
+# Deliberately narrow.  `F` (pyflakes) is what would have caught the dead
+# imports and the `importorskip` for a dependency that is not optional; `E9` is
+# syntax and runtime errors.  Style rules are left off on purpose -- the layout
+# here is a house style, not an accident, and 88 columns would reflow 82 lines
+# of it to no benefit.  100 is what the code already keeps to.
+[tool.ruff]
+line-length = 100
+extend-exclude = ["reference"]
+
+[tool.ruff.lint]
+select = ["F", "E9", "E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "tests_ltspm3"]

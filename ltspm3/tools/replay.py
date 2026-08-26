@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from ..control.coherence import CoherenceConfig, CoherenceMonitor
 from ..control.filters import MeasurementFilter
 from ..control.health import HealthState, SensorGuard, SensorGuardConfig
-from lschart.model import Reading, Validity
+from lschart.model import Reading
 from lschart.tools.import_xls import ChartLog, load
 
 #: The 218 input carrying the sample, and the 336 channel names.
