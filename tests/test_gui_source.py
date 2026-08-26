@@ -164,8 +164,15 @@ def test_a_log_with_no_date_in_its_name_has_nothing_to_backfill_from(tmp_path):
 
 
 def test_the_backfill_stops_once_its_coverage_is_met(tmp_path):
-    base = _dt.datetime.now().replace(hour=12, minute=0, second=0,
-                                      microsecond=0)
+    # Anchored to now, not to a fixed hour of the day.  `_backfill` measures
+    # its budget from `datetime.now()` -- deliberately, since the promise is to
+    # cover so many hours of *wall clock* -- so pinning these logs to noon made
+    # the gap between the data and the cutoff depend on what time the suite
+    # happened to run.  From 18:00 local onwards, now - 30 h lands after
+    # yesterday's first sample, the walk breaks a file early, and the day
+    # before never gets probed.  Passed every morning and failed every
+    # evening, in every timezone, until CI ran it at 21:00 UTC.
+    base = _dt.datetime.now().replace(microsecond=0)
     day = _dt.timedelta(days=1)
 
     def day_log(age_days, name):
