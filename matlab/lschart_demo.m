@@ -100,7 +100,7 @@ function lschart_demo(directory)
     fprintf('\n');
 
     % A setpoint is inert while its heater range is 0, so the write below is
-    % safe on a cold, idle rig and is NOT safe on one whose range has been
+    % safe on a cold, idle cryostat and is NOT safe on one whose range has been
     % raised.  It stays commented out on purpose: uncomment it when you have
     % read docs/recorder/file-interface.md and mean it.
     %

@@ -26,7 +26,7 @@ directory is the whole interface.
 | | |
 |---|---|
 | `status.json` | rewritten **in full** every cycle via `os.replace`, so a reader sees one cycle or the other and never a torn mixture |
-| `commands/` | a maildir. A client writes `<stem>.json.tmp` and renames it to `<stem>.json`; the recorder globs `*.json`, applies, deletes. No locking, no contention |
+| `commands/` | the command spool, maildir-style. A client writes `<stem>.json.tmp` and renames it to `<stem>.json`; the recorder globs `*.json`, applies, deletes. No locking, no contention |
 
 ### `status.json`
 
