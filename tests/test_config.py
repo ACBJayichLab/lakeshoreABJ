@@ -4,12 +4,15 @@ Generic only.  The `control:` section belongs to `ltspm3`, and its tests live in
 `tests_ltspm3/test_config_control.py`.
 """
 
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
 import pytest
 
 from lschart import config as config_mod
 from lschart.config import AppConfig, ConfigError
-
-yaml = pytest.importorskip("yaml")
 
 
 def write(tmp_path, text):
@@ -50,13 +53,50 @@ def test_unknown_key_is_rejected(tmp_path):
 
 
 def test_an_unregistered_extension_section_is_unknown(tmp_path):
-    """`control:` is only a legal key once `ltspm3` has registered it.
+    """The generic mechanism: a section nobody registered is not a valid key.
 
-    A recorder-only install must refuse a config that asks it to close a heater
-    loop, rather than ignoring the section and quietly recording instead.
+    Deliberately a name no package claims.  `control:` cannot be used here --
+    importing `tests_ltspm3` anywhere in the same session registers it process
+    wide, so this would pass or fail depending on test order.  The `control:`
+    case gets its own subprocess test below.
     """
     with pytest.raises(ConfigError, match="unknown key"):
         config_mod.load(write(tmp_path, "sample_pid:\n  enabled: true\n"))
+
+
+def test_a_recorder_only_install_refuses_an_ltspm3_config(tmp_path):
+    """The coworker case, and the one CLAUDE.md promises: `lschart` REFUSES it
+    and says why.
+
+    This has to run in a fresh interpreter.  `register_section` mutates process
+    wide state, so once anything has imported `ltspm3.config` -- which the rest
+    of this suite does -- `control:` is a legal key for the remainder of the
+    session and the refusal cannot be observed in-process at all.  That is why
+    the behaviour went untested despite looking covered.
+    """
+    cfg = tmp_path / "ltspm3.yaml"
+    cfg.write_text("control:\n  enabled: true\n")
+    script = textwrap.dedent(f"""
+        import sys
+        sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+        from lschart import config
+        assert "ltspm3" not in sys.modules, "the point of the subprocess"
+        try:
+            config.load({str(cfg)!r})
+        except config.ConfigError as exc:
+            print(exc)
+        else:
+            print("ACCEPTED")
+    """)
+    out = subprocess.run([sys.executable, "-c", script],
+                         capture_output=True, text=True, check=True).stdout
+
+    assert "ACCEPTED" not in out, "recorded silently instead of refusing"
+    assert "unknown key" in out and "control" in out
+    # Refusing is not enough on its own: the message has to send the reader
+    # somewhere.  This is the error a coworker hits first.
+    assert "ltspm3" in out, "refused without naming what provides the section"
+    assert "python -m ltspm3" in out, "refused without saying what to run instead"
 
 
 def test_nested_sections_are_built(tmp_path):
@@ -118,7 +158,7 @@ def test_a_cadence_the_bus_cannot_sustain_is_rejected():
         inst.driver = "visa"
         inst.read_status = True
     cfg.acquisition.interval_s = 0.5
-    with pytest.raises(ConfigError, match="poll cycle needs"):
+    with pytest.raises(ConfigError, match="cycle needs"):
         cfg.validate()
 
 

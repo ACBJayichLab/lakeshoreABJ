@@ -11,6 +11,7 @@ xlrd is not installed.
 
 import glob
 import os
+from pathlib import Path
 
 import pytest
 
@@ -19,13 +20,18 @@ from ltspm3.tools import replay as replay_mod
 
 pytest.importorskip("xlrd")
 
-LOGS = "reference/logs"
+# Resolved from this file, not from the working directory.  A relative path
+# made the whole module skip -- saying "reference logs not present" when they
+# were merely somewhere else -- for anyone who ran pytest from a subdirectory.
+# Silently losing the only tests that run on genuine data is worse than the
+# noise of a hard failure.
+LOGS = str(Path(__file__).resolve().parents[1] / "reference" / "logs")
 GLITCH_LOG = f"{LOGS}/CD8/cd8_2_24_2026_sample_cooldown.xls"
 CLEAN_LOG = f"{LOGS}/CD8/cd8_2_24_2026_sample_monitor7.xls"
 
 pytestmark = pytest.mark.skipif(
     not os.path.isdir(LOGS) or not glob.glob(f"{LOGS}/CD*/*.xls"),
-    reason="reference logs not present",
+    reason=f"reference logs not present under {LOGS}",
 )
 
 

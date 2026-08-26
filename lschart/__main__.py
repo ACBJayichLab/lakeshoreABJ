@@ -17,6 +17,7 @@ import time
 
 from . import config as config_mod
 from .app import Application
+from .instruments import InstrumentError
 from .ipc import AlreadyRunning, InstanceLock
 
 log = logging.getLogger("lschart")
@@ -147,7 +148,7 @@ def cmd_check(args) -> int:
               f"{'accepted from ' + ipc.command_path() if ipc.accept_commands else 'not accepted'}"
               f"{'  (' + ' and '.join(allowed) + ' ALLOWED from a file)' if allowed else ''}")
     else:
-        print("  status file    : disabled (ipc.enabled: false) -- the GUI and "
+        print("  status file    : disabled (ipc.enabled: false) -- the viewer and "
               "MATLAB have nothing to read")
 
     # Two gates, reported together, because "writable" is a lie about a box
@@ -297,6 +298,13 @@ def cmd_set(args) -> int:
                   f"of range {r} ({HEATER_RANGE_NAMES.get(r, r)})")
     except PermissionError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
+        return 1
+    except InstrumentError as exc:
+        # A write that did not read back.  This is the one failure here that
+        # says something about the *instrument's* state rather than about the
+        # command, so it must not arrive as a traceback: `InstrumentError` is a
+        # RuntimeError and was falling straight through the clause below.
+        print(f"FAILED: {exc}", file=sys.stderr)
         return 1
     except (ValueError, OSError) as exc:
         print(f"FAILED: {exc}", file=sys.stderr)

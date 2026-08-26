@@ -48,7 +48,6 @@ class Poller:
         status_every_n_cycles: int = 0,
         on_frame: Callable[[Frame], None] | None = None,
         clock=time.monotonic,
-        sleeper=time.sleep,
     ) -> None:
         self.instruments = instruments
         self.interval_s = interval_s
@@ -60,7 +59,6 @@ class Poller:
         self.status_every_n_cycles = status_every_n_cycles
         self.on_frame = on_frame
         self.clock = clock
-        self.sleeper = sleeper
 
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -147,7 +145,7 @@ class Poller:
         if self.on_frame is not None:
             try:
                 self.on_frame(frame)
-            except Exception:  # pragma: no cover - a GUI bug must not stop logging
+            except Exception:  # pragma: no cover - a viewer bug must not stop logging
                 log.exception("on_frame callback raised")
         return frame
 
@@ -166,7 +164,7 @@ class Poller:
             try:
                 self.step()
             except Exception:  # pragma: no cover - never let the thread die
-                log.exception("poll cycle failed")
+                log.exception("cycle failed")
 
             next_at += self.interval_s
             now = self.clock()

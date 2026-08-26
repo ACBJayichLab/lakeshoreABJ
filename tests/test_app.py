@@ -6,8 +6,6 @@ from lschart.app import Application
 from lschart.config import AppConfig, ConfigError, LS33xConfig, LS218Config
 from lschart.instruments.ls33x import LS33x
 
-yaml = pytest.importorskip("yaml")
-
 
 def cfg_with(*instruments, **kw):
     cfg = AppConfig(instruments=list(instruments), **kw)

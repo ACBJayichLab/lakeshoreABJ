@@ -41,7 +41,7 @@ from .filters import MeasurementFilter
 from .health import HealthState, SensorGuard, SensorGuardConfig
 from .pid import PID, PIDConfig
 from .ramp import RampConfig, SetpointRamp, SetpointSmoother
-from .tuning import ControlPhase, Tuner, TuningConfig
+from .tuning import Tuner, TuningConfig
 
 log = logging.getLogger(__name__)
 
@@ -656,7 +656,6 @@ class HeaterSupervisor:
         s.demand_pct = terms.unclamped
         s.error_k = terms.error
 
-        current = self.output_pct if self.output_pct is not None else terms.output
         anomalies: list[str] = []
 
         # A commanded ramp buys exactly the lag it commands, and no more.  The

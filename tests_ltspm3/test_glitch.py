@@ -15,22 +15,14 @@ from ltspm3.control import HealthState, LoopMode, SupervisorState
 from ltspm3.control.health import SensorGuardConfig
 
 
-def armed(harness, **kw):
-    h = harness(**kw)
-    h.settle_filter(40)
-    h.sup.set_mode(LoopMode.PID)
-    h.step(10)
-    return h
-
-
-def test_the_280_second_glitch_is_ridden_out_without_moving_the_heater(harness):
+def test_the_280_second_glitch_is_ridden_out_without_moving_the_heater(armed):
     """The longest observed event, at the observed cadence.
 
     The old fault_after_s of 60 s would have escalated this to a ramp-down and,
     with require_ack_after_fault, ended the run -- for a sensor burp that heals
     itself in five minutes.
     """
-    h = armed(harness)
+    h = armed()
     before = h.sup.output_pct
 
     h.cryostat.inject(glitch_channels={"218.1"})
@@ -47,9 +39,9 @@ def test_the_280_second_glitch_is_ridden_out_without_moving_the_heater(harness):
     assert h.sup.output_pct == pytest.approx(before, abs=0.05)
 
 
-def test_glitch_never_reads_zero_so_range_checks_alone_would_miss_it(harness):
+def test_glitch_never_reads_zero_so_range_checks_alone_would_miss_it(armed):
     """Documents why valid_min_k cannot be the detector for this."""
-    h = armed(harness)
+    h = armed()
     h.cryostat.inject(glitch_channels={"218.1"})
     h.step(40)
 
@@ -59,12 +51,12 @@ def test_glitch_never_reads_zero_so_range_checks_alone_would_miss_it(harness):
     assert any(s.validity.value in ("slew_reject", "incoherent") for s in h.history[-40:])
 
 
-def test_a_corroborated_fast_cooldown_is_believed(harness):
+def test_a_corroborated_fast_cooldown_is_believed(armed):
     """-6.5 K in one 4 s sample is real: monitor7 recorded it on all three inputs.
 
     The old max_slew_k_per_s of 1.25 K/s rejected exactly this.
     """
-    h = armed(harness)
+    h = armed()
     h.cryostat.response.pct = 20.0                        # a genuine, large step down
     h.step(60)
 
@@ -73,9 +65,9 @@ def test_a_corroborated_fast_cooldown_is_believed(harness):
     assert not rejected, f"rejected {len(rejected)} samples of a genuine transient"
 
 
-def test_uncorroborated_move_is_rejected_even_below_the_hard_slew_limit(harness):
+def test_uncorroborated_move_is_rejected_even_below_the_hard_slew_limit(armed):
     """The coherence tier is what catches the smaller half of the glitch."""
-    h = armed(harness)
+    h = armed()
     h.cryostat.inject(glitch_channels={"218.1"},
                  glitch_low_k=h.equilibrium_k - 3.0,   # ~3 K excursions: well
                  glitch_high_k=h.equilibrium_k)        # under 5 K/s at 4 s

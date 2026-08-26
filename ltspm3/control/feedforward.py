@@ -53,7 +53,6 @@ setpoint moves instead of lagging it by a thermal time constant.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 from ..thermal_response import (

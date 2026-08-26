@@ -1,7 +1,7 @@
 """Recorder, ring buffer and poller."""
 
 import csv
-import os
+import time
 
 import pytest
 
@@ -189,3 +189,168 @@ def test_status_polling_is_throttled():
     for _ in range(8):
         p.step()
     assert seen.count(True) == 2, seen
+
+
+# -- the acquisition thread --------------------------------------------------
+#
+# Everything above drives `step()` by hand.  What follows is the loop around
+# it: the cadence, the thread, and the shutdown.  This is the part that has to
+# survive months unattended, and it was the least exercised part of the module.
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+class RecordingStop:
+    """Stands in for the poller's stop Event, so the schedule is observable.
+
+    `run` blocks on `_stop.wait(delay)`, so substituting this makes every
+    sleep the loop asks for visible, lets it "pass" without any real time, and
+    ends the loop after a fixed number of cycles.  No threads, no sleeping, and
+    the cadence arithmetic is checked directly rather than inferred from
+    wall-clock timings that would make the test flaky on a busy machine.
+    """
+
+    def __init__(self, clock, stop_after: int) -> None:
+        self.clock = clock
+        self.stop_after = stop_after
+        self.waits: list[float] = []
+        self._set = False
+
+    def is_set(self) -> bool:
+        return self._set
+
+    def set(self) -> None:
+        self._set = True
+
+    def clear(self) -> None:
+        self._set = False
+
+    def wait(self, delay: float) -> bool:
+        self.waits.append(delay)
+        self.clock.t += delay
+        if len(self.waits) >= self.stop_after:
+            self._set = True
+        return self._set
+
+
+class CostlyInstrument:
+    """An instrument whose reads take a scripted amount of (virtual) time."""
+
+    name = "costly"
+
+    def __init__(self, clock, costs):
+        self.clock = clock
+        self.costs = list(costs)
+        self.starts: list[float] = []
+
+    def read_frame(self):
+        self.starts.append(self.clock.t)
+        self.clock.t += self.costs.pop(0) if self.costs else 0.0
+        return {"Sample": Reading("Sample", 96.0)}, {}
+
+
+def test_the_cadence_does_not_drift_when_a_cycle_runs_long():
+    """The deadline comes from the previous *deadline*, not from the time the
+    last cycle happened to finish.
+
+    Otherwise every slow cycle retards the schedule permanently, and a log that
+    is meant to be on a 1 s grid quietly becomes 1.4 s after an afternoon of
+    retries.
+    """
+    clock = Clock()
+    inst = CostlyInstrument(clock, [0.4, 0.9, 0.4, 0.4])
+    p = Poller([inst], interval_s=1.0, clock=clock)
+    p._stop = RecordingStop(clock, stop_after=4)
+    p.run()
+
+    assert inst.starts == [0.0, 1.0, 2.0, 3.0], "the cycle drifted off its grid"
+
+
+def test_a_cycle_that_overran_badly_resets_rather_than_bursting():
+    """Catching up would mean firing several cycles back to back, which is the
+    one thing a paced GPIB bus cannot absorb.  The schedule restarts from now."""
+    clock = Clock()
+    inst = CostlyInstrument(clock, [3.0, 0.1, 0.1])
+    p = Poller([inst], interval_s=1.0, clock=clock)
+    p._stop = RecordingStop(clock, stop_after=2)
+    p.run()
+
+    # The overrun cycle goes straight round without waiting, and the schedule
+    # then restarts from where it actually is.  Without the reset the deadline
+    # would still be back at 1.0 s and the next two cycles would fire with no
+    # delay at all, working off a backlog into a bus that cannot absorb it --
+    # so every recorded wait being a real one is the whole assertion.
+    assert inst.starts == [0.0, 3.0, 4.0]
+    assert p._stop.waits == [pytest.approx(0.9), pytest.approx(0.9)], "burst-fired"
+
+
+def test_a_cycle_that_raises_does_not_kill_the_acquisition_thread():
+    """A months-long run must not end because one cycle threw.
+
+    `step` already contains per-instrument failures; this is the backstop for
+    everything else -- a recorder bug, a supervisor bug, a full disk.
+    """
+    clock = Clock()
+    calls = []
+
+    class Exploding:
+        name = "boom"
+
+        def read_frame(self):
+            calls.append(clock.t)
+            raise RuntimeError("not a TransportError")
+
+    p = Poller([Exploding()], interval_s=1.0, clock=clock)
+    p._stop = RecordingStop(clock, stop_after=3)
+    p.run()
+
+    assert len(calls) == 3, "the loop stopped at the first exception"
+
+
+def test_starting_and_stopping_actually_runs_cycles():
+    """The real thread, once: everything else here substitutes the event."""
+    inst = FakeInstrument()
+    p = Poller([inst], interval_s=0.001)
+    p.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        while p.cycles < 3 and time.monotonic() < deadline:
+            time.sleep(0.001)
+    finally:
+        p.stop(timeout=5.0)
+
+    assert p.cycles >= 3, "the thread never ran a cycle"
+    assert p._thread is None
+    assert inst.reads >= 3
+
+
+def test_starting_a_second_time_is_refused():
+    """Two acquisition threads would both drive the bus -- see the lock."""
+    p = Poller([FakeInstrument()], interval_s=0.001)
+    p.start()
+    try:
+        with pytest.raises(RuntimeError, match="already started"):
+            p.start()
+    finally:
+        p.stop(timeout=5.0)
+
+
+def test_stopping_one_that_never_started_is_harmless():
+    """`stop` runs on the shutdown path, which is reached from failures too."""
+    Poller([FakeInstrument()]).stop()
+
+
+def test_it_can_be_used_as_a_context_manager():
+    inst = FakeInstrument()
+    with Poller([inst], interval_s=0.001) as p:
+        deadline = time.monotonic() + 5.0
+        while p.cycles < 1 and time.monotonic() < deadline:
+            time.sleep(0.001)
+    assert p._thread is None, "left the thread running"
+    assert p.cycles >= 1

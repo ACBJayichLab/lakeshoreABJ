@@ -89,7 +89,7 @@ ZOOM_STEP = 1.5
 
 #: How long a command's readback guard may hold a field before it gives up.
 #: The guard bridges the gap between an acknowledgement and the readback that
-#: reflects it, which is a few poll cycles -- longer when the recorder reads
+#: reflects it, which is a few cycles -- longer when the recorder reads
 #: status only every Nth one.  It is a backstop, not a schedule: what it
 #: bounds is how long a field may keep showing what was *asked for* when the
 #: readback never comes back close enough to agree.  A field that is wrong

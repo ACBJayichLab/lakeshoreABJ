@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 
 from ..model import Reading, ReadingStatus, Validity
-from ..transport import Transport, TransportError
+from ..transport import Transport
 
 log = logging.getLogger(__name__)
 

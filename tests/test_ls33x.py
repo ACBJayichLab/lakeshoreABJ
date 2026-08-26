@@ -7,6 +7,7 @@ guards around them.
 
 import pytest
 
+from lschart.instruments.base import InstrumentError
 from lschart.instruments.ls33x import CAPS, LS33x, LS335, LS336
 from lschart.instruments.sim import Sim33x, SimulatedCryostat
 from lschart.transport import LoopbackTransport, TransportError
@@ -276,7 +277,7 @@ def test_a_write_that_does_not_take_is_an_error_not_a_success():
     cryostat = SimulatedCryostat()
     sim = DeafSim(cryostat, model="335")
     inst = LS33x(LoopbackTransport(sim), model="335", allow_writes=True)
-    with pytest.raises(Exception, match="did not take"):
+    with pytest.raises(InstrumentError, match="did not take"):
         inst.set_setpoint(1, 77.0)
     assert sim.write_log, "the command was sent"
 
@@ -286,7 +287,7 @@ def test_the_failure_says_not_to_trust_the_instrument_state():
     cryostat = SimulatedCryostat()
     inst = LS33x(LoopbackTransport(DeafSim(cryostat, model="335")),
                  model="335", allow_writes=True)
-    with pytest.raises(Exception, match="do not assume"):
+    with pytest.raises(InstrumentError, match="do not assume"):
         inst.set_setpoint(1, 77.0)
 
 
@@ -300,7 +301,7 @@ def test_verification_covers_every_write_path():
         lambda: inst.set_pid(1, 10.0, 20.0, 0.0),
         lambda: inst.set_ramp(1, 1.5),
     ):
-        with pytest.raises(Exception, match="did not take"):
+        with pytest.raises(InstrumentError, match="did not take"):
             call()
 
 
@@ -315,7 +316,7 @@ def test_a_heater_that_refuses_to_switch_off_is_reported():
     sim = DeafSim(cryostat, model="335")
     sim.ranges = {1: 3, 2: 3}           # both heaters at full range
     inst = LS33x(LoopbackTransport(sim), model="335", allow_writes=True)
-    with pytest.raises(Exception, match="did not take"):
+    with pytest.raises(InstrumentError, match="did not take"):
         inst.all_heaters_off()
 
 

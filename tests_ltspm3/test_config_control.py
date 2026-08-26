@@ -5,15 +5,13 @@ is an unknown key and the file is rejected.  That is deliberate -- see
 `lschart.config.register_section`.
 """
 
-import os
+from pathlib import Path
 
 import pytest
 
 import ltspm3.config  # noqa: F401  -- registers the `control:` section
 from lschart import config as config_mod
 from lschart.config import AppConfig, ConfigError
-
-yaml = pytest.importorskip("yaml")
 
 
 def write(tmp_path, text):
@@ -32,11 +30,16 @@ def test_control_never_defaults_to_on():
 
 
 def test_repo_config_is_valid():
-    """The committed starter file must actually load."""
-    if not os.path.exists("config.yaml"):
-        pytest.skip("no config.yaml in cwd")
-    cfg = config_mod.load("config.yaml")
-    assert cfg.source_path == "config.yaml"
+    """The committed starter file must actually load.
+
+    Found by its path relative to this file: `config.yaml` is tracked, so it is
+    always there, and a cwd-relative lookup only made the test disappear when
+    pytest ran from anywhere but the repo root.
+    """
+    path = Path(__file__).resolve().parents[1] / "config.yaml"
+    assert path.exists(), f"the committed starter config is missing from {path}"
+    cfg = config_mod.load(str(path))
+    assert cfg.source_path == str(path)
 
 
 def test_omitted_section_still_gives_defaults(tmp_path):

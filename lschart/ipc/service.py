@@ -1,4 +1,4 @@
-"""The join: commands in, status out, once per poll cycle.
+"""The join: commands in, status out, once per cycle.
 
 This runs on the **acquisition thread**, from the poller's ``on_frame`` hook,
 and that is not an implementation detail.  The acquisition thread owns the bus;

@@ -25,11 +25,11 @@ every transport gets it and no driver has to think about it:
 * **retries back off** from ``retry_min_s`` to ``retry_max_s``, so a box that
   is off for a weekend is retried every 30 s, not every 50 ms.
 * **the state is observable.**  :attr:`is_up`, :attr:`last_error` and
-  :attr:`consecutive_failures` are what the status file and the GUI report;
+  :attr:`consecutive_failures` are what the status file and the viewer report;
   a link that is down should be visible, not merely absent from the log.
 
 Nothing here ever raises anything but :class:`TransportError`, and a link that
-is down raises promptly rather than blocking a poll cycle waiting on a timeout
+is down raises promptly rather than blocking a cycle waiting on a timeout
 that has already been proven to expire.
 """
 
@@ -120,7 +120,7 @@ class Transport(ABC):
 
         Called for its side effect by the first transaction; worth calling
         explicitly at startup so a misconfigured resource is reported then
-        rather than one poll cycle later.
+        rather than one cycle later.
         """
         with self._lock:
             self._ensure_open()

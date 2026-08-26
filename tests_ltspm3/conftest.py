@@ -5,7 +5,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ltspm3.control import HeaterSupervisor, PIDConfig, SensorGuardConfig, SupervisorConfig
+from ltspm3.control import (
+    HeaterSupervisor, LoopMode, PIDConfig, SensorGuardConfig, SupervisorConfig,
+)
 from lschart.instruments import LS218
 from lschart.instruments.sim import Sim218, SimulatedCryostat
 from ltspm3.sim_response import LTSPM3_AUX_COUPLING, ResponseParams, ThermalModel
@@ -101,6 +103,24 @@ class Harness:
 @pytest.fixture
 def harness():
     return Harness
+
+
+@pytest.fixture
+def armed(harness):
+    """A harness with the filter primed and the loop actually closed.
+
+    Almost every control test starts here, so it lives with `Harness` rather
+    than being copied into each file -- four byte-identical copies is four
+    places to forget when the arming sequence changes.
+    """
+    def build(**kw):
+        h = harness(**kw)
+        h.settle_filter(40)
+        h.sup.set_mode(LoopMode.PID)
+        h.step(10)
+        return h
+
+    return build
 
 
 @pytest.fixture

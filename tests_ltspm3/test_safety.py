@@ -2,22 +2,14 @@
 
 import pytest
 
+from lschart.transport import TransportError
 from ltspm3.control import HealthState, LoopMode, SupervisorConfig, SupervisorState, PIDConfig
-from ltspm3.control.health import SensorGuardConfig
-
-
-def armed(harness, **kw):
-    h = harness(**kw)
-    h.settle_filter(40)
-    h.sup.set_mode(LoopMode.PID)
-    h.step(10)
-    return h
 
 
 # -- "sample drops to 0 K suddenly -> it shouldn't react" -------------------
 
-def test_single_dropout_to_zero_does_not_move_the_heater(harness):
-    h = armed(harness)
+def test_single_dropout_to_zero_does_not_move_the_heater(armed):
+    h = armed()
     before = h.sup.output_pct
 
     h.cryostat.inject(dropout_channels={"218.1"})
@@ -31,8 +23,8 @@ def test_single_dropout_to_zero_does_not_move_the_heater(harness):
     assert not st.wrote
 
 
-def test_brief_dropout_then_recovery_returns_to_tracking(harness):
-    h = armed(harness)
+def test_brief_dropout_then_recovery_returns_to_tracking(armed):
+    h = armed()
     before = h.sup.output_pct
 
     h.cryostat.inject(dropout_channels={"218.1"})
@@ -50,8 +42,8 @@ def test_brief_dropout_then_recovery_returns_to_tracking(harness):
 
 # -- "if it is heating and it doesn't come back, slowly ramp to zero" -------
 
-def test_sustained_dropout_ramps_down_slowly(harness):
-    h = armed(harness)
+def test_sustained_dropout_ramps_down_slowly(armed):
+    h = armed()
     start = h.sup.output_pct
 
     h.cryostat.inject(dropout_channels={"218.1"})
@@ -68,10 +60,10 @@ def test_sustained_dropout_ramps_down_slowly(harness):
     assert all(b <= a + 1e-9 for a, b in zip(outs, outs[1:])), "ramp must be monotonic down"
 
 
-def test_ramp_down_reaches_safe_value_and_locks_out(harness):
+def test_ramp_down_reaches_safe_value_and_locks_out(armed):
     cfg = SupervisorConfig(rampdown_pct_per_min=60.0, safe_output_pct=62.5,
                            authority_pct=2.0, require_ack_after_fault=True)
-    h = armed(harness, sup_cfg=cfg)
+    h = armed(sup_cfg=cfg)
     h.cryostat.inject(dropout_channels={"218.1"})
     h.step(200)
     assert h.sup.state is SupervisorState.LOCKED_OUT
@@ -85,14 +77,14 @@ def test_ramp_down_reaches_safe_value_and_locks_out(harness):
 
 # -- "sudden multiple percentage point change in power needed -> don't" -----
 
-def test_large_error_is_treated_as_a_broken_premise_not_a_command(harness):
+def test_large_error_is_treated_as_a_broken_premise_not_a_command(armed):
     """A large error that was *not* commanded means the cryostat is wrong, not the loop.
 
     Stepping the setpoint (``ramp=False``) is the way to manufacture this in a
     test.  In normal use setpoint moves ramp, precisely so that a large error
     keeps its meaning as evidence of a fault -- see test_sweep.py.
     """
-    h = armed(harness)
+    h = armed()
     before = h.sup.output_pct
 
     h.sup.set_setpoint(140.0, ramp=False)   # 40 K away: outside max_error_k=1.0
@@ -103,9 +95,9 @@ def test_large_error_is_treated_as_a_broken_premise_not_a_command(harness):
     assert h.sup.output_pct == before, "must not chase a setpoint this far away"
 
 
-def test_persistent_anomaly_escalates_to_ramp_down(harness):
+def test_persistent_anomaly_escalates_to_ramp_down(armed):
     cfg = SupervisorConfig(anomaly_hold_s=60.0)
-    h = armed(harness, sup_cfg=cfg)
+    h = armed(sup_cfg=cfg)
     h.sup.set_setpoint(140.0, ramp=False)
     h.step(5)
     assert h.sup.state is SupervisorState.HOLDING
@@ -113,8 +105,8 @@ def test_persistent_anomaly_escalates_to_ramp_down(harness):
     assert h.sup.state in (SupervisorState.RAMPING_DOWN, SupervisorState.LOCKED_OUT)
 
 
-def test_anomaly_hold_does_not_wind_up_the_integral(harness):
-    h = armed(harness)
+def test_anomaly_hold_does_not_wind_up_the_integral(armed):
+    h = armed()
     h.sup.set_setpoint(h.equilibrium_k + 1.5, ramp=False)  # outside max_error_k
     h.step(30)
     # Assert on the *contribution* ki*I, not the raw integral: gain scheduling
@@ -128,7 +120,7 @@ def test_anomaly_hold_does_not_wind_up_the_integral(harness):
 
 # -- hard limits ------------------------------------------------------------
 
-def test_output_can_never_exceed_the_authority_band_upward(harness):
+def test_output_can_never_exceed_the_authority_band_upward(armed):
     """The band caps *heat*, unconditionally.
 
     Going below the band is allowed, but only as a fault ramp-down -- that is
@@ -136,7 +128,7 @@ def test_output_can_never_exceed_the_authority_band_upward(harness):
     """
     cfg = SupervisorConfig(operating_point_pct=63.0, authority_pct=0.25,
                            max_error_k=1000, anomaly_demand_pct=1000)
-    h = armed(harness, sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=300.0, kp=5.0, ti=10.0))
+    h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=300.0, kp=5.0, ti=10.0))
     h.sup.set_setpoint(300.0, ramp=False)
     h.step(400)
     outs = [s.output_pct for s in h.history if s.output_pct is not None]
@@ -153,9 +145,9 @@ def test_output_can_never_exceed_the_authority_band_upward(harness):
             )
 
 
-def test_per_step_rate_limit_is_respected_while_tracking(harness):
+def test_per_step_rate_limit_is_respected_while_tracking(armed):
     cfg = SupervisorConfig(max_step_pct=0.02, max_error_k=1000, anomaly_demand_pct=1000)
-    h = armed(harness, sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=200.0, kp=5.0, ti=50.0))
+    h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=200.0, kp=5.0, ti=50.0))
     h.sup.set_setpoint(200.0, ramp=False)
     h.step(100)
     pairs = list(zip(h.history, h.history[1:]))
@@ -163,6 +155,10 @@ def test_per_step_rate_limit_is_respected_while_tracking(harness):
              if a.output_pct is not None and b.output_pct is not None
              and b.state is SupervisorState.TRACKING]
     assert steps, "test never actually tracked"
+    # Without this the test is vacuous: delete the rate limiter and the output
+    # jumps to the band ceiling in one cycle and then sits there, so every step
+    # recorded here is exactly zero and the ceiling below passes trivially.
+    assert max(steps) > 0, "the output never moved: the limiter was not exercised"
     # one dither code (0.01) of slack on top of the 0.02 step limit
     assert max(steps) <= 0.02 + 0.01 / 2 + 1e-9, f"largest step {max(steps):.4f}%"
 
@@ -178,14 +174,17 @@ def test_off_mode_never_writes(harness):
 
 # -- comms ------------------------------------------------------------------
 
-def test_comms_failure_does_not_crash_the_loop(harness):
-    h = armed(harness)
+def test_comms_failure_does_not_crash_the_loop(armed):
+    h = armed()
     h.cryostat.inject(comms_fail=True)
     for _ in range(5):
         h.clock.advance(4.0)
         try:
-            reading = h.read()
-        except Exception:
+            # `.step` takes one Reading, not the whole frame.  Passing the
+            # frame used to be invisible here because every read raises while
+            # comms are down, so the success branch never ran.
+            reading = h.read().get("Sample")
+        except TransportError:
             reading = None
         st = h.sup.step(h.clock.t, reading)
     assert st.health in (HealthState.SUSPECT, HealthState.FAULT)
@@ -194,8 +193,8 @@ def test_comms_failure_does_not_crash_the_loop(harness):
     assert h.sup.guard.state in (HealthState.OK, HealthState.RECOVERING)
 
 
-def test_instrument_rdgst_fault_is_believed(harness):
-    h = armed(harness)
+def test_instrument_rdgst_fault_is_believed(armed):
+    h = armed()
     before = h.sup.output_pct
     h.cryostat.inject(rdgst_channels={"218.1": 32})     # temp overrange
     st = h.step(2)

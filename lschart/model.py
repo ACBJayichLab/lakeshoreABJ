@@ -1,7 +1,7 @@
 """Shared value types.
 
 These are deliberately plain and immutable: they cross thread boundaries
-(acquisition -> control -> GUI -> recorder) and must never be mutated in flight.
+(acquisition -> control -> viewer -> recorder) and must never be mutated in flight.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ class Reading:
 
 @dataclass(frozen=True, slots=True)
 class Frame:
-    """Everything read from every instrument in one poll cycle."""
+    """Everything read from every instrument in one cycle."""
 
     t_wall: float                      # time.time(), for the log's absolute clock
     t_mono: float                      # time.monotonic(), for all interval maths
