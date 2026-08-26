@@ -15,6 +15,14 @@ venv/
 # macOS (development machine)
 .DS_Store
 
+# Local agent/editor configuration.  Machine-specific by nature -- the one
+# that was committed here named a model on somebody's own localhost -- so it
+# cannot work on a coworker's machine and does not belong in the tree.
+opencode.json
+.opencode/
+.aider*
+
+
 # Runtime output -- the recorder writes here.  Never version experiment data.
 data/
 *.csv
