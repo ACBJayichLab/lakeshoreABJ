@@ -19,7 +19,7 @@ Plain `pip install -e ".[serial]"` works just as well; `uv` is only faster.
 | *(base)* | `numpy`, `pyyaml`, `pyvisa` | recording, the CLI, the file interface |
 | `serial` | `lakeshore` | USB / serial / TCP instruments — **no VISA runtime** |
 | `gui` | `pyqtgraph`, `PySide6` | the strip chart |
-| `dev` | `pytest`, `xlrd` | tests, and reading legacy `.xls` logs |
+| `dev` | `pytest`, `xlrd`, `ruff` | tests, reading legacy `.xls` logs, and the lint CI gates |
 
 The recorder is the process that has to stay up for months, so it deliberately
 does not depend on Qt. The viewer is a **separate process** and carries its own
@@ -79,12 +79,38 @@ Everything runs against simulated instruments by default, so this works on a
 laptop with nothing plugged in:
 
 ```bash
-.venv/bin/python -m pytest -q                    # 246 tests
+.venv/bin/python -m pytest -q                    # 395 tests, ~13 s
+.venv/bin/python -m ruff check .                 # must pass; CI gates on it
 .venv/bin/python -m lschart init config.yaml     # starter config, driver: sim
 .venv/bin/python -m lschart -c config.yaml check
 .venv/bin/python -m lschart -c config.yaml run --duration 10
 ```
 
+The suite runs from any working directory — if a test skips because it cannot
+find `reference/logs/` or `config.yaml`, that is a bug in the test, not in your
+checkout.
+
 **Going live is a config edit, not a code change**: change `driver:` from `sim`
 to `lakeshore` (USB/serial/TCP) or `visa` (GPIB). See
 [configuration.md](configuration.md).
+
+## Continuous integration
+
+`.github/workflows/tests.yml` runs the suite on **Linux, Windows and macOS**,
+on Python 3.11 and 3.13, for every push to `main` and every pull request. It
+lints first, then tests.
+
+Windows is in the matrix because that is the deployment target while
+development is macOS, and because the one Windows-specific bug found so far —
+the single-instance lock taken on a byte that moved with the file position, so
+a second recorder never collided with the first — had been hidden behind a
+`skip`.
+
+**A skipped test fails the build.** That is deliberate rather than fussy: every
+remaining skip is conditional on something CI is supposed to provide (`xlrd`,
+PySide6, the reference logs), so a skip in CI means CI is not testing what it
+claims to. The Linux job installs the Qt system libraries for the same reason —
+without them PySide6 will not import and the viewer tests quietly do not run.
+
+The repository is public, so Actions minutes on standard runners are free and
+unmetered; nothing here draws down a quota.

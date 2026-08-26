@@ -1,3 +1,90 @@
+# Handoff — 2026-08-26 (sixth session: the tests get audited, and CI arrives)
+
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
+**395 tests, all passing, on Linux, Windows and macOS — CI now runs them.
+No production behaviour changed except one CLI error path. `control/` untouched
+apart from two dead lines the linter found.**
+
+## What this session did
+
+Audited the suite rather than adding to it: read every test file, measured
+coverage, then ran targeted mutations against the safety logic to see which
+tests actually bite. Ten of twelve mutations were caught. The two that survived
+are the interesting part.
+
+### The one real hole
+
+`test_per_step_rate_limit_is_respected_while_tracking` **passed with the rate
+limiter deleted**. Without the limiter the output jumps to the band ceiling in
+one cycle and then sits there, so every step it measured was exactly zero and
+its ceiling assertion was satisfied trivially. Its own `assert steps` guard was
+written to catch this and only checked that steps were *recorded*. One line
+fixes it, and the mutant now fails.
+
+The other survivor was not a hole: the authority band is enforced at three
+independent sites, so removing one is invisible. The observable invariant holds
+and the test asserts the right thing. **Left alone deliberately** — pinning
+each layer separately would be testing the implementation, not the behaviour.
+
+### Bugs the audit turned up
+
+- **`cmd_set` could not report its most important failure.** `InstrumentError`
+  is a `RuntimeError`, so it fell through `except (ValueError, OSError)` and the
+  "the write was NOT applied — do not assume" message arrived as a traceback.
+  Found by covering the CLI, which had been at 17%.
+- **A control test passed the supervisor the whole readings dict** where it
+  takes one `Reading`, hidden behind an always-taken `except Exception`.
+- **Seven tests silently skipped outside the repo root**, including all of
+  `test_replay_reference.py` — the only tests that run on genuine data — while
+  reporting "reference logs not present". Relative paths.
+- **`Poller(sleeper=)` did nothing.** `run` blocks on `_stop.wait`, so anything
+  injected through that seam was ignored. Removed.
+- **`test_the_backfill_stops_once_its_coverage_is_met`** — the "pre-existing
+  failure" the previous handoff recorded. It is not pre-existing and not
+  persistent: it built its logs at "today 12:00" and asserted against a budget
+  `_backfill` measures from `now()`, so it passed 00:00–17:59 and failed
+  18:00–23:59, every day, in every timezone. Verified at all 24 hourly offsets.
+  Fixed by anchoring the fixture to `now`. `_backfill` itself is correct —
+  measuring from now is the promise it makes.
+
+### Coverage, where it was thin
+
+| | before | after |
+|---|---|---|
+| `lschart/__main__.py` (the CLI) | 17% | 77% |
+| `poller.py` (the threaded loop) | 70% | 95% |
+| `ipc/service.py` | 88% | 93% |
+| overall | 81% | 86% |
+
+New: `tests/test_cli.py` (31 tests, driven through `main()` with real argv);
+the poller's cadence, thread lifecycle and overrun reset; the `ramp` file
+command, which MATLAB's `setRamp` drives and which carries the "rate 0 turns
+ramping off" subtlety; and the recorder-only refusal of an ltspm3 config —
+which needs a subprocess, because `register_section` is process-wide and any
+`tests_ltspm3` import makes the refusal unobservable in-process.
+
+### CI
+
+`.github/workflows/tests.yml` — Linux, Windows, macOS × py3.11, py3.13. Lints
+first. **A skipped test fails the build**, because a skip is exactly how the
+real-data tests went missing. It found the backfill bug on its first run.
+
+The repo is public, so Actions minutes are free and unmetered. If it ever goes
+private the org is on the Free plan (2,000 min/month) and a run costs ~42
+billable minutes, ~30 of them macOS at its 10× multiplier — dropping macOS from
+the matrix is the lever, not dropping Windows.
+
+## What is still not verified
+
+Unchanged from the last three sessions, and CI does not change it: **a recorder
+has not run for a week on the cryostat's own Windows machine.** CI proves the
+code runs on Windows. It says nothing about that box's COM port, its drivers,
+or its power management.
+
+Also still open, and not this session's business: no ramp or step limit on the
+manual path, in the CLI or the viewer.
+
 # Handoff — 2026-08-25 (fifth session: command fields learn where the cryostat is)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.

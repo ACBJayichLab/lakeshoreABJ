@@ -95,7 +95,7 @@ stale-slew-reference bug that no simulated fault would have.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q                 # everything, 246 tests
+.venv/bin/python -m pytest -q                 # everything, 395 tests
 .venv/bin/python -m pytest -q tests_ltspm3     # the control half
 ```
 

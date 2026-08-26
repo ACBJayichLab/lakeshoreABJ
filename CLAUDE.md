@@ -26,7 +26,7 @@ generic document that mentions THE CHONKE is in the wrong file.
 
 ## Priorities (Jeff, 2026-08-24)
 
-**The GUI and the MATLAB interface are the priority. The software PID is not.**
+**The viewer and the MATLAB interface are the priority. The software PID is not.**
 
 `ltspm3` is complete and tested and should be left alone unless it breaks. New
 effort goes to `lschart`: the strip-chart viewer, the MATLAB file interface,
@@ -35,8 +35,11 @@ ordering — resist "while I am in here" improvements to `control/`.
 
 The viewer and the MATLAB interface now exist and are exercised end to end (the
 MATLAB half against a real MATLAB R2025b, the viewer against a live recorder).
-**Windows deployment is what is left**, and it is untested: development is
-macOS.
+**Windows deployment is what is left.** The test suite now runs there on every
+push — see [install](docs/recorder/install.md#continuous-integration) — which
+is not the same thing as the deployment being tested: CI proves the code runs
+on Windows, not that a recorder survives a week on the cryostat's own machine
+with its own COM port, its own drivers and its own power management.
 
 ## The invariants
 
@@ -137,6 +140,9 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
 
 matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus
                      selftest.m and a README. Not built; copied to the cryostat.
+.github/workflows/   tests.yml: lint, then the suite, on Linux/Windows/macOS x
+                     py3.11/3.13.  A SKIPPED TEST FAILS THE BUILD -- every
+                     remaining skip is conditional on something CI provides.
 docs/                recorder/ (generic) and ltspm3/ (one cryostat). Keep them apart.
 examples/            config-335-usb.yaml (coworker), config-336-usb.yaml (bench)
 reference/           Legacy MATLAB + 24 .xls chart-recorder logs. Not built.
@@ -166,13 +172,22 @@ tests/               Generic. tests_ltspm3/ has the virtual-clock control harnes
   failure may raise.
 - Filters are **dt-aware** (`alpha = 1 - exp(-dt/tau)`), never fixed-alpha —
   the bus jitters and a retry can cost a cycle.
+- `ruff check .` must pass; CI gates on it. The rule set is deliberately narrow
+  (`F`, `E9`, `E501` at 100 columns) — it catches dead imports and unused
+  locals, and leaves the house layout alone.
+- **A test must not depend on the working directory or on the time of day.**
+  Both have bitten: relative paths made seven tests vanish outside the repo
+  root, announcing themselves as "reference logs not present", and a viewer
+  test anchored to "today at noon" passed every morning and failed every
+  evening.
 
 ## Running
 
 ```bash
 uv venv --allow-existing .venv
 uv pip install --python .venv/bin/python -e ".[dev,serial]"
-.venv/bin/python -m pytest -q                          # ~343 tests
+.venv/bin/python -m pytest -q                          # ~395 tests
+.venv/bin/python -m ruff check .                       # gated in CI
 
 # generic recorder -- any cryostat, no control section in the config
 .venv/bin/python -m lschart -c examples/config-336-usb.yaml probe   # read all, write nothing

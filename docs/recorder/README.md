@@ -24,7 +24,7 @@ Nothing in this directory is specific to one cryostat.
   Unknown keys are an error, so a typo fails loudly rather than being ignored.
 - **[instruments.md](instruments.md)** — what each driver does, and four
   measured Lake Shore behaviours that cost real time to discover.
-- **[file-interface.md](file-interface.md)** — how MATLAB, the GUI, or your own
+- **[file-interface.md](file-interface.md)** — how MATLAB, the viewer, or your own
   script reads temperatures and sends setpoints **while the recorder runs**.
 - **[gui.md](gui.md)** — the strip chart, which is a separate process.
 - **[windows.md](windows.md)** — the deployment target.

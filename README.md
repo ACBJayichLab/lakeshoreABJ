@@ -37,7 +37,7 @@ If you are not working on LTSPM3, you need only the first — and you can ignore
 
 | | |
 |---|---|
-| **[docs/recorder/](docs/recorder/)** | **The chart recorder — generic, any cryostat.** Install, CLI, configuration, instruments, the file interface, the GUI, Windows, troubleshooting |
+| **[docs/recorder/](docs/recorder/)** | **The chart recorder — generic, any cryostat.** Install, CLI, configuration, instruments, the file interface, the viewer, Windows, troubleshooting |
 | **[docs/ltspm3/](docs/ltspm3/)** | **The LTSPM3 software PID — one cryostat only.** The hardware, the measured thermal response, the control loop, the safety rules |
 | [matlab/README.md](matlab/README.md) | Driving a running recorder from MATLAB |
 | [CLAUDE.md](CLAUDE.md) | Orientation and the load-bearing invariants, for anyone (or anything) changing the code |
@@ -73,7 +73,7 @@ tests/        generic;  tests_ltspm3/ is the control half
 ```bash
 uv venv --allow-existing .venv
 uv pip install --python .venv/bin/python -e ".[dev,serial]"
-.venv/bin/python -m pytest -q          # 246 tests, no hardware required
+.venv/bin/python -m pytest -q          # 395 tests, no hardware required
 ```
 
 Development is macOS; deployment is **Windows** —

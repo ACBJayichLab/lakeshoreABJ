@@ -36,7 +36,7 @@ ltspm3     LTSPM3 only          IS the loop, on the 218's analog output
 ## Status
 
 `ltspm3` is **complete, tested and parked**. The stated priority is the recorder,
-the GUI and the MATLAB interface; resist "while I am in here" improvements to
+the viewer and the MATLAB interface; resist "while I am in here" improvements to
 `control/`.
 
 Two things are worth knowing before it runs against the real cryostat:

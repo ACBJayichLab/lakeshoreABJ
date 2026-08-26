@@ -14,7 +14,7 @@ So MATLAB talks to the **recorder** instead, through two files:
 
 | | |
 |---|---|
-| `status.json` | rewritten by the recorder every poll cycle: temperatures, link health, and the outcome of recent commands |
+| `status.json` | rewritten by the recorder every cycle: temperatures, link health, and the outcome of recent commands |
 | `commands/` | a drop-box; write a command here and the recorder applies it on its next cycle |
 
 Nothing is connected to anything. There is no session to open, nothing to

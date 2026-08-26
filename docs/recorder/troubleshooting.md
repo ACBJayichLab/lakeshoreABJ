@@ -87,6 +87,29 @@ Every refusal names its own fix.
 while that output's heater range is 0. Raising the range is what applies power,
 and nothing does it as a side effect.
 
+**`FAILED: ... did not take ... do not assume the instrument is in the state
+you asked for`.** The command was sent, the instrument acknowledged nothing
+useful, and reading the value back still shows the old one after five attempts.
+Treat the box as being in an *unknown* state, not the old one and not the new
+one — that is what the wording is for. Usually one of:
+
+- the write genuinely did not apply (wrong loop, wrong output, a value the
+  firmware silently rejected);
+- the readback raced the write. The transport holds off `write_settle_s`
+  (100 ms) before the next transaction. Measured on a 336 over USB: at 0 ms
+  *every* readback was stale, at 50 ms they lagged by exactly one write, and
+  the threshold sat around 50–80 ms — so 100 ms has margin, and both failing
+  regimes look like success. Note it is a class attribute on `Transport`, **not
+  a config key**, and `build_transport` does not plumb it through: a box that
+  needs longer needs a code change today;
+- `readback_tol_pct` is tighter than the instrument's own resolution, so a
+  correct write reads back as a failure. The 218's DAC steps 0.01% and `AOUT?`
+  answers to two decimals; a tolerance below that will always fail.
+
+Verification is on by default and should stay on. `verify_writes: false` is for
+a box whose readback is genuinely unavailable, or for a loop that confirms its
+own writes — not for silencing this.
+
 **`send` hangs then times out.** Nothing is consuming the spool. Is a recorder
 running? `python -m lschart -c CONFIG status` exits 1 if it is missing or stale.
 
@@ -98,7 +121,7 @@ stamped before the command was issued.
 
 ## Reading the data
 
-**The GUI shows nothing.** `ipc.enabled` must be true, and the viewer's
+**The viewer shows nothing.** `ipc.enabled` must be true, and the viewer's
 `-c CONFIG` must point at the *recorder's* config (or `--status` at the file).
 
 **`status` exits 1 with a fresh-looking file.** Stale means older than three

@@ -12,7 +12,7 @@ cryostat. This is the half a coworker installs.
 
 | | |
 |---|---|
-| [install.md](recorder/install.md) | Python, extras, and the USB/GPIB drivers each connection needs |
+| [install.md](recorder/install.md) | Python, extras, the USB/GPIB drivers each connection needs, and CI |
 | [quickstart.md](recorder/quickstart.md) | From nothing to a running chart in five commands |
 | [cli.md](recorder/cli.md) | Every command: `run` `probe` `set` `check` `status` `send` `init` |
 | [configuration.md](recorder/configuration.md) | The config file, section by section |
