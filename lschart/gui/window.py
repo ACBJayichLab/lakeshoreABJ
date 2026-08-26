@@ -201,6 +201,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.curves: dict[str, pg.PlotDataItem] = {}
         self.toggles: dict[str, QtWidgets.QCheckBox] = {}
         self._pending: tuple[str, float] | None = None   # (command id, deadline)
+        #: ``(aux name, value)`` of the readback that would confirm the last
+        #: queued command, while that readback has not caught up yet.  One at
+        #: a time, because one unacknowledged command locks every button.
+        self._awaiting: tuple[str, float] | None = None
         self._first_load_done = False
         #: The hand-picked window, (t0, t1) in epoch seconds, or None while the
         #: view is following the recorder.  When it is set it is the authority
@@ -403,6 +407,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         self.loop_spin = QtWidgets.QSpinBox()
         self.loop_spin.setRange(1, 4)
+        self.loop_spin.valueChanged.connect(self._on_loop_changed)
         form.addRow("Loop", self.loop_spin)
 
         self.setpoint_spin = QtWidgets.QDoubleSpinBox()
@@ -410,6 +415,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.setpoint_spin.setDecimals(3)
         self.setpoint_spin.setSuffix(" K")
         self.setpoint_spin.setValue(0.0)
+        # The box tracks the rig's own setpoint until the operator touches it;
+        # the flag is what stops a fill from fighting a number being typed.
+        self._setpoint_dirty = False
+        self.setpoint_spin.valueChanged.connect(self._setpoint_edited)
         form.addRow("Target", self.setpoint_spin)
 
         self.send_button = QtWidgets.QPushButton("Send setpoint…")
@@ -431,11 +440,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
         form = QtWidgets.QFormLayout(self.range_group)
 
         self.heater_combo = QtWidgets.QComboBox()
+        self.heater_combo.currentIndexChanged.connect(self._output_changed)
         form.addRow("Output", self.heater_combo)
 
         self.range_combo = QtWidgets.QComboBox()
         for value, label in sorted(HEATER_RANGE_NAMES.items()):
             self.range_combo.addItem(f"{value} — {label}", value)
+        self._range_dirty = False
+        self.range_combo.currentIndexChanged.connect(self._range_edited)
         form.addRow("Range", self.range_combo)
 
         self.range_button = QtWidgets.QPushButton("Set range…")
@@ -463,6 +475,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.analog_spin.setDecimals(3)
         self.analog_spin.setSuffix(" %")
         self.analog_spin.setValue(0.0)
+        # Same arrangement as the setpoint: the rig's live output until edited.
+        self._analog_dirty = False
+        self.analog_spin.valueChanged.connect(self._analog_edited)
         form.addRow("Output", self.analog_spin)
 
         self.analog_button = QtWidgets.QPushButton("Set output…")
@@ -535,6 +550,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._update_readouts()
             self._update_links()
             self._update_commands()
+            self._sync_command_values()
             if self.tail.follow(self.source.log_path()):
                 self._first_load_done = False
             if self.tail.poll() or not self._first_load_done:
@@ -672,7 +688,117 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.analog_spin.setMaximum(ceiling)
             self.analog_group.setTitle(
                 f"Analog output {caps['analog_output']} (max {ceiling:g}%)")
+        # A different box, loop or output is a different "now": whatever the
+        # operator had half-typed belonged to the previous selection.
+        self._setpoint_dirty = False
+        self._range_dirty = False
+        self._analog_dirty = False
+        self._awaiting = None
+        self.source.poll()
+        self._sync_command_values()
         self._update_gate_notes()
+
+    # -- filling the command widgets with what the rig is at -----------------
+
+    def _aux_value(self, name: str) -> float | None:
+        """One scalar from the status file's aux block, by its full name.
+
+        The aux block is where each driver reports what it *read back* --
+        ``{inst}.setpoint{loop}``, ``{inst}.range{out}``, ``{inst}.aout{out}`` --
+        so it is also the honest answer to "what is this box at now", age and
+        all.  ``None`` when the recorder does not carry that name: an older
+        recorder or a query that failed this cycle.
+        """
+        for entry in (self.source.status or {}).get("aux", []):
+            if entry.get("name") == name:
+                value = entry.get("value")
+                return None if value is None else float(value)
+        return None
+
+    def _setpoint_edited(self, _value: float) -> None:
+        self._setpoint_dirty = True
+
+    def _range_edited(self, *_ignored) -> None:
+        self._range_dirty = True
+
+    def _analog_edited(self, _value: float) -> None:
+        self._analog_dirty = True
+
+    def _output_changed(self, *_ignored) -> None:
+        """A different heater output selected: its range is a different fact."""
+        self._range_dirty = False
+        self._sync_command_values()
+
+    def _on_loop_changed(self, *_ignored) -> None:
+        """A different loop selected: its setpoint is a different fact."""
+        self._setpoint_dirty = False
+        self._sync_command_values()
+
+    def _sync_command_values(self) -> None:
+        """Fill each command widget with its control's current value.
+
+        Swapping to a 218 should find the percentage it is already at; asking
+        a 33x for a setpoint should start from the one it is chasing -- not
+        from zero, which on these widgets reads as a plausible number to send.
+        The values come from the recorder's readback (the aux block), so they
+        carry the cycle delay; they are what the box says, not a promise.
+
+        Filling repeats every tick while a widget still shows the rig's value,
+        so a setpoint changed elsewhere (MATLAB, another viewer) arrives here
+        too.  Once the operator edits a field it stops tracking -- a fill that
+        fought the number being typed would be worse than a stale one -- until
+        the selection changes or the pending command is acknowledged, either of
+        which makes the field a fresh question again.
+
+        One gap needs its own guard: between an acknowledged command and the
+        readback that reflects it, the aux block still holds the *old* value,
+        and a fill here would snap the field back to it -- showing 0% in the
+        seconds after someone asked for 43%, which is worse than useless while
+        power is the question.  So a queued command names the one readback that
+        would confirm it, and until that readback agrees the field is left at
+        what was asked for.
+        """
+        instrument = self.instrument_combo.currentText()
+        if not instrument:
+            return
+        awaiting = self._awaiting
+        if awaiting is not None:
+            name, expected = awaiting
+            actual = self._aux_value(name)
+            if actual is not None and abs(actual - expected) <= 1e-6:
+                self._awaiting = None
+                awaiting = None
+
+        def held(aux_name: str) -> bool:
+            """True while this control's readback is still owed."""
+            return awaiting is not None and awaiting[0] == aux_name
+
+        if not self._setpoint_dirty:
+            name = f"{instrument}.setpoint{self.loop_spin.value()}"
+            value = self._aux_value(name)
+            if value is not None and not held(name):
+                self.setpoint_spin.blockSignals(True)
+                self.setpoint_spin.setValue(value)
+                self.setpoint_spin.blockSignals(False)
+        if not self._analog_dirty:
+            caps = capabilities(self.source.link_named(instrument))
+            if caps["has_analog"]:
+                name = f"{instrument}.aout{caps['analog_output']}"
+                value = self._aux_value(name)
+                if value is not None and not held(name):
+                    self.analog_spin.blockSignals(True)
+                    self.analog_spin.setValue(value)
+                    self.analog_spin.blockSignals(False)
+        if not self._range_dirty and self.heater_combo.currentText():
+            output = int(self.heater_combo.currentText())
+            name = f"{instrument}.range{output}"
+            value = self._aux_value(name)
+            if value is not None and not held(name):
+                index = self.range_combo.findData(int(value))
+                if index >= 0:
+                    self.range_combo.blockSignals(True)
+                    self.range_combo.setCurrentIndex(index)
+                    self.range_combo.blockSignals(False)
 
     def _update_gate_notes(self) -> None:
         """Say which of the two power gates is open, without disabling anything.
@@ -709,6 +835,17 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 self.ack_label.setStyleSheet(
                     "color:#1b5e20;" if ok else "color:#b71c1c;")
                 self._pending = None
+                # The question the fields were answering has been settled one
+                # way or the other; let them track the rig's readback again.
+                # A refused command has no readback to wait for -- and an
+                # accepted one keeps its guard until the readback agrees,
+                # which is what stops a stale aux value snapping the field
+                # back to where the rig was before the command landed.
+                if not ok:
+                    self._awaiting = None
+                self._setpoint_dirty = False
+                self._range_dirty = False
+                self._analog_dirty = False
                 for button in self._buttons():
                     button.setEnabled(True)
             elif QtCore.QDateTime.currentSecsSinceEpoch() > deadline:
@@ -716,6 +853,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
                     "no acknowledgement — the recorder may not be reading commands")
                 self.ack_label.setStyleSheet("color:#e65100;")
                 self._pending = None
+                self._awaiting = None
                 for button in self._buttons():
                     button.setEnabled(True)
 
@@ -1007,6 +1145,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         ):
             return
         self._queue("setpoint", loop=loop, kelvin=kelvin)
+        if self._pending is not None:
+            self._awaiting = (f"{instrument}.setpoint{loop}", kelvin)
 
     def _send_range(self) -> None:
         """Queue a heater range.  Above 0 this is the command that applies power."""
@@ -1035,6 +1175,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if not self._confirm("Set heater range", text):
             return
         self._queue("range", output=output, value=value)
+        if self._pending is not None:
+            self._awaiting = (f"{instrument}.range{output}", float(value))
 
     def _setpoint_now(self, instrument: str) -> str:
         """What the box says its setpoint is, for the range dialog.
@@ -1052,13 +1194,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """
         self.source.poll()
         loop = self.loop_spin.value()
-        for entry in (self.source.status or {}).get("aux", []):
-            if entry.get("name") == f"{instrument}.setpoint{loop}":
-                value = entry.get("value")
-                if value is not None:
-                    return (f"{float(value):.3f} K on loop {loop}, as the "
-                            f"recorder read it {self.source.age_s or 0.0:.0f} s "
-                            f"ago")
+        value = self._aux_value(f"{instrument}.setpoint{loop}")
+        if value is not None:
+            return (f"{value:.3f} K on loop {loop}, as the "
+                    f"recorder read it {self.source.age_s or 0.0:.0f} s ago")
         return f"not reported by the recorder for loop {loop}"
 
     def _send_analog(self) -> None:
@@ -1086,6 +1225,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if not self._confirm("Set analog output", text):
             return
         self._queue("analog", percent=percent)
+        if self._pending is not None:
+            self._awaiting = (f"{instrument}.aout{caps['analog_output']}",
+                              percent)
 
     def _send_heaters_off(self) -> None:
         """The panic button.  Every heater the recorder may write to, to zero."""
@@ -1103,3 +1245,5 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # Addressed to the recorder, not to a box: the whole point is that it
         # does not stop at whichever instrument happens to be selected.
         self._queue("heaters_off", instrument="")
+        # Many readbacks at once; none of them is *the* one to wait for.
+        self._awaiting = None

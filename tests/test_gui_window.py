@@ -658,3 +658,127 @@ def test_an_acknowledgement_releases_every_button(tmp_path, qt_app, monkeypatch)
     assert all(b.isEnabled() for b in w._buttons())
     assert "done" in w.ack_label.text()
     w.close()
+
+
+# -- the fields fill with what the rig is at ---------------------------------
+#
+# A command box that opens at zero invites sending zero-adjacent numbers at a
+# rig that is nowhere near them.  What each field should start from is the
+# recorder's own readback -- and swapping to a 218 should find the percentage
+# it is already at, not present 0% as if that were a neutral choice.
+
+
+def aux_status(tmp_path, links, aux):
+    """A status file carrying an explicit aux readback block."""
+    csv = tmp_path / "aux-log.csv"
+    if not csv.exists():
+        stamp = _dt.datetime.fromtimestamp(time.time()).isoformat(
+            timespec="milliseconds")
+        csv.write_text(HEADER + f"{stamp},0.0,96.0,77.0,12.5,,,\n")
+    path = tmp_path / f"status-{abs(hash(json.dumps(aux)))}.json"
+    path.write_text(json.dumps({
+        "t_wall": time.time(), "cycle": 3, "running": True, "interval_s": 1.0,
+        "channels": [{"name": "Sample", "kelvin": 96.0, "usable": True}],
+        "links": links,
+        "aux": [{"name": k, "value": v} for k, v in aux.items()],
+        "recorder": {"path": str(csv), "rows": 60},
+        "commands": {"accepted": True, "recent": []},
+    }))
+    return path
+
+
+def test_a_setpoint_field_opens_at_the_current_setpoint(tmp_path, qt_app):
+    path = aux_status(tmp_path, [CTRL], {"ls336.setpoint1": 4.2})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000)
+    assert w.setpoint_spin.value() == pytest.approx(4.2)
+    w.close()
+
+
+def test_changing_loop_refills_the_setpoint_field(tmp_path, qt_app):
+    path = aux_status(tmp_path, [CTRL],
+                      {"ls336.setpoint1": 4.2, "ls336.setpoint2": 77.35})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000)
+    assert w.setpoint_spin.value() == pytest.approx(4.2)
+    w.loop_spin.setValue(2)
+    assert w.setpoint_spin.value() == pytest.approx(77.35)
+    w.close()
+
+
+def test_swapping_to_a_218_finds_its_current_output(tmp_path, qt_app):
+    """The case that asked for this: no inert half, so 0 is never neutral."""
+    path = aux_status(tmp_path, [CTRL, MON], {
+        "ls218.aout1": 12.5, "ls218.range1": 0,
+    })
+    w = ViewerWindow(str(path), refresh_ms=10_000_000)
+    w.instrument_combo.setCurrentIndex(1)
+    assert w.analog_spin.value() == pytest.approx(12.5)
+    w.close()
+
+
+def test_the_range_combo_follows_the_current_range(tmp_path, qt_app):
+    path = aux_status(tmp_path, [CTRL],
+                      {"ls336.range1": 1, "ls336.range2": 3})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000)
+    assert w.range_combo.currentData() == 1
+    w.heater_combo.setCurrentIndex(1)               # output 2
+    assert w.range_combo.currentData() == 3
+    w.close()
+
+
+def test_an_edited_field_stops_tracking_until_the_selection_changes(
+        tmp_path, qt_app):
+    """A fill that fought the number being typed would be worse than stale."""
+    path = aux_status(tmp_path, [CTRL], {"ls336.setpoint1": 4.2})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000)
+    w.setpoint_spin.setValue(300.0)                 # the operator's number
+    w.refresh()
+    assert w.setpoint_spin.value() == pytest.approx(300.0)
+
+    # A different loop is a different question; the field tracks again.
+    w.loop_spin.setValue(2)
+    w.loop_spin.setValue(1)
+    w.refresh()
+    assert w.setpoint_spin.value() == pytest.approx(4.2)
+    w.close()
+
+
+def test_a_field_tracks_again_once_its_command_is_acknowledged(
+        tmp_path, qt_app, monkeypatch):
+    from lschart.ipc.commands import CommandSpool
+
+    path = aux_status(tmp_path, [MON], {"ls218.aout1": 0.0})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000,
+                     spool=CommandSpool(tmp_path / "cmd-aux"))
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.analog_spin.setValue(43.0)
+    w.analog_button.click()
+
+    # The readback has not caught up yet: the field keeps the operator's
+    # number until the recorder says what it now reads.
+    w.refresh()
+    assert w.analog_spin.value() == pytest.approx(43.0)
+
+    cid = w._pending[0]
+    status = json.loads(open(w.source.path).read())
+    status["cycle"] = 4
+    status["t_wall"] = time.time()
+    status["commands"]["recent"] = [{"id": cid, "ok": True, "message": "set"}]
+    open(w.source.path, "w").write(json.dumps(status))
+    w.refresh()
+    assert all(b.isEnabled() for b in w._buttons())
+    assert w.analog_spin.value() == pytest.approx(43.0)   # still the readback
+
+    status["aux"] = [{"name": "ls218.aout1", "value": 43.0}]
+    open(w.source.path, "w").write(json.dumps(status))
+    w.refresh()
+    assert w.analog_spin.value() == pytest.approx(43.0)   # and it agrees
+    w.close()
+
+
+def test_fields_without_a_readback_are_left_alone(tmp_path, qt_app):
+    """No aux entry means no honest number to fill with -- keep the widget's."""
+    path = aux_status(tmp_path, [CTRL], {})
+    w = ViewerWindow(str(path), refresh_ms=10_000_000)
+    assert w.setpoint_spin.value() == 0.0
+    assert w.range_combo.currentData() == 0         # the combo's own default
+    w.close()
