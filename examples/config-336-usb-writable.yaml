@@ -89,7 +89,7 @@ instruments:
     max_setpoint_k: 310.0
 
 acquisition:
-  interval_s: 1.0
+  interval_s: 2.0
   log_every_n: 1
   ringbuffer_size: 43200
 
