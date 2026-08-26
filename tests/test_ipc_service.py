@@ -57,7 +57,7 @@ def service(tmp_path, *instruments, **kw) -> IpcService:
 
 
 def tick(svc: IpcService) -> dict:
-    """One poll cycle: drain the spool, write the status file, read it back."""
+    """One cycle: drain the spool, write the status file, read it back."""
     svc.on_frame(Frame(t_wall=time.time(), t_mono=time.monotonic(),
                        readings={"Sample": Reading("Sample", 96.0)}))
     return read_status(svc.writer.path)
@@ -133,6 +133,10 @@ def test_the_transport_interlock_still_refuses_at_the_byte_level(tmp_path):
     svc = service(tmp_path, inst)
     cid = svc.spool.submit("setpoint", loop=1, kelvin=77.0)
     assert ack(tick(svc), cid)["ok"] is False
+    # The refusal is only half the claim; the other half is that nothing was
+    # transmitted.  Asserting the acknowledgement alone would pass on a driver
+    # that wrote first and reported the failure afterwards.
+    assert inst.transport.device.write_log == [], "a byte reached the instrument"
 
 
 def test_a_recorder_that_does_not_accept_commands_says_so(tmp_path):
@@ -197,6 +201,87 @@ def test_a_bad_loop_number_is_refused_by_the_driver(tmp_path):
     svc = service(tmp_path)
     cid = svc.spool.submit("setpoint", loop=9, kelvin=77.0)
     assert "no loop 9" in ack(tick(svc), cid)["message"]
+
+
+# -- the instrument's own ramp -----------------------------------------------
+#
+# `LakeShore.m`'s setRamp is the only client of this, and its help text makes a
+# promise the handler is what keeps: "a rate of 0 turns ramping off (it does
+# NOT mean 'infinitely fast')".  MATLAB never sends `enable`, so that promise
+# rests entirely on the handler deriving it from the rate.
+
+
+def test_a_ramp_rate_written_to_a_file_reaches_the_instrument(tmp_path):
+    inst = instrument()
+    svc = service(tmp_path, inst)
+    cid = svc.spool.submit("ramp", loop=1, rate_k_per_min=2.5)
+    assert ack(tick(svc), cid)["ok"]
+    assert inst.ramp(1) == (True, pytest.approx(2.5))
+
+
+def test_a_zero_rate_turns_ramping_off_rather_than_being_refused(tmp_path):
+    """The whole subtlety, exactly as MATLAB sends it: loop and rate, no `enable`.
+
+    The driver refuses a 0 K/min ramp outright -- 0 means "infinitely fast" to
+    the instrument -- so if the handler passed the rate straight through, the
+    documented way to stop a ramp would come back as an error instead.
+    """
+    inst = instrument()
+    svc = service(tmp_path, inst)
+    svc.spool.submit("ramp", loop=1, rate_k_per_min=2.5)
+    tick(svc)
+    assert inst.ramp(1)[0] is True
+
+    cid = svc.spool.submit("ramp", loop=1, rate_k_per_min=0)
+    result = ack(tick(svc), cid)
+    assert result["ok"], f"stopping a ramp was refused: {result['message']}"
+    assert "OFF" in result["message"]
+    assert inst.ramp(1)[0] is False
+
+
+def test_ramping_can_be_disabled_while_keeping_a_nonzero_rate(tmp_path):
+    """An explicit `enable` overrides the rate-derived default, both ways."""
+    inst = instrument()
+    svc = service(tmp_path, inst)
+    cid = svc.spool.submit("ramp", loop=1, rate_k_per_min=2.5, enable=False)
+    assert ack(tick(svc), cid)["ok"]
+    assert inst.ramp(1)[0] is False
+
+
+def test_a_ramp_defaults_to_loop_one(tmp_path):
+    """`loop` is optional here, unlike on setpoint."""
+    inst = instrument()
+    svc = service(tmp_path, inst)
+    cid = svc.spool.submit("ramp", rate_k_per_min=1.5)
+    assert ack(tick(svc), cid)["ok"]
+    assert inst.ramp(1) == (True, pytest.approx(1.5))
+
+
+def test_a_ramp_command_needs_its_rate(tmp_path):
+    svc = service(tmp_path)
+    cid = svc.spool.submit("ramp", loop=1)
+    assert "rate_k_per_min" in ack(tick(svc), cid)["message"]
+
+
+def test_a_ramp_is_refused_on_a_read_only_instrument(tmp_path):
+    """A ramp changes what the loop chases, so it passes the same gate as a
+    setpoint -- it is not a read dressed up as a write."""
+    inst = instrument(allow_writes=False)
+    svc = service(tmp_path, inst)
+    cid = svc.spool.submit("ramp", loop=1, rate_k_per_min=2.5)
+    assert "read-only" in ack(tick(svc), cid)["message"]
+    assert inst.transport.device.write_log == []
+
+
+def test_a_ramp_needs_no_power_gate_of_its_own(tmp_path):
+    """Ramping applies no power: the range is still whatever it was.  Gating it
+    behind allow_heater_range would make the safe way to move a setpoint harder
+    than the abrupt one."""
+    inst = instrument()
+    svc = service(tmp_path, inst, allow_heater_range=False)
+    cid = svc.spool.submit("ramp", loop=1, rate_k_per_min=2.5)
+    assert ack(tick(svc), cid)["ok"]
+    assert inst.heater_range(1) == 0
 
 
 # -- keeping the cycle bounded -----------------------------------------------
@@ -328,10 +413,11 @@ def test_a_read_only_218_refuses_the_analog_command(tmp_path):
 
 
 def test_the_transport_interlock_still_refuses_the_analog_command(tmp_path):
-    svc = service(tmp_path, monitor(allow_writes=True, read_only=True),
-                  allow_analog_output=True)
+    inst = monitor(allow_writes=True, read_only=True)
+    svc = service(tmp_path, inst, allow_analog_output=True)
     cid = svc.spool.submit("analog", percent=40.0)
     assert ack(tick(svc), cid)["ok"] is False
+    assert inst.transport.device.write_log == [], "a byte reached the heater"
 
 
 def test_the_ceiling_refuses_a_fat_finger_from_a_file_too(tmp_path):
