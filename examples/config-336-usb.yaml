@@ -33,8 +33,15 @@ instruments:
       # This box enumerates as USB VID 0x1FB9 / PID 0x0301 through a Silicon
       # Labs CP210x bridge, serial LSA26E0.  Matching on the serial number
       # rather than the port is what survives a re-enumeration: after a replug
-      # the port number changes and the serial does not.  With com_port empty
-      # the vendor driver scans for the instrument.
+      # the port number changes and the serial does not, so leave com_port
+      # empty when this is set.
+      #
+      # Do NOT blank both.  At least one of serial_number / com_port /
+      # ip_address must name the box, and the config is REFUSED otherwise --
+      # "uses the lakeshore driver but names no com_port, serial_number or
+      # ip_address".  The vendor driver would happily scan and grab whichever
+      # Lake Shore answers first; naming the box is what stops a second
+      # instrument on the bench from being recorded as this one.
       serial_number: "LSA26E0"
       com_port: ""
       baud_rate: 57600        # the 336's fixed USB rate (57600, 7-O-1)

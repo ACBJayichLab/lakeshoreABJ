@@ -22,7 +22,9 @@ instruments:
       # Better than com_port where you know it: a USB device that
       # re-enumerates comes back on a different port number but the same
       # serial number, so this is what survives a replug.  Set com_port to ""
-      # if you use it -- the driver then scans for the instrument.
+      # if you use it -- but do NOT blank both.  At least one of
+      # serial_number / com_port / ip_address must name the box, and the
+      # config is refused outright otherwise.
       serial_number: ""
       baud_rate: 57600        # the 335's factory default (57600, 7-O-1)
       timeout_ms: 3000
