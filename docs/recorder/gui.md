@@ -17,6 +17,7 @@ pip install -e ".[gui]"      # pyqtgraph + PySide6
 | `--status PATH` | point at a `status.json` directly instead |
 | `--refresh S` | redraw cadence, default 1.0 |
 | `--max-points N` | default 200,000 |
+| `--gap-factor N` | how many sample intervals a hole must exceed to be drawn as a gap, default 4 |
 | `--read-only` | open with no command spool at all, so the whole control panel is dead |
 | `--log-level` | |
 
@@ -60,6 +61,26 @@ Memory stays bounded by `--max-points`: past the cap a trace is decimated
 (every other sample dropped) rather than truncated, so old days lose
 resolution in the overview but never disappear — and a hand-picked span is
 re-read from disk at full resolution (above).
+
+## A hole in the log is drawn as a hole
+
+Where consecutive samples are more than **four sample intervals** apart the
+trace breaks instead of being joined by a straight line. A recorder that was
+off for an hour did not spend that hour sliding evenly from one temperature to
+the other, and the interpolating line asserts exactly that — at exactly the
+place on the chart where nobody has any data to contradict it.
+
+The threshold is a multiple of the *series' own median interval*, not a number
+of seconds, because the same trace is drawn at full resolution when a span is
+picked and decimated by 2, 4, 16 when it is not. A fixed number of seconds
+would shatter a zoomed-out overview into confetti or miss every gap in a fresh
+one; a multiple survives both, and survives a log written at a different
+interval from the one being written now.
+
+Four, and not two, because a recorder that missed a cycle or two is still
+recording: a retry on a jittering bus costs a cycle, and joining across that is
+the honest drawing. Three consecutive cycles gone is not jitter. `--gap-factor`
+moves the line if a particular cryostat wants it moved.
 
 ## What it shows
 

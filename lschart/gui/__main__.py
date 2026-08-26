@@ -13,6 +13,8 @@ import argparse
 import logging
 import sys
 
+from .source import GAP_FACTOR
+
 log = logging.getLogger("lschart.gui")
 
 
@@ -29,6 +31,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-points", type=int, default=200_000,
                     help="samples kept per trace; past this the history is "
                          "thinned, not truncated")
+    ap.add_argument("--gap-factor", type=float, default=GAP_FACTOR,
+                    help="draw a gap where consecutive samples are further "
+                         "apart than this many sample intervals (default "
+                         f"{GAP_FACTOR:g}); the trace is joined across "
+                         "anything closer")
     ap.add_argument("--read-only", action="store_true",
                     help="open without the ability to send commands at all")
     ap.add_argument("--log-level", default="INFO")
@@ -79,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         spool=spool,
         refresh_ms=int(args.refresh * 1000),
         max_points=args.max_points,
+        gap_factor=args.gap_factor,
         config_label=cfg.source_path or "",
     )
     window.show()

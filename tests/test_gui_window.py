@@ -863,3 +863,41 @@ def test_a_fill_leaves_the_widget_able_to_signal_again(tmp_path, qt_app):
     assert not w.setpoint_spin.signalsBlocked()
     assert not w.range_combo.signalsBlocked()
     w.close()
+
+
+def test_an_outage_reaches_the_curve_as_a_break_and_not_a_line(tmp_path, qt_app):
+    """The recorder stopped for an hour; the pen lifts rather than ruling across.
+
+    What the window owes `connect_flags` is that its answer actually gets to
+    pyqtgraph -- the arithmetic itself is tested where it lives, without Qt.
+    """
+    t0 = time.time() - 7200
+    csv = tmp_path / "log.csv"
+    with csv.open("w") as fh:
+        fh.write(HEADER)
+        for i in list(range(600)) + list(range(4200, 4800)):
+            stamp = _dt.datetime.fromtimestamp(t0 + i).isoformat(timespec="milliseconds")
+            fh.write(f"{stamp},{i}.0,{96.0:.4f},77.0,12.5,,,\n")
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({
+        "t_wall": time.time(), "cycle": 3, "running": True, "interval_s": 1.0,
+        "channels": [{"name": "Sample", "kelvin": 96.0, "usable": True}],
+        "links": [{"name": "ls336", "up": True, "writable": True}],
+        "recorder": {"path": str(csv), "rows": 1200},
+        "commands": {"accepted": True, "recent": []},
+    }))
+    w = ViewerWindow(str(status), refresh_ms=10_000_000)
+    qt_app.processEvents()
+
+    connect = w.curves["Sample"].curve.opts["connect"]
+    assert not isinstance(connect, str), "the whole trace was drawn as one line"
+    assert list(connect).count(0) == 1
+    # The break is at the last sample before the hour off, not anywhere else.
+    t = w.curves["Sample"].getData()[0]
+    broken = list(connect).index(0)
+    assert t[broken + 1] - t[broken] > 3000
+    w.close()
+
+
+def test_a_recorder_that_never_stopped_is_still_one_unbroken_trace(viewer):
+    assert viewer.curves["Sample"].curve.opts["connect"] == "all"

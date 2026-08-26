@@ -13,7 +13,7 @@ import json
 import time
 
 from lschart.gui.source import (
-    CsvTail, StatusSource, capabilities, classify_column,
+    CsvTail, StatusSource, capabilities, classify_column, connect_flags,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -46,6 +46,92 @@ def test_a_heater_percent_does_not_go_on_the_kelvin_axis():
 def test_a_heater_range_is_not_plotted_at_all():
     """0..3 is an enumeration; a line through it implies 1.5 means something."""
     assert classify_column("ls336.range1", {"Sample"}) == "other"
+
+
+# -- where the pen lifts -----------------------------------------------------
+
+
+def gaps(t, **kw):
+    """The indices after which `connect_flags` breaks the trace."""
+    flags = connect_flags(t, **kw)
+    if isinstance(flags, str):
+        assert flags == "all"
+        return []
+    assert len(flags) == len(t)
+    return [i for i, keep in enumerate(flags) if not keep]
+
+
+def test_evenly_spaced_samples_are_one_unbroken_line():
+    assert connect_flags([float(i) for i in range(50)]) == "all"
+
+
+def test_the_recorder_being_off_for_a_while_is_drawn_as_a_gap():
+    """The straight line across an outage is an hour the cryostat never had."""
+    t = [float(i) for i in range(20)] + [3600.0 + i for i in range(20)]
+    assert gaps(t) == [19]
+
+
+def test_a_missed_cycle_or_two_is_still_one_line():
+    """A retry on a jittering bus costs a cycle; the recorder never stopped."""
+    t = [0.0, 1.0, 2.0, 4.0, 5.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+    assert gaps(t) == []
+
+
+def test_the_threshold_follows_the_sample_interval_not_the_clock():
+    """The same shape at a minute per sample breaks in the same place."""
+    fast = [float(i) for i in range(20)] + [200.0 + i for i in range(20)]
+    slow = [60.0 * x for x in fast]
+    assert gaps(fast) == gaps(slow) == [19]
+
+
+def test_a_decimated_overview_does_not_shatter_into_confetti():
+    """Thinning doubles the spacing of every sample; none of that is a gap."""
+    t = [2.0 * i for i in range(500)]
+    assert connect_flags(t) == "all"
+
+
+def test_a_gap_survives_the_thinning_that_doubles_the_spacing_around_it():
+    full = [float(i) for i in range(60)] + [3600.0 + i for i in range(60)]
+    thinned = full[::2]
+    assert len(gaps(thinned)) == 1
+
+
+def test_several_outages_each_get_their_own_break():
+    t = ([float(i) for i in range(10)]
+         + [500.0 + i for i in range(10)]
+         + [9000.0 + i for i in range(10)])
+    assert gaps(t) == [9, 19]
+
+
+def test_the_factor_is_a_knob_and_not_a_constant_in_the_code():
+    t = [0.0, 1.0, 2.0, 3.0, 4.0, 12.0, 13.0, 14.0, 15.0]
+    assert gaps(t, factor=100.0) == []
+    assert gaps(t, factor=2.0) == [4]
+
+
+def test_two_samples_are_joined_because_one_interval_proves_nothing():
+    """There is no spacing to compare a single interval against."""
+    assert connect_flags([0.0, 86400.0]) == "all"
+    assert connect_flags([]) == "all"
+
+
+def test_repeated_timestamps_do_not_turn_the_whole_trace_to_dust():
+    """A zero median interval would make every step in the log a gap."""
+    t = [0.0] * 30 + [1.0] * 30
+    assert connect_flags(t) == "all"
+
+
+def test_a_step_backwards_is_not_itself_a_gap():
+    """A gap is missing data, which is a step *forward*; backwards is a clock.
+
+    The recorder appends in the order it reads, so a clock that went
+    backwards leaves the series out of order rather than sparse -- and the
+    jump back up to where it was is a real hole in the record, drawn as one.
+    Only the backwards step itself is not.
+    """
+    t = [float(i) for i in range(20)]
+    t[10] = -500.0
+    assert 9 not in gaps(t)
 
 
 # -- tailing the log ---------------------------------------------------------

@@ -30,6 +30,15 @@ hand-picked span is **re-read from the logs themselves**
 first draws the thinned overview so the view responds instantly, then swaps in
 the real samples a moment later.
 
+Holes
+-----
+
+A log has holes in it -- the recorder was stopped, the machine rebooted, the
+lid was closed -- and joining across one with a straight line invents a
+temperature history at exactly the place nothing can contradict it.
+:func:`connect_flags` is where that is decided, and it is the one part of this
+module that looks at the *spacing* of the samples rather than their values.
+
 Why the viewer is a separate process
 ------------------------------------
 
@@ -56,6 +65,8 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+
+import numpy as np
 
 from ..ipc.status import read_status, status_age_s
 
@@ -99,6 +110,67 @@ def classify_column(name: str, channel_names) -> str:
     if any(m in lowered for m in PERCENT_AUX_MARKERS):
         return "percent"
     return "other"
+
+
+#: How many times the sample interval a step between two samples must exceed
+#: before the chart draws a gap instead of a line.  A recorder that missed a
+#: cycle or two -- a retry on a jittering bus, a slow instrument -- is still
+#: recording, and joining across it is the honest drawing.  A recorder that
+#: was *off* is not, and a straight line across the hour it was off is an
+#: hour of temperature the cryostat never had.  4 is the first multiple that
+#: is unambiguously the second case: it needs three consecutive cycles gone.
+GAP_FACTOR = 4.0
+
+#: Intervals actually looked at when estimating a series' spacing.  The
+#: spacing of a series is uniform (one recorder, one interval, and decimation
+#: applies to the whole of it), so a few thousand of them settle the median as
+#: well as two hundred thousand would, and do it in constant time on a redraw
+#: that happens every second.
+_SPACING_SAMPLE = 4096
+
+
+def connect_flags(t, *, factor: float = GAP_FACTOR):
+    """Which of ``t``'s samples should be joined to the next by a line.
+
+    Returns pyqtgraph's ``"all"`` when every sample follows on from the one
+    before it, and a 0/1 array marking the breaks when some do not -- the
+    literal ``connect=`` argument ``setData`` takes.  An array rather than
+    NaNs punched into the values because a NaN would have to be spliced into
+    a copy of two 200 000-element lists on every redraw, and because a break
+    expressed this way leaves the autoscale looking at the real data.
+
+    The threshold is a multiple of the series' own median interval, not a
+    number of seconds, and that is the whole point: the same series is drawn
+    at full resolution when a span is picked and decimated by 2, 4, 16 when it
+    is not, so a fixed threshold would either break a decimated overview into
+    confetti or miss every gap in a fresh one.  Deriving it from the samples
+    in hand also survives a log written at a different interval, or a
+    recorder whose interval was changed between one file and the next.
+
+    Below three samples there is no spacing to have an opinion about -- one
+    interval cannot be compared with anything -- so the line is drawn.
+    """
+    n = len(t)
+    if n < 3:
+        return "all"
+    steps = np.diff(np.asarray(t, dtype=float))
+    stride = max(1, steps.size // _SPACING_SAMPLE)
+    sample = steps[::stride]
+    # Positive only: a clock step or two rows sharing a timestamp would drag
+    # the median to zero, and a zero nominal interval would call every step a
+    # gap and draw the trace as dust.
+    sample = sample[sample > 0.0]
+    if sample.size == 0:
+        return "all"
+    nominal = float(np.median(sample))
+    if nominal <= 0.0:
+        return "all"
+    breaks = steps > factor * nominal
+    if not breaks.any():
+        return "all"
+    flags = np.ones(n, dtype=np.uint8)
+    flags[:-1][breaks] = 0
+    return flags
 
 
 @dataclass

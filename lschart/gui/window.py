@@ -34,6 +34,11 @@ draws its thinned overview and then, one quiet tick later, swaps in what
 `CsvTail.prepare_span` re-read from the logs at full resolution -- zooming
 back into an old day shows real samples again, not whatever survived
 decimation.
+
+Where the log has a hole -- the recorder was off, the machine rebooted -- the
+trace breaks rather than ruling a straight line across it; `connect_flags` in
+`source` decides where, and it is the only thing in the drawing that looks at
+the *spacing* of the samples rather than their values.
 """
 
 from __future__ import annotations
@@ -48,7 +53,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..instruments.ls33x import HEATER_RANGE_NAMES
 from ..ipc.commands import CommandSpool
-from .source import CsvTail, StatusSource, capabilities, classify_column
+from .source import (
+    GAP_FACTOR, CsvTail, StatusSource, capabilities, classify_column, connect_flags,
+)
 
 log = logging.getLogger(__name__)
 
@@ -247,6 +254,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         spool: CommandSpool | None = None,
         refresh_ms: int = 1000,
         max_points: int = 200_000,
+        gap_factor: float = GAP_FACTOR,
         config_label: str = "",
     ) -> None:
         super().__init__()
@@ -254,6 +262,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.tail = CsvTail(max_points=max_points,
                             backfill_s=BACKFILL_COVERAGE_S)
         self.spool = spool
+        #: How many sample intervals a step has to exceed before the trace is
+        #: drawn with a gap there instead of a line.  See `connect_flags`.
+        self.gap_factor = gap_factor
         self.config_label = config_label
 
         self.curves: dict[str, pg.PlotDataItem] = {}
@@ -1004,7 +1015,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 # still matters, for the other panel and for the number of
                 # points Qt is asked to draw.
                 t, v = self.tail.between(name, *self._span)
-            curve.setData(t, v)
+            # A break where the samples stop for long enough to mean the
+            # recorder was not running: the pen lifts rather than ruling a
+            # straight line across an outage the cryostat did not spend at
+            # some convenient interpolated temperature.
+            curve.setData(t, v, connect=connect_flags(t, factor=self.gap_factor))
 
     # -- choosing the window with the mouse --------------------------------
 
