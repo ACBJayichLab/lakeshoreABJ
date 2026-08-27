@@ -293,6 +293,17 @@ class Sim33x:
         self.ranges = {out: 0 for out in self.caps.heater_outputs}
         self.pids = {loop: (50.0, 20.0, 0.0) for loop in self.caps.loops}
         self.ramps = {loop: (0, 0.0) for loop in self.caps.loops}
+        #: ``OUTMODE`` per output: ``(mode, input index, powerup enable)``.
+        #: Closed loop on the matching input by default -- loop 1 reads A,
+        #: loop 2 reads B and so on -- which is both the commonest wiring and
+        #: the one that makes a loop table say something in a test.
+        self.outmodes = {
+            loop: (1, min(loop, len(self.caps.inputs)), 0)
+            for loop in self.caps.loops
+        }
+        #: ``RAMPST?`` per loop: whether the box is still traversing to a new
+        #: setpoint.  Set it in a test; nothing here moves it on its own.
+        self.ramping = {loop: 0 for loop in self.caps.loops}
         self.write_log: list[str] = []
         if self.model == "336":
             # The LTSPM3 336: loop 2 independently holds THE CHONKE, heater near
@@ -315,6 +326,11 @@ class Sim33x:
             self.pids[int(parts[0])] = tuple(float(x) for x in parts[1:4])
         elif head == "RAMP":
             self.ramps[int(parts[0])] = (int(float(parts[1])), float(parts[2]))
+        elif head == "OUTMODE":
+            self.outmodes[int(parts[0])] = (
+                int(float(parts[1])), int(float(parts[2])),
+                int(float(parts[3])) if len(parts) > 3 else 0,
+            )
 
     def handle_query(self, cmd: str) -> str:
         self.cryostat._guard_comms()
@@ -351,7 +367,10 @@ class Sim33x:
             on, rate = self.ramps.get(int(arg), (0, 0.0))
             return f"{on},{rate:+.3f}"
         if head == "RAMPST?":
-            return "0"
+            return str(self.ramping.get(int(arg), 0))
+        if head == "OUTMODE?":
+            mode, source, powerup = self.outmodes.get(int(arg), (0, 0, 0))
+            return f"{mode},{source},{powerup}"
         raise TransportError(f"Sim33x({self.model}) does not implement {cmd!r}")
 
 

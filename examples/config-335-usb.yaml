@@ -37,6 +37,23 @@ instruments:
     read_setpoints: true      # SETP? on both loops -> a log column each
     read_heaters: true        # HTR? and RANGE? on both outputs
 
+    # OUTMODE? per loop -- which input it reads and whether it is in closed
+    # loop -- plus RAMPST?.  Read at startup and once a minute after that;
+    # OUTMODE changes approximately never.  This is where the viewer's loop
+    # table gets its sensor column, and it is the instrument's answer rather
+    # than a map kept in this file that could go stale.
+    read_loops: true
+    loop_every_n_cycles: 30
+
+    # How far each loop may sit from its setpoint and still count as settled,
+    # in kelvin.  Per loop because 0.5 K is a tight tolerance at 4 K and a
+    # loose one at 300 K.  A loop left out of this gets no "not settled" mark
+    # at all -- there is no default that would be right for two different
+    # loops, so this software declines to invent one.
+    loop_thresholds:
+      1: 0.5
+      2: 1.0
+
     # Writes are OFF by default.  Turn this on for a box this software is meant
     # to drive; leave it off for one that is only being watched.  It gates the
     # setpoint, the heater range and the loop's PID gains alike.

@@ -165,19 +165,54 @@ classdef LakeShore < handle
             %LINKS  Per-instrument health and capability, as a struct array.
             %
             %   Fields: name, model, up, consecutive_failures, reconnects,
-            %   last_error, writable, loops, heater_outputs, analog_output,
-            %   max_output_pct.
+            %   last_error, writable, loop_numbers, heater_outputs,
+            %   analog_output, max_output_pct, loops.
             %
             %   `writable` is the driver's own allow_writes policy, and it is
             %   separate from whether the recorder accepts commands at all --
             %   a command needs both.  Reach for this before assuming a write
             %   will land, and to tell a refusal apart from a dead link.
             %
+            %   `loops` is the loop table -- see LOOPS().  In schema 1 this
+            %   field was a bare list of loop numbers; those now live in
+            %   `loop_numbers`, and a script that has to work against both
+            %   should read whichever is a list of numbers.
+            %
             %   Pass a status struct to read it from a snapshot you already
             %   have, rather than making a second read that could disagree
             %   with the first.
             if nargin < 2, s = obj.status(); end
             items = obj.asStructArray(s, 'links');
+        end
+
+        function items = loops(obj, instrument, s)
+            %LOOPS  One instrument's control loops, as a struct array.
+            %
+            %   Fields: loop, sensor, input, mode, mode_code, heater_output,
+            %   setpoint_k, output_pct, range, threshold_k, ramping.  Every
+            %   entry carries every field; a value the recorder does not have
+            %   arrives as [] rather than as a plausible zero.
+            %
+            %   `sensor` is the instrument's own answer to "which input does
+            %   this loop read" (OUTMODE?), so it is the same string the
+            %   channel of that name carries -- no map kept in MATLAB, and
+            %   none to go stale.
+            %
+            %   Empty for a box with no loops, and empty against a recorder
+            %   older than schema 2, which did not publish this at all.
+            %
+            %       ls = LakeShore('data');
+            %       t  = struct2table(ls.loops('ls336'))
+            %
+            if nargin < 3, s = obj.status(); end
+            for link = obj.links(s)
+                if strcmp(link.name, instrument)
+                    items = obj.asStructArray(link, 'loops');
+                    return
+                end
+            end
+            error('LakeShore:noInstrument', ...
+                  'no instrument named "%s" in %s', instrument, obj.StatusFile);
         end
 
         function out = aux(obj, key)

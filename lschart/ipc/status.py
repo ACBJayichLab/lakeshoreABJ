@@ -55,7 +55,13 @@ log = logging.getLogger(__name__)
 
 #: Bumped when the meaning of a field changes.  A reader that checks this can
 #: say "this recorder is newer than I am" instead of quietly misreading it.
-SCHEMA_VERSION = 1
+#:
+#: 2 -- ``links[].loops`` became an array of loop *objects* describing what
+#: each loop is bound to, alongside the plain list of loop numbers that was
+#: there before (now ``links[].loop_numbers``).  A client written against 1
+#: keeps working: ``capabilities()`` in the viewer's source module is the
+#: worked example of degrading rather than assuming.
+SCHEMA_VERSION = 2
 
 
 def _num(value: Any) -> Any:
@@ -167,7 +173,7 @@ class StatusWriter:
         return [{"name": str(k), value_key: v} for k, v in mapping.items()]
 
     @staticmethod
-    def _links(instruments: list) -> list[dict]:
+    def _links(instruments: list, aux: dict | None = None) -> list[dict]:
         links = []
         for inst in instruments:
             t = getattr(inst, "transport", None)
@@ -181,8 +187,65 @@ class StatusWriter:
                 "writable": bool(getattr(inst, "allow_writes", False)),
             }
             link.update(StatusWriter._capabilities(inst))
+            link["loops"] = StatusWriter._loops(inst, aux or {})
             links.append(link)
         return links
+
+    @staticmethod
+    def _loops(inst, aux: dict) -> list[dict]:
+        """One entry per loop: what it reads, what it is doing, where it is.
+
+        **An array of uniform objects, not an object keyed by loop number.**
+        MATLAB's ``jsondecode`` runs object keys through ``makeValidName``, so
+        ``{"1": ...}`` arrives as a field called ``x1``; and an array whose
+        elements all carry the same fields is what makes ``jsondecode`` return
+        a struct array rather than a cell array of dissimilar structs.  Every
+        key below is therefore present on every entry, ``null`` where the
+        recorder has nothing to say.
+
+        Two halves joined here and nowhere else.  The instrument supplies what
+        it read from ``OUTMODE?`` -- the sensor, the mode, the heater output --
+        and the frame's aux block supplies the numbers that move.  Joining them
+        in one place is what stops a client reading the setpoint twice and
+        getting two answers.
+
+        Duck-typed like everything else in this module: a box with no
+        ``loop_rows`` has no loops to report, and says so with an empty list
+        rather than with a missing key.
+        """
+        rows = getattr(inst, "loop_rows", None)
+        if not callable(rows):
+            return []
+        name = getattr(inst, "name", "")
+        out = []
+        for row in rows():
+            loop = int(row.get("loop"))
+            heater = row.get("heater_output")
+            # A loop with a heater reports HTR? as its output; one whose output
+            # is analog-only (a 336's 3 and 4) reports AOUT?.  Both are a
+            # percentage of full scale, which is why they share a column.
+            pct_key = (f"{name}.heater{heater}" if heater is not None
+                       else f"{name}.aout{loop}")
+            range_value = (aux.get(f"{name}.range{heater}")
+                           if heater is not None else None)
+            out.append({
+                "loop": loop,
+                "sensor": str(row.get("sensor") or ""),
+                "input": str(row.get("input") or ""),
+                "mode": str(row.get("mode") or ""),
+                "mode_code": (None if row.get("mode_code") is None
+                              else int(row["mode_code"])),
+                "heater_output": None if heater is None else int(heater),
+                "setpoint_k": _num(aux.get(f"{name}.setpoint{loop}")),
+                "output_pct": _num(aux.get(pct_key)),
+                # An enumeration, so an int -- but null rather than 0 where
+                # there is no range to have, because 0 is "off" and would read
+                # as a fact about a loop that has no ranges at all.
+                "range": None if range_value is None else int(range_value),
+                "threshold_k": _num(row.get("threshold_k")),
+                "ramping": bool(row.get("ramping")),
+            })
+        return out
 
     @staticmethod
     def _capabilities(inst) -> dict:
@@ -205,8 +268,10 @@ class StatusWriter:
         analog = getattr(inst, "analog", None)
         return {
             # 33x: the loops it will accept a setpoint on, and the outputs that
-            # have a power range.
-            "loops": [int(n) for n in getattr(caps, "loops", ()) or ()],
+            # have a power range.  `loop_numbers` and not `loops`: schema 2
+            # gave `loops` to the array of loop *objects*, and one key cannot
+            # be two shapes.
+            "loop_numbers": [int(n) for n in getattr(caps, "loops", ()) or ()],
             "heater_outputs": [
                 int(n) for n in getattr(caps, "heater_outputs", ()) or ()
             ],
@@ -285,7 +350,7 @@ class StatusWriter:
             "aux": self._pairs({k: _num(v) for k, v in frame.aux.items()}),
             "errors": self._pairs({k: str(v) for k, v in frame.errors.items()},
                                   value_key="message"),
-            "links": self._links(instruments or []),
+            "links": self._links(instruments or [], frame.aux),
             "recorder": {
                 "path": str(getattr(recorder, "path", "") or ""),
                 "rows": int(getattr(recorder, "rows_written", 0)),

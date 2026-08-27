@@ -475,13 +475,39 @@ def showing(widget) -> bool:
     return not widget.isHidden()
 
 
+def loop_entry(n, sensor="Sample", **kw):
+    """One entry of a schema-2 ``links[].loops`` array.
+
+    Every key present on every entry, which is the promise the status file
+    makes -- MATLAB's jsondecode returns a struct array only when they agree.
+    """
+    entry = {
+        "loop": n, "sensor": sensor, "input": "ABCD"[n - 1],
+        "mode": "closed loop", "mode_code": 1,
+        "heater_output": n if n in (1, 2) else None,
+        "setpoint_k": 77.0, "output_pct": 0.0,
+        "range": 0 if n in (1, 2) else None,
+        "threshold_k": None, "ramping": False,
+    }
+    entry.update(kw)
+    return entry
+
+
 CTRL = {"name": "ls336", "model": "336", "up": True, "writable": True,
-        "loops": [1, 2, 3, 4], "heater_outputs": [1, 2],
-        "analog_output": None, "max_output_pct": 100.0}
+        "loop_numbers": [1, 2, 3, 4], "heater_outputs": [1, 2],
+        "analog_output": None, "max_output_pct": 100.0,
+        "loops": [loop_entry(n) for n in (1, 2, 3, 4)]}
 
 MON = {"name": "ls218", "model": "218", "up": True, "writable": True,
-       "loops": [], "heater_outputs": [], "analog_output": 1,
-       "max_output_pct": 70.0}
+       "loop_numbers": [], "heater_outputs": [], "analog_output": 1,
+       "max_output_pct": 70.0, "loops": []}
+
+#: What a recorder from before schema 2 wrote: a bare list of loop numbers and
+#: no loop objects at all.  A viewer must degrade to offering those loops, not
+#: to deciding the box has none.
+OLD_CTRL = {"name": "ls336", "model": "336", "up": True, "writable": True,
+            "loops": [1, 2, 3, 4], "heater_outputs": [1, 2],
+            "analog_output": None, "max_output_pct": 100.0}
 
 
 def queued(window) -> list[dict]:
@@ -493,9 +519,57 @@ def test_a_controller_gets_a_setpoint_and_a_range_but_no_analog_control(
     w = cryostat(tmp_path, qt_app, [CTRL])
     assert showing(w.setpoint_group) and showing(w.range_group)
     assert not showing(w.analog_group)
-    assert w.loop_spin.maximum() == 4
-    assert [w.heater_combo.itemText(i)
-            for i in range(w.heater_combo.count())] == ["1", "2"]
+    # The loop table is the selector; the range follows the loop it selects.
+    assert w._loop == 1
+    assert w.heater_label.text() == "1"
+    assert "output 1" in w.range_group.title()
+    w.close()
+
+
+def test_the_range_control_follows_the_loop_the_table_selected(tmp_path, qt_app):
+    """No separate output combo: on this family the loop number *is* the
+    output number, and a second control offering to disagree could only put
+    power somewhere nobody meant it to go."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.loops.selectRow(1)                        # loop 2
+    assert w._loop == 2
+    assert w.heater_label.text() == "2"
+    assert "output 2" in w.range_group.title()
+    w.close()
+
+
+def test_a_loop_with_no_heater_range_is_offered_none(tmp_path, qt_app):
+    """A 336's loops 3 and 4 drive an analog output: no range to set, so the
+    control that sets one is not shown."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.loops.selectRow(2)                        # loop 3
+    assert w._loop == 3
+    assert showing(w.setpoint_group)
+    assert not showing(w.range_group)
+    assert not showing(w.analog_group)          # a 336 takes no `analog`
+    assert "analog output" in w.loop_note.text()
+    w.close()
+
+
+def test_a_row_names_the_sensor_the_instrument_says_it_reads(tmp_path, qt_app):
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
+        loop_entry(1, "Coldplate"), loop_entry(2, "Stage 2"),
+        loop_entry(3, "Rad Shield"), loop_entry(4, "Stage 1")])])
+    sensors = [w.loops.item(r, 1).text() for r in range(w.loops.rowCount())]
+    assert sensors == ["Coldplate", "Stage 2", "Rad Shield", "Stage 1"]
+    ranges = [w.loops.item(r, 5).text() for r in range(w.loops.rowCount())]
+    assert ranges == ["0", "0", "n/a", "n/a"]
+    w.close()
+
+
+def test_a_recorder_too_old_to_publish_loops_still_offers_them(tmp_path, qt_app):
+    """Schema 1 wrote a bare list of loop numbers.  A viewer pointed at one
+    should offer its loops rather than decide the box has none."""
+    w = cryostat(tmp_path, qt_app, [OLD_CTRL])
+    assert showing(w.setpoint_group) and showing(w.range_group)
+    assert w.loops.rowCount() == 0             # no rows to invent
+    assert not w.loops.isVisible()
+    assert "schema 1" in w.loop_note.text()
     w.close()
 
 
@@ -575,7 +649,7 @@ def test_sending_a_heater_range_queues_the_right_command(
         tmp_path, qt_app, monkeypatch):
     w = cryostat(tmp_path, qt_app, [CTRL])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
-    w.heater_combo.setCurrentIndex(1)                 # output 2
+    w.loops.selectRow(1)                              # loop 2 -> output 2
     w.range_combo.setCurrentIndex(3)                  # range 3, high
     w.range_button.click()
 
@@ -704,7 +778,7 @@ def test_changing_loop_refills_the_setpoint_field(tmp_path, qt_app):
                       {"ls336.setpoint1": 4.2, "ls336.setpoint2": 77.35})
     w = ViewerWindow(str(path), refresh_ms=10_000_000)
     assert w.setpoint_spin.value() == pytest.approx(4.2)
-    w.loop_spin.setValue(2)
+    w.loops.selectRow(1)
     assert w.setpoint_spin.value() == pytest.approx(77.35)
     w.close()
 
@@ -725,7 +799,7 @@ def test_the_range_combo_follows_the_current_range(tmp_path, qt_app):
                       {"ls336.range1": 1, "ls336.range2": 3})
     w = ViewerWindow(str(path), refresh_ms=10_000_000)
     assert w.range_combo.currentData() == 1
-    w.heater_combo.setCurrentIndex(1)               # output 2
+    w.loops.selectRow(1)                            # loop 2 -> output 2
     assert w.range_combo.currentData() == 3
     w.close()
 
@@ -740,8 +814,8 @@ def test_an_edited_field_stops_tracking_until_the_selection_changes(
     assert w.setpoint_spin.value() == pytest.approx(300.0)
 
     # A different loop is a different question; the field tracks again.
-    w.loop_spin.setValue(2)
-    w.loop_spin.setValue(1)
+    w.loops.selectRow(1)
+    w.loops.selectRow(0)
     w.refresh()
     assert w.setpoint_spin.value() == pytest.approx(4.2)
     w.close()

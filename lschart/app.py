@@ -184,6 +184,9 @@ class Application:
             read_setpoints=c.read_setpoints,
             read_heaters=c.read_heaters,
             read_analog_outputs=c.read_analog_outputs,
+            read_loops=c.read_loops,
+            loop_every_n_cycles=c.loop_every_n_cycles,
+            loop_thresholds=dict(c.loop_thresholds),
             allow_writes=c.allow_writes,
             max_setpoint_k=c.max_setpoint_k,
         )

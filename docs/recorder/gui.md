@@ -100,6 +100,51 @@ Plus live readouts, link health, per-trace toggles, and the control panel
 below — all of which write into the same spool MATLAB uses, behind a
 confirmation dialog, with no privileges MATLAB lacks.
 
+## The loop table
+
+Beneath the per-channel readouts, and **not instead of them**: recording every
+thermometer continuously is the recorder's job, and a loop-centric view that
+replaced the channel list would turn an eight-input monitor into however many
+loops it has.
+
+One row per loop, across every instrument: `# · Sensor · K · SP · Out · Rng ·
+Rail · Off SP`. **Clicking a row selects that loop** — instrument and loop
+together — and every control in the command panel follows it. There is no loop
+spin box and no output combo; two ways to choose a loop is two things that can
+disagree about where a setpoint is going.
+
+Which sensor a loop reads comes from the **instrument** (`OUTMODE?`), not from
+a config key. On this family the loop number *is* the output number by
+protocol, so the heater binding is derived too. A loop whose output is
+analog-only — a 336's 3 and 4 — shows `n/a` in the range column, because it
+does not have a range that happens to be unknown; it has none.
+
+### The two warning marks
+
+`Rail` and `Off SP` are **two marks and never one**. OR-ing them into a single
+warning gives an icon that is lit through every cooldown, and an icon that is
+always lit is an icon nobody reads. They also mean different things:
+
+| | |
+|---|---|
+| **Rail** | the output is at or beyond 99 % or 1 %. Fixed, not per loop and not configurable: "this loop has no authority left" is the same fact on every heater |
+| **Off SP** | the sensor is further from the setpoint than that loop's `loop_thresholds` entry |
+
+Both are **suppressed while the loop is not trying** — range 0, a mode other
+than closed loop, or a ramp still traversing. A loop that was never going to
+the setpoint is not failing to reach it, and a ramp that has not arrived is
+doing exactly what it was asked to.
+
+A loop with **no threshold configured gets no `Off SP` mark at all.** 0.5 K is
+tight at 4 K and loose at 300 K; with nothing configured the honest answer is
+silence rather than a number this software picked.
+
+Worth expecting: a closed-loop output with **no range to switch it off** — a
+336's loops 3 and 4 — sitting below ambient will light both marks and keep them
+lit. That is literally true (it is asking for a temperature it cannot reach,
+with the output pinned at zero) and it is what the suppression rules above
+allow, because such a loop has no inert half to be switched off by.
+
 ## The control panel
 
 One instrument selector, then whatever the selected box can actually be asked
@@ -110,10 +155,15 @@ in three places is the same table going stale in three places.
 
 | Control | Appears for | |
 |---|---|---|
-| **Setpoint** | a box with loops | loop + kelvin. Inert on its own: a setpoint does nothing while the range is 0 |
-| **Heater range** | a box with heater outputs | output + 0/1/2/3. **Above 0 this applies power** |
+| **Setpoint** | a box with loops | kelvin, aimed at **the loop selected in the loop table**. Inert on its own: a setpoint does nothing while the range is 0 |
+| **Heater range** | a selected loop that drives a heater output | 0/1/2/3, applied to **that loop's** output. **Above 0 this applies power** |
 | **Analog output** | a box with a settable analog output (a 218) | one percentage. **Above 0 this applies power** — there is no inert half |
 | **All heaters OFF** | always | every writable instrument to zero, 33x ranges and 218 outputs alike |
+
+**Only the relevant grouping is ever shown.** Selecting a 336 loop 3 or 4
+hides the heater-range control, because there is no range to set — and says so
+in a sentence rather than offering a control that could only produce a
+refusal.
 
 Four things this panel does on purpose:
 

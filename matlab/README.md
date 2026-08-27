@@ -73,7 +73,8 @@ ls.channels()                % {'Sample', 'Cold Head', 'Shield'}
 ls.temperature()             % all of them, as a struct
 ls.temperature('Sample')     % one, in kelvin
 ls.aux('ls336.setpoint1')    % setpoints, heater percents
-ls.links()                   % per-instrument health: up, writable, loops
+ls.links()                   % per-instrument health: up, writable, capability
+ls.loops('ls336')            % the loop table: sensor, mode, setpoint, output
 T = ls.readLog();            % the CSV as a table, safe to read mid-run
 
 ls.setSetpoint(1, 77.0);     % blocks until the recorder confirms
@@ -82,6 +83,27 @@ ls.setRange(1, 0);           % heater range — 0 is off
 ls.setAnalog(5.0);           % 218 analog output percent — see the warning below
 ls.heatersOff();             % everything the recorder may write to, to zero
 ```
+
+`loops()` is the one worth knowing about if you are scripting a loop rather
+than a channel. It answers **which sensor a loop reads** with the
+*instrument's* own answer (`OUTMODE?`), so there is no map of loops to sensors
+in your script to go stale — and `sensor` is the same string `temperature()`
+uses, so the two join directly:
+
+```matlab
+r = ls.loops('ls336');
+here = ls.temperature();
+for i = 1:numel(r)
+    fprintf('loop %d (%s): %.3f K, going to %.3f K\n', ...
+            r(i).loop, r(i).sensor, ...
+            here.(matlab.lang.makeValidName(r(i).sensor)), r(i).setpoint_k);
+end
+```
+
+Every field is present on every entry, with `[]` where the recorder has
+nothing to say — never a plausible zero. Against a recorder older than schema
+2 it comes back empty, which is not an error: that recorder did not publish a
+loop table at all.
 
 Every command method blocks until the recorder acknowledges it, and **raises
 if the command was refused**. That is deliberate: a setpoint that was silently

@@ -97,15 +97,44 @@ def test_a_failed_auxiliary_query_does_not_lose_the_frame():
     assert not any(k.endswith("heater1") for k in aux)
 
 
-def test_transaction_budget_matches_what_a_frame_actually_costs():
-    """`check` predicts the bus load without opening anything, so it must agree."""
-    inst, sim = build("335", name="ls335")
-    inst.read_frame()          # let it discover channel names first
+def count_queries(inst, sim):
     counted = []
     original = sim.handle_query
     sim.handle_query = lambda cmd: (counted.append(cmd), original(cmd))[1]
     inst.read_frame()
-    assert len(counted) == inst.transactions_per_frame()
+    sim.handle_query = original
+    return counted
+
+
+def test_transaction_budget_matches_the_frame_that_costs_the_most():
+    """`check` predicts the bus load without opening anything, so it must agree
+    -- with the *worst* frame, which is the one the poll interval has to fit.
+
+    The loop bindings are read on a slow cadence, so most frames are cheaper
+    than the budget and the one that refreshes them is exactly it.  A budget
+    that averaged the burst away would be a budget the worst cycle overruns.
+    """
+    inst, sim = build("335", name="ls335")
+    inst.read_frame()          # let it discover channel names first
+
+    # The next frame is not a slow tick: cheaper than the budget, never more.
+    lean = count_queries(inst, sim)
+    assert len(lean) < inst.transactions_per_frame()
+    assert not any(c.startswith("OUTMODE?") for c in lean)
+
+    # Wind on to the frame that does refresh them.  That one is the budget.
+    while (inst._loop_cycles % inst.loop_every_n_cycles) != 0:
+        inst.read_frame()
+    fat = count_queries(inst, sim)
+    assert len(fat) == inst.transactions_per_frame()
+    assert sum(c.startswith("OUTMODE?") for c in fat) == len(inst.caps.loops)
+
+
+def test_a_recorder_that_does_not_want_loop_bindings_does_not_pay_for_them():
+    inst, sim = build("335", name="ls335", read_loops=False)
+    inst.read_frame()
+    assert len(count_queries(inst, sim)) == inst.transactions_per_frame()
+    assert inst.loop_bindings == {}
 
 
 # -- identity ---------------------------------------------------------------
@@ -337,3 +366,116 @@ def test_verification_is_on_by_default():
     cryostat = SimulatedCryostat()
     inst = LS33x(LoopbackTransport(Sim33x(cryostat)), model="336")
     assert inst.verify_writes is True
+
+
+# -- what a loop is bound to -------------------------------------------------
+#
+# From OUTMODE?, and from nowhere else.  A map of loops to sensors kept in a
+# config file could only go stale or lie, and on this family the loop number
+# *is* the output number by protocol.
+
+
+def test_a_loop_reports_the_sensor_the_instrument_says_it_reads():
+    inst, sim = build("336", name="ls336")
+    sim.outmodes[1] = (1, 3, 0)          # loop 1 reads input C
+    inst.read_frame()
+    binding = inst.loop_bindings[1]
+    assert binding.input_letter == "C"
+    assert binding.sensor == sim.names["C"]
+    assert binding.closed_loop
+
+
+def test_a_loop_in_open_loop_is_not_a_loop_chasing_a_setpoint():
+    inst, sim = build("336")
+    sim.outmodes[2] = (3, 2, 0)
+    inst.read_frame()
+    assert inst.loop_bindings[2].mode_name == "open loop"
+    assert not inst.loop_bindings[2].closed_loop
+
+
+def test_a_loop_bound_to_no_input_names_no_sensor():
+    inst, sim = build("336")
+    sim.outmodes[1] = (0, 0, 0)
+    inst.read_frame()
+    assert inst.loop_bindings[1].input_letter == ""
+    assert inst.loop_bindings[1].sensor == ""
+
+
+def test_the_heater_output_is_derived_not_configured():
+    """On a 336 loops 1 and 2 drive heaters and 3 and 4 drive analog outputs.
+    That is the protocol, so there is no key for it to disagree with."""
+    inst, _ = build("336")
+    inst.read_frame()
+    assert [inst.loop_bindings[n].heater_output for n in (1, 2, 3, 4)] == [
+        1, 2, None, None]
+
+
+def test_a_ramp_in_progress_is_reported_so_a_client_can_hold_its_warning():
+    inst, sim = build("336")
+    sim.ramping[1] = 1
+    inst.read_frame()
+    assert inst.loop_bindings[1].ramping is True
+
+
+def test_a_binding_that_fails_to_re_read_keeps_the_one_it_had():
+    """OUTMODE changes approximately never, so last cadence's answer is very
+    nearly certainly still true; dropping the row over one jittery reply would
+    take the loop out of the table for a minute."""
+    inst, sim = build("336")
+    inst.read_frame()
+    was = inst.loop_bindings[1]
+
+    original = sim.handle_query
+
+    def flaky(cmd):
+        if cmd.startswith("OUTMODE?"):
+            raise TransportError("simulated")
+        return original(cmd)
+
+    sim.handle_query = flaky
+    while (inst._loop_cycles % inst.loop_every_n_cycles) != 0:
+        inst.read_frame()
+    inst.read_frame()
+    assert inst.loop_bindings[1] == was
+
+
+def test_the_mode_and_the_ramp_flag_reach_the_log():
+    """A mode change is worth recording: "when did loop 2 go to open loop" is
+    a question asked after the fact, and only the CSV can answer it."""
+    inst, sim = build("336", name="ls336")
+    sim.outmodes[2] = (3, 2, 0)
+    _, aux = inst.read_frame()
+    assert aux["ls336.outmode2"] == 3.0
+    assert aux["ls336.ramping2"] == 0.0
+    assert "ls336.outmode2" in inst.aux_keys()
+
+
+def test_the_cached_binding_is_emitted_on_every_frame_not_only_the_slow_one():
+    """A column that is blank on 29 rows out of 30 is a column nobody can
+    read, and the value did not change on those 29 anyway."""
+    inst, _ = build("336", name="ls336")
+    inst.read_frame()
+    _, aux = inst.read_frame()               # not a slow tick
+    assert "ls336.outmode1" in aux
+
+
+def test_a_loop_row_carries_its_configured_settling_threshold():
+    inst, _ = build("336", loop_thresholds={1: 0.5, 2: 2.0})
+    inst.read_frame()
+    rows = {r["loop"]: r for r in inst.loop_rows()}
+    assert rows[1]["threshold_k"] == 0.5
+    assert rows[2]["threshold_k"] == 2.0
+    # A loop left out has no opinion about being settled, and says None.
+    assert rows[3]["threshold_k"] is None
+
+
+def test_loop_rows_resolve_sensor_names_against_the_labels_in_use():
+    """The binding is cached on a slow tick, but the labels are discovered on
+    the first frame -- so a cached sensor name would be empty for the rest of
+    the run."""
+    inst, sim = build("336")
+    inst.channels = {}                       # nothing discovered yet
+    inst._refresh_loops()
+    assert inst.loop_bindings[1].sensor == ""
+    inst.read_frame()                        # discovery happens here
+    assert inst.loop_rows()[0]["sensor"] == sim.names["A"]

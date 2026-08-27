@@ -56,7 +56,8 @@ from ..instruments.ls33x import HEATER_RANGE_NAMES
 from ..ipc.commands import CommandSpool
 from .source import (
     COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, CsvTail, StatusSource, capabilities,
-    classify_column, connect_flags, nearest_series, region_stats, write_region_csv,
+    SATURATED_HIGH_PCT, SATURATED_LOW_PCT, classify_column, connect_flags, loop_marks,
+    loop_rows, nearest_series, region_stats, write_region_csv,
 )
 
 log = logging.getLogger(__name__)
@@ -106,6 +107,20 @@ BANNER_STYLE = {
 #: and still get somewhere in three presses.
 ZOOM_STEP = 1.5
 
+
+#: The loop table's columns.  ``Rail`` and ``Off SP`` are deliberately two
+#: columns and not one: OR-ing them into a single warning gives an icon that is
+#: lit through every cooldown, and an icon that is always lit is an icon nobody
+#: reads.  They also mean different things -- a loop pinned at its rail has run
+#: out of authority, a loop far from its setpoint may simply be on the way.
+#: Headings are terse because the panel is narrow and a loop table that
+#: scrolls sideways hides the very marks it exists to show.
+LOOP_COLUMNS = ["#", "Sensor", "K", "SP", "Out", "Rng", "Rail", "Off SP"]
+
+#: What each mark says when it is lit.  Words rather than glyphs: this is read
+#: at 2 a.m. by somebody who has not seen the legend.
+MARK_SATURATED = "RAIL"
+MARK_UNSETTLED = "OFF SP"
 
 #: The two region cursors, and the shading between them.  Deliberately not one
 #: of CURVE_COLORS: a cursor that is the same colour as a trace reads as part
@@ -384,6 +399,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: The newest value drawn for each trace, which is what the legend
         #: shows while no region is picked.
         self._live_values: dict[str, float] = {}
+        #: The loop every command in the panel is about, chosen by clicking a
+        #: row of the loop table.  There is no second selector.
+        self._loop: int = 1
 
         self.setWindowTitle("lschart — strip chart")
         self.resize(1280, 800)
@@ -411,7 +429,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         splitter.addWidget(self._plots())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([380, 900])
+        splitter.setSizes([430, 900])
         outer.addWidget(splitter, 1)
 
         self.setCentralWidget(central)
@@ -442,6 +460,35 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # with four channels should not reserve half the panel for the six it
         # does not have, while the trace list underneath goes unscrollable.
         box.addWidget(self.readouts, 0)
+
+        # The loop table, *beneath* the per-channel readouts and not instead of
+        # them.  Recording every thermometer continuously is the recorder's
+        # job, and a loop-centric view that replaced the channel list would
+        # turn an eight-input monitor into however many loops it has.
+        self.loops = QtWidgets.QTableWidget(0, len(LOOP_COLUMNS))
+        self.loops.setHorizontalHeaderLabels(LOOP_COLUMNS)
+        self.loops.verticalHeader().setVisible(False)
+        self.loops.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.loops.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.loops.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.loops.horizontalHeader().setStretchLastSection(False)
+        self.loops.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeToContents)
+        self.loops.setSizePolicy(QtWidgets.QSizePolicy.Preferred,
+                                 QtWidgets.QSizePolicy.Fixed)
+        # Never a vertical scrollbar: the table is sized to its rows below,
+        # and one that scrolled would hide a loop behind a scrollbar in a
+        # panel that has the room for it.
+        self.loops.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.loops.itemSelectionChanged.connect(self._loop_row_selected)
+        self.loops.setToolTip(
+            "One row per control loop, as the instrument reports it "
+            "(OUTMODE?). Click a row to point the command panel at that "
+            "loop.")
+        #: Row index -> (instrument name, loop row), so a click can say which
+        #: loop was picked without parsing the cells back out again.
+        self._loop_index: list[tuple[str, dict]] = []
+        box.addWidget(self.loops, 0)
 
         view_row = QtWidgets.QHBoxLayout()
         view_row.addWidget(QtWidgets.QLabel("View"))
@@ -557,6 +604,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
         top.addRow("Instrument", self.instrument_combo)
         box.addLayout(top)
 
+        # What the selected loop is bound to, in a sentence.  From the
+        # recorder's OUTMODE reading, so it is the instrument's answer and not
+        # a map kept in here that could go stale.
+        self.loop_note = QtWidgets.QLabel("")
+        self.loop_note.setWordWrap(True)
+        self.loop_note.setStyleSheet("color:#37474f;")
+        box.addWidget(self.loop_note)
+
         box.addWidget(self._setpoint_group())
         box.addWidget(self._range_group())
         box.addWidget(self._analog_group())
@@ -581,10 +636,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.setpoint_group = QtWidgets.QGroupBox("Setpoint")
         form = QtWidgets.QFormLayout(self.setpoint_group)
 
-        self.loop_spin = QtWidgets.QSpinBox()
-        self.loop_spin.setRange(1, 4)
-        self.loop_spin.valueChanged.connect(self._on_loop_changed)
-        form.addRow("Loop", self.loop_spin)
+        # No loop selector here.  The loop table above *is* the selector, and
+        # two ways to choose a loop is two things that can disagree about
+        # which one a setpoint is going to.
+        self.loop_label = QtWidgets.QLabel("—")
+        self.loop_label.setStyleSheet("font-weight:600;")
+        form.addRow("Loop", self.loop_label)
 
         self.setpoint_spin = QtWidgets.QDoubleSpinBox()
         self.setpoint_spin.setRange(0.0, 1000.0)
@@ -615,9 +672,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.range_group = QtWidgets.QGroupBox("Heater range")
         form = QtWidgets.QFormLayout(self.range_group)
 
-        self.heater_combo = QtWidgets.QComboBox()
-        self.heater_combo.currentIndexChanged.connect(self._output_changed)
-        form.addRow("Output", self.heater_combo)
+        # No output selector either.  On this family the loop number *is* the
+        # output number by protocol, so the output a range applies to is
+        # decided by the row that is selected -- and a second control offering
+        # to disagree with that could only ever put power somewhere nobody
+        # meant it to go.
+        self.heater_label = QtWidgets.QLabel("—")
+        self.heater_label.setStyleSheet("font-weight:600;")
+        form.addRow("Output", self.heater_label)
 
         self.range_combo = QtWidgets.QComboBox()
         for value, label in sorted(HEATER_RANGE_NAMES.items()):
@@ -785,6 +847,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.source.poll()
             self._update_banner()
             self._update_readouts()
+            self._update_loops()
             self._update_links()
             self._update_commands()
             self._sync_command_values()
@@ -852,6 +915,110 @@ class ViewerWindow(QtWidgets.QMainWindow):
         item.setText(text)
         return item
 
+    def _update_loops(self) -> None:
+        """Fill the loop table from what the recorder read off the instruments.
+
+        Every link's loops, in link order, the way the readouts show every
+        link's channels -- a loop table that showed only the selected box
+        would hide the loop somebody needs to notice.
+
+        The kelvin column is looked up by the loop's *sensor name*, which is
+        the same string the trace and the readout carry, because the recorder
+        resolved it once from ``OUTMODE?`` and the input labels.  Nothing here
+        maps loops to sensors; there is no table in this file to go stale.
+        """
+        kelvin_by_name = {}
+        for channel in self.source.channels():
+            kelvin_by_name[str(channel.get("name", ""))] = (
+                channel.get("kelvin"), bool(channel.get("usable")))
+
+        entries: list[tuple[str, dict]] = []
+        for link in self.source.links():
+            name = str(link.get("name", ""))
+            for row in loop_rows(link):
+                entries.append((name, row))
+        self._loop_index = entries
+
+        # Hidden entirely rather than left as an empty header: a recorder with
+        # no loops (or one too old to say) should not reserve panel height for
+        # a table that will never have a row in it.
+        self.loops.setVisible(bool(entries))
+        grew = self.loops.rowCount() != len(entries)
+        if grew:
+            self.loops.setRowCount(len(entries))
+
+        selected = -1
+        for index, (instrument, row) in enumerate(entries):
+            kelvin, usable = kelvin_by_name.get(str(row.get("sensor") or ""),
+                                                (None, False))
+            marks = loop_marks(row, kelvin if usable else None)
+            heater = row.get("heater_output")
+            cells = [
+                str(row.get("loop") or ""),
+                str(row.get("sensor") or "—"),
+                "—" if kelvin is None else f"{float(kelvin):.3f}",
+                self._maybe(row.get("setpoint_k"), "{:.3f}"),
+                self._maybe(row.get("output_pct"), "{:.1f}"),
+                # N/A and not "—": a loop whose output is analog-only does not
+                # have a range that happens to be unknown, it has none at all.
+                "n/a" if heater is None else self._maybe(row.get("range"), "{:.0f}"),
+                MARK_SATURATED if marks["saturated"] else "",
+                MARK_UNSETTLED if marks["unsettled"] else "",
+            ]
+            for column, text in enumerate(cells):
+                item = self.loops.item(index, column)
+                if item is None:
+                    item = QtWidgets.QTableWidgetItem()
+                    self.loops.setItem(index, column, item)
+                item.setText(text)
+                item.setForeground(QtGui.QBrush(QtGui.QColor(
+                    "#b71c1c" if column >= 6 and text else "#000000")))
+            self.loops.item(index, 1).setToolTip(
+                f"{instrument} loop {row.get('loop')}: "
+                f"{row.get('mode') or 'mode unknown'}"
+                + ("" if marks["trying"] else
+                   " — not trying to reach a setpoint, so neither warning "
+                   "applies"))
+            self.loops.item(index, 6).setToolTip(
+                f"the output is at a rail (at or beyond {SATURATED_HIGH_PCT:g}% "
+                f"or {SATURATED_LOW_PCT:g}%): this loop has no authority left "
+                "in the direction it is asking for"
+                if marks["saturated"] else "")
+            self.loops.item(index, 7).setToolTip(
+                f"{row.get('sensor') or 'the sensor'} is further than "
+                f"{self._maybe(row.get('threshold_k'), '{:g}')} K from the "
+                "setpoint (loop_thresholds in the recorder's config)"
+                if marks["unsettled"] else "")
+            if (instrument == self.instrument_combo.currentText()
+                    and int(row.get("loop") or 0) == self._loop):
+                selected = index
+
+        if grew:
+            # Sized *after* the cells are filled.  Measuring an empty table
+            # measures the row height of a row with nothing in it, which is
+            # how the last loop came to sit behind a scrollbar; and a
+            # horizontal scrollbar, if the panel is too narrow for the
+            # columns, eats a row's worth of height on its own.
+            self.loops.resizeRowsToContents()
+            height = (self.loops.horizontalHeader().height()
+                      + 2 * self.loops.frameWidth())
+            for r in range(len(entries)):
+                height += self.loops.rowHeight(r)
+            bar = self.loops.horizontalScrollBar()
+            if bar.isVisible():
+                height += bar.height()
+            self.loops.setFixedHeight(height)
+
+        if selected >= 0 and not self.loops.selectionModel().isRowSelected(
+                selected, QtCore.QModelIndex()):
+            with _quiet(self.loops):
+                self.loops.selectRow(selected)
+
+    @staticmethod
+    def _maybe(value, fmt: str) -> str:
+        """A number the recorder may not have.  Never a plausible zero."""
+        return "—" if value is None else fmt.format(float(value))
+
     def _update_links(self) -> None:
         lines = []
         for link in self.source.links():
@@ -909,23 +1076,18 @@ class ViewerWindow(QtWidgets.QMainWindow):
         link = self.source.link_named(self.instrument_combo.currentText())
         caps = capabilities(link)
 
-        self.setpoint_group.setVisible(caps["has_loops"])
-        if caps["loops"]:
-            self.loop_spin.setRange(min(caps["loops"]), max(caps["loops"]))
+        if caps["loops"] and self._loop not in caps["loops"]:
+            # A different box: the loop number the last one was on may not
+            # exist here, and a setpoint sent to a loop that does not exist is
+            # a refusal at best.
+            self._loop = caps["loops"][0]
 
-        self.range_group.setVisible(caps["has_heater_range"])
-        outputs = [str(n) for n in caps["heater_outputs"]]
-        if [self.heater_combo.itemText(i)
-                for i in range(self.heater_combo.count())] != outputs:
-            self.heater_combo.clear()
-            self.heater_combo.addItems(outputs)
-
-        self.analog_group.setVisible(caps["has_analog"])
         if caps["has_analog"]:
             ceiling = caps["max_output_pct"]
             self.analog_spin.setMaximum(ceiling)
             self.analog_group.setTitle(
                 f"Analog output {caps['analog_output']} (max {ceiling:g}%)")
+        self._show_loop_controls(caps)
         # A different box, loop or output is a different "now": whatever the
         # operator had half-typed belonged to the previous selection.
         self._setpoint_dirty = False
@@ -935,6 +1097,72 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.source.poll()
         self._sync_command_values()
         self._update_gate_notes()
+
+    def _selected_loop_row(self) -> dict:
+        """The status entry for the loop the panel is pointed at, or ``{}``.
+
+        ``{}`` for a recorder too old to publish one, which is the same
+        degrade `capabilities` makes -- the panel then falls back to what it
+        can work out from the capability block alone.
+        """
+        link = self.source.link_named(self.instrument_combo.currentText())
+        for row in loop_rows(link):
+            if int(row.get("loop") or 0) == self._loop:
+                return row
+        return {}
+
+    def _heater_for_selected_loop(self, caps: dict) -> int | None:
+        """Which heater output the selected loop drives, or None if it drives
+        an analog one.
+
+        From the recorder's `OUTMODE`-derived row where there is one, and from
+        the capability table otherwise -- on this family the loop number *is*
+        the output number by protocol, so the fallback is not a guess.
+        """
+        row = self._selected_loop_row()
+        if row:
+            heater = row.get("heater_output")
+            return None if heater is None else int(heater)
+        return self._loop if self._loop in caps["heater_outputs"] else None
+
+    def _show_loop_controls(self, caps: dict) -> None:
+        """Show the grouping the selected loop can actually be commanded with.
+
+        Only the relevant one is ever on screen.  A loop that drives a heater
+        gets the range control; one whose output is analog-only -- a 336's 3
+        and 4 -- has no range to set, and offering the control would be
+        offering a refusal.  A box with no loops at all (a 218) gets the
+        analog control and nothing else, because on that box the percentage
+        *is* the power.
+        """
+        self.setpoint_group.setVisible(caps["has_loops"])
+        heater = self._heater_for_selected_loop(caps) if caps["has_loops"] else None
+
+        self.range_group.setVisible(caps["has_heater_range"] and heater is not None)
+        self.range_group.setTitle(
+            "Heater range" if heater is None else f"Heater range (output {heater})")
+        self.heater_label.setText("—" if heater is None else str(heater))
+
+        # The analog grouping belongs to a box that will accept an `analog`
+        # command.  A 336 loop 3 has an analog output and no way to command it
+        # from here, which is a sentence to say rather than a control to offer.
+        self.analog_group.setVisible(
+            caps["has_analog"] and (not caps["has_loops"] or heater is None))
+
+        self.loop_label.setText(str(self._loop) if caps["has_loops"] else "—")
+        row = self._selected_loop_row()
+        if not caps["has_loops"]:
+            note = ""
+        elif not row:
+            note = (f"loop {self._loop} — this recorder does not publish loop "
+                    "bindings (schema 1); the sensor and mode are unknown")
+        else:
+            note = (f"loop {self._loop} reads {row.get('sensor') or '?'} "
+                    f"({row.get('mode') or 'mode unknown'})")
+            if heater is None:
+                note += (" and drives an analog output, which this recorder "
+                         "has no command for")
+        self.loop_note.setText(note)
 
     # -- filling the command widgets with what the cryostat is at -----------------
 
@@ -962,15 +1190,38 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _analog_edited(self, _value: float) -> None:
         self._analog_dirty = True
 
-    def _output_changed(self, *_ignored) -> None:
-        """A different heater output selected: its range is a different fact."""
-        self._range_dirty = False
-        self._sync_command_values()
+    def _loop_row_selected(self) -> None:
+        """A row of the loop table clicked: point the whole panel at that loop.
 
-    def _on_loop_changed(self, *_ignored) -> None:
-        """A different loop selected: its setpoint is a different fact."""
+        Instrument and loop together, because a row names both -- and because
+        selecting a loop on one box while the command panel is still addressed
+        to another is exactly the mistake having one selector is meant to
+        remove.
+        """
+        rows = self.loops.selectionModel().selectedRows()
+        if not rows:
+            return
+        index = rows[0].row()
+        if not 0 <= index < len(self._loop_index):
+            return
+        instrument, row = self._loop_index[index]
+        self._loop = int(row.get("loop") or 1)
+        names = [self.instrument_combo.itemText(i)
+                 for i in range(self.instrument_combo.count())]
+        if instrument in names:
+            if self.instrument_combo.currentText() != instrument:
+                # _instrument_changed does the rest, including this loop.
+                self.instrument_combo.setCurrentIndex(names.index(instrument))
+                return
+        elif instrument:
+            self.loop_note.setText(
+                f"{instrument} is read-only on this recorder; its loops can be "
+                "watched here but not commanded")
+        # A different loop is a different "now" for every field in the panel.
         self._setpoint_dirty = False
-        self._sync_command_values()
+        self._range_dirty = False
+        self._awaiting = None
+        self._instrument_changed()
 
     def _sync_command_values(self) -> None:
         """Fill each command widget with its control's current value.
@@ -1020,7 +1271,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             return awaiting is not None and awaiting.aux == aux_name
 
         if not self._setpoint_dirty:
-            name = f"{instrument}.setpoint{self.loop_spin.value()}"
+            name = f"{instrument}.setpoint{self._loop}"
             value = self._aux_value(name)
             if value is not None and not held(name):
                 with _quiet(self.setpoint_spin):
@@ -1033,9 +1284,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 if value is not None and not held(name):
                     with _quiet(self.analog_spin):
                         self.analog_spin.setValue(value)
-        if not self._range_dirty and self.heater_combo.currentText():
-            output = int(self.heater_combo.currentText())
-            name = f"{instrument}.range{output}"
+        heater = self._heater_for_selected_loop(
+            capabilities(self.source.link_named(instrument)))
+        if not self._range_dirty and heater is not None:
+            name = f"{instrument}.range{heater}"
             value = self._aux_value(name)
             if value is not None and not held(name):
                 index = self.range_combo.findData(int(value))
@@ -1682,7 +1934,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if self.spool is None:
             return
         instrument = self.instrument_combo.currentText()
-        loop = self.loop_spin.value()
+        loop = self._loop
         kelvin = self.setpoint_spin.value()
         if not self._confirm(
             "Send setpoint",
@@ -1701,7 +1953,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if self.spool is None:
             return
         instrument = self.instrument_combo.currentText()
-        output = int(self.heater_combo.currentText() or 1)
+        output = self._heater_for_selected_loop(
+            capabilities(self.source.link_named(instrument)))
+        if output is None:
+            self.ack_label.setText(
+                f"loop {self._loop} of {instrument} drives no heater range")
+            self.ack_label.setStyleSheet("color:#e65100;")
+            return
         value = int(self.range_combo.currentData())
         name = HEATER_RANGE_NAMES.get(value, value)
         if value == 0:
@@ -1743,7 +2001,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         "unknown" rather than a guess when the recorder does not carry it.
         """
         self.source.poll()
-        loop = self.loop_spin.value()
+        loop = self._loop
         value = self._aux_value(f"{instrument}.setpoint{loop}")
         if value is not None:
             return (f"{value:.3f} K on loop {loop}, as the "

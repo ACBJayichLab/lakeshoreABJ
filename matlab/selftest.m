@@ -44,7 +44,28 @@ function selftest(directory)
                'instrument links are down. Check `links` in status.json.']);
     end
 
-    % -- 3. can we command it ---------------------------------------------
+    % -- 3. what is each loop bound to ------------------------------------
+    %
+    % Schema 2 and later.  Empty against an older recorder, which is not a
+    % failure: reading temperatures and commanding still work, and a script
+    % that needs the loop table should say so itself.
+    for link = ls.links(s)
+        rows = ls.loops(link.name, s);
+        if isempty(rows)
+            fprintf('loops       : %s publishes none (recorder older than ' , link.name);
+            fprintf('schema 2, or no loops)\n');
+            continue
+        end
+        fprintf('loops       : %s\n', link.name);
+        for i = 1:numel(rows)
+            r = rows(i);
+            if isempty(r.setpoint_k), sp = NaN; else, sp = r.setpoint_k; end
+            fprintf('  loop %d  %-20s %-12s  SP %8.3f K\n', ...
+                    r.loop, r.sensor, r.mode, sp);
+        end
+    end
+
+    % -- 4. can we command it ---------------------------------------------
     fprintf('ping        : ');
     [ok, message] = ls.ping();
     if ok

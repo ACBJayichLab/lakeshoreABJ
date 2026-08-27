@@ -1,8 +1,20 @@
 # Feature Plan — Desired Behavior
 
 **Date:** 2026-08-27
-**Status:** Specified, not started
+**Status:** **Phases 1 and 2 are done.** Phase 3 (the write path) is not started.
 **Supersedes:** the 2026-08-26 draft (see [What changed](#what-changed-from-the-first-draft))
+
+| Phase | | |
+|---|---|---|
+| 1 | V1 V2 C1 C2 E1 | **done** -- viewer only, nothing on the bus |
+| 2 | S1 S2 S5 · L1 L2 L3 R1 W1 W2 | **done** -- verified against the bench 336, read path only |
+| 3 | A1 A2 P1 (S3 S4) K1-K4 A3 (S6) | **not started** -- every item is invariant territory |
+
+Phase 3 changes the write path and removes the zero-exemptions. Read
+invariants 3, 4 and 5 in `CLAUDE.md` before starting it, and note that A3's
+fallout (S6) reaches further than the code: `CLAUDE.md`'s invariant 3 wording,
+two `CommandError` messages, the viewer's gate notes, three documents and
+about 33 references in `tests/test_ipc_service.py`.
 
 The viewer and the MATLAB interface are the priority; the software PID is not.
 Nothing here asks for work in `control/` except one seam, named where it comes up.

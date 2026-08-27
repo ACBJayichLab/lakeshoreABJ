@@ -134,6 +134,15 @@ def classify_column(name: str, channel_names) -> str:
 #: is unambiguously the second case: it needs three consecutive cycles gone.
 GAP_FACTOR = 4.0
 
+#: When a loop counts as pinned at its rail.  Fixed rather than configurable
+#: and not per loop: "the output has run out of authority" is the same fact on
+#: every heater, and a per-loop knob here would be a knob whose only use is
+#: turning the warning off.  Both ends, because a loop stuck at zero has run
+#: out of authority in the other direction.
+SATURATED_HIGH_PCT = 99.0
+SATURATED_LOW_PCT = 1.0
+
+
 #: Where a viewer's value axis stops when the data does not ask for more:
 #: ``(floor, ceiling)`` for the temperature panel and for the output panel.
 #: Zoom and pan are held inside these unless a sample lies outside them, in
@@ -989,11 +998,27 @@ def capabilities(link: dict) -> dict:
     Defaults are chosen so an *older* recorder -- one whose status file predates
     the capability block -- degrades to the previous behaviour (a 1..4 loop
     spinner, no analog control) rather than to a window with nothing in it.
+
+    Two schemas of loop numbers are accepted for the same reason.  Schema 2
+    gave ``loops`` to the array of loop *objects* and moved the plain list to
+    ``loop_numbers``; schema 1 recorders still write a list of integers under
+    ``loops``, and a viewer pointed at one should offer their loops rather than
+    decide the box has none.
     """
-    loops = [int(n) for n in link.get("loops") or ()]
     heaters = [int(n) for n in link.get("heater_outputs") or ()]
     analog = link.get("analog_output")
-    known = ("loops" in link) or ("analog_output" in link)
+    known = ("loop_numbers" in link) or ("loops" in link) or ("analog_output" in link)
+    if "loop_numbers" in link:
+        loops = [int(n) for n in link.get("loop_numbers") or ()]
+    else:
+        # Schema 1: a bare list of integers.  Anything else under this key is
+        # schema 2's object array, which says nothing about which loops the
+        # box will accept a setpoint on that `loop_rows` does not.
+        raw = link.get("loops") or ()
+        loops = [int(n) for n in raw if isinstance(n, (int, float))]
+        if not loops:
+            loops = [int(r["loop"]) for r in raw
+                     if isinstance(r, dict) and r.get("loop") is not None]
     if not known:
         loops, heaters = [1, 2, 3, 4], [1, 2]
     return {
@@ -1005,3 +1030,70 @@ def capabilities(link: dict) -> dict:
         "has_heater_range": bool(heaters),
         "has_analog": analog is not None,
     }
+
+
+#: What a loop entry looks like when the recorder is too old to publish one.
+#: Every key present, so a client can read it without asking whether it is
+#: there -- which is the same promise the status file itself makes.
+EMPTY_LOOP = {
+    "loop": 0, "sensor": "", "input": "", "mode": "", "mode_code": None,
+    "heater_output": None, "setpoint_k": None, "output_pct": None,
+    "range": None, "threshold_k": None, "ramping": False,
+}
+
+
+def loop_rows(link: dict) -> list[dict]:
+    """The loop table for one instrument, from its status entry.
+
+    Empty for a recorder too old to publish one (schema 1, where ``loops`` was
+    a list of integers) -- the caller shows no table rather than inventing
+    rows, which is the same degrade `capabilities` makes.
+
+    Every returned row carries every key, filled from :data:`EMPTY_LOOP` where
+    the recorder said nothing, so no caller has to guard each lookup.
+    """
+    rows = []
+    for raw in link.get("loops") or ():
+        if not isinstance(raw, dict):
+            continue                     # schema 1's list of loop numbers
+        row = dict(EMPTY_LOOP)
+        row.update({k: v for k, v in raw.items() if k in EMPTY_LOOP})
+        rows.append(row)
+    return rows
+
+
+def loop_marks(row: dict, kelvin: float | None) -> dict:
+    """The two warning marks for one loop row: ``saturated`` and ``unsettled``.
+
+    **Two marks and never one.** OR-ing them together makes an icon that is lit
+    through every cooldown, and an icon that is always lit is an icon nobody
+    reads. They also mean different things: a loop pinned at its rail has run
+    out of authority, while a loop far from its setpoint may simply be on its
+    way there.
+
+    Both are suppressed while the loop is **not trying** -- range 0, a mode
+    other than closed loop, or a ramp still traversing. A loop that was never
+    going to the setpoint is not failing to reach it, and a ramp that has not
+    arrived is a ramp doing exactly what it was asked to.
+
+    ``unsettled`` needs a threshold, and a loop with none configured has no
+    opinion about being settled: the mark stays off rather than being decided
+    by a number this software picked. See ``loop_thresholds`` in the config.
+    """
+    trying = (
+        row.get("mode_code") == 1                # closed loop, and only that
+        and not row.get("ramping")
+        and (row.get("range") is None or int(row.get("range") or 0) > 0)
+    )
+    if not trying:
+        return {"trying": False, "saturated": False, "unsettled": False}
+    pct = row.get("output_pct")
+    setpoint = row.get("setpoint_k")
+    threshold = row.get("threshold_k")
+    saturated = pct is not None and (
+        float(pct) >= SATURATED_HIGH_PCT or float(pct) <= SATURATED_LOW_PCT)
+    unsettled = (
+        kelvin is not None and setpoint is not None and threshold is not None
+        and abs(float(kelvin) - float(setpoint)) > float(threshold)
+    )
+    return {"trying": True, "saturated": saturated, "unsettled": unsettled}

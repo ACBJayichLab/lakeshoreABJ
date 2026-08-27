@@ -46,6 +46,39 @@ ls218:
     assert cfg.control_channel == "Sample"
 
 
+def test_yaml_integer_loop_keys_survive(tmp_path):
+    """Same trap as the 218's channel numbers: YAML hands over string keys,
+    and a threshold filed under "1" would never be found for loop 1."""
+    cfg = config_mod.load(write(tmp_path, """
+instruments:
+  - name: ls336
+    model: "336"
+    loop_thresholds:
+      1: 0.5
+      2: 2.0
+"""))
+    assert cfg.instruments[0].loop_thresholds == {1: 0.5, 2: 2.0}
+
+
+def test_loop_polling_is_counted_in_the_bus_budget(tmp_path):
+    """OUTMODE? and RAMPST? land on the bus like anything else, and `check`
+    has to predict the worst frame without opening a port."""
+    with_loops = config_mod.load(write(tmp_path, """
+instruments:
+  - name: ls336
+    model: "336"
+    read_loops: true
+"""))
+    without = config_mod.load(write(tmp_path, """
+instruments:
+  - name: ls336
+    model: "336"
+    read_loops: false
+"""))
+    assert (with_loops.estimated_transactions()
+            - without.estimated_transactions()) == 2 * 4     # 4 loops
+
+
 def test_unknown_key_is_rejected(tmp_path):
     """A typo in a safety limit must not be silently ignored."""
     with pytest.raises(ConfigError, match="unknown key"):

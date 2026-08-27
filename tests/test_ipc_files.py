@@ -100,6 +100,106 @@ def test_a_status_without_a_timestamp_has_no_age(tmp_path):
     assert status_age_s({"cycle": 3}) is None
 
 
+# -- the loop table the status file publishes --------------------------------
+#
+# Two halves joined in one place: what the instrument read off OUTMODE?, and
+# the numbers that move, out of the frame's aux block.  Joining them anywhere
+# but here would mean a client reading the setpoint twice and getting two
+# answers.
+
+
+def loops_of(tmp_path, inst, aux=None):
+    writer = StatusWriter(tmp_path / "status.json")
+    writer.write(frame(aux=aux or {}), instruments=[inst])
+    return read_status(tmp_path / "status.json")["links"][0]["loops"]
+
+
+def sim_336(**kw):
+    from lschart.instruments.ls33x import LS33x
+    from lschart.instruments.sim import Sim33x, SimulatedCryostat
+    from lschart.transport import LoopbackTransport
+
+    sim = Sim33x(SimulatedCryostat(), model="336")
+    inst = LS33x(LoopbackTransport(sim), model="336", name="ls336", **kw)
+    inst.read_frame()                      # discover labels and bindings
+    return inst, sim
+
+
+def test_loops_are_an_array_of_uniform_objects_not_an_object_per_loop(tmp_path):
+    """`jsondecode` runs object *keys* through makeValidName, so {"1": ...}
+    arrives as a field called x1.  A name that lives in a value survives, and
+    uniform elements are what make jsondecode return a struct array."""
+    inst, _ = sim_336()
+    loops = loops_of(tmp_path, inst)
+    assert isinstance(loops, list) and len(loops) == 4
+    assert [lp["loop"] for lp in loops] == [1, 2, 3, 4]
+    assert len({tuple(sorted(lp)) for lp in loops}) == 1
+
+
+def test_a_loop_carries_the_sensor_the_instrument_says_it_reads(tmp_path):
+    inst, sim = sim_336()
+    sim.outmodes[1] = (1, 3, 0)            # loop 1 reads input C
+    inst._loop_cycles = 0                  # force the slow tick
+    inst.read_frame()
+    assert loops_of(tmp_path, inst)[0]["sensor"] == sim.names["C"]
+
+
+def test_the_numbers_that_move_come_from_the_frame_not_from_the_driver(tmp_path):
+    inst, _ = sim_336()
+    loops = loops_of(tmp_path, inst, {
+        "ls336.setpoint1": 77.0, "ls336.heater1": 43.25, "ls336.range1": 2,
+        "ls336.setpoint3": 290.0, "ls336.aout3": 12.5,
+    })
+    assert loops[0]["setpoint_k"] == 77.0
+    assert loops[0]["output_pct"] == 43.25
+    assert loops[0]["range"] == 2
+    # A 336's loop 3 has no range and reports AOUT? as its output.
+    assert loops[2]["heater_output"] is None
+    assert loops[2]["range"] is None
+    assert loops[2]["output_pct"] == 12.5
+
+
+def test_a_loop_the_recorder_could_not_read_is_null_not_zero(tmp_path):
+    """0 K is a plausible setpoint and 0 % is a real output.  Absent has to
+    look different from both."""
+    inst, _ = sim_336()
+    loops = loops_of(tmp_path, inst)
+    assert loops[0]["setpoint_k"] is None
+    assert loops[0]["output_pct"] is None
+    assert loops[0]["range"] is None
+
+
+def test_a_configured_threshold_reaches_the_status_file(tmp_path):
+    """Published so the viewer never has to parse config semantics."""
+    inst, _ = sim_336(loop_thresholds={1: 0.5})
+    loops = loops_of(tmp_path, inst)
+    assert loops[0]["threshold_k"] == 0.5
+    assert loops[1]["threshold_k"] is None
+
+
+def test_a_box_with_no_loops_says_so_with_an_empty_array(tmp_path):
+    """Absent capabilities are empty, never missing: a client can then tell
+    "this box has no loops" from "this recorder is too old to say"."""
+    from lschart.instruments.ls218 import LS218
+    from lschart.instruments.sim import Sim218, SimulatedCryostat
+    from lschart.transport import LoopbackTransport
+
+    inst = LS218(LoopbackTransport(Sim218(SimulatedCryostat())), name="ls218")
+    assert loops_of(tmp_path, inst) == []
+
+
+def test_the_plain_loop_number_list_did_not_go_away_it_moved(tmp_path):
+    """Schema 2 gave `loops` to the object array; one key cannot be two
+    shapes, so the numbers a client picks a command target from live under
+    `loop_numbers`."""
+    inst, _ = sim_336()
+    writer = StatusWriter(tmp_path / "status.json")
+    writer.write(frame(), instruments=[inst])
+    link = read_status(tmp_path / "status.json")["links"][0]
+    assert link["loop_numbers"] == [1, 2, 3, 4]
+    assert link["heater_outputs"] == [1, 2]
+
+
 # -- the command spool -------------------------------------------------------
 
 

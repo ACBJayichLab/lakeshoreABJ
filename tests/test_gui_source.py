@@ -16,8 +16,9 @@ import time
 import pytest
 
 from lschart.gui.source import (
-    CsvTail, Series, StatusSource, capabilities, classify_column, connect_flags,
-    nearest_series, region_stats, value_at, write_region_csv,
+    EMPTY_LOOP, CsvTail, Series, StatusSource, capabilities, classify_column,
+    connect_flags, loop_marks, loop_rows, nearest_series, region_stats, value_at,
+    write_region_csv,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -895,3 +896,106 @@ def test_a_column_with_no_sample_at_a_timestamp_is_left_empty(tmp_path):
     rows = list(csv.reader(out.open()))
     assert rows[1] == [rows[1][0], "0.000", "96", ""]
     assert rows[2][3] == "12"
+
+
+# -- the loop table, and its two warning marks -------------------------------
+#
+# What is worth testing is not that a dict round-trips.  It is that the two
+# marks stay separate, that neither is lit for a loop that is not trying to
+# reach a setpoint, and that a loop with no configured threshold gets no
+# opinion invented for it.
+
+
+def link_with_loops(*loops, **kw):
+    link = {"name": "ls336", "model": "336", "up": True, "writable": True,
+            "loop_numbers": [1, 2], "heater_outputs": [1, 2],
+            "analog_output": None, "max_output_pct": 100.0,
+            "loops": list(loops)}
+    link.update(kw)
+    return link
+
+
+def a_loop(**kw):
+    row = {"loop": 1, "sensor": "Sample", "input": "A", "mode": "closed loop",
+           "mode_code": 1, "heater_output": 1, "setpoint_k": 100.0,
+           "output_pct": 50.0, "range": 2, "threshold_k": 0.5, "ramping": False}
+    row.update(kw)
+    return row
+
+
+def test_loop_rows_fills_in_every_key_a_recorder_left_out():
+    """A caller must not have to guard each lookup: the status file promises
+    every entry carries every field, and this is where a partial one is made
+    to keep that promise."""
+    rows = loop_rows(link_with_loops({"loop": 2, "sensor": "Stage 2"}))
+    assert rows[0]["loop"] == 2 and rows[0]["sensor"] == "Stage 2"
+    assert rows[0]["range"] is None and rows[0]["ramping"] is False
+    assert set(rows[0]) == set(EMPTY_LOOP)
+
+
+def test_a_schema_1_recorder_publishes_no_loop_rows():
+    """`loops` was a list of integers then.  Inventing rows from it would put
+    a sensor column on screen with nothing behind it."""
+    old = {"name": "ls336", "loops": [1, 2, 3, 4], "heater_outputs": [1, 2],
+           "analog_output": None}
+    assert loop_rows(old) == []
+    # But its loops are still offered as command targets.
+    assert capabilities(old)["loops"] == [1, 2, 3, 4]
+
+
+def test_schema_2_loop_numbers_come_from_their_own_key():
+    caps = capabilities(link_with_loops(a_loop(), a_loop(loop=2)))
+    assert caps["loops"] == [1, 2]
+    assert caps["has_loops"] and caps["has_heater_range"]
+
+
+def test_a_loop_at_its_rail_is_marked_saturated():
+    assert loop_marks(a_loop(output_pct=99.4), 100.0)["saturated"]
+    assert loop_marks(a_loop(output_pct=0.5), 100.0)["saturated"]
+    assert not loop_marks(a_loop(output_pct=50.0), 100.0)["saturated"]
+
+
+def test_a_loop_away_from_its_setpoint_is_marked_unsettled():
+    marks = loop_marks(a_loop(setpoint_k=100.0, threshold_k=0.5), 103.0)
+    assert marks["unsettled"] and not marks["saturated"]
+    assert loop_marks(a_loop(setpoint_k=100.0, threshold_k=0.5), 100.2)[
+        "unsettled"] is False
+
+
+def test_the_two_marks_are_never_the_same_mark():
+    """A cooldown is "not at setpoint" for hours; OR-ing that into the
+    saturation warning gives an icon that is always lit."""
+    marks = loop_marks(a_loop(output_pct=50.0, threshold_k=0.5), 200.0)
+    assert marks["unsettled"] and not marks["saturated"]
+    marks = loop_marks(a_loop(output_pct=100.0, threshold_k=0.5), 100.0)
+    assert marks["saturated"] and not marks["unsettled"]
+
+
+def test_a_loop_with_no_threshold_gets_no_opinion_about_being_settled():
+    """0.5 K is tight at 4 K and loose at 300 K.  With nothing configured the
+    honest answer is silence, not a number this software picked."""
+    marks = loop_marks(a_loop(threshold_k=None), 400.0)
+    assert marks["trying"] and not marks["unsettled"]
+
+
+def test_neither_mark_is_lit_while_the_loop_is_not_trying():
+    """Range 0, a mode other than closed loop, or a ramp still traversing:
+    a loop that was never going to the setpoint is not failing to reach it."""
+    for row in (a_loop(range=0),
+                a_loop(mode_code=3, mode="open loop"),
+                a_loop(mode_code=0, mode="off"),
+                a_loop(ramping=True)):
+        marks = loop_marks(dict(row, output_pct=100.0), 400.0)
+        assert marks == {"trying": False, "saturated": False, "unsettled": False}
+
+
+def test_a_loop_with_no_range_at_all_can_still_be_trying():
+    """A 336's loops 3 and 4 have no range; `null` there means "no such
+    thing", not "off", and must not read as a loop that is switched off."""
+    marks = loop_marks(a_loop(loop=3, heater_output=None, range=None,
+                              output_pct=99.5), 100.0)
+    assert marks["trying"] and marks["saturated"]
+
+
+def test_a_channel_with_no_usable_reading_settles_nothing():
+    assert not loop_marks(a_loop(), None)["unsettled"]

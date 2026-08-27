@@ -76,6 +76,30 @@ instruments:
     read_setpoints: true      # SETP? 1-4
     read_heaters: true        # HTR? and RANGE? on outputs 1 and 2
 
+    # Outputs 3 and 4 are analog-only: no range, and AOUT? is the whole of
+    # what they are doing.  Read so the viewer's loop table can fill in the
+    # output column for loops 3 and 4 rather than leaving them blank.
+    read_analog_outputs: true
+
+    # OUTMODE? per loop -- which input it reads and whether it is in closed
+    # loop -- plus RAMPST?.  Read at startup and once a minute after that;
+    # OUTMODE changes approximately never.  This is where the loop table's
+    # sensor column comes from, and it is the instrument's answer rather than
+    # a map kept in this file that could go stale.
+    read_loops: true
+    loop_every_n_cycles: 30
+
+    # How far each loop may sit from its setpoint and still count as settled,
+    # in kelvin.  Per loop because 0.5 K is a tight tolerance at 4 K and a
+    # loose one at 300 K.  A loop left out of this simply gets no
+    # "not settled" mark -- there is no default that would be right for two
+    # different loops.
+    loop_thresholds:
+      1: 0.5
+      2: 1.0
+      3: 1.0
+      4: 1.0
+
     allow_writes: false       # <-- INTERLOCK.  Leave this off.
 
 acquisition:

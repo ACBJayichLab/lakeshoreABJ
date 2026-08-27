@@ -83,9 +83,31 @@ not be touched under any circumstances, including by a bug in this program.
 | `channels` | `{}` | `{A: Coldplate, B: Stage 2, ...}`. **Empty means ask the instrument** (`INNAME?`). Setting them explicitly means a column cannot silently change meaning if someone relabels the box mid-run |
 | `read_setpoints` | `true` | `SETP?` per loop |
 | `read_heaters` | `true` | `HTR?` and `RANGE?` |
-| `read_analog_outputs` | `false` | |
+| `read_analog_outputs` | `false` | `AOUT?` on outputs 3–4 of a 336. Turn on to fill the loop table's output column for loops 3 and 4 |
+| `read_loops` | `true` | `OUTMODE?` and `RAMPST?` per loop, on a slow cadence — which input each loop reads and whether it is in closed loop |
+| `loop_every_n_cycles` | `30` | how often those are re-read. `OUTMODE` changes approximately never |
+| `loop_thresholds` | `{}` | `{loop: kelvin}` — how far a loop may sit from its setpoint and still count as settled |
 | **`allow_writes`** | **`false`** | gates every command that changes what the box does |
 | `max_setpoint_k` | `350.0` | a blunt guard against a typo'd setpoint, refused in software rather than politely forwarded to a cryostat |
+
+`read_loops` is on because it is the **only correct** answer to "which sensor
+does loop 2 read". A map of that kept in this file could go stale or lie; the
+instrument cannot. On this family the loop number *is* the output number by
+protocol, so the heater binding is not configurable either — it is derived.
+
+`loop_thresholds` is per loop and has no default, deliberately. 0.5 K is a
+tight tolerance at 4 K and a loose one at 300 K, so it is a property of the
+loop rather than of this software, and there is no number this file could pick
+that would be right for two of them. **A loop left out simply gets no "not
+settled" mark** — the viewer will not invent an opinion for it.
+
+```yaml
+    read_loops: true
+    loop_every_n_cycles: 30
+    loop_thresholds:
+      1: 0.5
+      2: 1.0
+```
 
 `allow_writes` is off by default because the common case on a shared cryostat is
 that some other loop is already holding something important. Turn it on for a

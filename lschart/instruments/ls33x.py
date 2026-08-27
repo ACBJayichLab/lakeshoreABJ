@@ -28,6 +28,23 @@ asking it to, in so many words.
 
 ``max_setpoint_k`` is a second, blunter guard: a typo that asks a cryostat for
 3000 K should be refused by the software rather than politely forwarded.
+
+What a loop is bound to
+-----------------------
+
+``OUTMODE? <output>`` says which input a loop reads and what it is doing with
+it -- closed loop, zone, open loop, monitor, or off.  That is the *instrument's*
+answer, and it is the only correct one: a map of loops to sensors kept in a
+config file can go stale or lie, and on this family the loop number **is** the
+output number by protocol, so the heater binding is not a matter of opinion
+either.
+
+It is read on a slow cadence rather than every cycle because it changes
+approximately never -- somebody reconfigures a loop, and then it stays that way
+for months.  ``RAMPST?`` rides along on the same tick despite changing rather
+more often, because what it is wanted for is suppressing a "not at setpoint"
+mark during a deliberate traversal, and being a cadence late with that is
+harmless where being a cadence late with a temperature would not be.
 """
 
 from __future__ import annotations
@@ -72,6 +89,48 @@ CAPS: dict[str, ModelCaps] = {
 #: output is in current mode.
 HEATER_RANGE_NAMES = {0: "off", 1: "low", 2: "medium", 3: "high"}
 
+#: ``OUTMODE`` modes, as the 33x manuals number them.  Only ``closed loop``
+#: means the loop is trying to reach a setpoint; every other value is a loop
+#: that is doing something else, or nothing, and a client that marks it "not at
+#: setpoint" is marking a loop that was never going there.
+OUTMODE_NAMES = {
+    0: "off", 1: "closed loop", 2: "zone", 3: "open loop",
+    4: "monitor", 5: "warmup",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class LoopBinding:
+    """What one loop is wired to and what it is doing, as the box reports it.
+
+    ``sensor`` is the display name of the input the loop reads, resolved
+    against the labels this driver is using -- so the loop table and the trace
+    it should be read beside carry the same string.  Empty when the loop reads
+    no input, or when the labels have not been discovered yet.
+
+    ``heater_output`` is the loop number on this family, by protocol, and is
+    ``None`` for a loop whose output is analog-only (a 336's 3 and 4).  It is
+    derived from the capability table rather than configured: a config key for
+    it could only ever disagree with the instrument.
+    """
+
+    loop: int
+    mode: int
+    input_index: int
+    input_letter: str
+    sensor: str
+    heater_output: int | None
+    ramping: bool
+
+    @property
+    def mode_name(self) -> str:
+        return OUTMODE_NAMES.get(self.mode, str(self.mode))
+
+    @property
+    def closed_loop(self) -> bool:
+        """True only while the loop is actually trying to reach its setpoint."""
+        return self.mode == 1
+
 
 def _close_enough(got, expected, tol: float) -> bool:
     """Compare a readback with what was commanded, elementwise for tuples."""
@@ -99,6 +158,9 @@ class LS33x(Instrument):
         read_setpoints: bool = True,
         read_heaters: bool = True,
         read_analog_outputs: bool = False,
+        read_loops: bool = True,
+        loop_every_n_cycles: int = 30,
+        loop_thresholds: dict | None = None,
         allow_writes: bool = False,
         max_setpoint_k: float = 350.0,
         verify_writes: bool = True,
@@ -115,6 +177,21 @@ class LS33x(Instrument):
         self.read_setpoints = read_setpoints
         self.read_heaters = read_heaters
         self.read_analog_outputs = read_analog_outputs
+        self.read_loops = read_loops
+        self.loop_every_n_cycles = max(1, int(loop_every_n_cycles))
+        #: How far a loop's temperature may sit from its setpoint and still
+        #: count as settled, per loop.  Configuration and not a constant,
+        #: because 0.5 K is a tight tolerance at 4 K and a loose one at 300 K
+        #: -- it is a property of the loop, and there is no number this file
+        #: could pick that would be right for two of them.  A loop with no
+        #: threshold configured simply has no opinion about being settled.
+        self.loop_thresholds = {
+            int(k): float(v) for k, v in (loop_thresholds or {}).items()
+        }
+        #: What each loop is bound to, from ``OUTMODE?``.  Empty until the
+        #: first frame; a client must degrade rather than assume.
+        self.loop_bindings: dict[int, LoopBinding] = {}
+        self._loop_cycles = 0
         self.allow_writes = allow_writes
         self.max_setpoint_k = max_setpoint_k
         self.verify_writes = verify_writes
@@ -193,7 +270,102 @@ class LS33x(Instrument):
         if self.read_analog_outputs:
             for out in self.caps.analog_outputs:
                 self._try_aux(aux, f"{self.name}.aout{out}", f"AOUT? {out}")
+        if self.read_loops:
+            self._refresh_loops()
+            # Emitted from the cache every frame, not only on the slow tick:
+            # a column that is blank on 29 rows out of 30 is a column nobody
+            # can read, and the value has not changed on those 29 anyway.
+            for loop, binding in self.loop_bindings.items():
+                aux[f"{self.name}.outmode{loop}"] = float(binding.mode)
+                aux[f"{self.name}.ramping{loop}"] = 1.0 if binding.ramping else 0.0
         return readings, aux
+
+    # -- what each loop is bound to ---------------------------------------
+
+    def outmode(self, output: int) -> tuple[int, int, bool]:
+        """``OUTMODE? <output>`` -- ``(mode, input index, powerup enable)``.
+
+        The input is an index into this model's inputs, 0 meaning none: 1..4
+        are A..D on a 336 and 1..2 are A..B on a 335.
+        """
+        mode, source, powerup = parse_float_list(
+            self.transport.query(f"OUTMODE? {output}"))[:3]
+        return int(mode), int(source), bool(int(powerup))
+
+    def _refresh_loops(self) -> None:
+        """Re-read every loop's binding, on the slow cadence.
+
+        All of them on the same tick rather than one per tick round-robin.
+        Round-robin would bound the per-frame cost at three transactions, but
+        it also means a four-loop box learns that loop 4 started ramping four
+        slow cadences late -- and the mark those readings feed is one whose
+        whole value is not being wrong.  The burst is what
+        :meth:`transactions_per_frame` reports, so the cycle budget is sized
+        for it rather than surprised by it.
+
+        A query that fails leaves the previous binding in place.  ``OUTMODE``
+        changes approximately never, so last cadence's answer is very nearly
+        certainly still true, and dropping the row would take the loop out of
+        the table over one jittery reply.
+        """
+        due = (self._loop_cycles % self.loop_every_n_cycles) == 0
+        self._loop_cycles += 1
+        if not due:
+            return
+        heaters = set(self.caps.heater_outputs)
+        for loop in self.caps.loops:
+            previous = self.loop_bindings.get(loop)
+            try:
+                mode, index, _powerup = self.outmode(loop)
+            except (TransportError, ValueError) as exc:
+                log.debug("%s: OUTMODE? %d failed: %s", self.name, loop, exc)
+                continue
+            try:
+                ramping = self.is_ramping(loop)
+            except (TransportError, ValueError) as exc:
+                log.debug("%s: RAMPST? %d failed: %s", self.name, loop, exc)
+                ramping = bool(previous.ramping) if previous else False
+            letter = (self.caps.inputs[index - 1]
+                      if 1 <= index <= len(self.caps.inputs) else "")
+            self.loop_bindings[loop] = LoopBinding(
+                loop=loop,
+                mode=mode,
+                input_index=index,
+                input_letter=letter,
+                sensor=self.channels.get(letter, "") if letter else "",
+                heater_output=loop if loop in heaters else None,
+                ramping=ramping,
+            )
+
+    def loop_rows(self) -> list[dict]:
+        """One row per loop, for a client building a loop-centric table.
+
+        The instrument's half of it: which sensor, what mode, which heater
+        output, and how close counts as settled.  The numbers that move --
+        setpoint, output percent, range -- are in the frame's aux block and are
+        joined on by whoever is publishing, so there is one reading of them and
+        not two that can disagree.
+
+        Sensor names are resolved *here* rather than cached in the binding,
+        because the labels are discovered on the first frame and a binding read
+        before that would have cached an empty string for the rest of the run.
+        """
+        rows = []
+        heaters = set(self.caps.heater_outputs)
+        for loop in self.caps.loops:
+            binding = self.loop_bindings.get(loop)
+            letter = binding.input_letter if binding else ""
+            rows.append({
+                "loop": loop,
+                "sensor": self.channels.get(letter, "") if letter else "",
+                "input": letter,
+                "mode": binding.mode_name if binding else "",
+                "mode_code": binding.mode if binding else None,
+                "heater_output": loop if loop in heaters else None,
+                "ramping": bool(binding.ramping) if binding else False,
+                "threshold_k": self.loop_thresholds.get(loop),
+            })
+        return rows
 
     def _try_aux(self, aux: dict[str, float], key: str, query: str) -> None:
         """Auxiliaries are nice-to-have; one that errors must not kill the frame."""
@@ -216,6 +388,9 @@ class LS33x(Instrument):
                 keys += [f"{self.name}.heater{out}", f"{self.name}.range{out}"]
         if self.read_analog_outputs:
             keys += [f"{self.name}.aout{i}" for i in self.caps.analog_outputs]
+        if self.read_loops:
+            for loop in self.caps.loops:
+                keys += [f"{self.name}.outmode{loop}", f"{self.name}.ramping{loop}"]
         return keys
 
     def transactions_per_frame(self) -> int:
@@ -229,6 +404,11 @@ class LS33x(Instrument):
             n += 2 * len(self.caps.heater_outputs)       # HTR? and RANGE?
         if self.read_analog_outputs:
             n += len(self.caps.analog_outputs)
+        if self.read_loops:
+            # The slow tick's burst, counted at full weight: this is a budget,
+            # and a budget that averages a burst away is one the worst cycle
+            # overruns.  OUTMODE? and RAMPST? per loop.
+            n += 2 * len(self.caps.loops)
         return n
 
     # -- writing (guarded) -------------------------------------------------

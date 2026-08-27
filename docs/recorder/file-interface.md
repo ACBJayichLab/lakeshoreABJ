@@ -34,8 +34,38 @@ Carries: schema version, pid, host, config path, wall clock and uptime, cycle
 count and dropped cycles, every channel (`name`, `kelvin`, `sensor_units`,
 `validity`, `usable`, `status`), auxiliary values (setpoints, heater percents),
 errors, per-link health (`up`, `consecutive_failures`, `reconnects`,
-`last_error`, `writable`), the recorder's path and row count, control state if
-there is one, and command acknowledgements.
+`last_error`, `writable`) and capability (`loop_numbers`, `heater_outputs`,
+`analog_output`, `max_output_pct`), the per-link **loop table** described
+below, the recorder's path and row count, control state if there is one, and
+command acknowledgements.
+
+#### `links[].loops` — the loop table (schema 2)
+
+One entry per control loop, each carrying every one of these keys, `null`
+where the recorder has nothing to say:
+
+| Field | |
+|---|---|
+| `loop` | the loop number |
+| `sensor` | the display name of the input it reads, from `OUTMODE?` |
+| `input` | that input's letter |
+| `mode`, `mode_code` | `closed loop`, `zone`, `open loop`, `monitor`, `warmup`, `off` — and the number behind it |
+| `heater_output` | the heater output it drives, or `null` for an analog-only output (a 336's 3 and 4) |
+| `setpoint_k`, `output_pct`, `range` | where it is going, what it is putting out, and how much power it may use. `range` is `null` where there is no range to have |
+| `threshold_k` | how far from setpoint still counts as settled, from `loop_thresholds`. `null` when none is configured |
+| `ramping` | `RAMPST?` — still traversing to a new setpoint |
+
+**Where these come from.** The bindings are the *instrument's* answer
+(`OUTMODE?`), re-read on a slow cadence; the numbers that move come from the
+same aux block the CSV carries. They are joined in one place so a client
+cannot read the setpoint twice and get two answers.
+
+**Schema 2 moved one key.** `links[].loops` used to be a bare list of loop
+numbers; it is now this array of objects, and the plain list lives at
+`links[].loop_numbers`. A client written against schema 1 should degrade —
+offer the loops it finds under either key, and show no loop table rather than
+inventing rows. `capabilities()` and `loop_rows()` in `lschart/gui/source.py`
+are the worked example.
 
 **Arrays, not objects.** Channels are `[{"name": ..., "kelvin": ...}, ...]`
 rather than `{"Rad Shield": 295.3}`, because MATLAB's `jsondecode` passes

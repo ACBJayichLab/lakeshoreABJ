@@ -167,6 +167,21 @@ class LS33xConfig(InstrumentConfig):
     read_setpoints: bool = True
     read_heaters: bool = True
     read_analog_outputs: bool = False
+    #: Ask the instrument what each loop is bound to and what it is doing
+    #: (``OUTMODE?``, ``RAMPST?``).  On, because it costs two transactions per
+    #: loop every ``loop_every_n_cycles`` frames and it is the only correct
+    #: answer to "which sensor does loop 2 read" -- a map of that kept here
+    #: could only ever go stale or lie.
+    read_loops: bool = True
+    #: How often those are re-read.  ``OUTMODE`` changes approximately never;
+    #: 30 cycles is a minute at the 2 s cadence a cryostat usually runs.
+    loop_every_n_cycles: int = 30
+    #: ``{loop: kelvin}`` -- how far a loop may sit from its setpoint and still
+    #: count as settled.  Per loop and not global on purpose: 0.5 K is a tight
+    #: tolerance at 4 K and a loose one at 300 K, so it is a property of the
+    #: loop rather than of this software.  A loop left out has no opinion about
+    #: being settled, and no client will claim one for it.
+    loop_thresholds: dict[int, float] = field(default_factory=dict)
     allow_writes: bool = False
     #: A blunt guard against a typo'd setpoint.  Refused in software rather
     #: than politely forwarded to a cryostat.
@@ -541,6 +556,11 @@ class AppConfig:
                     n += 2 * len(caps.heater_outputs)     # HTR? and RANGE?
                 if inst.read_analog_outputs:
                     n += len(caps.analog_outputs)
+                if inst.read_loops:
+                    # OUTMODE? and RAMPST? per loop.  Counted at full weight
+                    # even though they only land every Nth cycle: this is the
+                    # worst frame, and the worst frame is what has to fit.
+                    n += 2 * len(caps.loops)
         return n
 
     def max_pacing_s(self) -> float:
@@ -615,8 +635,9 @@ def _coerce(cls, value: Any, path: str):
             ]
         elif is_dataclass(type(default)) and not isinstance(default, type):
             kwargs[name] = _coerce(type(default), raw, sub)
-        elif name == "channels" and isinstance(raw, dict):
-            # YAML gives str keys for the 218's integer inputs.
+        elif name in ("channels", "loop_thresholds") and isinstance(raw, dict):
+            # YAML gives str keys for the 218's integer inputs, and for the
+            # 33x's loop numbers.
             kwargs[name] = {
                 (int(k) if isinstance(k, str) and k.lstrip("-").isdigit() else k): v
                 for k, v in raw.items()

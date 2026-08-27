@@ -97,6 +97,9 @@ lschart/                    GENERIC -- any Lake Shore cryostat
     ls218.py         8 inputs + the heater actuator (AnalogOutputConfig).
     ls33x.py         335/336 in one driver, a capability table per model.
                      Every write is confirmed by readback.  Read-only default.
+                     `OUTMODE?` on a slow cadence says which input each loop
+                     reads and whether it is closed loop -- the instrument's
+                     answer, never a map kept in config.
     sim.py           Cryostat-agnostic fakes (Sim218/Sim33x) + FirstOrderResponse, a
                      deliberately boring one-pole default.  The calibrated
                      LTSPM3 thermal response is injected from ltspm3/, not built in here.
@@ -107,12 +110,16 @@ lschart/                    GENERIC -- any Lake Shore cryostat
     lock.py          OS-level single-instance lock.
     status.py        status.json, rewritten in full every cycle via os.replace.
                      Arrays, not objects -- MATLAB mangles JSON object *keys*.
+                     SCHEMA_VERSION 2 adds `links[].loops`, the loop table.
     commands.py      The maildir-style command spool. Ordering, expiry,
                      acknowledgement, and clock-skew refusal.
     service.py       Joins the two onto the acquisition cycle, on the
                      acquisition thread, because that thread owns the bus.
   gui/               The strip chart. A SEPARATE PROCESS, not a thread.
-    source.py        CsvTail + StatusSource. No Qt -- this is what tests cover.
+    source.py        CsvTail + StatusSource, plus the arithmetic the window is
+                     not allowed to hold: region statistics, hover lookup, the
+                     region export, and the loop-table projections.  No Qt --
+                     this is what the tests cover.
     window.py        pyqtgraph. The only module in the repo that imports Qt.
                      Left-drag on either panel zooms to exactly that rectangle;
                      that is ZoomViewBox, and `_span` (time, shared) and
