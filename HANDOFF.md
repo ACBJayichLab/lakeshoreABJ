@@ -1,3 +1,83 @@
+# Handoff — 2026-08-27 (seventh session: the feature plan gets specified)
+
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
+**No code changed. `FEATURE_PLAN.md` was rewritten from a draft into a specification
+with stable IDs, phases and a file map. 408 tests passing, ruff clean — the next
+session starts from a known-good tree.**
+
+## Start here
+
+Read [`FEATURE_PLAN.md`](FEATURE_PLAN.md), then its **Where the work lands** section,
+which maps every ID onto files and entry points. **Phase 1 (V1, V2, C1, C2, E1) is
+viewer-only** — no recorder change, nothing on the bus, independently shippable. Start
+there unless told otherwise.
+
+## What this session did
+
+Took a feature draft written in a previous session and specified it with Jeff. Most of
+the session was spent finding places where the draft had flattened an intent into
+something simpler and wrong. Nine such places are listed in the plan's *What changed*
+section; three are worth repeating here because they are the shape of the mistake:
+
+- **Two features were one feature cut in half.** "Legend shows current value" and
+  "hover tooltip" were the residue of *cursor region statistics* — two cursors and the
+  mean between them. A live number in the legend answers a question the readouts panel
+  already answers.
+- **A loop-centric readouts table would have deleted thermometers.** "218: 1 row" turns
+  an eight-input monitor into one channel, when recording every thermometer
+  continuously is the recorder's whole job.
+- **Three features sourced from config what the instrument already knows.**
+  `loop_heater_map` and `loop_sensors` are `OUTMODE?` and the 33x command set. On that
+  family the loop number *is* the output number by protocol.
+
+### The decisions with teeth
+
+**A1/A2 — a sixth interlock, on a new axis.** Per-source command policy: an immutable
+`ipc.sources` ceiling plus a mutable runtime toggle that may only ever narrow it.
+`Command.source` is already carried end to end and already populated by all three
+clients; today it reaches `_execute` and is used only for a log line.
+
+`allow_writes` is **not** repurposed for this, and the reason is worth carrying: it is
+driver policy, it gates every caller equally, and `ltspm3`'s supervisor writes to the
+instrument in-process without touching the spool — so it has no source for a source
+policy to describe. The five existing gates ask *may this action happen*; these ask
+*may this client ask for it*.
+
+**A3 — the zero-exemptions are removed.** This is a reversal of a documented invariant.
+`lschart` currently assumes zero is the safe direction in four places, including
+`CLAUDE.md` invariant 3. Jeff's correction: cutting heater power is **not** automatically
+safe on this cryostat — it stops heating and it can also crash the stage. `ltspm3`
+already agreed, quietly: the supervisor commands a configured `safe_output_pct` on a
+fault rather than zero.
+
+After A3 the only exemptions anywhere are the two panic actions, and **the exemption
+belongs to the command kind, not to the GUI** — MATLAB may send both. The fallout is
+logged as S6 and is mostly documentation, including a rewrite of invariant 3.
+
+**K3 — a new `hold` command.** Sets each loop's setpoint to its bound sensor's current
+temperature, ramping disabled first so the instrument holds instead of ramping to it.
+On the 218 it freezes the analog output and stops the software loop. The supervisor
+already models this: `SupervisorState.HOLDING` is *"output frozen pending clarity"*, and
+`abort_ramp()` / `set_mode(MANUAL)` / `set_manual_percent()` compose into it with the
+clamp and rate limiter still in force. `arm()` is the way back.
+
+## What is still open
+
+One item: X1, the software loop's own state in the loop table, deferred deliberately.
+
+Two others were settled late and are worth flagging because they arrived after the
+register was written. The viewer **may** resume a software loop after a panic hold —
+that is K4, a new `arm` command, and it is pointedly *not* a panic action: arming
+starts the heater again, so it passes every gate. And W1's saturation thresholds are
+**fixed** at 99% / 1%, not per loop; only W2's not-settled threshold is per loop.
+
+## Unchanged
+
+Windows deployment is still the outstanding risk, and CI proving the code runs on
+Windows is still not the same as a recorder surviving a week on the cryostat's own
+machine. `control/` was not touched.
+
 # Handoff — 2026-08-26 (sixth session: the tests get audited, and CI arrives)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
