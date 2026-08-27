@@ -23,7 +23,9 @@ pytest.importorskip("pyqtgraph")
 
 from PySide6 import QtCore, QtWidgets  # noqa: E402
 
-from lschart.gui.window import ViewerWindow  # noqa: E402
+from lschart.gui.window import (  # noqa: E402
+    DEFAULT_VIEW_WINDOW_S, ViewerWindow,
+)
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
 
@@ -168,17 +170,19 @@ def test_a_zoom_by_any_other_route_also_moves_the_window(viewer):
 def test_there_is_a_way_back_to_following_the_recorder(viewer, leave):
     box = viewer.k_plot.getViewBox()
     drag(box, 0.4, 0.6, 0.2, 0.8)
-    assert not viewer.live_button.isChecked()
+    assert not any(b.isChecked() for b in viewer.span_buttons.values())
 
     if leave == "double-click":
+        # Back to the window that was showing before the drag, not to some
+        # canonical one: abandoning a span should not also rescale time.
         box.mouseClickEvent(FakeDoubleClick())
     else:
-        viewer.live_button.click()
+        viewer.span_buttons[DEFAULT_VIEW_WINDOW_S].click()
 
     assert viewer._span is None
     assert viewer._ylim == {"K": None, "%": None}
     assert box.autoRangeEnabled() == [True, True]
-    assert viewer.live_button.isChecked()
+    assert viewer.span_buttons[DEFAULT_VIEW_WINDOW_S].isChecked()
 
 
 # -- the rectangle, and the axes it is allowed to set ------------------------
@@ -325,9 +329,9 @@ def test_three_presses_are_three_steps(viewer):
 
 def test_an_x_zoom_stops_the_chart_following_the_recorder(viewer):
     """Pressing it is a decision, and a decision has to be escapable."""
-    assert viewer.live_button.isChecked()
+    assert viewer.span_buttons[DEFAULT_VIEW_WINDOW_S].isChecked()
     viewer.zoom_buttons["X+"].click()
-    assert not viewer.live_button.isChecked()
+    assert not any(b.isChecked() for b in viewer.span_buttons.values())
     assert not viewer.k_plot.getViewBox().autoRangeEnabled()[0]
     assert "not following" in viewer.statusBar().currentMessage()
 
@@ -336,7 +340,7 @@ def test_a_y_zoom_stops_the_axis_autoscaling(viewer):
     viewer.zoom_buttons["Y+"].click()
     # The view row describes the *time* window, and time still follows: the
     # button stays checked.  The fixed kelvin axis is named in the status bar.
-    assert viewer.live_button.isChecked()
+    assert viewer.span_buttons[DEFAULT_VIEW_WINDOW_S].isChecked()
     assert not viewer.k_plot.getViewBox().autoRangeEnabled()[1]
     # The time axis is untouched: the chart still follows the recorder in x.
     assert viewer._span is None
@@ -350,10 +354,10 @@ def test_a_y_zoom_survives_the_next_poll_of_the_files(viewer):
     assert viewer.k_plot.getViewBox().viewRange()[1] == pytest.approx(list(fixed))
 
 
-def test_live_undoes_the_buttons_too(viewer):
+def test_a_view_button_undoes_the_zoom_buttons_too(viewer):
     viewer.zoom_buttons["X+"].click()
     viewer.zoom_buttons["Y+"].click()
-    viewer.live_button.click()
+    viewer.span_buttons[DEFAULT_VIEW_WINDOW_S].click()
     assert viewer._span is None
     assert viewer._ylim == {"K": None, "%": None}
     assert viewer.k_plot.getViewBox().autoRangeEnabled() == [True, True]
@@ -388,13 +392,15 @@ def test_a_view_button_cuts_the_data_to_its_window(tmp_path, qt_app):
     w = ViewerWindow(str(status), refresh_ms=10_000_000)
     qt_app.processEvents()
 
-    assert len(w.curves["Sample"].getData()[0]) == 600   # All shows everything
+    # Ten hours of samples inside the 24 h the viewer opens on: all of them.
+    assert len(w.curves["Sample"].getData()[0]) == 600
+    assert w.span_buttons[DEFAULT_VIEW_WINDOW_S].isChecked()
     w.span_buttons[6 * 3600.0].click()
     shown = len(w.curves["Sample"].getData()[0])
     assert 360 <= shown <= 362          # 6 h at one minute, plus the bracket
     assert "last 6.0 h" in w.statusBar().currentMessage()
     assert w.span_buttons[6 * 3600.0].isChecked()
-    assert not w.live_button.isChecked()
+    assert not w.span_buttons[DEFAULT_VIEW_WINDOW_S].isChecked()
 
     # New samples extend into the window's frame: still live-referenced.  The
     # far edge slides forward with the newest sample, dropping about as many
@@ -416,12 +422,11 @@ def test_a_drag_leaves_no_view_button_checked(viewer):
     assert viewer.span_buttons[24 * 3600.0].isChecked()
     drag(viewer.k_plot.getViewBox(), 0.4, 0.6)
     assert not any(b.isChecked() for b in viewer.span_buttons.values())
-    assert not viewer.live_button.isChecked()
     # And a view button is a way back out of the hand-picked span.
     viewer.span_buttons[12 * 3600.0].click()
     assert viewer._span is None
     assert viewer._follow_span_s == 12 * 3600.0
-    assert viewer.live_button.isChecked() is False
+    assert viewer.span_buttons[12 * 3600.0].isChecked()
 
 
 # -- the control panel -------------------------------------------------------
@@ -901,3 +906,227 @@ def test_an_outage_reaches_the_curve_as_a_break_and_not_a_line(tmp_path, qt_app)
 
 def test_a_recorder_that_never_stopped_is_still_one_unbroken_trace(viewer):
     assert viewer.curves["Sample"].curve.opts["connect"] == "all"
+
+
+# -- the value axis has a comfort stop, not a clamp ---------------------------
+#
+# A 300 K axis panned out to 10 000 K is a chart nobody can read.  A sensor
+# that has come loose and reads 1400 K is a chart somebody has to be able to
+# read.  The stop has to allow the second while resisting the first, which
+# means it is the wider of the configured window and the data.
+
+
+def y_limits(plot):
+    return plot.getViewBox().state["limits"]["yLimits"]
+
+
+def test_the_value_axis_stops_where_the_viewer_says(viewer):
+    lo, hi = y_limits(viewer.k_plot)
+    assert lo <= 0.0
+    assert hi == pytest.approx(450.0)
+    lo, hi = y_limits(viewer.pct_plot)
+    assert hi == pytest.approx(100.0)
+
+
+def test_a_reading_outside_the_stop_widens_it_to_the_reading(tmp_path, qt_app):
+    """The measured number wins.  An axis that would not go to 1400 K would be
+    hiding the one reading that matters."""
+    t0 = time.time() - 600
+    csv_path = tmp_path / "log.csv"
+    with csv_path.open("w") as fh:
+        fh.write(HEADER)
+        for i in range(120):
+            stamp = _dt.datetime.fromtimestamp(t0 + i).isoformat(
+                timespec="milliseconds")
+            # A miswired sensor, reading well past the comfort stop.
+            fh.write(f"{stamp},{i}.0,1400.0,77.0,12.5,,,\n")
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({
+        "t_wall": time.time(), "cycle": 1, "running": True, "interval_s": 1.0,
+        "channels": [{"name": "Sample", "kelvin": 1400.0, "usable": True}],
+        "links": [{"name": "ls336", "up": True, "writable": True}],
+        "recorder": {"path": str(csv_path), "rows": 120},
+        "commands": {"accepted": True, "recent": []},
+    }))
+    w = ViewerWindow(str(status), refresh_ms=10_000_000)
+    qt_app.processEvents()
+    assert y_limits(w.k_plot)[1] >= 1400.0
+    w.close()
+
+
+def test_the_stop_is_configurable_without_touching_a_config_file(tmp_path, qt_app):
+    """In the shape of --max-points and --gap-factor: a viewer flag, no key."""
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({
+        "t_wall": time.time(), "cycle": 1, "running": True, "interval_s": 1.0,
+        "channels": [], "links": [], "recorder": {"path": "", "rows": 0},
+        "commands": {"accepted": False, "recent": []},
+    }))
+    w = ViewerWindow(str(status), refresh_ms=10_000_000, max_kelvin=20.0,
+                     max_percent=50.0)
+    qt_app.processEvents()
+    assert y_limits(w.k_plot)[1] == pytest.approx(20.0)
+    assert y_limits(w.pct_plot)[1] == pytest.approx(50.0)
+    w.close()
+
+
+# -- the cursors and what is between them ------------------------------------
+
+
+def test_the_cursors_arrive_somewhere_useful(viewer):
+    """A pair that measures nothing until it has been placed twice is a pair
+    most people put away again."""
+    assert viewer._cursors is None
+    viewer.cursor_button.click()
+    assert viewer._cursors is not None
+    a, b = viewer._cursors
+    x0, x1 = viewer.k_plot.getViewBox().viewRange()[0]
+    assert x0 < a < b < x1
+    assert viewer.k_plot.getViewBox().cursor_mode is True
+
+
+def test_a_click_moves_the_nearer_cursor(viewer):
+    viewer.cursor_button.click()
+    a, b = viewer._cursors
+    viewer._place_cursor(a + (b - a) * 0.1)      # nearer the left one
+    assert viewer._cursors[1] == b
+    assert viewer._cursors[0] != a
+
+
+def test_the_statistics_come_from_the_full_resolution_samples(viewer):
+    viewer.cursor_button.click()
+    newest = viewer.tail.newest()
+    viewer._cursors = (newest - 600, newest - 60)
+    viewer._update_region_stats()
+
+    stats = viewer._stats["K"]["Sample"]
+    got = viewer.tail.samples_in(newest - 600, newest - 60)["Sample"]
+    assert stats.n == len(got.v)
+    assert stats.mean == pytest.approx(sum(got.v) / len(got.v))
+    assert "mean" in viewer._stat_labels["K"].toPlainText()
+    # Once for the region, not once per trace.
+    assert viewer._stat_labels["K"].toPlainText().count("Δt") == 1
+
+
+def test_putting_the_cursors_away_takes_the_statistics_with_them(viewer):
+    viewer.cursor_button.click()
+    viewer._update_region_stats()
+    assert viewer._stat_labels["K"].isVisible()
+    viewer.cursor_button.click()
+    assert viewer._cursors is None
+    assert not viewer._stat_labels["K"].isVisible()
+    assert viewer.k_plot.getViewBox().cursor_mode is False
+    assert not viewer.export_button.isEnabled()
+
+
+def test_the_legend_carries_the_live_value_only_while_nothing_is_picked(viewer):
+    """Two readings of one trace, measured over different spans, a few pixels
+    apart, is how a chart comes to disagree with itself."""
+    legend = viewer.k_plot.legend
+    label = legend.getLabel(viewer.curves["Sample"])
+    assert label.text.startswith("Sample")
+    assert label.text != "Sample"                # a number is in there
+
+    viewer.cursor_button.click()
+    viewer._update_region_stats()
+    assert legend.getLabel(viewer.curves["Sample"]).text == "Sample"
+
+
+def test_a_region_in_the_past_is_not_re_measured_every_tick(viewer):
+    """Nothing the recorder does now changes what happened between two past
+    instants, and re-reading every log in the directory to confirm that once a
+    second is not free."""
+    viewer.cursor_button.click()
+    newest = viewer.tail.newest()
+    viewer._cursors = (newest - 600, newest - 60)
+    viewer._update_region_stats()
+    key = viewer._stats_key
+
+    calls = []
+    real = viewer.tail.samples_in
+    viewer.tail.samples_in = lambda *a, **k: (calls.append(a), real(*a, **k))[1]
+    viewer.refresh()
+    viewer.refresh()
+    assert calls == []
+    assert viewer._stats_key == key
+
+
+# -- the cursor gesture displaces the drag, and only while it is up -----------
+
+
+def test_the_left_drag_still_zooms_while_the_cursors_are_away(viewer):
+    (x0, x1), _ = drag(viewer.k_plot.getViewBox(), 0.4, 0.6)
+    assert viewer._span == pytest.approx((x0, x1))
+
+
+def test_the_left_button_places_cursors_instead_of_zooming_while_they_are_up(viewer):
+    viewer.cursor_button.click()
+    before = viewer._span
+    box = viewer.k_plot.getViewBox()
+    rect = box.boundingRect()
+    p0 = QtCore.QPointF(rect.width() * 0.4, rect.height() * 0.4)
+    p1 = QtCore.QPointF(rect.width() * 0.6, rect.height() * 0.6)
+    box.mouseDragEvent(FakeDrag(p0, p1, True))
+    assert viewer._span == before                  # no window was picked
+    assert viewer._cursors[0] == pytest.approx(box.mapToView(p1).x()) or \
+        viewer._cursors[1] == pytest.approx(box.mapToView(p1).x())
+
+
+# -- naming the trace under the pointer --------------------------------------
+
+
+def test_hovering_a_trace_names_it_and_reads_it_there(viewer):
+    box = viewer.k_plot.getViewBox()
+    t, v = viewer.curves["Sample"].getData()
+    middle = len(t) // 2
+    scene_pos = box.mapViewToScene(QtCore.QPointF(float(t[middle]),
+                                                  float(v[middle])))
+    viewer._on_hover((scene_pos,))
+    label = viewer._hover_labels["K"]
+    assert label.isVisible()
+    text = label.toPlainText()
+    assert text.startswith("Sample")
+    assert f"{float(v[middle]):.3f}" in text
+
+
+def test_hovering_nowhere_near_a_trace_names_nothing(viewer):
+    box = viewer.k_plot.getViewBox()
+    (_, y1) = box.viewRange()[1]
+    t, _ = viewer.curves["Sample"].getData()
+    scene_pos = box.mapViewToScene(
+        QtCore.QPointF(float(t[len(t) // 2]), y1 * 10))
+    viewer._on_hover((scene_pos,))
+    assert not viewer._hover_labels["K"].isVisible()
+
+
+# -- exporting the region ----------------------------------------------------
+
+
+def test_the_export_writes_the_region_at_full_resolution(viewer, tmp_path,
+                                                         monkeypatch):
+    viewer.cursor_button.click()
+    newest = viewer.tail.newest()
+    viewer._cursors = (newest - 600, newest - 60)
+    viewer._update_region_stats()
+    assert viewer.export_button.isEnabled()
+
+    out = tmp_path / "region.csv"
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog, "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(out), "")))
+    viewer.export_button.click()
+
+    lines = out.read_text().splitlines()
+    assert lines[0].startswith("Timestamp,Time,Sample")
+    assert len(lines) - 1 == viewer._stats["K"]["Sample"].n
+    assert "region.csv" in viewer.export_note.text()
+
+
+def test_a_cancelled_export_writes_nothing(viewer, monkeypatch):
+    viewer.cursor_button.click()
+    viewer._update_region_stats()
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog, "getSaveFileName",
+        staticmethod(lambda *a, **k: ("", "")))
+    viewer.export_button.click()
+    assert viewer.export_note.text() == ""

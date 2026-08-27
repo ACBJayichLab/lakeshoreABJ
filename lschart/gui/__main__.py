@@ -13,7 +13,7 @@ import argparse
 import logging
 import sys
 
-from .source import GAP_FACTOR
+from .source import COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR
 
 log = logging.getLogger("lschart.gui")
 
@@ -36,6 +36,15 @@ def main(argv: list[str] | None = None) -> int:
                          "apart than this many sample intervals (default "
                          f"{GAP_FACTOR:g}); the trace is joined across "
                          "anything closer")
+    ap.add_argument("--max-kelvin", type=float, default=COMFORT_STOP_K[1],
+                    help="where the temperature panel stops zooming and "
+                         "panning outward (default "
+                         f"{COMFORT_STOP_K[1]:g}); a reading beyond it widens "
+                         "the stop to the reading, so a miswired sensor is "
+                         "never hidden by it")
+    ap.add_argument("--max-percent", type=float, default=COMFORT_STOP_PCT[1],
+                    help="the same stop for the output panel (default "
+                         f"{COMFORT_STOP_PCT[1]:g})")
     ap.add_argument("--read-only", action="store_true",
                     help="open without the ability to send commands at all")
     ap.add_argument("--log-level", default="INFO")
@@ -87,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         refresh_ms=int(args.refresh * 1000),
         max_points=args.max_points,
         gap_factor=args.gap_factor,
+        max_kelvin=args.max_kelvin,
+        max_percent=args.max_percent,
         config_label=cfg.source_path or "",
     )
     window.show()

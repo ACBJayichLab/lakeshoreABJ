@@ -30,6 +30,19 @@ hand-picked span is **re-read from the logs themselves**
 first draws the thinned overview so the view responds instantly, then swaps in
 the real samples a moment later.
 
+Measuring a region
+------------------
+
+Two cursors on the chart ask a question about the *log*, not about the
+drawing: the mean, spread and change of every trace between them.  Answering
+it from what is on screen would answer it from whatever survived decimation,
+so :meth:`CsvTail.samples_in` gets the samples at full resolution -- from
+memory while nothing has been thinned, from the files once something has --
+and :func:`region_stats` reduces them.  :func:`write_region_csv` writes the
+same samples out.  All three are here rather than in the window because they
+are arithmetic on the log, and because this is the module that has no Qt in
+it and can therefore be tested without one.
+
 Holes
 -----
 
@@ -120,6 +133,21 @@ def classify_column(name: str, channel_names) -> str:
 #: hour of temperature the cryostat never had.  4 is the first multiple that
 #: is unambiguously the second case: it needs three consecutive cycles gone.
 GAP_FACTOR = 4.0
+
+#: Where a viewer's value axis stops when the data does not ask for more:
+#: ``(floor, ceiling)`` for the temperature panel and for the output panel.
+#: Zoom and pan are held inside these unless a sample lies outside them, in
+#: which case the stop widens to the data -- a comfort stop, not a clamp.  A
+#: miswired sensor reading 1400 K is exactly the reading somebody has to be
+#: able to look at, and an axis that refused to go there would be hiding the
+#: measurement in favour of a number this file guessed.
+#:
+#: Here rather than in ``window`` because ``lschart.gui.__main__`` builds its
+#: ``--max-kelvin`` / ``--max-percent`` defaults from them, and it has to be
+#: able to print its help on a machine with no Qt installed.
+COMFORT_STOP_K = (0.0, 450.0)
+COMFORT_STOP_PCT = (0.0, 100.0)
+
 
 #: Intervals actually looked at when estimating a series' spacing.  The
 #: spacing of a series is uniform (one recorder, one interval, and decimation
@@ -234,6 +262,13 @@ class CsvTail:
         #: next prepare; bounded by the span, not by the age of the log.
         self._overlay: dict[str, Series] = {}
         self._overlay_span: tuple[float, float] | None = None
+        #: True once any series has been decimated.  Until it is, what is held
+        #: in memory *is* the full resolution of the logs read so far, and a
+        #: question that needs every sample -- cursor statistics, an export --
+        #: can be answered from memory instead of from disk.  It never goes
+        #: back to False: a series thinned once has lost those samples for
+        #: good, and the file is the only place left holding them.
+        self.thinned = False
 
     # -- following the file ------------------------------------------------
 
@@ -387,6 +422,7 @@ class CsvTail:
             self.series = {}
             self.header = []
             self.rows = 0
+            self.thinned = False
             # The overlay was folded forward from bytes that are no longer
             # there.  Extending it with the re-read would count them twice,
             # so it goes; the window asks for the span again and gets a
@@ -505,6 +541,7 @@ class CsvTail:
                 # the detail back from disk when someone looks closely.
                 del s.t[::2]
                 del s.v[::2]
+                self.thinned = True
         self.rows += 1
         return 1
 
@@ -516,6 +553,20 @@ class CsvTail:
         if s is None:
             return [], []
         return s.t, s.v
+
+    def newest(self) -> float | None:
+        """The time of the newest sample this viewer holds, over all columns.
+
+        ``None`` before anything has been read.  Used to tell a region that is
+        finished from one that is still filling: a cursor pair whose right
+        edge sits beyond this is a region the recorder has not caught up with
+        yet, and its statistics will change.
+        """
+        latest = None
+        for s in self.series.values():
+            if s.t and (latest is None or s.t[-1] > latest):
+                latest = s.t[-1]
+        return latest
 
     def recent(self, name: str, seconds: float) -> tuple[list[float], list[float]]:
         """One column over the last ``seconds`` of what this viewer holds.
@@ -551,7 +602,26 @@ class CsvTail:
         by their timestamps as they parse.  Returns the number of rows
         recovered.
         """
-        lo, hi = t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S
+        overlay, rows = self._read_span(
+            t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S)
+        self._overlay = overlay
+        self._overlay_span = (t0, t1)
+        return rows
+
+    def _read_span(self, lo: float, hi: float) -> tuple[dict[str, Series], int]:
+        """Every sample between ``lo`` and ``hi`` that the logs on disk hold.
+
+        The scan itself, without the opinion about what it is for: whether the
+        result becomes the drawing overlay (:meth:`prepare_span`) or answers a
+        question about a region (:meth:`samples_in`) is the caller's business,
+        and the two must not share one slot -- a cursor region and a zoom
+        window are different spans, and letting either overwrite the other's
+        samples would make the chart and the statistics disagree about what
+        was measured.
+
+        Returns ``(series by column, rows recovered)``.  The live state is
+        borrowed and put back: the parser keeps its tallies on ``self``.
+        """
         # Every log this run has produced, whether or not this viewer has
         # read it yet -- a picked span may reach back past the backfill cap,
         # and the disk is where the full-resolution answer lives either way.
@@ -565,24 +635,51 @@ class CsvTail:
             sources[p] = upto
         if self.path:
             sources[self.path] = self._offset
-        overlay: dict[str, Series] = {}
+        out: dict[str, Series] = {}
         rows = 0
         for path, upto in sources.items():
             text = self._read_prefix(path, upto)
             if not text:
                 continue
             # Scan it through the ordinary parser without touching the live
-            # state, then fold what came out into the overlay.
+            # state, then fold what came out into the result.
             saved = (self.header, self.series, self.rows, self.errors)
             self.header, self.series, self.rows, self.errors = [], {}, 0, 0
             try:
-                self._consume(text, sink=overlay, t_range=(lo, hi))
+                self._consume(text, sink=out, t_range=(lo, hi))
                 rows += self.rows
             finally:
                 (self.header, self.series, self.rows, self.errors) = saved
-        self._overlay = overlay
-        self._overlay_span = (t0, t1)
-        return rows
+        return out, rows
+
+    def samples_in(self, t0: float, t1: float) -> dict[str, Series]:
+        """Every column's **full-resolution** samples in ``[t0, t1]``.
+
+        What a cursor region is measured from, and what an export writes out.
+        Never the decimated overview: a mean taken over every other sample is
+        a different number from the mean of the measurement, and the whole
+        reason to draw two cursors is to ask what the cryostat actually did
+        between them.
+
+        Answered from memory while nothing has been thinned -- which is the
+        common case, and the difference between a statistic that costs a
+        slice and one that costs a scan of every log in the directory.  Once
+        decimation has thrown samples away, memory can no longer answer and
+        the files are re-read.
+
+        Unlike :meth:`between` this takes the span literally: no bracketing
+        sample from beyond the edge, because a sample outside the region is
+        not part of what happened inside it.
+        """
+        if not self.thinned:
+            out: dict[str, Series] = {}
+            for name, s in self.series.items():
+                lo = bisect.bisect_left(s.t, t0)
+                hi = bisect.bisect_right(s.t, t1)
+                if hi > lo:
+                    out[name] = Series(name, s.t[lo:hi], s.v[lo:hi])
+            return out
+        return self._read_span(t0, t1)[0]
 
     @staticmethod
     def _read_prefix(path: str, upto: int | None) -> str | None:
@@ -625,6 +722,149 @@ class CsvTail:
 
     def columns(self) -> list[str]:
         return [c for c in self.header[1:] if c not in NON_SERIES_COLUMNS]
+
+
+@dataclass(frozen=True)
+class RegionStats:
+    """What one trace did between the cursors.
+
+    ``delta`` is last minus first, not max minus min: the question a cursor
+    region answers on a strip chart is "how far did it move between there and
+    there", and a trace that wandered out and came back moved nowhere.  The
+    spread is what ``std`` is for, and the two together say which of the
+    two happened.
+    """
+
+    name: str
+    n: int
+    mean: float
+    std: float
+    delta: float
+    first: float
+    last: float
+
+
+def region_stats(samples: dict[str, Series], names=None) -> dict[str, RegionStats]:
+    """Summarise each column of ``samples`` -- what :meth:`CsvTail.samples_in`
+    returned for a cursor region.
+
+    Columns with nothing in the region are absent from the result rather than
+    present with zeros: a mean of no samples is not 0, and a panel that says
+    0.000 K where it means "nothing was recorded here" is the kind of number
+    somebody acts on.
+
+    ``std`` is the population standard deviation of the samples in hand.  These
+    are a whole population -- every sample the recorder took between the
+    cursors -- not a draw from a larger one, so there is no correction to make.
+    A single sample has a spread of exactly zero, and reports it.
+    """
+    out: dict[str, RegionStats] = {}
+    for name, series in samples.items():
+        if names is not None and name not in names:
+            continue
+        if not series.v:
+            continue
+        v = np.asarray(series.v, dtype=float)
+        out[name] = RegionStats(
+            name=name,
+            n=int(v.size),
+            mean=float(v.mean()),
+            std=float(v.std()),
+            delta=float(v[-1] - v[0]),
+            first=float(v[0]),
+            last=float(v[-1]),
+        )
+    return out
+
+
+def value_at(t, v, x: float) -> float | None:
+    """``v`` interpolated linearly at time ``x``, or ``None`` outside the data.
+
+    Outside rather than clamped: a trace that ends at 10:00 has no value at
+    10:30, and answering with its last one would put a number under the mouse
+    that the cryostat never had.  Exactly on a sample returns that sample,
+    which matters when the pointer is parked on the newest one.
+    """
+    n = len(t)
+    if n == 0:
+        return None
+    if x < t[0] or x > t[-1]:
+        return None
+    i = bisect.bisect_left(t, x)
+    if i == 0:
+        return float(v[0])
+    if i >= n:
+        return float(v[-1])
+    t0, t1 = t[i - 1], t[i]
+    if t1 == t0:
+        return float(v[i])
+    frac = (x - t0) / (t1 - t0)
+    return float(v[i - 1]) + frac * (float(v[i]) - float(v[i - 1]))
+
+
+def nearest_series(
+    traces: dict[str, tuple],
+    x: float,
+    y: float,
+    *,
+    tolerance: float,
+) -> tuple[str, float] | None:
+    """Which trace the pointer is on, and what it reads there.
+
+    ``traces`` is ``{name: (t, v)}`` -- whatever is currently drawn on one
+    panel.  Each is interpolated at ``x`` and the closest in ``y`` wins,
+    provided it is within ``tolerance`` of the pointer.  The tolerance is in
+    data units and is the caller's business, because a panel's units are: a
+    few pixels' worth of a percent axis is not a few pixels' worth of a
+    kelvin axis, and a fixed number here would identify a trace three
+    screen-inches away on one panel and nothing at all on the other.
+
+    ``None`` when nothing is near enough, which is most of the panel.
+    """
+    best: tuple[str, float] | None = None
+    best_gap = float("inf")
+    for name, (t, v) in traces.items():
+        got = value_at(t, v, x)
+        if got is None:
+            continue
+        gap = abs(got - y)
+        if gap <= tolerance and gap < best_gap:
+            best, best_gap = (name, got), gap
+    return best
+
+
+def write_region_csv(path, samples: dict[str, Series], *, columns=None) -> int:
+    """Write a cursor region out as a CSV, in the recorder's own shape.
+
+    Rows, not columns-side-by-side: every series in ``samples`` was read from
+    the same log rows, so their timestamps line up, and pivoting them back
+    into rows gives a file that opens in the same place the recorder's own
+    logs do.  A column with no sample at some timestamp is left empty rather
+    than filled in -- that is what the recorder writes for a channel that
+    failed a cycle, and inventing a value here would be worse than the hole.
+
+    Returns the number of data rows written.
+    """
+    names = [n for n in (columns if columns is not None else sorted(samples))
+             if n in samples]
+    by_time: dict[float, dict[str, float]] = {}
+    for name in names:
+        series = samples[name]
+        for t, v in zip(series.t, series.v):
+            by_time.setdefault(t, {})[name] = v
+    stamps = sorted(by_time)
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["Timestamp", "Time", *names])
+        t0 = stamps[0] if stamps else 0.0
+        for t in stamps:
+            row = by_time[t]
+            writer.writerow([
+                _dt.datetime.fromtimestamp(t).isoformat(timespec="milliseconds"),
+                f"{t - t0:.3f}",
+                *[("" if n not in row else f"{row[n]:.6g}") for n in names],
+            ])
+    return len(stamps)
 
 
 class StatusSource:

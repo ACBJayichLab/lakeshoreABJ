@@ -8,12 +8,16 @@ here rather than being allowed to reach the widgets as exceptions.
 
 from __future__ import annotations
 
+import csv
 import datetime as _dt
 import json
 import time
 
+import pytest
+
 from lschart.gui.source import (
-    CsvTail, StatusSource, capabilities, classify_column, connect_flags,
+    CsvTail, Series, StatusSource, capabilities, classify_column, connect_flags,
+    nearest_series, region_stats, value_at, write_region_csv,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -713,3 +717,181 @@ def test_a_file_that_shrank_drops_the_overlay_rather_than_double_counting(tmp_pa
     tt, vv = tail.between("Sample", t0, t0 + 30.0)
     assert vv == [96.0 + i for i in range(4)]
     assert tt == sorted(tt)
+
+
+# -- measuring a region ------------------------------------------------------
+#
+# Two cursors ask a question about the log, not about the drawing.  What is
+# worth testing is that the answer comes from every sample the files hold --
+# a mean over every other sample is a different number -- and that a region
+# holding nothing says nothing rather than saying zero.
+
+
+def test_a_region_is_measured_from_every_sample_not_the_thinned_overview(tmp_path):
+    """The decimated overview has thrown half the samples away; the mean has not."""
+    t0 = 1_700_000_000.0
+    path = tmp_path / "lschart_2026-08-24.csv"
+    # 100 samples alternating 90 and 110 K.  Thinned by 2 they all become one
+    # value or the other, and the mean moves by 10 K.
+    path.write_text(HEADER + "".join(
+        row(t0 + i, 90.0 if i % 2 == 0 else 110.0) for i in range(100)))
+
+    tail = CsvTail(max_points=16)
+    tail.follow(str(path))
+    tail.poll()
+    assert tail.thinned                      # the overview has lost samples
+
+    stats = region_stats(tail.samples_in(t0, t0 + 99))
+    assert stats["Sample"].n == 100
+    assert stats["Sample"].mean == pytest.approx(100.0)
+
+
+def test_an_unthinned_tail_answers_a_region_without_touching_the_disk(tmp_path):
+    """While nothing has been decimated, memory *is* the full resolution."""
+    path = log(tmp_path, rows=10)
+    tail = CsvTail()
+    tail.follow(str(path))
+    tail.poll()
+    assert not tail.thinned
+
+    # Move the file out from under it: an answer that still arrives came from
+    # memory, which is the whole point of the fast path.
+    path.rename(tmp_path / "moved.csv")
+    stats = region_stats(tail.samples_in(1_700_000_000.0, 1_700_000_009.0))
+    assert stats["Sample"].n == 10
+
+
+def test_a_region_takes_its_span_literally(tmp_path):
+    """No bracketing sample: what happened outside is not part of what happened
+    inside, however much a line crossing the edge wants drawing."""
+    path = log(tmp_path, rows=10)
+    tail = CsvTail()
+    tail.follow(str(path))
+    tail.poll()
+    t0 = 1_700_000_000.0
+    samples = tail.samples_in(t0 + 3, t0 + 5)
+    assert samples["Sample"].t == [t0 + 3, t0 + 4, t0 + 5]
+
+
+def test_a_region_with_nothing_in_it_reports_nothing_rather_than_zero(tmp_path):
+    path = log(tmp_path, rows=5)
+    tail = CsvTail()
+    tail.follow(str(path))
+    tail.poll()
+    stats = region_stats(tail.samples_in(1, 2))
+    assert stats == {}
+
+
+def test_delta_is_last_minus_first_not_the_range():
+    """A trace that wandered out and came back moved nowhere; the spread says
+    that it wandered."""
+    series = Series("Sample", [0.0, 1.0, 2.0], [10.0, 40.0, 10.0])
+    stats = region_stats({"Sample": series})["Sample"]
+    assert stats.delta == pytest.approx(0.0)
+    assert stats.std > 10.0
+    assert stats.mean == pytest.approx(20.0)
+
+
+def test_one_sample_has_a_spread_of_exactly_zero():
+    stats = region_stats({"S": Series("S", [1.0], [5.0])})["S"]
+    assert (stats.n, stats.mean, stats.std, stats.delta) == (1, 5.0, 0.0, 0.0)
+
+
+def test_measuring_a_region_does_not_disturb_the_drawing_overlay(tmp_path):
+    """The chart's span and a cursor region are different spans, and neither
+    may overwrite the other's samples."""
+    t0 = 1_700_000_000.0
+    path = tmp_path / "lschart_2026-08-24.csv"
+    path.write_text(HEADER + "".join(row(t0 + i, 96.0 + i) for i in range(200)))
+    tail = CsvTail(max_points=32)
+    tail.follow(str(path))
+    tail.poll()
+
+    tail.prepare_span(t0 + 100, t0 + 150)
+    drawn = tail.between("Sample", t0 + 100, t0 + 150)
+    tail.samples_in(t0 + 10, t0 + 20)        # a region somewhere else entirely
+    assert tail.between("Sample", t0 + 100, t0 + 150) == drawn
+
+
+def test_newest_is_none_before_anything_has_been_read(tmp_path):
+    assert CsvTail().newest() is None
+    tail = CsvTail()
+    tail.follow(str(log(tmp_path, rows=4)))
+    tail.poll()
+    assert tail.newest() == 1_700_000_003.0
+
+
+# -- what is under the pointer -----------------------------------------------
+
+
+def test_a_value_between_two_samples_is_interpolated():
+    assert value_at([0.0, 10.0], [100.0, 200.0], 2.5) == pytest.approx(125.0)
+
+
+def test_a_value_outside_the_data_is_none_rather_than_the_nearest_one():
+    """A trace that ends at 10:00 has no value at 10:30, and saying it holds
+    its last one would put a reading under the pointer the cryostat never had."""
+    assert value_at([0.0, 10.0], [100.0, 200.0], 11.0) is None
+    assert value_at([0.0, 10.0], [100.0, 200.0], -1.0) is None
+    assert value_at([], [], 0.0) is None
+
+
+def test_a_value_exactly_on_a_sample_is_that_sample():
+    assert value_at([0.0, 10.0], [100.0, 200.0], 10.0) == pytest.approx(200.0)
+    assert value_at([0.0, 10.0], [100.0, 200.0], 0.0) == pytest.approx(100.0)
+
+
+def test_the_nearest_trace_is_the_one_the_pointer_is_on():
+    traces = {
+        "cold": ([0.0, 10.0], [4.0, 4.0]),
+        "warm": ([0.0, 10.0], [300.0, 300.0]),
+    }
+    assert nearest_series(traces, 5.0, 5.0, tolerance=20.0) == ("cold", 4.0)
+    assert nearest_series(traces, 5.0, 295.0, tolerance=20.0) == ("warm", 300.0)
+
+
+def test_nothing_is_named_when_nothing_is_near_enough():
+    traces = {"cold": ([0.0, 10.0], [4.0, 4.0])}
+    assert nearest_series(traces, 5.0, 200.0, tolerance=20.0) is None
+    # And a pointer past the end of a trace identifies nothing, rather than
+    # naming it at whatever it last read.
+    assert nearest_series(traces, 50.0, 4.0, tolerance=20.0) is None
+
+
+# -- writing a region out ----------------------------------------------------
+
+
+def test_an_exported_region_comes_back_as_rows(tmp_path):
+    t0 = 1_700_000_000.0
+    tail = CsvTail()
+    tail.follow(str(log(tmp_path, rows=5, t0=t0)))
+    tail.poll()
+
+    out = tmp_path / "region.csv"
+    written = write_region_csv(out, tail.samples_in(t0 + 1, t0 + 3),
+                               columns=tail.columns())
+    assert written == 3
+
+    rows = list(csv.reader(out.open()))
+    assert rows[0] == ["Timestamp", "Time", "Sample",
+                       "ls336.setpoint1", "ls336.heater1"]
+    assert len(rows) == 4
+    assert rows[1][2] == "97"                     # 96.0 + 1
+    assert rows[1][1] == "0.000"                  # seconds from the first row
+    assert rows[3][1] == "2.000"
+
+
+def test_a_column_with_no_sample_at_a_timestamp_is_left_empty(tmp_path):
+    """What the recorder writes for a channel that failed a cycle.  Filling it
+    in here would invent a measurement at exactly the place nothing can
+    contradict it."""
+    t0 = 1_700_000_000.0
+    samples = {
+        "Sample": Series("Sample", [t0, t0 + 1], [96.0, 97.0]),
+        "Other": Series("Other", [t0 + 1], [12.0]),
+    }
+    out = tmp_path / "region.csv"
+    write_region_csv(out, samples, columns=["Sample", "Other"])
+    rows = list(csv.reader(out.open()))
+    assert rows[1] == [rows[1][0], "0.000", "96", ""]
+    assert rows[2][3] == "12"

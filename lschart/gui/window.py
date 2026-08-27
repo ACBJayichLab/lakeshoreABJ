@@ -26,10 +26,10 @@ value axis is cropped to it too.  The drag is always the whole rectangle;
 view stops following the recorder -- new samples land off the right-hand edge,
 which is what a fixed window means -- so the state is announced in the status
 bar (no view button checked) and is left by a double-click or any button in
-the `View` row.  That row holds live-referenced windows -- the last
-6/12/24/48 hours, riding forward with the recorder -- plus `All`; a fresh
-viewer backfills only about that widest window, and older spans are re-read
-from disk when a drag reaches them.  While a span is picked the chart first
+the `View` row.  That row holds live-referenced windows and nothing else --
+the last 6/12/24/48 hours, riding forward with the recorder, opening on 24 h;
+a fresh viewer backfills only about the widest of them, and older spans are
+re-read from disk when a drag reaches them.  While a span is picked the chart first
 draws its thinned overview and then, one quiet tick later, swaps in what
 `CsvTail.prepare_span` re-read from the logs at full resolution -- zooming
 back into an old day shows real samples again, not whatever survived
@@ -46,6 +46,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import time
 from typing import NamedTuple
 
 import pyqtgraph as pg
@@ -54,7 +55,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ..instruments.ls33x import HEATER_RANGE_NAMES
 from ..ipc.commands import CommandSpool
 from .source import (
-    GAP_FACTOR, CsvTail, StatusSource, capabilities, classify_column, connect_flags,
+    COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, CsvTail, StatusSource, capabilities,
+    classify_column, connect_flags, nearest_series, region_stats, write_region_csv,
 )
 
 log = logging.getLogger(__name__)
@@ -70,10 +72,21 @@ CURVE_COLORS = [
 #: (label, seconds) for the live-referenced view buttons: the last N hours,
 #: riding forward with the recorder.  The widest of these is also how much
 #: history a fresh viewer backfills from the finished logs.
+#:
+#: There is no "everything" button.  A window that means "whatever this viewer
+#: happens to hold" is not a window: it is a different span on a viewer opened
+#: an hour ago and one left up since Tuesday, and it grows silently under
+#: whoever is reading it.  Scrolling back to find an older run is acceptable;
+#: a view whose extent is an accident of process uptime is not.
 VIEW_WINDOWS = [
     ("6 h", 6 * 3600.0), ("12 h", 12 * 3600.0),
     ("24 h", 24 * 3600.0), ("48 h", 48 * 3600.0),
 ]
+
+#: What a viewer opens on, and what a double-click returns to when no window
+#: has been chosen yet.  A day: long enough to hold last night's cooldown,
+#: short enough that a two-hour excursion is still a shape rather than a spike.
+DEFAULT_VIEW_WINDOW_S = 24 * 3600.0
 
 #: How far back a fresh start reads by default: the widest view button, plus
 #: an hour so the edge of a full window has samples to bracket it.
@@ -93,6 +106,25 @@ BANNER_STYLE = {
 #: and still get somewhere in three presses.
 ZOOM_STEP = 1.5
 
+
+#: The two region cursors, and the shading between them.  Deliberately not one
+#: of CURVE_COLORS: a cursor that is the same colour as a trace reads as part
+#: of the data.
+CURSOR_COLOR = "#37474f"
+
+#: How near the pointer has to be to a trace, in pixels, for the hover readout
+#: to name it.  In pixels because that is the unit of "the pointer is on it";
+#: a tolerance in kelvin would be three screen-inches wide on the percent
+#: panel and invisible on a temperature axis cropped to a 2 mK wobble.
+HOVER_TOLERANCE_PX = 14.0
+
+#: The floor on how often a cursor region that reaches the live edge is
+#: re-measured from *disk*.  Only bites once decimation has started, which is
+#: the only case where the statistics cannot be answered from memory --
+#: `CsvTail.samples_in` re-reads every log in the directory then, and the live
+#: edge grows once a cycle.  A region in the past is measured once and not
+#: again: nothing can change what happened between two past instants.
+STATS_RELOAD_S = 5.0
 
 #: How long a command's readback guard may hold a field before it gives up.
 #: The guard bridges the gap between an acknowledgement and the readback that
@@ -192,6 +224,10 @@ class ZoomViewBox(pg.ViewBox):
     sigRegionSelected = QtCore.Signal(object, object)
     #: A double-click anywhere in the panel: go back to following the recorder.
     sigViewReset = QtCore.Signal()
+    #: A time picked with the left button while ``cursor_mode`` is on, in
+    #: data coordinates.  Emitted on a click and continuously through a drag,
+    #: so a cursor can be dropped or dragged into place with one gesture.
+    sigPointPicked = QtCore.Signal(float)
 
     #: A drag shorter than this, either way, is not a rectangle.  In pixels,
     #: because that is the unit of the wobble it is there to reject.
@@ -199,6 +235,13 @@ class ZoomViewBox(pg.ViewBox):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
+        #: While True the left button places a region cursor instead of
+        #: drawing a zoom rectangle.  Two gestures cannot share one button,
+        #: and the cursors are the ones that need a *click* -- so the drag is
+        #: what gives way, and only while the cursors are on screen.  The
+        #: wheel, Shift-drag and the X/Y buttons still zoom throughout, so no
+        #: view is unreachable with the cursors up.
+        self.cursor_mode = False
         self._band = QtWidgets.QGraphicsRectItem()
         # Width 0 keeps the pen cosmetic: the item lives in data coordinates,
         # where one x unit is a second and a scaled pen would be a smear.
@@ -215,6 +258,12 @@ class ZoomViewBox(pg.ViewBox):
             super().mouseDragEvent(ev, axis=axis)
             return
         ev.accept()
+        if self.cursor_mode:
+            # No threshold and no band: a cursor follows the pointer from the
+            # first pixel, because dragging one is how it gets put somewhere
+            # exact and a dead zone at the start would fight that.
+            self.sigPointPicked.emit(float(self.mapToView(ev.pos()).x()))
+            return
         down, here = ev.buttonDownPos(), ev.pos()
         # The threshold is judged in pixels, on the way in; what comes back out
         # is in data coordinates, where one x unit is a second.
@@ -236,6 +285,11 @@ class ZoomViewBox(pg.ViewBox):
             ev.accept()
             self.sigViewReset.emit()
             return
+        if (self.cursor_mode
+                and ev.button() == QtCore.Qt.MouseButton.LeftButton):
+            ev.accept()
+            self.sigPointPicked.emit(float(self.mapToView(ev.pos()).x()))
+            return
         super().mouseClickEvent(ev)   # the right-click menu still belongs here
 
     def _show_band(self, x, y) -> None:
@@ -255,6 +309,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         refresh_ms: int = 1000,
         max_points: int = 200_000,
         gap_factor: float = GAP_FACTOR,
+        max_kelvin: float = COMFORT_STOP_K[1],
+        max_percent: float = COMFORT_STOP_PCT[1],
         config_label: str = "",
     ) -> None:
         super().__init__()
@@ -265,9 +321,20 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: How many sample intervals a step has to exceed before the trace is
         #: drawn with a gap there instead of a line.  See `connect_flags`.
         self.gap_factor = gap_factor
+        #: Where each panel's value axis stops when the data does not ask for
+        #: more, keyed by unit.  Widened to whatever is drawn, never narrowed
+        #: to it -- see :meth:`_apply_comfort_stops`.
+        self._comfort = {
+            "K": (COMFORT_STOP_K[0], float(max_kelvin)),
+            "%": (COMFORT_STOP_PCT[0], float(max_percent)),
+        }
         self.config_label = config_label
 
         self.curves: dict[str, pg.PlotDataItem] = {}
+        #: Which panel each curve is on, by unit.  Decided once, when the
+        #: column is adopted, because `classify_column` is the only thing
+        #: entitled to an opinion about it and it should not be asked twice.
+        self.curve_units: dict[str, str] = {}
         self.toggles: dict[str, QtWidgets.QCheckBox] = {}
         self._pending: tuple[str, float] | None = None   # (command id, deadline)
         #: ``(aux name, value)`` of the readback that would confirm the last
@@ -293,12 +360,30 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: none of them should each cost a file scan.
         self._loaded_span: tuple[float, float] | None = None
         self._armed_span: tuple[float, float] | None = None
-        #: The live-referenced window currently shown, in seconds, or None for
-        #: "All".  While it is set the x axis is not hand-picked: each redraw
-        #: shows the newest sample minus this many seconds, so it rides
-        #: forward with the recorder.  A drag supersedes it; its button
-        #: reselects it.
-        self._follow_span_s: float | None = None
+        #: The live-referenced window currently shown, in seconds.  Always a
+        #: number: every live view is the last N hours of something, and there
+        #: is no "everything held" state for it to be absent for.  While the
+        #: view is following, each redraw shows the newest sample minus this
+        #: many seconds, so the window rides forward with the recorder.  A
+        #: drag supersedes it -- ``_span`` then decides -- and it is kept
+        #: through that, because it is what a double-click comes back to.
+        self._follow_span_s: float = DEFAULT_VIEW_WINDOW_S
+        #: The two region cursors, as times in epoch seconds, or None while
+        #: no region is picked.  Unordered as stored -- the operator may drag
+        #: one past the other -- and sorted wherever a span is wanted.
+        self._cursors: tuple[float, float] | None = None
+        #: What the last statistics pass was computed from: the region, and
+        #: how many rows the tail held when it ran.  Recomputing a region that
+        #: cannot have changed would be a scan of every log in the directory
+        #: once a second.  See `_update_region_stats`.
+        self._stats_key: tuple | None = None
+        self._stats_read_at = 0.0
+        #: The statistics themselves, by panel unit then column name, so the
+        #: export writes exactly the region the panel is describing.
+        self._stats: dict[str, dict] = {}
+        #: The newest value drawn for each trace, which is what the legend
+        #: shows while no region is picked.
+        self._live_values: dict[str, float] = {}
 
         self.setWindowTitle("lschart — strip chart")
         self.resize(1280, 800)
@@ -361,21 +446,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         view_row = QtWidgets.QHBoxLayout()
         view_row.addWidget(QtWidgets.QLabel("View"))
         # Live-referenced windows: the last N hours, riding forward with the
-        # recorder.  "All" is the one that is not referenced to anything but
-        # what this viewer happens to hold.
-        self.live_button = QtWidgets.QPushButton("All")
-        self.live_button.setCheckable(True)
-        self.live_button.setChecked(True)
-        self.live_button.setToolTip(
-            "everything this viewer holds (the backfill covers only about "
-            "two days; older spans are fetched from disk when you zoom to "
-            "them)")
-        self.live_button.clicked.connect(self._follow_live)
-        view_row.addWidget(self.live_button, 0)
+        # recorder.  Every one of them is a fixed extent ending at the newest
+        # sample, which is what makes two viewers side by side comparable.
         self.span_buttons: dict[float, QtWidgets.QPushButton] = {}
         for label, seconds in VIEW_WINDOWS:
             button = QtWidgets.QPushButton(label)
             button.setCheckable(True)
+            button.setChecked(seconds == self._follow_span_s)
             button.setToolTip(f"the last {label}, following the recorder")
             button.clicked.connect(
                 lambda _checked=False, s=seconds: self._follow_window(s))
@@ -407,6 +484,36 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.zoom_buttons[label] = button
         zoom_row.addStretch(1)
         box.addLayout(zoom_row)
+
+        # Two cursors and what is between them.  A separate row from the view
+        # and zoom rows because it answers a different question: those choose
+        # what is on screen, this measures a piece of it.
+        cursor_row = QtWidgets.QHBoxLayout()
+        self.cursor_button = QtWidgets.QPushButton("Cursors")
+        self.cursor_button.setCheckable(True)
+        self.cursor_button.setToolTip(
+            "Two vertical cursors, and the mean, spread and change of every "
+            "trace between them.\n"
+            "Left-click or drag on a panel moves the nearer one. While they "
+            "are up the left button places cursors instead of drawing a zoom "
+            "rectangle; the wheel, Shift-drag and the X/Y buttons still zoom.")
+        self.cursor_button.clicked.connect(self._toggle_cursors)
+        cursor_row.addWidget(self.cursor_button, 0)
+
+        self.export_button = QtWidgets.QPushButton("Export region…")
+        self.export_button.setEnabled(False)
+        self.export_button.setToolTip(
+            "Write the samples between the cursors to a CSV, at full "
+            "resolution — not the thinned overview the chart draws.")
+        self.export_button.clicked.connect(self._export_region)
+        cursor_row.addWidget(self.export_button, 0)
+        cursor_row.addStretch(1)
+        box.addLayout(cursor_row)
+
+        self.export_note = QtWidgets.QLabel("")
+        self.export_note.setWordWrap(True)
+        self.export_note.setStyleSheet("color:#37474f;")
+        box.addWidget(self.export_note)
 
         traces = QtWidgets.QGroupBox("Traces")
         self.traces_layout = QtWidgets.QVBoxLayout(traces)
@@ -571,6 +678,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.pct_plot = layout.addPlot(row=1, col=0, viewBox=ZoomViewBox())
         self.pct_plot.setLabel("left", "Output", units="%")
         self.pct_plot.showGrid(x=True, y=True, alpha=0.25)
+        # A legend on this panel too, because with no cursors set the legend
+        # is where the live value is written, and a heater percent is a
+        # number people read off the chart as often as a temperature.
+        self.pct_plot.addLegend(offset=(-10, 10))
         self.pct_plot.setAxisItems({"bottom": pg.DateAxisItem()})
         # One pan or zoom moves both: comparing a heater step against the
         # temperature it caused is the whole reason there are two panels.
@@ -581,6 +692,56 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: value axis it picked is not.
         self._panels = {"K": self.k_plot, "%": self.pct_plot}
 
+        # The cursors: two per panel, x-linked by being drawn on both, plus
+        # the shading between them.  Not `LinearRegionItem`, whose own drag
+        # handles would be a third gesture on the left button.
+        self._cursor_lines: dict[str, list] = {}
+        self._cursor_shades: dict[str, object] = {}
+        self._stat_labels: dict[str, pg.TextItem] = {}
+        for unit, plot in self._panels.items():
+            shade = pg.LinearRegionItem(
+                values=(0, 0), movable=False,
+                brush=pg.mkBrush(55, 71, 79, 28), pen=pg.mkPen(None))
+            shade.setZValue(-1e9)        # behind the traces, not over them
+            shade.hide()
+            plot.addItem(shade, ignoreBounds=True)
+            self._cursor_shades[unit] = shade
+            lines = []
+            for _ in range(2):
+                line = pg.InfiniteLine(
+                    angle=90, movable=False,
+                    pen=pg.mkPen(CURSOR_COLOR, width=1,
+                                 style=QtCore.Qt.PenStyle.DashLine))
+                line.setZValue(1e8)
+                line.hide()
+                plot.addItem(line, ignoreBounds=True)
+                lines.append(line)
+            self._cursor_lines[unit] = lines
+
+            # The statistics panel.  Parented to the view box rather than
+            # placed in data coordinates, so it stays in the corner of the
+            # panel through every pan and zoom instead of sliding off it.
+            label = pg.TextItem(anchor=(0, 0), color="#263238",
+                                fill=pg.mkBrush(255, 255, 255, 225),
+                                border=pg.mkPen("#b0bec5"))
+            label.setParentItem(plot.getViewBox())
+            label.setPos(10, 10)
+            label.setZValue(1e9)
+            label.hide()
+            self._stat_labels[unit] = label
+
+        #: What the pointer is hovering, named where the pointer is.  In data
+        #: coordinates on purpose: it belongs to the sample it is identifying,
+        #: not to a corner of the panel.
+        self._hover_labels: dict[str, pg.TextItem] = {}
+        for unit, plot in self._panels.items():
+            hover = pg.TextItem(anchor=(0, 1), color="#ffffff",
+                                fill=pg.mkBrush(38, 50, 56, 220))
+            hover.setZValue(1e9)
+            hover.hide()
+            plot.addItem(hover, ignoreBounds=True)
+            self._hover_labels[unit] = hover
+
         # Either panel may be dragged; both mean the same time window, and the
         # link carries it to the other one.
         for unit, plot in self._panels.items():
@@ -588,6 +749,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             vb.sigRegionSelected.connect(
                 lambda x, y, u=unit: self._select_region(u, x, y))
             vb.sigViewReset.connect(self._follow_live)
+            vb.sigPointPicked.connect(self._place_cursor)
             # A value axis can also be moved by the wheel or a Shift-drag, and
             # then it is just as fixed as one that was dragged out; noticing
             # here is what keeps the Live button honest about it.
@@ -597,6 +759,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # Shift-drag, the linked panel -- arrives here, so there is one place
         # that decides what the window is and what data belongs in it.
         self.k_plot.sigXRangeChanged.connect(self._x_range_changed)
+
+        # Rate-limited: sigMouseMoved fires per pixel of pointer travel, and
+        # every one of them would otherwise cost an interpolation across
+        # every trace on the panel.
+        self._hover_proxy = pg.SignalProxy(
+            layout.scene().sigMouseMoved, rateLimit=30, slot=self._on_hover)
 
         layout.ci.layout.setRowStretchFactor(0, 3)
         layout.ci.layout.setRowStretchFactor(1, 1)
@@ -637,6 +805,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
                     self.tail.prepare_span(*self._span)
                     self._loaded_span = self._span
                     self._redraw()
+            self._update_region_stats()
             self._update_statusbar()
         except Exception:  # noqa: BLE001 - a drawing bug must not stop the viewer
             log.exception("refresh failed; the viewer continues")
@@ -959,7 +1128,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 f"window {stamp(int(t0)).toString('HH:mm:ss')}–"
                 f"{stamp(int(t1)).toString('HH:mm:ss')} "
                 f"({_duration(t1 - t0)}) · not following")
-        elif self._follow_span_s is not None:
+        else:
             bits.append(f"last {_duration(self._follow_span_s)} · live")
         for unit, fixed in self._ylim.items():
             if fixed is not None:
@@ -983,6 +1152,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             colour = CURVE_COLORS[len(self.curves) % len(CURVE_COLORS)]
             curve = plot.plot([], [], pen=pg.mkPen(colour, width=2), name=name)
             self.curves[name] = curve
+            self.curve_units[name] = "K" if kind == "kelvin" else "%"
 
             check = QtWidgets.QCheckBox(name)
             check.setChecked(True)
@@ -992,19 +1162,19 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.traces_layout.insertWidget(self.traces_layout.count() - 1, check)
 
     def _redraw(self) -> None:
+        #: The extent of what each panel is actually showing, so the comfort
+        #: stop can widen to a reading that lies outside it.
+        extents: dict[str, tuple[float, float] | None] = {
+            unit: None for unit in self._panels
+        }
         for name, curve in self.curves.items():
             if not self.toggles[name].isChecked():
                 curve.setData([], [])
                 continue
             if self._span is None:
-                if self._follow_span_s is None:
-                    # All: everything the logs have given this viewer,
-                    # thinned to max_points per trace at worst.
-                    t, v = self.tail.everything(name)
-                else:
-                    # A live-referenced window: the newest sample is the
-                    # right edge, and each redraw rides forward with it.
-                    t, v = self.tail.recent(name, self._follow_span_s)
+                # A live-referenced window: the newest sample is the right
+                # edge, and each redraw rides forward with it.
+                t, v = self.tail.recent(name, self._follow_span_s)
             else:
                 # Exactly the visible span, so a panel still autoscaling fits
                 # itself to what is on screen: zoom into a five-minute wobble
@@ -1020,6 +1190,264 @@ class ViewerWindow(QtWidgets.QMainWindow):
             # straight line across an outage the cryostat did not spend at
             # some convenient interpolated temperature.
             curve.setData(t, v, connect=connect_flags(t, factor=self.gap_factor))
+            if v:
+                self._live_values[name] = float(v[-1])
+                unit = self.curve_units[name]
+                seen = extents[unit]
+                lo, hi = min(v), max(v)
+                extents[unit] = (lo, hi) if seen is None else (
+                    min(seen[0], lo), max(seen[1], hi))
+        self._apply_comfort_stops(extents)
+
+    def _apply_comfort_stops(self, extents: dict) -> None:
+        """Hold each value axis inside its comfort stop, or inside the data.
+
+        A stop and not a clamp.  Panning a 300 K axis out to 10 000 K is a
+        gesture nobody meant to make and a chart nobody can read, so the axis
+        resists it -- but a sensor that has come loose and reads 1400 K is
+        exactly the measurement somebody has to be able to look at, and an
+        axis that refused to go there would be hiding the reading in favour of
+        a number this file guessed.  So the stop is the wider of the two: the
+        configured window, or everything on the panel.
+
+        Only the value axis.  Time has no comfortable extent -- a log runs for
+        as long as it runs -- and a stop on it would fight the drag that is
+        the whole point of the chart.
+        """
+        for unit, plot in self._panels.items():
+            floor, ceiling = self._comfort[unit]
+            seen = extents.get(unit)
+            if seen is not None:
+                # A margin so a reading sitting exactly on the stop is not
+                # pinned against the edge of the panel by it.
+                pad = 0.05 * max(seen[1] - seen[0], 1e-9)
+                floor = min(floor, seen[0] - pad)
+                ceiling = max(ceiling, seen[1] + pad)
+            plot.getViewBox().setLimits(yMin=floor, yMax=ceiling)
+
+    # -- the cursors, what is between them, and what is under the pointer ---
+    #
+    # Two questions a strip chart gets asked that the trace alone cannot
+    # answer: "what did it do between there and there", and "which of these
+    # lines is that".  Both are measurements of the log rather than of the
+    # picture, which is why the arithmetic is in `source` and not here -- and
+    # why the statistics come from `samples_in`, at whatever resolution the
+    # files hold, and never from the decimated overview the chart draws.
+
+    def _toggle_cursors(self, checked: bool) -> None:
+        """Put the two cursors on screen, or take them off again.
+
+        They arrive at the thirds of the window rather than nowhere: a pair
+        of cursors that has to be placed twice before it measures anything is
+        a pair of cursors most people put away again.  From there each click
+        moves whichever is nearer.
+        """
+        for plot in self._panels.values():
+            plot.getViewBox().cursor_mode = bool(checked)
+        if not checked:
+            self._cursors = None
+        else:
+            x0, x1 = self.k_plot.getViewBox().viewRange()[0]
+            width = x1 - x0
+            self._cursors = (x0 + width / 3.0, x0 + 2.0 * width / 3.0)
+        self.export_note.setText("")
+        self._sync_cursor_items()
+        self._update_region_stats()
+
+    def _place_cursor(self, x: float) -> None:
+        """A click or drag on a panel: move the cursor nearer to it.
+
+        Nearer, rather than alternating.  Alternating means the operator has
+        to remember which one moved last, and gets the wrong edge half the
+        time; nearest is the rule the pointer already implies.
+        """
+        if self._cursors is None:
+            return
+        a, b = self._cursors
+        self._cursors = (x, b) if abs(x - a) <= abs(x - b) else (a, x)
+        self._sync_cursor_items()
+        self._update_region_stats()
+
+    def _sync_cursor_items(self) -> None:
+        """Put the drawn cursors where ``_cursors`` says, on both panels."""
+        for unit in self._panels:
+            lines = self._cursor_lines[unit]
+            shade = self._cursor_shades[unit]
+            if self._cursors is None:
+                for line in lines:
+                    line.hide()
+                shade.hide()
+                continue
+            for line, x in zip(lines, self._cursors):
+                line.setPos(x)
+                line.show()
+            shade.setRegion(tuple(sorted(self._cursors)))
+            shade.show()
+
+    def _update_region_stats(self) -> None:
+        """Measure the region between the cursors, and say what it measured.
+
+        Recomputed only when it can have changed.  A region that lies wholly
+        in the past cannot: nothing the recorder does now alters what
+        happened between two past instants, so it is measured once and left.
+        A region whose right-hand cursor sits beyond the newest sample is
+        still filling, and is re-measured as rows arrive -- but no more often
+        than ``STATS_RELOAD_S`` once decimation has started, because from
+        then on the answer costs a scan of every log in the directory rather
+        than a slice of memory.
+        """
+        if self._cursors is None:
+            for label in self._stat_labels.values():
+                label.hide()
+            self._stats = {}
+            self._stats_key = None
+            self.export_button.setEnabled(False)
+            self._update_legend()
+            return
+
+        t0, t1 = sorted(self._cursors)
+        newest = self.tail.newest()
+        growing = newest is None or newest < t1
+        key = (t0, t1, self.tail.rows if growing else None)
+        if key == self._stats_key:
+            return
+        now = time.monotonic()
+        if (growing and self.tail.thinned and self._stats_key is not None
+                and now - self._stats_read_at < STATS_RELOAD_S):
+            return
+
+        samples = self.tail.samples_in(t0, t1)
+        self._stats_read_at = now
+        self._stats_key = key
+        stats = region_stats(samples)
+
+        self._stats = {}
+        for unit in self._panels:
+            rows = []
+            for name in self.curves:
+                if self.curve_units[name] != unit:
+                    continue
+                if not self.toggles[name].isChecked():
+                    continue
+                st = stats.get(name)
+                if st is None:
+                    continue
+                self._stats.setdefault(unit, {})[name] = st
+                rows.append(
+                    f"{name}   mean {st.mean:.3f}   sd {st.std:.3f}   "
+                    f"Δ {st.delta:+.3f}   (n={st.n})"
+                )
+            label = self._stat_labels[unit]
+            if not rows:
+                label.hide()
+                continue
+            # Δt once, in the header, because it is a property of the region
+            # and not of any one trace.
+            label.setText("\n".join([f"Δt {_duration(t1 - t0)}", *rows]))
+            label.show()
+        self.export_button.setEnabled(bool(samples))
+        self._update_legend()
+
+    def _update_legend(self) -> None:
+        """The legend carries the live value -- but only while nothing is picked.
+
+        With cursors up the statistics panel is the answer to "what is this
+        trace doing", and a second number a few pixels away, measured over a
+        different span, is how two readings of the same trace come to
+        disagree on screen.  So the legend goes back to being names.
+        """
+        picked = self._cursors is not None
+        for name, curve in self.curves.items():
+            legend = self._panels[self.curve_units[name]].legend
+            if legend is None:
+                continue
+            label = legend.getLabel(curve)
+            if label is None:
+                continue
+            value = self._live_values.get(name)
+            text = name if (picked or value is None) else f"{name}   {value:.3f}"
+            if getattr(label, "text", None) != text:
+                label.setText(text)
+
+    def _on_hover(self, event) -> None:
+        """Name the trace under the pointer, and read it there.
+
+        Interpolated at the pointer's time rather than snapped to the nearest
+        sample: on a decimated overview the nearest sample can be minutes
+        away, and a number that far from where the pointer is pointing is a
+        different reading.
+
+        On a signal rather than the timer, so it must not raise: an exception
+        out of a Qt slot takes the event loop with it.
+        """
+        try:
+            pos = event[0] if isinstance(event, (tuple, list)) else event
+            for unit, plot in self._panels.items():
+                vb = plot.getViewBox()
+                label = self._hover_labels[unit]
+                if not vb.sceneBoundingRect().contains(pos):
+                    label.hide()
+                    continue
+                point = vb.mapSceneToView(pos)
+                x, y = float(point.x()), float(point.y())
+                traces = {}
+                for name, curve in self.curves.items():
+                    if self.curve_units[name] != unit:
+                        continue
+                    if not self.toggles[name].isChecked():
+                        continue
+                    t, v = curve.getData()
+                    if t is None or len(t) == 0:
+                        continue
+                    traces[name] = (t, v)
+                _, y_per_px = vb.viewPixelSize()
+                hit = nearest_series(
+                    traces, x, y,
+                    tolerance=HOVER_TOLERANCE_PX * abs(y_per_px),
+                )
+                if hit is None:
+                    label.hide()
+                    continue
+                name, value = hit
+                label.setText(f"{name}  {value:.3f} {unit}")
+                label.setPos(x, value)
+                label.show()
+        except Exception:  # noqa: BLE001 - a hover must not stop the viewer
+            log.debug("hover readout failed", exc_info=True)
+
+    def _export_region(self) -> None:
+        """Write the cursor region out as a CSV, at full resolution.
+
+        Every column the log carries, not only the traces that happen to be
+        ticked: the region is a piece of the recording, and what somebody
+        wants out of it a week later is not necessarily what was on screen
+        when they picked it.
+        """
+        if self._cursors is None:
+            return
+        t0, t1 = sorted(self._cursors)
+        stamp = QtCore.QDateTime.fromSecsSinceEpoch(int(t0)).toString(
+            "yyyyMMdd-HHmmss")
+        folder = os.path.dirname(self.tail.path or "") or os.getcwd()
+        chosen, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export the cursor region",
+            os.path.join(folder, f"region_{stamp}.csv"),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not chosen:
+            return
+        try:
+            samples = self.tail.samples_in(t0, t1)
+            rows = write_region_csv(chosen, samples,
+                                    columns=self.tail.columns())
+        except OSError as exc:
+            self.export_note.setText(f"could not write {chosen}: {exc}")
+            self.export_note.setStyleSheet("color:#b71c1c;")
+            return
+        self.export_note.setText(
+            f"wrote {rows} row(s) over {_duration(t1 - t0)} to "
+            f"{os.path.basename(chosen)}")
+        self.export_note.setStyleSheet("color:#1b5e20;")
 
     # -- choosing the window with the mouse --------------------------------
 
@@ -1093,14 +1521,20 @@ class ViewerWindow(QtWidgets.QMainWindow):
         return self._span is None and not any(self._ylim.values())
 
     def _follow_live(self, *_ignored) -> None:
-        """The `All` button, or a double-click: show everything held."""
-        self._set_follow(None)
+        """A double-click: back to following the recorder.
+
+        Back to *the window that was showing*, not to some canonical one.  A
+        double-click is how a hand-picked span is abandoned, and abandoning it
+        should return the chart to what it was before the drag rather than
+        also silently rescaling the time axis to a day.
+        """
+        self._set_follow(self._follow_span_s)
 
     def _follow_window(self, seconds: float) -> None:
         """A live-referenced window button: the last ``seconds``, riding."""
         self._set_follow(seconds)
 
-    def _set_follow(self, seconds: float | None) -> None:
+    def _set_follow(self, seconds: float) -> None:
         """Enter a live-referenced view and drop every hand-picked axis."""
         self._span = None
         self._armed_span = None
@@ -1126,7 +1560,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
         view.
         """
         following = self._span is None
-        self.live_button.setChecked(following and self._follow_span_s is None)
         for seconds, button in self.span_buttons.items():
             button.setChecked(following and seconds == self._follow_span_s)
 

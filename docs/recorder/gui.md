@@ -18,6 +18,8 @@ pip install -e ".[gui]"      # pyqtgraph + PySide6
 | `--refresh S` | redraw cadence, default 1.0 |
 | `--max-points N` | default 200,000 |
 | `--gap-factor N` | how many sample intervals a hole must exceed to be drawn as a gap, default 4 |
+| `--max-kelvin N` | where the temperature panel stops panning and zooming outward, default 450 |
+| `--max-percent N` | the same stop for the output panel, default 100 |
 | `--read-only` | open with no command spool at all, so the whole control panel is dead |
 | `--log-level` | |
 
@@ -52,10 +54,16 @@ viewer down:
   logs on disk at full resolution — whether or not that day was ever
   backfilled.
 
-The `View` row holds live-referenced windows — **6 h, 12 h, 24 h, 48 h** —
-whose right edge is always the newest sample, riding forward with the
-recorder, plus **All**, which shows everything this viewer happens to hold.
-A drag supersedes any of them; clicking one again is the way back.
+The `View` row holds live-referenced windows and nothing else — **6 h, 12 h,
+24 h, 48 h**, opening on 24 h — whose right edge is always the newest sample,
+riding forward with the recorder. A drag supersedes any of them; clicking one
+again is the way back, and a double-click returns to whichever was showing.
+
+There is deliberately no "everything" button. A window meaning "whatever this
+viewer happens to hold" is a different span on a viewer opened an hour ago and
+one left up since Tuesday, and it grows silently under whoever is reading it.
+Scrolling back to find an older run is acceptable; a view whose extent is an
+accident of process uptime is not.
 
 Memory stays bounded by `--max-points`: past the cap a trace is decimated
 (every other sample dropped) rather than truncated, so old days lose
@@ -169,7 +177,7 @@ steps without redrawing a rectangle to do it.
 
 | Gesture | |
 |---|---|
-| **left-drag** | zoom to exactly that rectangle |
+| **left-drag** | zoom to exactly that rectangle — *or* place a cursor, while the cursors are up |
 | **X+ X− Y+ Y−** | zoom one axis at a time about its middle |
 | **wheel** | zoom about the cursor |
 | **shift-drag**, or middle-drag | pan |
@@ -187,11 +195,21 @@ A hand-picked view **stops following the recorder**: new samples land off the
 right-hand edge, which is what a fixed window means, and a fixed value axis
 will not open up for an excursion that leaves it. While a span is picked the
 status bar names it and says `not following`, no view button is checked, and
-`All`, a double-click, or any view button returns to a live-referenced view —
-all axes at once.
+a double-click or any view button returns to a live-referenced view — all axes
+at once.
 
 A value axis moved by the **wheel** or a shift-drag counts as hand-picked too;
-it is just as fixed as one dragged out, and the `Live` button says so.
+it is just as fixed as one dragged out, and the status bar says so.
+
+### The value axis has a comfort stop
+
+Zoom and pan on a value axis stop at **0–450 K** and **0–100 %** — *unless the
+data goes outside them*, in which case the stop widens to the data. A 300 K
+axis panned out to 10 000 K is a chart nobody can read; a sensor that has come
+loose and reads 1400 K is a chart somebody has to be able to read, and an axis
+that refused to go there would be hiding the measurement in favour of a number
+the viewer guessed. `--max-kelvin` and `--max-percent` move the stop. The time
+axis has none: a log runs for as long as it runs.
 
 The time window is not just a view change: the curves are refed with exactly
 the samples in the span (plus one either side, so a trace crossing the edge is
@@ -212,6 +230,58 @@ the recorder wrote. The overview you see for that first tick is thinned; the
 disk read costs nothing during a gesture because it waits for the span to
 stop moving.
 
+## Measuring a region: the cursors
+
+`Cursors` puts two vertical lines on both panels, at the thirds of the window.
+Left-click or drag on either panel moves **whichever is nearer** to the
+pointer — nearest rather than alternating, because alternating means
+remembering which one moved last and getting the wrong edge half the time.
+
+Between them, an in-plot panel reports **per trace: mean, standard deviation
+and Δvalue**, and **once for the region, Δtime**.
+
+Three things worth knowing about those numbers:
+
+- **they come from full-resolution samples, never from what is drawn.** The
+  chart decimates; a mean over every other sample is a different number. The
+  samples come from memory while nothing has been thinned and from the logs
+  once something has, which is `CsvTail.samples_in`;
+- **Δvalue is last minus first, not max minus min.** A trace that wandered out
+  and came back moved nowhere, and the standard deviation beside it is what
+  says it wandered;
+- **a region in the past is measured once.** Nothing the recorder does now
+  changes what happened between two past instants. A region whose right-hand
+  cursor sits past the newest sample is still filling and is re-measured as
+  rows arrive.
+
+While the cursors are up **the left button places them instead of drawing a
+zoom rectangle** — two gestures cannot share one button. The wheel, shift-drag
+and the `X±` / `Y±` buttons still zoom throughout, so no view is unreachable
+with the cursors on screen.
+
+With **no** cursors set, the legend on each panel carries the **live value** of
+its traces. With cursors up it goes back to being names: a second number a few
+pixels from the statistics panel, measured over a different span, is how a
+chart comes to disagree with itself.
+
+## Naming the trace under the pointer
+
+Hovering names the nearest trace and gives its value there, on both panels, to
+3 dp. Interpolated at the pointer's time rather than snapped to the nearest
+sample — on a decimated overview the nearest sample can be minutes away, and a
+number that far from where the pointer is pointing is a different reading.
+Independent of the cursors; it works whether they are up or not.
+
+## Exporting a region
+
+`Export region…` writes the samples between the cursors to a CSV, at full
+resolution, in the recorder's own shape — `Timestamp`, `Time`, then one column
+per channel. **Every column the log carries**, not only the traces that happen
+to be ticked: what somebody wants out of a region a week later is not
+necessarily what was on screen when they picked it. A column with no sample at
+some timestamp is left empty, which is what the recorder writes for a channel
+that failed a cycle.
+
 ## What it deliberately does not do
 
 Omissions, not oversights:
@@ -221,9 +291,7 @@ Omissions, not oversights:
   limiting is control policy and belongs to the supervisor; a second set of
   limits in the viewer is a second set of limits that can disagree;
 - **no annotation of the log** from the viewer;
-- **no cursor readout.** A pyqtgraph one-liner if it turns out to be wanted;
-- **no export of the selected span.** Picking a window is a way to look, not a
-  way to cut the log; the CSV is the log.
+- **no "everything held" view button** — see above.
 
 ## Running it headless
 
