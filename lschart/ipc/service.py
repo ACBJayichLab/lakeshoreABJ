@@ -108,6 +108,7 @@ class IpcService:
         accept_commands: bool = False,
         allow_heater_range: bool = False,
         allow_analog_output: bool = False,
+        allow_pid: bool = False,
         sources: dict | None = None,
         sources_path: str | None = None,
         max_commands_per_cycle: int = 4,
@@ -122,6 +123,7 @@ class IpcService:
         self.accept_commands = accept_commands
         self.allow_heater_range = allow_heater_range
         self.allow_analog_output = allow_analog_output
+        self.allow_pid = allow_pid
         self.sources = SourcePolicy(sources, overlay_path=sources_path)
         self.max_commands_per_cycle = max(1, int(max_commands_per_cycle))
         self.interval_s = interval_s
@@ -152,11 +154,13 @@ class IpcService:
                         if getattr(i, "allow_writes", False)]
             log.warning(
                 "IPC: status -> %s; accepting commands from %s "
-                "(writable instruments: %s; heater range %s; analog output %s)",
+                "(writable instruments: %s; heater range %s; analog output %s; "
+                "PID %s)",
                 self.writer.path, self.spool.directory,
                 ", ".join(writable) or "NONE -- every command will be refused",
                 "ALLOWED" if self.allow_heater_range else "refused",
                 "ALLOWED" if self.allow_analog_output else "refused",
+                "ALLOWED" if self.allow_pid else "refused",
             )
             if not self.sources.unconfigured:
                 log.warning("IPC: source policy: %s (default %s)",
@@ -383,6 +387,38 @@ class IpcService:
                 f"{inst.name} analog output {inst.analog.output} -> "
                 f"{percent:.3f}% (NOT verified)")
 
+    def _do_pid(self, cmd: Command) -> str:
+        """Retune a loop.  Gated on its own, and not because it applies power.
+
+        It does not: a loop with range 0 stays inert however it is tuned, so
+        this is not a third power gate.  It is gated because gains are a
+        different *kind* of act from a setpoint.  A setpoint moves the cryostat
+        somewhere and you can watch it go; gains change how it gets anywhere at
+        all, and a badly-tuned loop misbehaves quietly for the rest of the run
+        rather than visibly at the moment of the command.  Somebody who wants a
+        remote client to be able to move a setpoint has not thereby said they
+        want it retuning the loop.
+
+        All three gains are required together.  ``PID`` is one command on the
+        instrument and the driver verifies all three by readback; accepting one
+        of them would mean reading the other two back and re-sending them,
+        which is a read-modify-write against a box somebody else may be
+        touching.
+        """
+        inst = self._target(cmd)
+        if not self.allow_pid:
+            raise CommandError(
+                "retuning a loop is not accepted from a file on this recorder; "
+                "set ipc.allow_pid: true if a remote client really should be "
+                "able to change P, I and D"
+            )
+        loop = _as_int(cmd.args, "loop", required=False, default=1)
+        p = _as_float(cmd.args, "p")
+        i = _as_float(cmd.args, "i")
+        d = _as_float(cmd.args, "d")
+        inst.set_pid(loop, p, i, d)
+        return f"{inst.name} loop {loop} PID -> {p:.1f}, {i:.1f}, {d:.1f} (verified)"
+
     def _do_heaters_off(self, cmd: Command) -> str:
         """The panic button.  Always available: lowering power is the safe direction.
 
@@ -430,6 +466,7 @@ class IpcService:
             "ttl_s": self.spool.ttl_s,
             "allow_heater_range": bool(self.allow_heater_range),
             "allow_analog_output": bool(self.allow_analog_output),
+            "allow_pid": bool(self.allow_pid),
             # An array of uniform objects, never an object keyed by source
             # name: `lschart-cli` would reach MATLAB as `lschart_cli`.
             "sources": self.sources.as_status(),

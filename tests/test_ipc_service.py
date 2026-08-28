@@ -503,3 +503,69 @@ def test_heaters_off_says_so_when_there_is_nothing_it_may_turn_off(tmp_path):
     cid = svc.spool.submit("heaters_off")
     result = ack(tick(svc), cid)
     assert result["ok"] is False and "writable" in result["message"]
+
+
+# -- retuning a loop ---------------------------------------------------------
+#
+# Its own gate, and not because it applies power: a loop with range 0 stays
+# inert however it is tuned.  It is gated because gains are a different kind of
+# act -- a setpoint moves the cryostat somewhere and you watch it go, gains
+# change how it gets anywhere at all, quietly, for the rest of the run.
+
+
+def test_retuning_a_loop_is_refused_by_default(tmp_path):
+    inst = instrument()
+    before = inst.pid(1)
+    svc = service(tmp_path, inst)
+    cid = svc.spool.submit("pid", loop=1, p=50.0, i=20.0, d=0.0)
+    entry = ack(tick(svc), cid)
+    assert not entry["ok"]
+    assert "ipc.allow_pid" in entry["message"]
+    assert inst.pid(1) == before
+
+
+def test_retuning_a_loop_works_once_it_is_allowed(tmp_path):
+    inst = instrument()
+    svc = service(tmp_path, inst, allow_pid=True)
+    cid = svc.spool.submit("pid", loop=1, p=123.0, i=45.0, d=6.0)
+    assert ack(tick(svc), cid)["ok"]
+    assert inst.pid(1) == pytest.approx((123.0, 45.0, 6.0), abs=0.05)
+
+
+def test_the_pid_gate_does_not_open_a_power_gate(tmp_path):
+    """Six gates, and each of them means one thing."""
+    svc = service(tmp_path, allow_pid=True)
+    cid = svc.spool.submit("range", output=1, value=2)
+    assert "ipc.allow_heater_range" in ack(tick(svc), cid)["message"]
+
+
+def test_a_power_gate_does_not_open_the_pid_one(tmp_path):
+    svc = service(tmp_path, allow_heater_range=True, allow_analog_output=True)
+    cid = svc.spool.submit("pid", loop=1, p=50.0, i=20.0, d=0.0)
+    assert "ipc.allow_pid" in ack(tick(svc), cid)["message"]
+
+
+def test_all_three_gains_are_required_together(tmp_path):
+    """One of them would mean reading the other two back and re-sending them."""
+    svc = service(tmp_path, allow_pid=True)
+    cid = svc.spool.submit("pid", loop=1, p=50.0)
+    entry = ack(tick(svc), cid)
+    assert not entry["ok"] and "'i'" in entry["message"]
+
+
+def test_retuning_a_read_only_instrument_is_refused(tmp_path):
+    svc = service(tmp_path, instrument(allow_writes=False), allow_pid=True)
+    cid = svc.spool.submit("pid", loop=1, p=50.0, i=20.0, d=0.0)
+    entry = ack(tick(svc), cid)
+    assert not entry["ok"] and "allow_writes" in entry["message"]
+
+
+def test_a_bad_loop_number_is_refused_by_the_driver_for_pid_too(tmp_path):
+    svc = service(tmp_path, allow_pid=True)
+    cid = svc.spool.submit("pid", loop=9, p=50.0, i=20.0, d=0.0)
+    assert not ack(tick(svc), cid)["ok"]
+
+
+def test_the_status_file_reports_the_pid_gate(tmp_path):
+    svc = service(tmp_path, allow_pid=True)
+    assert tick(svc)["commands"]["allow_pid"] is True

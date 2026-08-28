@@ -55,6 +55,7 @@ where the recorder has nothing to say:
 | `setpoint_k`, `output_pct`, `range` | where it is going, what it is putting out, and how much power it may use. `range` is `null` where there is no range to have |
 | `threshold_k` | how far from setpoint still counts as settled, from `loop_thresholds`. `null` when none is configured |
 | `ramping` | `RAMPST?` — still traversing to a new setpoint |
+| `p`, `i`, `d` | the **instrument's own** gains, from `PID?` on the same slow cadence. `null` unless the recorder is configured with `read_pid: true`, which is not the default |
 
 **Where these come from.** The bindings are the *instrument's* answer
 (`OUTMODE?`), re-read on a slow cadence; the numbers that move come from the
@@ -93,6 +94,7 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `ramp` | `loop`, `rate_k_per_min` (0 disables) |
 | `range` | `output`, `value` 0–3 — **applies power** on a 33x |
 | `analog` | `percent` — **applies power** on a 218; there is no inert half to it |
+| `pid` | `loop`, `p`, `i`, `d` — the instrument's own gains, all three together |
 | `heaters_off` | every heater on every writable instrument to zero |
 
 `heaters_off` is the only command that is not aimed at one box. Every other
@@ -137,6 +139,7 @@ allow_writes             per-instrument driver policy      (default OFF)
 ipc.accept_commands      is this recorder listening at all (default OFF)
 ipc.allow_heater_range   may a file raise a 33x heater range   (default OFF)
 ipc.allow_analog_output  may a file raise a 218 analog output  (default OFF)
+ipc.allow_pid            may a file retune a loop              (default OFF)
 ```
 
 The last two are one gate each rather than one gate for both, because they are
@@ -145,7 +148,26 @@ own sample heater but only *watches* a controller holding something else, one
 of them wants to be open and the other emphatically does not.
 
 Turning a heater **off** — a range to 0, or an analog output to 0% — never
-needs either of the last two: the safe direction is always available.
+needs either of the two power gates: the safe direction is always available.
+
+`allow_pid` is not a third power gate. Retuning applies no power at all — a
+loop with its range at 0 stays inert however it is tuned — and it has no
+always-allowed direction either, because there is no such thing as a gain that
+removes heat. It is separate because gains are a different *kind* of act from a
+setpoint: a setpoint moves the cryostat somewhere and you watch it go, gains
+change how it gets anywhere at all, quietly, for the rest of the run. Somebody
+who wants a remote client to be able to move a setpoint has not thereby said
+they want it retuning the loop.
+
+**Three gains go together, always.** `PID` is one command on the instrument and
+the driver verifies all three by readback. Accepting one would mean reading the
+other two back and re-sending them, which is a read-modify-write against a box
+somebody else may be touching.
+
+**There is no command that reads the gains back.** The loop table publishes
+them, polled; a command that returned data would be a new shape for the spool,
+the CLI and MATLAB all at once, for three numbers that change about as often as
+`OUTMODE` does.
 
 ### A sixth gate, on a different axis
 
@@ -230,6 +252,7 @@ ipc:
   accept_commands: true       # reads commands/    -- needed to WRITE
   allow_heater_range: false   # may a file turn a 33x heater ON
   allow_analog_output: false  # may a file drive a 218 output above 0
+  allow_pid: false            # may a file retune a loop
   sources: {}                 # WHO may ask; empty means everyone
 ```
 

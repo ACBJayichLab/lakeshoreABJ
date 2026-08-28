@@ -202,3 +202,37 @@ def test_recommended_cadence_fits_the_budget():
         inst.driver = "visa"
     cfg.validate()
     assert cfg.estimated_cycle_s() < cfg.acquisition.interval_s
+
+
+# -- the shipped examples ----------------------------------------------------
+#
+# These are what a coworker installs, and an example that does not load is
+# worse than no example: it fails at the cryostat rather than here.  Found the
+# hard way -- `read_analog_outputs: true` was added to the 336 example without
+# its cadence being raised to match, and the file shipped unable to start.
+
+#: Resolved from this file, never from the working directory.  A relative path
+#: here once made seven tests quietly vanish outside the repo root.
+EXAMPLES = sorted((Path(__file__).resolve().parents[1] / "examples").glob("*.yaml"))
+
+
+def test_there_are_examples_to_check():
+    """Guards the guard: a bad glob would make every test below vacuous."""
+    assert EXAMPLES, "no example configs found next to the repo root"
+
+
+@pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.name)
+def test_every_shipped_example_loads_and_validates(path):
+    cfg = config_mod.load(str(path))
+    assert cfg.enabled_instruments
+
+
+@pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.name)
+def test_every_shipped_example_fits_its_own_cadence(path):
+    """`validate()` already checks this; asserting it names what broke."""
+    cfg = config_mod.load(str(path))
+    assert cfg.estimated_cycle_s() <= cfg.acquisition.interval_s, (
+        f"{path.name}: {cfg.estimated_transactions()} transactions is "
+        f"{cfg.estimated_cycle_s():.2f} s, past its "
+        f"{cfg.acquisition.interval_s} s cadence"
+    )

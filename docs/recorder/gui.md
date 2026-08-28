@@ -156,6 +156,7 @@ in three places is the same table going stale in three places.
 | Control | Appears for | |
 |---|---|---|
 | **Setpoint** | a box with loops | kelvin, aimed at **the loop selected in the loop table**. Inert on its own: a setpoint does nothing while the range is 0 |
+| **PID gains** | a box with loops | P, I and D on **the selected loop** — the instrument's own, not any software loop's. All three go out together. Applies no power |
 | **Heater range** | a selected loop that drives a heater output | 0/1/2/3, applied to **that loop's** output. **Above 0 this applies power** |
 | **Analog output** | a box with a settable analog output (a 218) | one percentage. **Above 0 this applies power** — there is no inert half |
 | **All heaters OFF** | always | every writable instrument to zero, 33x ranges and 218 outputs alike |
@@ -165,7 +166,16 @@ hides the heater-range control, because there is no range to set — and says so
 in a sentence rather than offering a control that could only produce a
 refusal.
 
-Four things this panel does on purpose:
+**There is no "get PID" button, because there could not be one.** This viewer
+holds no port and cannot ask an instrument anything. The gains are in the panel
+because the recorder polls `PID?` on a slow cadence and publishes them; a
+recorder configured with `read_pid: false` — the default — leaves the boxes
+blank, and the note under them names the key that would fill them. That note is
+deliberately different from the one about `ipc.allow_pid`: "nobody is reading
+these" and "this recorder will not change these" are different facts, and an
+operator who cannot tell them apart will conclude the wrong thing about both.
+
+Five things this panel does on purpose:
 
 **The analog spin box is capped at the recorder's `max_output_pct`**, not at
 100, so the widget cannot express a value that is going to be refused — and the

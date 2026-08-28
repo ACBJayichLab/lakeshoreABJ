@@ -244,6 +244,12 @@ class StatusWriter:
                 "range": None if range_value is None else int(range_value),
                 "threshold_k": _num(row.get("threshold_k")),
                 "ramping": bool(row.get("ramping")),
+                # The instrument's own gains, polled on a slow cadence.  Null
+                # on a recorder with `read_pid: false`, which a client has to
+                # handle anyway -- so no schema bump buys anything here.
+                "p": _num(aux.get(f"{name}.p{loop}")),
+                "i": _num(aux.get(f"{name}.i{loop}")),
+                "d": _num(aux.get(f"{name}.d{loop}")),
             })
         return out
 

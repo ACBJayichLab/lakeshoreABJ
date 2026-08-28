@@ -135,8 +135,8 @@ paying for a second transaction and a settle in every control cycle.
 
 ## The interlocks, in the order they apply
 
-Five gates, and a command that applies power needs four of them: the three
-common ones plus whichever of the last two matches the box it is aimed at.
+A command that applies power needs four gates: the three common ones plus
+whichever per-kind gate matches the box it is aimed at.
 
 | Gate | Where | Default |
 |---|---|---|
@@ -145,16 +145,27 @@ common ones plus whichever of the last two matches the box it is aimed at.
 | `ipc.accept_commands` | is this recorder listening to files at all | **off** |
 | `ipc.allow_heater_range` | may a *file* raise a **33x** heater range | **off** |
 | `ipc.allow_analog_output` | may a *file* raise a **218** analog output | **off** |
+| `ipc.allow_pid` | may a *file* retune a loop | **off** |
 
-The last two are deliberately not one switch. They are different commands on
-different boxes, and a cryostat that wants its own sample heater driven from a file
-has no business also being able to raise a range on a controller that is
-holding something else.
+The two power gates are deliberately not one switch. They are different
+commands on different boxes, and a cryostat that wants its own sample heater
+driven from a file has no business also being able to raise a range on a
+controller that is holding something else.
+
+`allow_pid` is a per-kind gate but **not** a power gate. Retuning applies no
+power — a loop with its range at 0 stays inert however it is tuned — and it has
+no always-allowed direction either, because there is no such thing as a gain
+that removes heat. It is separate because gains are a different *kind* of act:
+a setpoint moves the cryostat somewhere and you watch it go, gains change how
+it gets anywhere at all, quietly, for the rest of the run.
 
 Turning a heater **off** — a range to 0, or an analog output to 0% — never
-needs either of the last two: the safe direction is always available. It does
-still need `allow_writes`, because a box this program may not write to is one
-whose output may belong to somebody else.
+needs either power gate: the safe direction is always available. It does still
+need `allow_writes`, because a box this program may not write to is one whose
+output may belong to somebody else.
+
+On a different axis again, `ipc.sources` asks *which client* may ask at all —
+see [file-interface](file-interface.md#a-sixth-gate-on-a-different-axis).
 
 `probe` forces `read_only` on for every transport regardless of the config, so
 its safety does not depend on the config file being right.

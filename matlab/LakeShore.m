@@ -189,9 +189,11 @@ classdef LakeShore < handle
             %LOOPS  One instrument's control loops, as a struct array.
             %
             %   Fields: loop, sensor, input, mode, mode_code, heater_output,
-            %   setpoint_k, output_pct, range, threshold_k, ramping.  Every
-            %   entry carries every field; a value the recorder does not have
-            %   arrives as [] rather than as a plausible zero.
+            %   setpoint_k, output_pct, range, threshold_k, ramping, and the
+            %   instrument's own gains p, i and d.  Every entry carries every
+            %   field; a value the recorder does not have arrives as [] rather
+            %   than as a plausible zero -- p, i and d are [] on a recorder
+            %   configured with `read_pid: false`, which is the default.
             %
             %   `sensor` is the instrument's own answer to "which input does
             %   this loop read" (OUTMODE?), so it is the same string the
@@ -305,6 +307,28 @@ classdef LakeShore < handle
             %   that matters.
             [ok, message, id] = obj.run('analog', ...
                 struct('percent', percent), nargout);
+        end
+
+        function [ok, message, id] = setPID(obj, loop, P, I, D)
+            %SETPID  The instrument's own gains on one loop.
+            %
+            %   Nothing to do with any software loop: these are the P, I and D
+            %   the Lake Shore box itself uses.  All three go together, because
+            %   PID is one command on the instrument and the recorder verifies
+            %   all three by reading them back.
+            %
+            %   This applies no power on its own -- a loop with range 0 stays
+            %   inert however it is tuned -- but the recorder refuses it unless
+            %   its config says `ipc.allow_pid: true`, because gains are a
+            %   different kind of act from a setpoint: a setpoint moves the
+            %   cryostat somewhere and you watch it go, gains change how it
+            %   gets anywhere at all, quietly, for the rest of the run.
+            %
+            %   Read the current gains with loops(): the `p`, `i` and `d`
+            %   fields of the loop table, polled on a slow cadence.  They are
+            %   NaN on a recorder configured with `read_pid: false`.
+            [ok, message, id] = obj.run('pid', ...
+                struct('loop', loop, 'p', P, 'i', I, 'd', D), nargout);
         end
 
         function [ok, message, id] = heatersOff(obj)

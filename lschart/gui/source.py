@@ -977,6 +977,18 @@ class StatusSource:
         cmds = (self.status or {}).get("commands") or {}
         return bool(cmds.get("allow_analog_output"))
 
+    def allows_pid(self) -> bool:
+        """May a *file* retune a loop on this recorder?
+
+        Unlike the two power gates this one has no always-allowed direction --
+        there is no such thing as a gain that removes heat -- but it is still
+        not a reason to disable the control: the boxes are worth reading even
+        where they cannot be written, and a greyed-out field is not a legible
+        way to say "you may look".
+        """
+        cmds = (self.status or {}).get("commands") or {}
+        return bool(cmds.get("allow_pid"))
+
     def source_allowed(self, name: str = "lschart-gui") -> bool:
         """Is this client's own label switched on at the recorder?
 

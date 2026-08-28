@@ -169,6 +169,22 @@ def test_a_loop_the_recorder_could_not_read_is_null_not_zero(tmp_path):
     assert loops[0]["range"] is None
 
 
+def test_the_gains_reach_the_status_file_with_the_loop_they_belong_to(tmp_path):
+    """So a client never has to reassemble a loop from three aux keys."""
+    inst, _ = sim_336(read_pid=True)
+    loops = loops_of(tmp_path, inst, {
+        "ls336.p2": 60.0, "ls336.i2": 25.0, "ls336.d2": 3.0,
+    })
+    assert (loops[1]["p"], loops[1]["i"], loops[1]["d"]) == (60.0, 25.0, 3.0)
+
+
+def test_a_recorder_not_polling_the_gains_says_null_rather_than_zero(tmp_path):
+    """0 is a real value for D, so absent has to look different from it."""
+    inst, _ = sim_336()
+    loops = loops_of(tmp_path, inst)
+    assert loops[0]["p"] is None and loops[0]["d"] is None
+
+
 def test_a_configured_threshold_reaches_the_status_file(tmp_path):
     """Published so the viewer never has to parse config semantics."""
     inst, _ = sim_336(loop_thresholds={1: 0.5})

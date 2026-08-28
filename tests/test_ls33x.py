@@ -479,3 +479,73 @@ def test_loop_rows_resolve_sensor_names_against_the_labels_in_use():
     assert inst.loop_bindings[1].sensor == ""
     inst.read_frame()                        # discovery happens here
     assert inst.loop_rows()[0]["sensor"] == sim.names["A"]
+
+
+# -- the gains, polled ------------------------------------------------------
+#
+# The viewer holds no port and cannot ask an instrument anything, so polling on
+# the slow cadence is the only way P, I and D ever reach a screen.  Off by
+# default, because one more transaction per loop does not fit the 1 Hz the
+# shipped default config promises.
+
+
+def test_the_gains_are_not_read_unless_asked_for():
+    inst, sim = build("335", name="ls335")
+    inst.read_frame()
+    assert not any(c.startswith("PID?") for c in count_queries(inst, sim))
+    assert inst.loop_pid == {}
+
+
+def test_the_gains_reach_the_aux_block():
+    inst, _sim = build("335", name="ls335", read_pid=True)
+    _readings, aux = inst.read_frame()
+    assert aux["ls335.p1"] > 0.0
+    assert {"ls335.p1", "ls335.i1", "ls335.d1",
+            "ls335.p2", "ls335.i2", "ls335.d2"} <= set(aux)
+
+
+def test_the_gains_ride_the_slow_cadence_and_the_budget_counts_the_burst():
+    inst, sim = build("335", name="ls335", read_pid=True)
+    inst.read_frame()
+
+    lean = count_queries(inst, sim)
+    assert not any(c.startswith("PID?") for c in lean)
+
+    while (inst._loop_cycles % inst.loop_every_n_cycles) != 0:
+        inst.read_frame()
+    fat = count_queries(inst, sim)
+    assert sum(c.startswith("PID?") for c in fat) == len(inst.caps.loops)
+    assert len(fat) == inst.transactions_per_frame()
+
+
+def test_the_gains_are_still_reported_on_the_frames_that_did_not_read_them():
+    """A column blank on 29 rows out of 30 is a column nobody can read."""
+    inst, _sim = build("335", name="ls335", read_pid=True)
+    inst.read_frame()
+    _readings, aux = inst.read_frame()
+    assert "ls335.p1" in aux
+
+
+def test_a_recorder_that_wants_only_the_gains_pays_only_for_them():
+    inst, sim = build("335", name="ls335", read_loops=False, read_pid=True)
+    counted = count_queries(inst, sim)
+    assert any(c.startswith("PID?") for c in counted)
+    assert not any(c.startswith("OUTMODE?") for c in counted)
+    assert inst.loop_bindings == {}
+
+
+def test_the_aux_header_names_the_gain_columns_before_the_first_frame():
+    """The recorder needs the CSV header before any frame has arrived."""
+    inst, _sim = build("335", name="ls335", read_pid=True)
+    assert "ls335.p1" in inst.aux_keys()
+    assert inst.aux_keys().index("ls335.p1") < inst.aux_keys().index("ls335.i1")
+
+
+def test_a_verified_write_updates_the_cache_rather_than_waiting_a_cadence():
+    """Otherwise a viewer cannot tell "not refreshed yet" from "did not take"."""
+    inst, _sim = build("335", name="ls335", read_pid=True, allow_writes=True)
+    inst.read_frame()
+    inst.set_pid(1, 111.0, 22.0, 3.0)
+    _readings, aux = inst.read_frame()
+    assert aux["ls335.p1"] == pytest.approx(111.0, abs=0.05)
+    assert aux["ls335.d1"] == pytest.approx(3.0, abs=0.05)

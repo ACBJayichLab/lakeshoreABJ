@@ -60,12 +60,36 @@ function selftest(directory)
         for i = 1:numel(rows)
             r = rows(i);
             if isempty(r.setpoint_k), sp = NaN; else, sp = r.setpoint_k; end
-            fprintf('  loop %d  %-20s %-12s  SP %8.3f K\n', ...
-                    r.loop, r.sensor, r.mode, sp);
+            fprintf('  loop %d  %-20s %-12s  SP %8.3f K   %s\n', ...
+                    r.loop, r.sensor, r.mode, sp, gainsOf(r));
         end
     end
 
-    % -- 4. can we command it ---------------------------------------------
+    % -- 4. what are we allowed to ask for --------------------------------
+    %
+    % Printed rather than checked.  None of these being open is a perfectly
+    % good configuration for a recorder somebody only wants MATLAB to read, so
+    % a selftest that failed on it would be wrong; what it must not do is let
+    % you discover the answer from a refused command in the middle of a sweep.
+    c = s.commands;
+    fprintf('gates       : heater range %s, analog output %s, PID %s\n', ...
+            onOff(c, 'allow_heater_range'), onOff(c, 'allow_analog_output'), ...
+            onOff(c, 'allow_pid'));
+    if isfield(c, 'source_policy') && c.source_policy
+        allowed = true;
+        entries = c.sources;
+        if isstruct(entries)
+            for i = 1:numel(entries)
+                if strcmp(entries(i).name, 'matlab')
+                    allowed = logical(entries(i).allowed);
+                end
+            end
+        end
+        fprintf('source      : this client is labelled "matlab" -- %s\n', ...
+                ternary(allowed, 'PERMITTED', 'NOT PERMITTED by ipc.sources'));
+    end
+
+    % -- 5. can we command it ---------------------------------------------
     fprintf('ping        : ');
     [ok, message] = ls.ping();
     if ok
@@ -79,4 +103,27 @@ function selftest(directory)
     end
 
     fprintf('\nOK -- MATLAB can read this recorder and command it.\n');
+end
+
+
+function out = gainsOf(r)
+%GAINSOF  One loop's gains, or a note saying why there are none.
+    if isempty(r.p) || isnan(r.p)
+        out = 'PID not polled (read_pid: false)';
+    else
+        out = sprintf('P %.1f  I %.1f  D %.1f', r.p, r.i, r.d);
+    end
+end
+
+
+function out = onOff(c, field)
+    out = 'refused';
+    if isfield(c, field) && logical(c.(field))
+        out = 'ALLOWED';
+    end
+end
+
+
+function out = ternary(cond, a, b)
+    if cond, out = a; else, out = b; end
 end

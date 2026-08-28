@@ -85,6 +85,7 @@ not be touched under any circumstances, including by a bug in this program.
 | `read_heaters` | `true` | `HTR?` and `RANGE?` |
 | `read_analog_outputs` | `false` | `AOUT?` on outputs 3–4 of a 336. Turn on to fill the loop table's output column for loops 3 and 4 |
 | `read_loops` | `true` | `OUTMODE?` and `RAMPST?` per loop, on a slow cadence — which input each loop reads and whether it is in closed loop |
+| `read_pid` | `false` | `PID?` per loop, on that same slow cadence. The **only** way P, I and D reach the viewer — it holds no port |
 | `loop_every_n_cycles` | `30` | how often those are re-read. `OUTMODE` changes approximately never |
 | `loop_thresholds` | `{}` | `{loop: kelvin}` — how far a loop may sit from its setpoint and still count as settled |
 | **`allow_writes`** | **`false`** | gates every command that changes what the box does |
@@ -95,6 +96,14 @@ does loop 2 read". A map of that kept in this file could go stale or lie; the
 instrument cannot. On this family the loop number *is* the output number by
 protocol, so the heater binding is not configurable either — it is derived.
 
+`read_pid` is **off** while `read_loops` is on, and the reason is arithmetic
+rather than caution. The default 218 + 336 config sits at 19 transactions
+against a 1 s cadence at 50 ms pacing, and one more per loop does not fit —
+`check` refuses a cadence a cycle cannot fit rather than letting the poll
+silently drift. At the 2 s a cryostat usually runs there is room, and the
+example configs turn it on. Without it the viewer's PID boxes are blank and say
+which key would fill them.
+
 `loop_thresholds` is per loop and has no default, deliberately. 0.5 K is a
 tight tolerance at 4 K and a loose one at 300 K, so it is a property of the
 loop rather than of this software, and there is no number this file could pick
@@ -103,6 +112,7 @@ settled" mark** — the viewer will not invent an opinion for it.
 
 ```yaml
     read_loops: true
+    read_pid: true
     loop_every_n_cycles: 30
     loop_thresholds:
       1: 0.5
@@ -201,6 +211,7 @@ Full explanation in [file-interface.md](file-interface.md).
 | `max_commands_per_cycle` | `4` | bounds how much bus time one cycle spends on commands |
 | **`allow_heater_range`** | **`false`** | may a *file* raise a **33x** heater range. Turning one **off** is always allowed |
 | **`allow_analog_output`** | **`false`** | may a *file* raise a **218** analog output above 0. Commanding 0 is always allowed |
+| **`allow_pid`** | **`false`** | may a *file* retune a loop (P, I, D). Applies no power, and has no always-allowed direction |
 | **`sources`** | `{}` | which **clients** may ask at all: `{default: false, matlab: true}`. Empty means no policy and every source may ask |
 | `ack_history` | `20` | acknowledgements carried in `status.json`. A client polling slower than this fills up may miss its own answer |
 

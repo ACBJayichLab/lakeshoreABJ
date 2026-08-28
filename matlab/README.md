@@ -81,6 +81,7 @@ ls.setSetpoint(1, 77.0);     % blocks until the recorder confirms
 ls.setRamp(1, 2.5);          % K/min, run by the instrument's own firmware
 ls.setRange(1, 0);           % heater range — 0 is off
 ls.setAnalog(5.0);           % 218 analog output percent — see the warning below
+ls.setPID(1, 50, 20, 0);     % the INSTRUMENT's own gains, all three together
 ls.heatersOff();             % everything the recorder may write to, to zero
 ```
 
@@ -162,11 +163,21 @@ struct fields cannot contain spaces, so "Rad Shield" becomes `RadShield` there.
 A command from MATLAB passes exactly the same interlocks as one typed at the
 recorder's own command line. The file interface is not a back door.
 
+The one exception runs the other way: `heatersOff()` is a panic command, and
+panic commands are exempt from the per-client source policy and from the two
+power gates. MATLAB gets that exemption for the same reason the viewer does —
+the recorder sees the command *kind*, not who sent it, and an automated abort
+is a large part of why the command exists. It is still refused by
+`ipc.accept_commands`, by `allow_writes` and by `transport.read_only`.
+
 | Refusal | Fix |
 |---|---|
 | `this recorder is not accepting commands` | `ipc.accept_commands: true` in the recorder's config |
 | `... is configured read-only` | `allow_writes: true` on that instrument |
 | `raising a heater range applies power ...` | `ipc.allow_heater_range: true`, if a remote client really should be able to turn a heater on. Turning one **off** is always allowed |
+| `retuning a loop is not accepted from a file ...` | `ipc.allow_pid: true`. Gains apply no power, but they change how the loop behaves for the rest of the run |
+| `commands from 'matlab' are not accepted by this recorder's configuration` | `ipc.sources` names which clients may ask at all. Needs a config edit and a restart |
+| `commands from 'matlab' are currently switched off in ... sources.json` | somebody switched this client off at the recorder. Delete that entry — no restart needed |
 | `issued N s ago, older than the 30 s limit` | the recorder was not running when the command was queued |
 | `several controllers are configured` | say which: `ls.submit('setpoint', struct('loop',1,'kelvin',77), 'ls336')` |
 

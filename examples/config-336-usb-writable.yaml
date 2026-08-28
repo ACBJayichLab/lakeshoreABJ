@@ -91,6 +91,12 @@ instruments:
     read_loops: true
     loop_every_n_cycles: 30
 
+    # PID? per loop, on that same slow cadence.  This is the only way P, I and
+    # D reach the viewer: it holds no port and cannot ask the box anything.
+    # Off in the shipped defaults because one more transaction per loop does
+    # not fit a 1 s cadence; it fits comfortably at the 2 s this file runs.
+    read_pid: true
+
     # How far each loop may sit from its setpoint and still count as settled,
     # in kelvin.  Per loop because 0.5 K is a tight tolerance at 4 K and a
     # loose one at 300 K.  A loop left out of this simply gets no

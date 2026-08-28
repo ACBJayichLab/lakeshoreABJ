@@ -567,6 +567,20 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     )
     an.add_argument("percent", type=float)
 
+    pid = snd_sub.add_parser(
+        "pid",
+        help="the instrument's own P, I and D on one loop",
+        description="Retune a loop on the instrument itself -- nothing to do "
+                    "with any software loop. All three gains go together, "
+                    "because PID is one command on the box and the driver "
+                    "verifies all three by readback. Refused unless the "
+                    "recorder's config sets ipc.allow_pid.",
+    )
+    pid.add_argument("p", type=float)
+    pid.add_argument("i", type=float)
+    pid.add_argument("d", type=float)
+    pid.add_argument("--loop", type=int, default=1)
+
     snd_sub.add_parser(
         "heaters_off",
         help="every writable heater to zero: 33x ranges AND 218 analog outputs")
@@ -579,6 +593,7 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "ramp": ("rate_k_per_min", "loop"),
             "range": ("value", "output"),
             "analog": ("percent",),
+            "pid": ("p", "i", "d", "loop"),
             "heaters_off": (),
             "ping": (),
         }[parsed.kind]

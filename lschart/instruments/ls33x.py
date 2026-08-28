@@ -159,6 +159,7 @@ class LS33x(Instrument):
         read_heaters: bool = True,
         read_analog_outputs: bool = False,
         read_loops: bool = True,
+        read_pid: bool = False,
         loop_every_n_cycles: int = 30,
         loop_thresholds: dict | None = None,
         allow_writes: bool = False,
@@ -178,6 +179,20 @@ class LS33x(Instrument):
         self.read_heaters = read_heaters
         self.read_analog_outputs = read_analog_outputs
         self.read_loops = read_loops
+        #: Read each loop's gains on the same slow cadence as the bindings.
+        #: The viewer holds no port and cannot ask an instrument anything, so
+        #: polling is the only way P, I and D can ever be on screen -- and a
+        #: command that returned data would be a new pattern for the spool, the
+        #: CLI and MATLAB all at once, for three numbers that change about as
+        #: often as OUTMODE does.
+        #:
+        #: **Off by default**, unlike the other slow-cadence reads, and for an
+        #: arithmetical reason rather than a cautious one: the default 218 +
+        #: 336 config sits at 19 transactions against a 1 s cadence at 50 ms
+        #: pacing, and one more per loop does not fit.  A recorder that wants
+        #: the gains on screen has room for them at 2 s, which is what a
+        #: cryostat usually runs; the default must not quietly stop being 1 Hz.
+        self.read_pid = read_pid
         self.loop_every_n_cycles = max(1, int(loop_every_n_cycles))
         #: How far a loop's temperature may sit from its setpoint and still
         #: count as settled, per loop.  Configuration and not a constant,
@@ -191,6 +206,10 @@ class LS33x(Instrument):
         #: What each loop is bound to, from ``OUTMODE?``.  Empty until the
         #: first frame; a client must degrade rather than assume.
         self.loop_bindings: dict[int, LoopBinding] = {}
+        #: ``{loop: (p, i, d)}`` from ``PID?``, on the same slow cadence and
+        #: with the same rule: a failed read leaves the previous answer, which
+        #: is very nearly certainly still true.
+        self.loop_pid: dict[int, tuple[float, float, float]] = {}
         self._loop_cycles = 0
         self.allow_writes = allow_writes
         self.max_setpoint_k = max_setpoint_k
@@ -270,14 +289,19 @@ class LS33x(Instrument):
         if self.read_analog_outputs:
             for out in self.caps.analog_outputs:
                 self._try_aux(aux, f"{self.name}.aout{out}", f"AOUT? {out}")
-        if self.read_loops:
+        if self.read_loops or self.read_pid:
             self._refresh_loops()
+        if self.read_loops:
             # Emitted from the cache every frame, not only on the slow tick:
             # a column that is blank on 29 rows out of 30 is a column nobody
             # can read, and the value has not changed on those 29 anyway.
             for loop, binding in self.loop_bindings.items():
                 aux[f"{self.name}.outmode{loop}"] = float(binding.mode)
                 aux[f"{self.name}.ramping{loop}"] = 1.0 if binding.ramping else 0.0
+        for loop, (p, i, d) in self.loop_pid.items():
+            aux[f"{self.name}.p{loop}"] = p
+            aux[f"{self.name}.i{loop}"] = i
+            aux[f"{self.name}.d{loop}"] = d
         return readings, aux
 
     # -- what each loop is bound to ---------------------------------------
@@ -311,6 +335,14 @@ class LS33x(Instrument):
         due = (self._loop_cycles % self.loop_every_n_cycles) == 0
         self._loop_cycles += 1
         if not due:
+            return
+        if self.read_pid:
+            for loop in self.caps.loops:
+                try:
+                    self.loop_pid[loop] = self.pid(loop)
+                except (TransportError, ValueError) as exc:
+                    log.debug("%s: PID? %d failed: %s", self.name, loop, exc)
+        if not self.read_loops:
             return
         heaters = set(self.caps.heater_outputs)
         for loop in self.caps.loops:
@@ -391,6 +423,10 @@ class LS33x(Instrument):
         if self.read_loops:
             for loop in self.caps.loops:
                 keys += [f"{self.name}.outmode{loop}", f"{self.name}.ramping{loop}"]
+        if self.read_pid:
+            for loop in self.caps.loops:
+                keys += [f"{self.name}.p{loop}", f"{self.name}.i{loop}",
+                         f"{self.name}.d{loop}"]
         return keys
 
     def transactions_per_frame(self) -> int:
@@ -409,6 +445,8 @@ class LS33x(Instrument):
             # and a budget that averages a burst away is one the worst cycle
             # overruns.  OUTMODE? and RAMPST? per loop.
             n += 2 * len(self.caps.loops)
+        if self.read_pid:
+            n += len(self.caps.loops)                    # PID? per loop
         return n
 
     # -- writing (guarded) -------------------------------------------------
@@ -552,6 +590,11 @@ class LS33x(Instrument):
             lambda: self.pid(loop), (p, i, d),
             what=f"PID gains on loop {loop}", tol=0.05,
         )
+        # The readback verified these, so the cache can have them now rather
+        # than up to a slow cadence later.  A viewer that has just changed a
+        # gain and watches the old one sit there for a minute has no way to
+        # tell "not refreshed yet" from "did not take".
+        self.loop_pid[loop] = (p, i, d)
         log.warning("%s: PID %d,%.1f,%.1f,%.1f (verified)", self.name, loop, p, i, d)
 
     def set_ramp(self, loop: int, rate_k_per_min: float, *, enable: bool = True) -> None:

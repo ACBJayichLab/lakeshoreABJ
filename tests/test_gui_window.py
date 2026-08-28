@@ -488,6 +488,7 @@ def loop_entry(n, sensor="Sample", **kw):
         "setpoint_k": 77.0, "output_pct": 0.0,
         "range": 0 if n in (1, 2) else None,
         "threshold_k": None, "ramping": False,
+        "p": None, "i": None, "d": None,
     }
     entry.update(kw)
     return entry
@@ -1204,3 +1205,97 @@ def test_a_cancelled_export_writes_nothing(viewer, monkeypatch):
         staticmethod(lambda *a, **k: ("", "")))
     viewer.export_button.click()
     assert viewer.export_note.text() == ""
+
+
+# -- the loop's gains --------------------------------------------------------
+#
+# Read and not asked for: the viewer holds no port.  The numbers are in the
+# status file because the recorder polls PID? on a slow cadence, and a recorder
+# that does not poll them has to be distinguishable from one that will not
+# accept new ones.
+
+
+def with_gains(tmp_path, qt_app, *, aux, commands=None):
+    """A viewer on a 336 whose status file carries the given aux entries."""
+    from lschart.ipc.commands import CommandSpool
+
+    csv = tmp_path / "gains.csv"
+    stamp = _dt.datetime.fromtimestamp(time.time()).isoformat(timespec="milliseconds")
+    csv.write_text(HEADER + f"{stamp},0.0,96.0,77.0,12.5,,,\n")
+    status = tmp_path / "status-gains.json"
+    status.write_text(json.dumps({
+        "t_wall": time.time(), "cycle": 3, "running": True, "interval_s": 1.0,
+        "channels": [{"name": "Sample", "kelvin": 96.0, "usable": True}],
+        "links": [CTRL],
+        "aux": [{"name": k, "value": v} for k, v in aux.items()],
+        "recorder": {"path": str(csv), "rows": 60},
+        "commands": commands or {"accepted": True, "recent": []},
+    }))
+    w = ViewerWindow(str(status), refresh_ms=10_000_000,
+                     spool=CommandSpool(tmp_path / "cmd-gains"))
+    w.refresh()
+    return w
+
+
+def test_the_gain_boxes_fill_from_what_the_recorder_read(tmp_path, qt_app):
+    w = with_gains(tmp_path, qt_app,
+                   aux={"ls336.p1": 60.0, "ls336.i1": 25.0, "ls336.d1": 3.0})
+    assert showing(w.pid_group)
+    assert w.pid_spins["p"].value() == pytest.approx(60.0)
+    assert w.pid_spins["i"].value() == pytest.approx(25.0)
+    assert w.pid_spins["d"].value() == pytest.approx(3.0)
+
+
+def test_gains_that_are_not_polled_say_so_rather_than_showing_zero(tmp_path, qt_app):
+    """Blank because nobody is looking is not the same as refused."""
+    w = with_gains(tmp_path, qt_app, aux={})
+    assert "read_pid" in w.pid_note.text()
+
+
+def test_a_recorder_that_will_not_retune_says_that_instead(tmp_path, qt_app):
+    w = with_gains(tmp_path, qt_app, aux={"ls336.p1": 60.0},
+                   commands={"accepted": True, "recent": [], "allow_pid": False})
+    assert "ipc.allow_pid" in w.pid_note.text()
+
+
+def test_a_recorder_that_will_retune_says_it_applies_no_power(tmp_path, qt_app):
+    w = with_gains(tmp_path, qt_app, aux={"ls336.p1": 60.0},
+                   commands={"accepted": True, "recent": [], "allow_pid": True})
+    assert "does not apply power" in w.pid_note.text()
+
+
+def test_all_three_gains_go_out_in_one_command(tmp_path, qt_app, monkeypatch):
+    """PID is one command on the instrument; sending one gain would be a
+    read-modify-write against a box somebody else may be touching."""
+    w = with_gains(tmp_path, qt_app,
+                   aux={"ls336.p1": 60.0, "ls336.i1": 25.0, "ls336.d1": 3.0})
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.pid_spins["p"].setValue(75.0)
+    w._send_pid()
+    sent = queued(w)
+    assert len(sent) == 1
+    assert sent[0]["kind"] == "pid"
+    assert (sent[0]["p"], sent[0]["i"], sent[0]["d"]) == (75.0, 25.0, 3.0)
+    assert sent[0]["loop"] == 1
+
+
+def test_editing_a_gain_stops_the_fill_fighting_the_typing(tmp_path, qt_app):
+    w = with_gains(tmp_path, qt_app,
+                   aux={"ls336.p1": 60.0, "ls336.i1": 25.0, "ls336.d1": 3.0})
+    w.pid_spins["i"].setValue(99.0)
+    w.refresh()
+    assert w.pid_spins["i"].value() == pytest.approx(99.0)
+
+
+def test_the_gains_follow_the_selected_loop(tmp_path, qt_app):
+    w = with_gains(tmp_path, qt_app,
+                   aux={"ls336.p1": 60.0, "ls336.i1": 25.0, "ls336.d1": 3.0,
+                        "ls336.p2": 10.0, "ls336.i2": 5.0, "ls336.d2": 0.0})
+    w._loop = 2
+    w._sync_command_values()
+    assert w.pid_spins["p"].value() == pytest.approx(10.0)
+
+
+def test_a_box_with_no_loops_offers_no_gains(tmp_path, qt_app):
+    w = cryostat(tmp_path, qt_app, [MON])
+    assert not showing(w.pid_group)

@@ -89,6 +89,12 @@ instruments:
     read_loops: true
     loop_every_n_cycles: 30
 
+    # PID? per loop, on that same slow cadence.  This is the only way P, I and
+    # D reach the viewer: it holds no port and cannot ask the box anything.
+    # Off in the shipped defaults because one more transaction per loop does
+    # not fit a 1 s cadence; it fits comfortably at the 2 s this file runs.
+    read_pid: true
+
     # How far each loop may sit from its setpoint and still count as settled,
     # in kelvin.  Per loop because 0.5 K is a tight tolerance at 4 K and a
     # loose one at 300 K.  A loop left out of this simply gets no
@@ -103,9 +109,15 @@ instruments:
     allow_writes: false       # <-- INTERLOCK.  Leave this off.
 
 acquisition:
-  interval_s: 1.0
+  # 2 s, not 1 s.  A full frame on this box is 27 transactions -- four inputs,
+  # four setpoints, heaters, analog outputs, and the slow tick's OUTMODE?,
+  # RAMPST? and PID? burst -- which is 1.35 s at 50 ms pacing.  `check` refuses
+  # a cadence a cycle cannot fit rather than letting the poll silently drift,
+  # so raising it here is not a preference, it is the arithmetic.  Drop
+  # read_analog_outputs and read_pid if you want 1 Hz back.
+  interval_s: 2.0
   log_every_n: 1
-  ringbuffer_size: 43200      # 12 h at 1 Hz, for plotting only
+  ringbuffer_size: 43200      # 24 h at 0.5 Hz, for plotting only
 
 recorder:
   enabled: true

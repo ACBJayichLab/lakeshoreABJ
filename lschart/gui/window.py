@@ -618,6 +618,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         box.addWidget(self.loop_note)
 
         box.addWidget(self._setpoint_group())
+        box.addWidget(self._pid_group())
         box.addWidget(self._range_group())
         box.addWidget(self._analog_group())
 
@@ -663,6 +664,50 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.send_button.clicked.connect(self._send_setpoint)
         form.addRow(self.send_button)
         return self.setpoint_group
+
+    def _pid_group(self) -> QtWidgets.QWidget:
+        """The instrument's own gains for the selected loop.
+
+        Read, not asked for.  This viewer holds no port and cannot query an
+        instrument; the numbers arrive in the status file because the recorder
+        polls ``PID?`` on a slow cadence, and a recorder configured with
+        ``read_pid: false`` leaves them blank and says so.  A "Get PID" button
+        would have to be a command that returned data, which is a shape the
+        spool, the CLI and MATLAB do not have.
+
+        All three go out together.  ``PID`` is one command on the instrument
+        and the driver verifies all three by readback; sending one would mean
+        reading the other two back and re-sending them, which is a
+        read-modify-write against a box somebody else may be touching.
+        """
+        self.pid_group = QtWidgets.QGroupBox("PID gains")
+        form = QtWidgets.QFormLayout(self.pid_group)
+
+        self.pid_spins = {}
+        for key, label, decimals in (
+            ("p", "P", 1), ("i", "I", 1), ("d", "D", 1),
+        ):
+            spin = QtWidgets.QDoubleSpinBox()
+            # The instrument's own ranges: 0.1..1000 for P and I, 0..200 for D
+            # on this family.  Bounded here so the widget cannot express a
+            # value the box will refuse.
+            spin.setRange(0.0 if key == "d" else 0.1, 1000.0 if key != "d" else 200.0)
+            spin.setDecimals(decimals)
+            spin.valueChanged.connect(self._pid_edited)
+            self.pid_spins[key] = spin
+            form.addRow(label, spin)
+        # One flag for the three of them, because they are one command.
+        self._pid_dirty = False
+
+        self.pid_button = QtWidgets.QPushButton("Send PID…")
+        self.pid_button.clicked.connect(self._send_pid)
+        form.addRow(self.pid_button)
+
+        self.pid_note = QtWidgets.QLabel("")
+        self.pid_note.setWordWrap(True)
+        self.pid_note.setStyleSheet("color:#e65100;")
+        form.addRow(self.pid_note)
+        return self.pid_group
 
     def _range_group(self) -> QtWidgets.QWidget:
         """Heater range.  Off / low / medium / high, and it applies power.
@@ -1149,6 +1194,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         *is* the power.
         """
         self.setpoint_group.setVisible(caps["has_loops"])
+        # Gains belong to a loop, so they appear exactly where a setpoint does
+        # -- including on a 336's loops 3 and 4, which have gains and no range.
+        self.pid_group.setVisible(caps["has_loops"])
         heater = self._heater_for_selected_loop(caps) if caps["has_loops"] else None
 
         self.range_group.setVisible(caps["has_heater_range"] and heater is not None)
@@ -1202,6 +1250,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _analog_edited(self, _value: float) -> None:
         self._analog_dirty = True
+
+    def _pid_edited(self, _value: float) -> None:
+        self._pid_dirty = True
 
     def _loop_row_selected(self) -> None:
         """A row of the loop table clicked: point the whole panel at that loop.
@@ -1297,6 +1348,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 if value is not None and not held(name):
                     with _quiet(self.analog_spin):
                         self.analog_spin.setValue(value)
+        if not self._pid_dirty:
+            for key, spin in self.pid_spins.items():
+                name = f"{instrument}.{key}{self._loop}"
+                value = self._aux_value(name)
+                if value is not None and not held(name):
+                    with _quiet(spin):
+                        spin.setValue(value)
         heater = self._heater_for_selected_loop(
             capabilities(self.source.link_named(instrument)))
         if not self._range_dirty and heater is not None:
@@ -1335,6 +1393,29 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 "This recorder will not drive an output above 0 from a file "
                 "(ipc.allow_analog_output: false). Setting 0 still works.")
             self.analog_note.setStyleSheet("color:#e65100;")
+
+        # Two different silences to tell apart. Blank boxes because nobody is
+        # polling the gains is not the same as a recorder that will not accept
+        # new ones, and an operator who cannot see the difference will conclude
+        # the wrong thing about both.
+        polled = any(self._aux_value(f"{self.instrument_combo.currentText()}."
+                                     f"{key}{self._loop}") is not None
+                     for key in self.pid_spins)
+        if not polled:
+            self.pid_note.setText(
+                "This recorder does not read the loop gains, so these are not "
+                "the instrument's (read_pid: false in its config).")
+            self.pid_note.setStyleSheet("color:#e65100;")
+        elif not self.source.allows_pid():
+            self.pid_note.setText(
+                "Shown from the instrument, but this recorder will not change "
+                "them from a file (ipc.allow_pid: false).")
+            self.pid_note.setStyleSheet("color:#e65100;")
+        else:
+            self.pid_note.setText(
+                "The instrument's own gains. Changing them does not apply "
+                "power; it changes how the loop gets anywhere at all.")
+            self.pid_note.setStyleSheet("color:#37474f;")
 
         self._update_pending()
 
@@ -1880,7 +1961,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         first is unacknowledged is how you get a range raised against a
         setpoint that turned out to be refused.
         """
-        return [self.send_button, self.range_button,
+        return [self.send_button, self.pid_button, self.range_button,
                 self.analog_button, self.off_button]
 
     def _confirm(self, title: str, text: str) -> bool:
@@ -1960,6 +2041,26 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._queue("setpoint", loop=loop, kelvin=kelvin)
         self._await_readback(f"{instrument}.setpoint{loop}", kelvin,
                              self._display_tolerance(self.setpoint_spin))
+
+    def _send_pid(self) -> None:
+        """Queue all three gains for the selected loop."""
+        if self.spool is None:
+            return
+        instrument = self.instrument_combo.currentText()
+        loop = self._loop
+        gains = {k: spin.value() for k, spin in self.pid_spins.items()}
+        if not self._confirm(
+            "Send PID gains",
+            f"Retune loop {loop} of {instrument} to "
+            f"P {gains['p']:.1f}, I {gains['i']:.1f}, D {gains['d']:.1f}?\n\n"
+            "This applies no power: a loop with its range at 0 stays inert "
+            "however it is tuned. It does change how the loop behaves for the "
+            "rest of the run, including while it is already driving.",
+        ):
+            return
+        self._queue("pid", loop=loop, **gains)
+        self._await_readback(f"{instrument}.p{loop}", gains["p"],
+                             self._display_tolerance(self.pid_spins["p"]))
 
     def _send_range(self) -> None:
         """Queue a heater range.  Above 0 this is the command that applies power."""

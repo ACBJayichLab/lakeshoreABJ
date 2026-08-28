@@ -123,6 +123,7 @@ python -m lschart -c config.yaml send setpoint 77 --loop 1
 python -m lschart -c config.yaml send ramp 2.5 --loop 1
 python -m lschart -c config.yaml send range 0 --output 1
 python -m lschart -c config.yaml send analog 5.0
+python -m lschart -c config.yaml send pid 50 20 0 --loop 1
 python -m lschart -c config.yaml send heaters_off
 ```
 
@@ -139,13 +140,22 @@ percentage *is* the power. **Know the gain before typing a number** — on LTSPM
 it is ~10 K/%, and the recorder's `max_output_pct` is what stands between a
 misplaced decimal and the cryostat.
 
+`pid` sets the **instrument's own** gains — nothing to do with any software
+loop. All three go together, because `PID` is one command on the box and the
+driver verifies all three by readback. It applies no power (a loop with range 0
+stays inert however it is tuned), and there is no command that reads the gains
+back: `status` prints them, from the recorder's slow-cadence poll, on a
+recorder configured with `read_pid: true`.
+
 `heaters_off` is the panic button and covers *every* writable instrument — 33x
 ranges and 218 analog outputs alike — not just one. Read-only boxes are skipped
 and named in the reply.
 
 Requires `ipc.accept_commands: true`, plus the instrument's `allow_writes`, plus
-`ipc.allow_heater_range` for `range` above 0 or `ipc.allow_analog_output` for
-`analog` above 0. Full rules in [file-interface.md](file-interface.md).
+`ipc.allow_heater_range` for `range` above 0, `ipc.allow_analog_output` for
+`analog` above 0, and `ipc.allow_pid` for `pid`. A recorder with an
+`ipc.sources` policy may also refuse the CLI by name — it labels itself
+`lschart-cli`. Full rules in [file-interface.md](file-interface.md).
 
 ## `init` — write a starter config
 

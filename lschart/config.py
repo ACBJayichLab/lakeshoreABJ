@@ -173,6 +173,15 @@ class LS33xConfig(InstrumentConfig):
     #: answer to "which sensor does loop 2 read" -- a map of that kept here
     #: could only ever go stale or lie.
     read_loops: bool = True
+    #: Ask each loop for its gains (``PID?``) on that same slow cadence.  The
+    #: viewer holds no port, so polling is the only way P, I and D reach a
+    #: screen at all.  One transaction per loop per slow tick, counted at full
+    #: weight in the budget.  **Off by default**, unlike the other slow reads:
+    #: the default 218 + 336 config already sits at 19 transactions against a
+    #: 1 s cadence at 50 ms pacing, and one more per loop does not fit.  At the
+    #: 2 s cadence a cryostat usually runs there is room, and the example
+    #: configs turn it on.
+    read_pid: bool = False
     #: How often those are re-read.  ``OUTMODE`` changes approximately never;
     #: 30 cycles is a minute at the 2 s cadence a cryostat usually runs.
     loop_every_n_cycles: int = 30
@@ -272,6 +281,14 @@ class IpcConfig:
     #: client may only raise it above zero if this says so; commanding it to
     #: zero is always allowed.
     allow_analog_output: bool = False
+    #: May a file retune a loop?  Its own gate rather than riding on
+    #: `allow_writes`, because changing P, I and D is a different kind of act
+    #: from moving a setpoint: a setpoint moves a cryostat somewhere, gains
+    #: change *how it gets anywhere at all*, and a badly-tuned loop misbehaves
+    #: for the rest of the run rather than visibly at the moment of the command.
+    #: It applies no power on its own, which is why it is not one of the two
+    #: gates above -- a loop with range 0 stays inert however it is tuned.
+    allow_pid: bool = False
 
     #: Per-client policy: which *sources* may ask at all.  The five interlocks
     #: above all answer "may this action happen"; this one answers "may this
@@ -604,6 +621,8 @@ class AppConfig:
                     # even though they only land every Nth cycle: this is the
                     # worst frame, and the worst frame is what has to fit.
                     n += 2 * len(caps.loops)
+                if inst.read_pid:
+                    n += len(caps.loops)                  # PID? per loop
         return n
 
     def max_pacing_s(self) -> float:
