@@ -523,6 +523,11 @@ remembering which one moved last and getting the wrong edge half the time.
 Between them, an in-plot panel reports **per trace: mean, standard deviation
 and Δvalue**, and **once for the region, Δtime**.
 
+It is laid out as a table -- headed once, one row per trace, and the numbers
+right-aligned so the decimal points stack. Columns of padded spaces would not
+line up: the panel is drawn in the UI's proportional font, where two spaces
+are not a column.
+
 Three things worth knowing about those numbers:
 
 - **they come from full-resolution samples, never from what is drawn.** The

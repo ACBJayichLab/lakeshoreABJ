@@ -26,7 +26,8 @@ from PySide6 import QtCore, QtGui, QtWidgets  # noqa: E402
 from lschart.gui import theme  # noqa: E402
 from lschart.gui.window import GUI_SOURCE as GUI_SOURCE_NAME  # noqa: E402
 from lschart.gui.window import (  # noqa: E402
-    COL_CHANNEL, COL_SATURATED, DEFAULT_VIEW_WINDOW_S, ViewerWindow, warn_colour,
+    COL_CHANNEL, COL_SATURATED, DEFAULT_VIEW_WINDOW_S, ViewerWindow, _stats_html,
+    warn_colour,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -1179,6 +1180,40 @@ def test_the_statistics_come_from_the_full_resolution_samples(viewer):
     assert "mean" in viewer._stat_labels["K"].toPlainText()
     # Once for the region, not once per trace.
     assert viewer._stat_labels["K"].toPlainText().count("Δt") == 1
+
+
+def test_the_statistics_panel_lines_its_numbers_up_in_columns(viewer):
+    """Two spaces are not a column in a proportional font.
+
+    The old panel padded `name   mean 148.755   sd 0.034` with spaces and let
+    the font decide where that landed, so no two rows agreed on where a number
+    started.  The columns are a real table now, headed once, and the numbers
+    right-align in it so the decimal points stack.
+    """
+    viewer.cursor_button.click()
+    newest = viewer.tail.newest()
+    viewer._cursors = (newest - 600, newest - 60)
+    viewer._update_region_stats()
+
+    label = viewer._stat_labels["K"]
+    assert "<table" in label.toHtml()
+    # A table's cells come back one per line, which is enough to see that the
+    # headings are there once and that the value rows carry no labels of their
+    # own -- `Sample` is a cell, not `Sample   mean 148.755`.
+    cells = label.toPlainText().split("\n")
+    for heading in ("mean", "sd", "n"):
+        assert cells.count(heading) == 1, heading
+    assert f"{viewer._stats['K']['Sample'].mean:.3f}" in cells
+    assert "Sample" in cells
+
+
+def test_the_statistics_table_escapes_the_name_of_a_trace():
+    """A channel is named in a config file, and a config file can say `<`."""
+    markup = _stats_html("Δt 5 min",
+                                [("A & B <2>", "1.000", "0.001", "+0.000",
+                                  "7")])
+    assert "&amp;" in markup and "&lt;2&gt;" in markup
+    assert "<td" in markup and 'align="right"' in markup
 
 
 def test_putting_the_cursors_away_takes_the_statistics_with_them(viewer):

@@ -44,6 +44,7 @@ the *spacing* of the samples rather than their values.
 from __future__ import annotations
 
 import contextlib
+import html
 import logging
 import os
 import time
@@ -291,6 +292,37 @@ def _scaled(rng, factor: float) -> tuple[float, float]:
     middle = (rng[0] + rng[1]) / 2
     half = (rng[1] - rng[0]) / 2 / factor
     return middle - half, middle + half
+
+
+#: The region-statistics panel, as a table rather than as padded text.  The
+#: label is drawn in the UI's proportional font, where two spaces are not a
+#: column, so the columns are a real ``<table>``: every number lands under its
+#: heading whatever the trace is called and however many digits it carries.
+#: Numbers right-align, so decimal points line up down a column; names do not.
+def _stats_html(header: str, rows: list[tuple[str, str, str, str, str]]) -> str:
+    """The statistics panel's markup: a header line over one table.
+
+    ``rows`` is ``(name, mean, sd, delta, n)``, already formatted.  Nothing
+    here sets a text colour -- the item's own colour is the normal case, and
+    painting it here is the one thing that would break on a dark desktop.
+    """
+    def cell(text: str, align: str, head: bool = False) -> str:
+        tag = "th" if head else "td"
+        weight = "" if head else " font-weight: normal;"
+        return (f'<{tag} align="{align}" style="padding: 0px 7px;{weight}">'
+                f"{html.escape(text)}</{tag}>")
+
+    head = (cell("", "left", True) + cell("mean", "right", True)
+            + cell("sd", "right", True) + cell("Δ", "right", True)
+            + cell("n", "right", True))
+    body = "".join(
+        "<tr>" + cell(name, "left") + cell(mean, "right") + cell(sd, "right")
+        + cell(delta, "right") + cell(n, "right") + "</tr>"
+        for name, mean, sd, delta, n in rows
+    )
+    return (f"<div>{html.escape(header)}</div>"
+            f'<table cellspacing="0" cellpadding="0">'
+            f"<tr>{head}</tr>{body}</table>")
 
 
 def _duration(seconds: float) -> str:
@@ -1274,7 +1306,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             # placed in data coordinates, so it stays in the corner of the
             # panel through every pan and zoom instead of sliding off it.
             label = pg.TextItem(anchor=(0, 0), color="#263238",
-                                fill=pg.mkBrush(255, 255, 255, 225),
+                                fill=pg.mkBrush(255, 255, 255, 248),
                                 border=pg.mkPen("#b0bec5"))
             label.setParentItem(plot.getViewBox())
             label.setPos(10, 10)
@@ -2333,17 +2365,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 if st is None:
                     continue
                 self._stats.setdefault(unit, {})[name] = st
-                rows.append(
-                    f"{name}   mean {st.mean:.3f}   sd {st.std:.3f}   "
-                    f"Δ {st.delta:+.3f}   (n={st.n})"
-                )
+                rows.append((name, f"{st.mean:.3f}", f"{st.std:.3f}",
+                             f"{st.delta:+.3f}", f"{st.n}"))
             label = self._stat_labels[unit]
             if not rows:
                 label.hide()
                 continue
             # Δt once, in the header, because it is a property of the region
             # and not of any one trace.
-            label.setText("\n".join([f"Δt {_duration(t1 - t0)}", *rows]))
+            label.setHtml(_stats_html(f"Δt {_duration(t1 - t0)}",
+                                      rows))
             label.show()
         self.export_button.setEnabled(bool(samples))
         self._update_legend()
