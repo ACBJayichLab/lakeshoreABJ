@@ -298,6 +298,12 @@ class Application:
         )
         if self.ipc is not None:
             self.ipc.poller = self.poller
+            # The software loop, duck-typed: the service calls `arm` and `hold`
+            # by name and never learns what a supervisor is.  Handed over even
+            # on a recorder with no controller, because "there is no software
+            # loop here" is an answer a client needs by name rather than a
+            # missing attribute.
+            self.ipc.software_loop = self
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -343,6 +349,38 @@ class Application:
             setpoint_k = here
             log.warning("arming to hold the present temperature, %.4f K", setpoint_k)
         self.supervisor.arm(setpoint_k)
+
+    @property
+    def has_loop(self) -> bool:
+        """Is there a software loop here at all?
+
+        Part of the duck-typed contract the IPC service reaches this object by
+        (`has_loop`, `hold`, `arm`), and asked *before* a permission gate: a
+        recorder with no loop needs to be told it has no loop, not told it
+        lacks permission for something that could not happen anyway.
+        """
+        return self.supervisor is not None
+
+    def hold(self) -> str:
+        """Freeze the software loop's output where it is, and stop regulating.
+
+        The other half of a ``hold`` command, the instrument-loop half being
+        the IPC service's.  Duck-typed on purpose: what a supervisor is belongs
+        to `ltspm3`, and `lschart` may not import it -- so this asks the object
+        it was handed whether it has a ``panic_hold`` and says so plainly when
+        it does not.
+
+        Raises RuntimeError on a recorder with no software loop, which is a
+        thing to report by name rather than a silent success.
+        """
+        panic = getattr(self.supervisor, "panic_hold", None)
+        if not callable(panic):
+            raise RuntimeError(
+                "no software loop is configured -- this is a recorder, and "
+                "there is nothing here whose output could be frozen"
+            )
+        held = panic()
+        return f"software loop OPEN, heater frozen at {float(held):.3f}%"
 
     def current_temperature(self) -> float | None:
         """Latest usable reading on the control channel, or None."""

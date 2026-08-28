@@ -70,6 +70,16 @@ def ack(status: dict, cid: str) -> dict:
     raise AssertionError(f"no acknowledgement for {cid} in {status['commands']}")
 
 
+def send(svc: IpcService, kind: str, **kw) -> dict:
+    """Queue one command, run a cycle, hand back the acknowledgement.
+
+    One call because the halves have to happen in that order, and passing a
+    submit() into a call that already ran tick() evaluates them in the other.
+    """
+    cid = svc.spool.submit(kind, **kw)
+    return ack(tick(svc), cid)
+
+
 # -- the happy path ----------------------------------------------------------
 
 
@@ -569,3 +579,183 @@ def test_a_bad_loop_number_is_refused_by_the_driver_for_pid_too(tmp_path):
 def test_the_status_file_reports_the_pid_gate(tmp_path):
     svc = service(tmp_path, allow_pid=True)
     assert tick(svc)["commands"]["allow_pid"] is True
+
+
+# -- hold and arm ------------------------------------------------------------
+#
+# `hold` is the second panic action and is exempt from the source policy and
+# the power gates.  `arm` is the way back and is exempt from nothing: it starts
+# the loop driving the heater, which is the power-applying direction.
+
+
+class FakeLoop:
+    """A software loop, duck-typed exactly as `IpcService` reaches for one.
+
+    Three names, which is the whole contract: `has_loop`, `hold`, `arm`.
+    `present=False` is the recorder-only case -- the object is still handed
+    over, because "there is no loop here" is an answer a client needs by name.
+    """
+
+    def __init__(self, *, present=True):
+        self.has_loop = present
+        self.held = False
+        self.armed_at = "not armed"
+
+    def hold(self):
+        if not self.has_loop:
+            raise RuntimeError("no software loop is configured -- this is a recorder")
+        self.held = True
+        return "software loop OPEN, heater frozen at 43.000%"
+
+    def arm(self, setpoint_k=None):
+        if not self.has_loop:
+            raise RuntimeError("no controller is configured -- this is a recorder")
+        self.armed_at = setpoint_k
+
+
+def held_frame(**readings):
+    return Frame(t_wall=time.time(), t_mono=time.monotonic(),
+                 readings={k: Reading(k, v) for k, v in readings.items()})
+
+
+class FakePoller:
+    def __init__(self, frame):
+        self.last_frame = frame
+
+
+def holding_service(tmp_path, inst, **kw):
+    """A service whose poller has a frame, so `hold` has temperatures to use."""
+    svc = service(tmp_path, inst, **kw)
+    svc.poller = FakePoller(held_frame(**{inst.channels["A"]: 123.25}))
+    return svc
+
+
+def test_hold_moves_a_loop_to_its_own_sensors_present_temperature(tmp_path):
+    inst = instrument()
+    inst.read_frame()                       # discover labels and bindings
+    svc = holding_service(tmp_path, inst)
+    cid = svc.spool.submit("hold")
+    entry = ack(tick(svc), cid)
+    assert entry["ok"], entry["message"]
+    assert inst.setpoint(1) == pytest.approx(123.25, abs=0.01)
+
+
+def test_hold_switches_ramping_off_before_moving_the_setpoint(tmp_path):
+    """The other order makes the instrument traverse to it instead of holding."""
+    inst = instrument()
+    inst.read_frame()
+    inst.set_ramp(1, 2.5, enable=True)
+    svc = holding_service(tmp_path, inst)
+    cid = svc.spool.submit("hold")
+    message = ack(tick(svc), cid)["message"]
+
+    on, rate = inst.ramp(1)
+    assert on is False
+    # The rate is kept, so a sweep can be resumed without remembering it.
+    assert rate == pytest.approx(2.5, abs=0.01)
+    assert "2.5 K/min kept" in message
+
+
+def test_hold_skips_a_loop_whose_sensor_is_not_readable_and_names_it(tmp_path):
+    """A hold that wrote a bad number would be worse than one that admits it."""
+    inst = instrument()
+    inst.read_frame()
+    before = inst.setpoint(1)
+    svc = service(tmp_path, inst)
+    svc.poller = FakePoller(held_frame())        # no readings at all
+    cid = svc.spool.submit("hold")
+    entry = ack(tick(svc), cid)
+    assert not entry["ok"]
+    assert "not readable" in entry["message"]
+    assert inst.setpoint(1) == pytest.approx(before, abs=0.01)
+
+
+def test_hold_is_refused_on_a_read_only_instrument(tmp_path):
+    svc = service(tmp_path, instrument(allow_writes=False))
+    svc.poller = FakePoller(held_frame(Sample=96.0))
+    entry = send(svc, "hold")
+    assert not entry["ok"] and "read-only" in entry["message"]
+
+
+def test_hold_freezes_the_software_loop_too(tmp_path):
+    inst = instrument()
+    inst.read_frame()
+    svc = holding_service(tmp_path, inst)
+    svc.software_loop = FakeLoop()
+    cid = svc.spool.submit("hold")
+    entry = ack(tick(svc), cid)
+    assert entry["ok"]
+    assert svc.software_loop.held
+    assert "frozen" in entry["message"]
+
+
+def test_hold_on_a_recorder_with_no_software_loop_still_holds_the_instrument(tmp_path):
+    """One half missing must not fail the other. It is a panic action."""
+    inst = instrument()
+    inst.read_frame()
+    svc = holding_service(tmp_path, inst)
+    svc.software_loop = FakeLoop(present=False)
+    entry = send(svc, "hold")
+    assert entry["ok"]
+    assert inst.setpoint(1) == pytest.approx(123.25, abs=0.01)
+    assert "recorder" in entry["message"]
+
+
+def test_hold_needs_no_power_gate(tmp_path):
+    """It is a panic action: stopping never waits on another permission."""
+    inst = instrument()
+    inst.read_frame()
+    svc = holding_service(tmp_path, inst)
+    assert send(svc, "hold")["ok"]
+
+
+def test_arm_is_refused_without_the_analog_gate(tmp_path):
+    """Arming starts the loop driving. That is the power-applying direction."""
+    svc = service(tmp_path)
+    svc.software_loop = FakeLoop()
+    entry = send(svc, "arm")
+    assert not entry["ok"]
+    assert "ipc.allow_analog_output" in entry["message"]
+
+
+def test_arm_with_no_setpoint_holds_where_the_cryostat_is(tmp_path):
+    svc = service(tmp_path, allow_analog_output=True)
+    svc.software_loop = FakeLoop()
+    entry = send(svc, "arm")
+    assert entry["ok"]
+    assert svc.software_loop.armed_at is None
+    assert "at now" in entry["message"]
+
+
+def test_arm_with_a_setpoint_uses_it(tmp_path):
+    svc = service(tmp_path, allow_analog_output=True)
+    svc.software_loop = FakeLoop()
+    cid = svc.spool.submit("arm", kelvin=96.5)
+    assert ack(tick(svc), cid)["ok"]
+    assert svc.software_loop.armed_at == pytest.approx(96.5)
+
+
+def test_matlabs_empty_reads_as_no_setpoint_rather_than_a_bad_one(tmp_path):
+    """MATLAB spells "no value" as [], and jsonencode writes it literally."""
+    svc = service(tmp_path, allow_analog_output=True)
+    svc.software_loop = FakeLoop()
+    cid = svc.spool.submit("arm", kelvin=[])
+    assert ack(tick(svc), cid)["ok"]
+    assert svc.software_loop.armed_at is None
+
+
+def test_arm_on_a_recorder_with_no_software_loop_says_so_by_name(tmp_path):
+    svc = service(tmp_path, allow_analog_output=True)
+    svc.software_loop = FakeLoop(present=False)
+    entry = send(svc, "arm")
+    assert not entry["ok"] and "only records" in entry["message"]
+
+
+def test_a_recorder_with_no_loop_is_told_that_and_not_about_a_gate(tmp_path):
+    """A permission for something that cannot happen sends the reader to edit
+    a config key that would change nothing."""
+    svc = service(tmp_path)                       # analog gate shut as well
+    svc.software_loop = FakeLoop(present=False)
+    entry = send(svc, "arm")
+    assert "only records" in entry["message"]
+    assert "ipc.allow_analog_output" not in entry["message"]

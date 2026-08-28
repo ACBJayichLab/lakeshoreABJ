@@ -95,9 +95,11 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `range` | `output`, `value` 0–3 — **applies power** on a 33x |
 | `analog` | `percent` — **applies power** on a 218; there is no inert half to it |
 | `pid` | `loop`, `p`, `i`, `d` — the instrument's own gains, all three together |
-| `heaters_off` | every heater on every writable instrument to zero |
+| `heaters_off` | **panic** — every heater on every writable instrument to zero |
+| `hold` | **panic** — every closed loop stopped where it is; a software loop's output frozen |
+| `arm` | `kelvin` (optional) — close the software loop again. **Applies power**, and is exempt from nothing |
 
-`heaters_off` is the only command that is not aimed at one box. Every other
+`heaters_off` and `hold` are the only commands not aimed at one box. Every other
 handler takes an argument that means something on exactly one instrument;
 this one takes none and means "stop heating", which on a two-box cryostat had
 better include the box carrying the sample heater. A panic button that leaves
@@ -228,13 +230,18 @@ torn read: the recorder keeps the last overlay it managed to parse rather than
 widening the policy, because half a file is not permission.
 
 **The panic commands are exempt**, and are the only things that are —
-`heaters_off` bypasses the source policy *and* the two power gates above. It
-does not bypass `ipc.accept_commands`, `allow_writes` or `transport.read_only`:
-a box configured read-only stays read-only and is named in the reply. The
-exemption belongs to the command **kind**, not to the viewer — the recorder
-cannot tell a menu press from a script, so MATLAB's `heatersOff()` gets it too.
-That is deliberate: an automated abort is a large part of why a panic command
-exists.
+`heaters_off` and `hold` bypass the source policy *and* the two power gates
+above. They do not bypass `ipc.accept_commands`, `allow_writes` or
+`transport.read_only`: a box configured read-only stays read-only and is named
+in the reply. The exemption belongs to the command **kind**, not to the viewer
+— the recorder cannot tell a menu press from a script, so MATLAB's
+`heatersOff()` and `hold()` get it too. That is deliberate: an automated abort
+is a large part of why a panic command exists.
+
+`arm` is **not** a panic command and is exempt from nothing. It is the way back
+from a `hold`, and arming starts the loop driving the heater, which is the
+power-applying direction — so it passes the source policy,
+`ipc.allow_analog_output` and `allow_writes` like any other write.
 
 `lschart -c CONFIG status` prints the effective policy, and `check` prints the
 configured ceiling before anything is running.
@@ -243,6 +250,43 @@ A refusal is not a crash. A driver limit saying no (`max_setpoint_k`,
 `max_output_pct`, a loop the box does not have) comes back as
 `refused: <reason>` and is logged at WARNING, not as an ERROR with a traceback
 — on a live cryostat, an operator's typo must not look like a fault in the log.
+
+## The two ways to stop
+
+`heaters_off` removes power. `hold` stops movement. They are different actions
+and neither is a superset of the other.
+
+**`hold`**, per closed 33x loop: ramping off **first**, then the setpoint moved
+to that loop's own bound sensor's present temperature. The order is the whole
+trick — set the setpoint while ramping is still on and the instrument traverses
+to it instead of holding it. The configured rate is kept and only the enable is
+cleared, so a sweep can be resumed without remembering what the rate was.
+Ramping is left off: silently restoring it would surprise whoever asked for a
+hold. Each loop gets *its own* sensor's temperature, from `OUTMODE?` — two loops
+on one 336 hold two different things. A loop with no binding yet, a loop not in
+closed loop, and a loop whose sensor did not read this cycle are each skipped
+and named, because a hold that wrote a bad number would be worse than one that
+admits it could not.
+
+On the software loop, `hold` freezes the output where it is and stops
+regulating.
+
+**Two honest things about `hold`.** It is not a synonym for less power: while a
+ramp is heading *down*, its setpoint sits below the temperature the cryostat has
+actually reached, so holding — which adopts that reached temperature — demands
+*more* heat than the ramp was demanding. It never raises a range, so it stays
+bounded by the power already permitted. And it means two different things on the
+two boxes: a 33x loop holds a **temperature** and keeps regulating; a 218 holds a
+**power**, and nothing regulates the sample afterwards, so it will drift with
+the cryostat.
+
+**`arm`** is the way back. With no `kelvin` it arms to hold the temperature the
+cryostat is at now, which is what avoids handing the PID a step to chase. If the
+cryostat drifted during the hold, the accumulated error is real — the
+supervisor's clamp and rate limiter still bound what the output may do about it,
+which is exactly why this goes through the loop's own `arm` rather than around
+it. On a recorder with no software loop it says so by name rather than quietly
+succeeding.
 
 ## Switching it on
 

@@ -159,7 +159,8 @@ in three places is the same table going stale in three places.
 | **PID gains** | a box with loops | P, I and D on **the selected loop** — the instrument's own, not any software loop's. All three go out together. Applies no power |
 | **Heater range** | a selected loop that drives a heater output | 0/1/2/3, applied to **that loop's** output. **Above 0 this applies power** |
 | **Analog output** | a box with a settable analog output (a 218) | one percentage. **Above 0 this applies power** — there is no inert half |
-| **All heaters OFF** | always | every writable instrument to zero, 33x ranges and 218 outputs alike |
+| **Arm software loop** | always | close the software loop at the temperature the cryostat is at now — the way back from a hold. **This applies power** |
+| **Panic ▾** | always, and never greyed out | a menu of the two ways to stop: **All heaters OFF** and **All temperatures HOLD** |
 
 **Only the relevant grouping is ever shown.** Selecting a 336 loop 3 or 4
 hides the heater-range control, because there is no range to set — and says so
@@ -210,12 +211,51 @@ commanded number — so asking for 43% never shows 0% again in the seconds while
 power is the question.
 
 **One unacknowledged command locks every button.** Otherwise a range can be
-queued against a setpoint that turned out to be refused.
+queued against a setpoint that turned out to be refused. The Panic menu is the
+exception, deliberately: that reasoning inverts for the stopping direction — no
+pending command can make it wrong to stop, and an operator reaching for Panic
+while somebody's setpoint is still being acknowledged must not find it greyed
+out.
 
-The panic button is deliberately *not* aimed at the selected instrument. Every
-other control needs an argument that means something on one box; this one means
-"stop heating", which on a two-box cryostat had better include the box carrying the
-sample heater.
+## The Panic menu
+
+Two ways to stop, behind a menu, and **three clicks by design**: open the menu,
+choose the action, confirm it. These are needed almost never and must not be
+reachable by accident; the middle click is what a mis-aimed one lands on.
+
+| | |
+|---|---|
+| **All heaters OFF** | 33x ranges to 0 and 218 analog outputs to 0%, on every writable box. Setpoints are not changed |
+| **All temperatures HOLD** | every closed loop's ramping switched off (the rate is kept) and its setpoint moved to its own sensor's present temperature; a software loop's output frozen |
+
+Neither is aimed at the selected instrument. Every other control needs an
+argument that means something on one box; these mean "stop", which on a two-box
+cryostat had better include the box carrying the sample heater.
+
+**The menu sits outside the command group, and that is structural.** Both kinds
+are exempt from the recorder's per-client source policy, so when that policy
+switches the rest of the panel off these must stay live — and in Qt a child of a
+disabled parent is disabled however firmly it is enabled. A panel that greyed
+out a button the recorder would in fact obey would be lying at the moment it
+matters most.
+
+**What the bypass covers, and what it does not.** These two bypass the source
+policy and the two power gates. They do *not* bypass `ipc.accept_commands`,
+`allow_writes` or `transport.read_only` — a box configured read-only stays
+read-only and is named in the reply. The menu's tooltip says exactly that,
+rather than "bypasses interlocks", which would be a promise it does not keep.
+
+**Hold's dialog says two things that are easy to get wrong.** Hold is not a
+synonym for less power: while a ramp is heading down, its setpoint sits below
+the temperature the cryostat has reached, so holding demands *more* heat than
+the ramp was demanding. And hold means two different things on the two boxes — a
+33x loop holds a temperature and keeps regulating; a 218 holds a power, and
+nothing regulates the sample afterwards.
+
+**Arm is outside the menu**, next to it rather than in it. Arming starts the
+loop driving the heater again, which is the power-applying direction; sitting it
+beside the two stopping actions would suggest it shares their exemptions, and it
+shares none of them.
 
 ## Zooming with the mouse
 

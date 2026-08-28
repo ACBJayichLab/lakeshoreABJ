@@ -581,6 +581,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         box.addWidget(scroll, 1)
 
         box.addWidget(self._command_box())
+        # OUTSIDE the command group, and that is structural rather than
+        # cosmetic. The panic kinds are exempt from the source policy at the
+        # recorder, so when that policy switches the panel off these must stay
+        # live -- and a Qt child of a disabled parent is disabled however
+        # firmly you enable it.
+        box.addWidget(self._panic_box())
         self.links_label = QtWidgets.QLabel("")
         self.links_label.setWordWrap(True)
         box.addWidget(self.links_label)
@@ -622,21 +628,55 @@ class ViewerWindow(QtWidgets.QMainWindow):
         box.addWidget(self._range_group())
         box.addWidget(self._analog_group())
 
-        # Never gated on anything.  The safe direction is always available, and
-        # a panic button that can be greyed out is not one.
-        self.off_button = QtWidgets.QPushButton("All heaters OFF")
-        self.off_button.setToolTip(
-            "Every heater this recorder may write to, to zero: 33x ranges and "
-            "218 analog outputs alike. Boxes it may not write to are left "
-            "alone and named in the reply.")
-        self.off_button.setStyleSheet("font-weight:bold; padding:4px;")
-        self.off_button.clicked.connect(self._send_heaters_off)
-        box.addWidget(self.off_button)
+        # The way back from a hold, and deliberately *outside* the panic menu:
+        # arming starts the loop driving the heater again, which is the
+        # power-applying direction. Putting it beside the two stopping actions
+        # would suggest it shares their exemptions. It shares none of them.
+        self.arm_button = QtWidgets.QPushButton("Arm software loop…")
+        self.arm_button.setToolTip(
+            "Close the software loop at the temperature the cryostat is at "
+            "now — the way back from a hold. This APPLIES POWER and is gated "
+            "like any other write.")
+        self.arm_button.clicked.connect(self._send_arm)
+        box.addWidget(self.arm_button)
 
         self.ack_label = QtWidgets.QLabel("")
         self.ack_label.setWordWrap(True)
         box.addWidget(self.ack_label)
         return self.command_group
+
+    def _panic_box(self) -> QtWidgets.QWidget:
+        """The two ways to stop, behind a menu.
+
+        **Three clicks by design**: open the menu, choose the action, confirm
+        it. These are needed almost never and must not be reachable by
+        accident, and the middle click is what a mis-aimed one lands on.
+
+        Its own widget rather than a button in the command group, because it
+        must survive that group being switched off: the panic kinds are exempt
+        from the per-client source policy at the recorder, and a Qt child of a
+        disabled parent is disabled no matter how firmly it is enabled. A panel
+        that greyed out a button the recorder would in fact obey would be
+        lying at the moment that matters most.
+
+        The tooltip says what the bypass covers and what it does not, rather
+        than "bypasses interlocks" — which would be a promise it does not keep.
+        """
+        self.panic_button = QtWidgets.QToolButton()
+        self.panic_button.setText("Panic ▾")
+        self.panic_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.panic_button.setToolTip(
+            "Two ways to stop. Both bypass the per-client source policy and "
+            "the two power gates. Neither bypasses a read-only instrument, "
+            "which is left alone and named in the reply.")
+        self.panic_button.setStyleSheet("font-weight:bold; padding:4px;")
+        menu = QtWidgets.QMenu(self.panic_button)
+        self.off_action = menu.addAction("All heaters OFF…")
+        self.off_action.triggered.connect(self._send_heaters_off)
+        self.hold_action = menu.addAction("All temperatures HOLD…")
+        self.hold_action.triggered.connect(self._send_hold)
+        self.panic_button.setMenu(menu)
+        return self.panic_button
 
     def _setpoint_group(self) -> QtWidgets.QWidget:
         self.setpoint_group = QtWidgets.QGroupBox("Setpoint")
@@ -1104,11 +1144,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         allowed = self.source.source_allowed(GUI_SOURCE)
         enabled = bool(self.spool) and accepted and allowed and bool(names)
         self.command_group.setEnabled(enabled)
-        # The panic button is exempt from the source policy at the recorder, so
-        # it must not be greyed out by it here.  Disabling a control the
-        # recorder would in fact obey is the one way this panel can lie.
-        if not enabled and self.spool and accepted and not allowed:
-            self.off_button.setEnabled(True)
+        # The panic menu is not in that group -- see `_panic_box` -- so it is
+        # unaffected here, which is the point. It follows the spool alone.
+        self.panic_button.setEnabled(bool(self.spool) and accepted)
         if not self.spool:
             why = "this viewer was started without a command spool"
         elif not accepted:
@@ -1960,9 +1998,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
         the recorder's next cycle, and letting a second one be queued while the
         first is unacknowledged is how you get a range raised against a
         setpoint that turned out to be refused.
+
+        **The panic menu is deliberately not in this list.** That reasoning
+        inverts for the stopping direction: no pending command can make it
+        wrong to stop, and an operator reaching for Panic while somebody's
+        setpoint is still being acknowledged must not find it greyed out.
+        `arm` *is* in the list -- it applies power, so it queues like any
+        other write.
         """
         return [self.send_button, self.pid_button, self.range_button,
-                self.analog_button, self.off_button]
+                self.analog_button, self.arm_button]
 
     def _confirm(self, title: str, text: str) -> bool:
         return QtWidgets.QMessageBox.question(
@@ -2099,6 +2144,55 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # quantity: it reads back as the integer it was set to or it did not
         # take, so half a step is all the slack it needs.
         self._await_readback(f"{instrument}.range{output}", float(value), 0.5)
+
+    def _send_hold(self) -> None:
+        """Stop every loop where it is.  The second panic action."""
+        if self.spool is None:
+            return
+        if not self._confirm(
+            "Hold all temperatures",
+            "Stop every loop where it is?\n\n"
+            "Each closed 33x loop has its ramping switched off (the rate is "
+            "kept) and its setpoint moved to its own sensor's present "
+            "temperature. A software loop has its output frozen and stops "
+            "regulating.\n\n"
+            "HOLD IS NOT A SYNONYM FOR LESS POWER. While a ramp is heading "
+            "down, its setpoint sits below the temperature the cryostat has "
+            "actually reached — so holding, which adopts that reached "
+            "temperature, demands more heat than the ramp was demanding. It "
+            "never raises a range, so it stays inside the power already "
+            "permitted.\n\n"
+            "Hold also means two different things on the two boxes: a 33x loop "
+            "holds a TEMPERATURE and keeps regulating; a 218 holds a POWER, "
+            "and nothing regulates the sample afterwards, so it will drift "
+            "with the cryostat.\n\n"
+            "Ramping is left off. Turn it back on yourself when you want it.",
+        ):
+            return
+        self._queue("hold", instrument="")
+        # Every loop at once; there is no single readback that confirms it.
+        self._awaiting = None
+
+    def _send_arm(self) -> None:
+        """Close the software loop again.  The power-applying direction."""
+        if self.spool is None:
+            return
+        if not self._confirm(
+            "Arm the software loop",
+            "Close the software loop at the temperature the cryostat is at "
+            "now?\n\n"
+            "THIS APPLIES POWER. The loop starts driving the heater again. It "
+            "is not a panic action and is exempt from nothing: it needs "
+            "ipc.allow_analog_output like any other write.\n\n"
+            "If the cryostat drifted while it was held, the error that has "
+            "accumulated is real — but the supervisor's clamp and rate limiter "
+            "still bound what the output can do about it.\n\n"
+            "A recorder with no software loop will say so rather than doing "
+            "anything.",
+        ):
+            return
+        self._queue("arm", instrument="")
+        self._awaiting = None
 
     def _setpoint_now(self, instrument: str) -> str:
         """What the box says its setpoint is, for the range dialog.

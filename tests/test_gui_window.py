@@ -706,7 +706,9 @@ def test_the_panic_button_is_not_aimed_at_the_selected_instrument(
     w = cryostat(tmp_path, qt_app, [CTRL, MON])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
     w.instrument_combo.setCurrentIndex(0)
-    w.off_button.click()
+    # The action, not the button: the button opens the menu, and clicking it
+    # here would block on a modal popup rather than send anything.
+    w.off_action.trigger()
 
     (cmd,) = queued(w)
     assert cmd["kind"] == "heaters_off" and cmd["instrument"] == ""
@@ -1299,3 +1301,75 @@ def test_the_gains_follow_the_selected_loop(tmp_path, qt_app):
 def test_a_box_with_no_loops_offers_no_gains(tmp_path, qt_app):
     w = cryostat(tmp_path, qt_app, [MON])
     assert not showing(w.pid_group)
+
+
+# -- the panic menu ----------------------------------------------------------
+#
+# Three clicks by design: open the menu, choose the action, confirm it. These
+# are needed almost never and must not be reachable by accident.
+
+
+def test_the_panic_menu_holds_both_ways_of_stopping(tmp_path, qt_app):
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    labels = [a.text() for a in w.panic_button.menu().actions()]
+    assert any("heaters OFF" in t for t in labels)
+    assert any("HOLD" in t for t in labels)
+    w.close()
+
+
+def test_hold_is_aimed_at_the_recorder_and_not_at_one_box(tmp_path, qt_app,
+                                                          monkeypatch):
+    w = cryostat(tmp_path, qt_app, [CTRL, MON])
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.hold_action.trigger()
+    (cmd,) = queued(w)
+    assert cmd["kind"] == "hold" and cmd["instrument"] == ""
+    w.close()
+
+
+def test_cancelling_the_confirmation_sends_nothing(tmp_path, qt_app, monkeypatch):
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    monkeypatch.setattr(w, "_confirm", lambda *a: False)
+    w.hold_action.trigger()
+    w.off_action.trigger()
+    assert queued(w) == []
+    w.close()
+
+
+def test_arm_is_outside_the_panic_menu(tmp_path, qt_app, monkeypatch):
+    """It applies power. Sitting beside the stopping actions would suggest it
+    shares their exemptions, and it shares none of them."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    labels = [a.text() for a in w.panic_button.menu().actions()]
+    assert not any("Arm" in t for t in labels)
+
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.arm_button.click()
+    (cmd,) = queued(w)
+    assert cmd["kind"] == "arm" and cmd["instrument"] == ""
+    w.close()
+
+
+def test_the_source_policy_does_not_grey_out_the_panic_menu(tmp_path, qt_app):
+    """The recorder would obey it. Disabling it here would be a lie."""
+    w = cryostat(tmp_path, qt_app, [CTRL], commands={
+        "accepted": True, "recent": [], "source_policy": True,
+        "source_default": False,
+        "sources": [{"name": "lschart-gui", "allowed": False,
+                     "configured": False, "disabled_at_runtime": False}],
+    })
+    w.refresh()
+    assert not w.command_group.isEnabled()
+    assert w.panic_button.isEnabled()
+    w.close()
+
+
+def test_a_pending_command_does_not_lock_the_panic_menu(tmp_path, qt_app,
+                                                        monkeypatch):
+    """No pending command can make it wrong to stop."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.send_button.click()                      # queues a setpoint, unacked
+    assert not w.send_button.isEnabled()
+    assert w.panic_button.isEnabled()
+    w.close()

@@ -102,6 +102,17 @@ function selftest(directory)
                'and restart it.'], message);
     end
 
+    % -- 6. are the panic commands reachable -------------------------------
+    %
+    % Named rather than exercised.  hold() and heatersOff() both change what
+    % the cryostat is doing, and a selftest that moved a setpoint or dropped a
+    % heater range because somebody ran it to check their install would be a
+    % worse failure than any it could detect.
+    fprintf('panic       : heatersOff() and hold() are available here; ');
+    fprintf('arm() is the way back from a hold\n');
+    fprintf('              (not exercised -- both change what the cryostat ');
+    fprintf('is doing)\n');
+
     fprintf('\nOK -- MATLAB can read this recorder and command it.\n');
 end
 

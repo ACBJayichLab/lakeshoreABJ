@@ -63,7 +63,7 @@ log = logging.getLogger(__name__)
 #: What they do *not* bypass is `ipc.accept_commands`, `allow_writes` or
 #: `transport.read_only` -- a box configured read-only stays read-only, and is
 #: named in the reply rather than silently skipped.
-PANIC_KINDS = frozenset({"heaters_off"})
+PANIC_KINDS = frozenset({"heaters_off", "hold"})
 
 
 class CommandError(ValueError):
@@ -72,7 +72,10 @@ class CommandError(ValueError):
 
 def _as_float(args: dict, key: str, *, required: bool = True,
               default: float | None = None) -> float | None:
-    if key not in args or args[key] is None:
+    # `[]` counts as absent: MATLAB spells "no value" that way and jsonencode
+    # writes it out literally, so a client that sends one means the same thing
+    # as one that sends nothing.
+    if key not in args or args[key] is None or args[key] == []:
         if required:
             raise CommandError(f"missing required argument {key!r}")
         return default
@@ -130,6 +133,11 @@ class IpcService:
         #: Set by the application once the poller exists; read duck-typed so
         #: this module never needs to know what a supervisor is.
         self.poller = None
+        #: The software loop, also set by the application, also duck-typed:
+        #: `has_loop`, `hold()` and `arm(setpoint_k=None)` are read by name.
+        #: ``None`` on anything that did not hand one over, and both commands
+        #: then say so by name rather than failing on a missing attribute.
+        self.software_loop = None
 
         self.applied = 0
         self.refused = 0
@@ -418,6 +426,149 @@ class IpcService:
         d = _as_float(cmd.args, "d")
         inst.set_pid(loop, p, i, d)
         return f"{inst.name} loop {loop} PID -> {p:.1f}, {i:.1f}, {d:.1f} (verified)"
+
+    def _do_hold(self, cmd: Command) -> str:
+        """Stop everything where it is: the second panic action.
+
+        Per 33x loop, **ramping off first and the setpoint second**.  The order
+        is the whole trick: set the setpoint while ramping is still on and the
+        instrument traverses to it instead of holding it, which is the opposite
+        of what was asked for.  The rate itself is left configured -- only the
+        enable is cleared -- so a sweep can be resumed by turning ramping back
+        on rather than by remembering what the rate used to be.  Ramping is
+        left off; silently restoring it would surprise whoever pressed this.
+
+        The setpoint each loop is given is **its own bound sensor's present
+        temperature**, from the instrument's ``OUTMODE?`` answer and the last
+        frame.  Not the control channel's, and not one number for the box: two
+        loops on one 336 hold two different things.
+
+        A loop is skipped, and named, when there is nothing sensible to hold it
+        at: no binding yet, a sensor whose reading this cycle was not usable,
+        or a mode where a setpoint means nothing.  A hold that wrote a bad
+        number would be worse than one that admits it could not.
+
+        Then the software loop, if there is one: its output is frozen and it
+        stops regulating.  Note that is a *power*, not a temperature -- nothing
+        regulates the sample afterwards.
+
+        Like `heaters_off`, no single failure fails the command.  A panic
+        action that gives up halfway and reports failure leaves an operator
+        unable to tell what it did manage to do.
+        """
+        frame = getattr(self.poller, "last_frame", None)
+        readings = getattr(frame, "readings", {}) or {}
+        done: list[str] = []
+        skipped: list[str] = []
+
+        for inst in self.instruments:
+            if not hasattr(inst, "set_setpoint") or not hasattr(inst, "caps"):
+                continue
+            if not getattr(inst, "allow_writes", False):
+                skipped.append(f"{inst.name} (read-only here)")
+                continue
+            for loop in inst.caps.loops:
+                try:
+                    held, message = self._hold_loop(inst, loop, readings)
+                except Exception as exc:  # noqa: BLE001 - one loop must not stop the rest
+                    log.warning("hold: %s loop %d failed: %s", inst.name, loop, exc)
+                    skipped.append(f"{inst.name} loop {loop} ({exc})")
+                    continue
+                (done if held else skipped).append(message)
+
+        loop_message = ""
+        if self.software_loop is not None:
+            try:
+                loop_message = self.software_loop.hold()
+            except RuntimeError as exc:
+                # A recorder with no software loop.  Named, not silent: a
+                # client that thinks it has one needs to hear that it has not.
+                skipped.append(str(exc))
+            except Exception as exc:  # noqa: BLE001
+                log.exception("hold: the software loop refused")
+                skipped.append(f"software loop ({exc})")
+            else:
+                done.append(loop_message)
+
+        if not done:
+            raise CommandError(
+                "nothing to hold: "
+                + ("; ".join(skipped) if skipped else
+                   "no loop on this recorder is writable")
+            )
+        message = "; ".join(done)
+        if skipped:
+            message += f"; left alone: {', '.join(skipped)}"
+        return message
+
+    @staticmethod
+    def _hold_loop(inst, loop: int, readings: dict) -> tuple[bool, str]:
+        """``(held, sentence)`` for one loop.
+
+        The flag rather than a convention about the sentence, because every
+        sentence here starts with the instrument's name and the caller has to
+        be able to tell "held" from "could not" without parsing prose.
+        """
+        binding = getattr(inst, "loop_bindings", {}).get(loop)
+        if binding is None:
+            return False, f"{inst.name} loop {loop} (no binding read yet)"
+        if not binding.closed_loop:
+            return False, f"{inst.name} loop {loop} ({binding.mode_name})"
+        sensor = binding.sensor
+        reading = readings.get(sensor) if sensor else None
+        if reading is None or not getattr(reading, "usable", False):
+            return False, (f"{inst.name} loop {loop} "
+                           f"({sensor or 'its sensor'} not readable this cycle)")
+        kelvin = float(reading.kelvin)
+
+        # Ramping off FIRST.  See the caller's docstring: the other order
+        # traverses to the setpoint instead of holding it.
+        was_ramping, rate = inst.ramp(loop)
+        if was_ramping:
+            inst.set_ramp(loop, rate, enable=False)
+        inst.set_setpoint(loop, kelvin)
+        note = f" (ramp OFF, rate {rate:g} K/min kept)" if was_ramping else ""
+        return True, f"{inst.name} loop {loop} holding {kelvin:.4f} K{note}"
+
+    def _do_arm(self, cmd: Command) -> str:
+        """The way back from a hold, and deliberately *not* a panic action.
+
+        Arming starts the software loop driving the heater again, which is the
+        power-applying direction.  So it passes the source policy,
+        `ipc.allow_analog_output` and `allow_writes` like any other write --
+        the exemption the panic kinds get is for stopping, never for starting.
+
+        With no setpoint it arms to hold the temperature the cryostat is at
+        now, which is what avoids handing the PID a step to chase.  If the
+        cryostat drifted during the hold, the accumulated error is real; the
+        supervisor's clamp and rate limiter still bound what the output can do
+        about it, which is precisely why this goes through ``arm`` rather than
+        around it.
+        """
+        # Before the gate, deliberately.  A recorder with no loop needs to be
+        # told it has no loop; telling it instead that it lacks permission for
+        # something that could not happen anyway sends whoever reads that
+        # message to edit a config key that would change nothing.
+        if not getattr(self.software_loop, "has_loop", False):
+            raise CommandError(
+                "this recorder has no software loop to arm -- it only records. "
+                "A software loop comes from `ltspm3`, not from `lschart`"
+            )
+        if not self.allow_analog_output:
+            raise CommandError(
+                "arming the software loop starts it driving the heater, and "
+                "this recorder does not accept that from a file; set "
+                "ipc.allow_analog_output: true if a remote client really "
+                "should be able to close the loop"
+            )
+        kelvin = _as_float(cmd.args, "kelvin", required=False, default=None)
+        try:
+            self.software_loop.arm(kelvin)
+        except RuntimeError as exc:
+            raise CommandError(str(exc)) from None
+        if kelvin is None:
+            return "software loop ARMED, holding the temperature it is at now"
+        return f"software loop ARMED at {kelvin:.4f} K"
 
     def _do_heaters_off(self, cmd: Command) -> str:
         """The panic button.  Always available: lowering power is the safe direction.

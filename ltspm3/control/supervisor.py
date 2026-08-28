@@ -362,6 +362,37 @@ class HeaterSupervisor:
         log.warning("ramp aborted, holding %.4f K", held)
         return held
 
+    def panic_hold(self) -> float:
+        """Stop regulating and leave the heater exactly where it is.
+
+        The controller half of ``lschart``'s ``hold`` command, and the one seam
+        the file interface reaches into this package by -- called duck-typed by
+        name, so ``lschart`` still never imports ``ltspm3``.
+
+        Composed rather than invented: :meth:`abort_ramp` stops any sweep where
+        it stands, and ``set_mode(MANUAL)`` adopts the output the heater is
+        currently at.  Both already existed; what did not was a single name for
+        the pair, and a panic action assembled from three calls at the call
+        site is one that can be assembled wrong.
+
+        **The clamp and the rate limiter still apply.**  Manual mode is not raw
+        access to the DAC -- every value still passes ``clamp`` and
+        ``_rate_limit`` on the way out, which is exactly why this goes through
+        the supervisor rather than around it.
+
+        Note this holds a *power*, not a temperature.  Nothing regulates the
+        sample afterwards, so it will drift with the cryostat -- which is the
+        opposite of what "hold" means on a 33x loop, and is why the viewer says
+        so out loud before doing it.  :meth:`arm` is the way back.
+
+        Returns the percentage being held.
+        """
+        self.abort_ramp()
+        self.set_mode(LoopMode.MANUAL)
+        held = self.manual_pct
+        log.warning("PANIC HOLD: loop open, heater frozen at %.3f%%", held)
+        return held
+
     def set_manual_percent(self, pct: float) -> None:
         """Request a manual output.  Still clamped and rate limited on the way out."""
         self.manual_pct = pct

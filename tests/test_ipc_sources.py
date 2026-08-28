@@ -25,6 +25,13 @@ from lschart.model import Frame, Reading
 from lschart.transport import LoopbackTransport
 
 
+class _Poller:
+    """Stands in for the poller, which is where `hold` finds its temperatures."""
+
+    def __init__(self, frame):
+        self.last_frame = frame
+
+
 def instrument(name="ls336", *, allow_writes=True) -> LS33x:
     return LS33x(
         LoopbackTransport(Sim33x(SimulatedCryostat(None, start_k=96.0), model="336"),
@@ -224,6 +231,28 @@ def test_permitting_a_source_does_not_make_a_read_only_box_writable(tmp_path):
                   sources={"default": True})
     entry = send(svc, "setpoint", loop=1, kelvin=77.0, source="matlab")
     assert not entry["ok"]
+
+
+def test_a_refused_source_still_reaches_hold(tmp_path):
+    """Both panic kinds, not just the one that was there first."""
+    inst = instrument()
+    inst.read_frame()
+    svc = service(tmp_path, inst, sources={"matlab": True})
+    svc.poller = _Poller(Frame(
+        t_wall=time.time(), t_mono=time.monotonic(),
+        readings={inst.channels["A"]: Reading(inst.channels["A"], 88.0)},
+    ))
+    entry = send(svc, "hold", source="lschart-gui")
+    assert entry["ok"], entry["message"]
+    assert inst.setpoint(1) == pytest.approx(88.0, abs=0.01)
+
+
+def test_arm_is_not_a_panic_kind_and_obeys_the_source_policy(tmp_path):
+    """Arming applies power, so the exemption for stopping does not cover it."""
+    svc = service(tmp_path, sources={"matlab": True}, allow_analog_output=True)
+    entry = send(svc, "arm", source="lschart-gui")
+    assert not entry["ok"]
+    assert "not accepted by this recorder's configuration" in entry["message"]
 
 
 def test_a_refused_source_still_reaches_the_panic_button(tmp_path):

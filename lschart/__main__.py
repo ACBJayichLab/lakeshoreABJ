@@ -582,6 +582,33 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     pid.add_argument("--loop", type=int, default=1)
 
     snd_sub.add_parser(
+        "hold",
+        help="stop every loop where it is: setpoints to present temperature, "
+             "software loop frozen",
+        description="The second panic action. Every closed 33x loop has its "
+                    "ramping switched off (the rate is kept) and its setpoint "
+                    "moved to its own sensor's present temperature; a software "
+                    "loop has its output frozen and stops regulating. Note "
+                    "hold is not a synonym for less power: a ramp heading DOWN "
+                    "sits below the temperature the cryostat has reached, so "
+                    "holding demands more heat than the ramp was. It never "
+                    "raises a range, so it stays inside the power already "
+                    "permitted.",
+    )
+
+    arm = snd_sub.add_parser(
+        "arm",
+        help="close the software loop again -- the way back from `hold`",
+        description="Not a panic action and exempt from nothing: arming starts "
+                    "the loop driving the heater, which is the power-applying "
+                    "direction, so it needs ipc.allow_analog_output like any "
+                    "other write. With no kelvin it arms to hold the "
+                    "temperature the cryostat is at now, which is what avoids "
+                    "handing the PID a step to chase.",
+    )
+    arm.add_argument("kelvin", type=float, nargs="?", default=None)
+
+    snd_sub.add_parser(
         "heaters_off",
         help="every writable heater to zero: 33x ranges AND 218 analog outputs")
     snd_sub.add_parser("ping", help="prove the command path works, touching nothing")
@@ -594,6 +621,8 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "range": ("value", "output"),
             "analog": ("percent",),
             "pid": ("p", "i", "d", "loop"),
+            "hold": (),
+            "arm": ("kelvin",),
             "heaters_off": (),
             "ping": (),
         }[parsed.kind]

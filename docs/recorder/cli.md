@@ -125,6 +125,8 @@ python -m lschart -c config.yaml send range 0 --output 1
 python -m lschart -c config.yaml send analog 5.0
 python -m lschart -c config.yaml send pid 50 20 0 --loop 1
 python -m lschart -c config.yaml send heaters_off
+python -m lschart -c config.yaml send hold
+python -m lschart -c config.yaml send arm            # or `send arm 96.5`
 ```
 
 Writes into the command spool and waits for the acknowledgement
@@ -150,6 +152,18 @@ recorder configured with `read_pid: true`.
 `heaters_off` is the panic button and covers *every* writable instrument — 33x
 ranges and 218 analog outputs alike — not just one. Read-only boxes are skipped
 and named in the reply.
+
+`hold` is the other panic action: every closed loop stopped where it is —
+ramping off first (the rate is kept), then the setpoint moved to that loop's own
+sensor's present temperature — and a software loop's output frozen. **It is not
+a synonym for less power**: a ramp heading down sits below the temperature the
+cryostat has reached, so holding demands more heat than the ramp was. It never
+raises a range.
+
+`arm` is the way back from a hold, and is **not** a panic action: it starts the
+loop driving the heater, so it needs `ipc.allow_analog_output` and passes the
+source policy like any other write. With no kelvin it arms to hold the
+temperature the cryostat is at now.
 
 Requires `ipc.accept_commands: true`, plus the instrument's `allow_writes`, plus
 `ipc.allow_heater_range` for `range` above 0, `ipc.allow_analog_output` for

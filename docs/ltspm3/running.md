@@ -46,6 +46,34 @@ act that re-primes the PID and the filter from current conditions.
 Nothing raises the heater in response to a fault, ever (rule 1). The only fault
 responses are freeze and slow ramp-down.
 
+## Stopping the loop deliberately, from a file
+
+Distinct from a fault: this is an operator asking, not the supervisor deciding.
+
+```bash
+python -m ltspm3 -c config.yaml send hold      # loop OPEN, heater frozen
+python -m ltspm3 -c config.yaml send arm       # closed again, holding here
+```
+
+`hold` reaches `HeaterSupervisor.panic_hold()`, which is `abort_ramp()` plus
+`set_mode(MANUAL)` under one name — the loop stops regulating and the heater is
+left exactly where it was. **The clamp and the rate limiter still apply**;
+manual mode is not raw access to the DAC, which is why this goes through the
+supervisor rather than around it. The state reads `idle` / `manual`.
+
+That is a hold of a **power**, not of a temperature. Nothing regulates the
+sample afterwards, so it drifts with the cryostat — the opposite of what `hold`
+does to a 33x loop, which keeps regulating at the temperature it was at.
+
+`arm` is the way back, and with no kelvin it arms to hold the temperature the
+cryostat is at *now*. If it drifted while held, that error is real; the clamp
+and rate limiter bound what the output may do about it.
+
+`panic_hold()` is **the one seam `lschart` reaches into this package by**,
+called duck-typed by name from `lschart/app.py` — so `lschart` still never
+imports `ltspm3` (invariant 1). The same command from a plain recorder finds no
+software loop and says so.
+
 ## Before the first armed run
 
 Three things are outstanding, in priority order.

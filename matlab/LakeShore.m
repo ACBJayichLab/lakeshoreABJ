@@ -341,6 +341,62 @@ classdef LakeShore < handle
             [ok, message, id] = obj.run('heaters_off', struct(), nargout);
         end
 
+        function [ok, message, id] = hold(obj)
+            %HOLD  Stop every loop where it is.  The second panic command.
+            %
+            %   Each closed 33x loop has its ramping switched off -- the rate
+            %   is kept -- and its setpoint moved to its own bound sensor's
+            %   present temperature.  A software loop has its output frozen
+            %   and stops regulating.
+            %
+            %   TWO HONEST THINGS.  Hold is not a synonym for less power: a
+            %   ramp heading DOWN sits below the temperature the cryostat has
+            %   actually reached, so holding -- which adopts that reached
+            %   temperature -- demands MORE heat than the ramp was demanding.
+            %   It never raises a range, so it stays inside the power already
+            %   permitted.  And hold means two different things on the two
+            %   boxes: a 33x loop holds a TEMPERATURE and keeps regulating, a
+            %   218 holds a POWER and nothing regulates the sample afterwards,
+            %   so it will drift with the cryostat.
+            %
+            %   Like heatersOff, this is exempt from the per-client source
+            %   policy and from the power gates -- an automated abort is a
+            %   large part of why it exists.  It is still refused by
+            %   `ipc.accept_commands`, `allow_writes` and `transport.read_only`.
+            %
+            %   arm() is the way back.
+            [ok, message, id] = obj.run('hold', struct(), nargout);
+        end
+
+        function [ok, message, id] = arm(obj, kelvin)
+            %ARM  Close the software loop again -- the way back from hold().
+            %
+            %   NOT a panic command and exempt from nothing.  Arming starts
+            %   the loop driving the heater, which is the power-applying
+            %   direction, so it passes the source policy,
+            %   `ipc.allow_analog_output` and `allow_writes` like any other
+            %   write.
+            %
+            %   With no argument it arms to hold the temperature the cryostat
+            %   is at NOW, which is what avoids handing the PID a step to
+            %   chase.  If the cryostat drifted during the hold, the error
+            %   that has accumulated is real -- but the supervisor's clamp and
+            %   rate limiter still bound what the output may do about it.
+            %
+            %   A no-op on a recorder with no software loop, which it says by
+            %   name rather than quietly succeeding.
+            % The field is omitted rather than sent empty when no kelvin was
+            % given.  MATLAB spells "no value" as [], which jsonencode writes
+            % as [] -- and an argument that is present but not a number is a
+            % different thing from an absent one on the other side.
+            if nargin < 2 || isempty(kelvin)
+                args = struct();
+            else
+                args = struct('kelvin', kelvin);
+            end
+            [ok, message, id] = obj.run('arm', args, nargout);
+        end
+
         function [ok, message, id] = ping(obj)
             %PING  Prove the command path works, without touching an instrument.
             %
