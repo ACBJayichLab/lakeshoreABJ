@@ -261,12 +261,22 @@ of them failed on *both* grounds (cyan reaches only 2.26:1 on white).
 
 ## The control panel
 
-The **instrument selector** sits flush on top of the first group, at the
-right-hand end: no band of its own above it, and no overlapping the group's
-border either. It is one combo box, and the panel has no rows to spare. It is
-joined to the group *stack* rather than to the Setpoint group, because which
-group comes first depends on the box: a 218 has no loops, so Setpoint is hidden
-and the analog group is what shows.
+The **instrument selector** shares a line with the first group's title —
+"Setpoint" on the left, `Instrument [box]` on the right — with that group's
+border directly beneath and nothing between them. It is one combo box, and the
+panel has no rows to spare.
+
+It works by taking the title *off* the first visible group and drawing it in
+the selector's row instead. A titled `QGroupBox` draws its title **above** its
+frame, so anything placed against the group's widget rectangle leaves the whole
+title band visibly empty — that band is what read as a gap. A group with no
+title has no band, so its frame starts at its widget top and the row above sits
+on the border.
+
+Which group is first depends on the box: a 218 has no loops, so Setpoint is
+hidden and the analog group is what shows. The titles are therefore stored
+rather than written straight onto the widgets, and two of them change at
+runtime (`Heater range (output 2)`, `Analog output 1 (max 70%)`).
 
 
 One instrument selector, then whatever the selected box can actually be asked

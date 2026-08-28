@@ -551,6 +551,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # "this cryostat has none of them".
         self._instrument_changed()
 
+    #: The command groups' own layout, whose top margin is what drops the
+    #: instrument selector onto the first group's title line.  Set in
+    #: `_command_box`; None until then, because `_place_instrument_selector`
+    #: can be reached from a palette change before the panel is built.
+    _group_stack = None
+    _group_titles: dict = {}
+
     def _left_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
         box = QtWidgets.QVBoxLayout(panel)
@@ -753,17 +760,26 @@ class ViewerWindow(QtWidgets.QMainWindow):
         box.setContentsMargins(margins.left(), 0, margins.right(),
                                margins.bottom())
 
-        # The instrument selector sits flush on top of the first group, at
-        # the right-hand end: no band of its own above it, and no overlapping
-        # the group's border either. Neither gap nor collision -- the two read
-        # as one block.
+        # The instrument selector shares a line with the first group's title:
+        # the title text on the left, "Instrument [combo]" on the right, and
+        # the group's frame directly beneath with nothing between them.
         #
-        # The row and the group stack share a container with zero spacing,
-        # because a QVBoxLayout has one spacing for every item in it and this
-        # is the one join that has to close completely.
+        # It works by taking the title *off* the first visible group and
+        # drawing it here instead. A QGroupBox with no title has no title band,
+        # so its frame starts at its widget top and the row above it sits flush
+        # on the border -- which is the whole point. Every other way of doing
+        # this fights the layout: a top margin is compressible (asked for 40 px
+        # it returned 25), a spacer gets squeezed the same way, and overlaying
+        # the selector on the group draws it straight through the frame.
+        #
+        # `_place_instrument_selector` is what moves the title, because which
+        # group is first depends on the box: a 218 has no loops, so it shows
+        # the analog group where a 33x shows Setpoint.
         selector = QtWidgets.QHBoxLayout()
-        selector.setContentsMargins(0, 0, 0, 2)
+        selector.setContentsMargins(8, 0, 0, 2)
         selector.setSpacing(6)
+        self.group_title = QtWidgets.QLabel("")
+        selector.addWidget(self.group_title)
         selector.addStretch(1)
         selector.addWidget(QtWidgets.QLabel("Instrument"))
         self.instrument_combo = QtWidgets.QComboBox()
@@ -774,6 +790,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         stack = QtWidgets.QVBoxLayout(groups)
         stack.setSpacing(4)
         stack.setContentsMargins(0, 0, 0, 0)
+        # Any slack goes to the BOTTOM. Without this it lands above the first
+        # visible group instead -- on a 218, where the three groups before the
+        # analog one are hidden, that put 15 px of nothing between the
+        # selector and the box it is supposed to be sitting on.
+        stack.addStretch(0)
+        self._group_stack = stack
 
         # What the selected loop is bound to, in a sentence.  From the
         # recorder's OUTMODE reading, so it is the instrument's answer and not
@@ -801,6 +823,15 @@ class ViewerWindow(QtWidgets.QMainWindow):
         joined.addLayout(selector)
         joined.addWidget(groups)
         box.addWidget(head)
+        #: Each group's own title, so the one lent to `group_title` can be
+        #: given back when a different group becomes the first visible one.
+        #: Each group's *intended* title -- the one it shows when it is not
+        #: the first visible group, which is the one lending its title line to
+        #: the selector. Two of them change at runtime, so this is the source
+        #: of truth and the widget follows it.
+        self._group_titles = {g: g.title() for g in (
+            self.setpoint_group, self.pid_group,
+            self.range_group, self.analog_group)}
 
         # The way back from a hold, and deliberately *outside* the panic menu:
         # arming starts the loop driving the heater again, which is the
@@ -1328,6 +1359,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.banner.setStyleSheet(theme.banner_style(state, self))
             self._update_readings()
             self._update_gate_notes()
+            self._place_instrument_selector()
         except Exception:  # pragma: no cover - cosmetic, never fatal
             log.debug("could not re-apply the theme", exc_info=True)
 
@@ -1654,7 +1686,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if caps["has_analog"]:
             ceiling = caps["max_output_pct"]
             self.analog_spin.setMaximum(ceiling)
-            self.analog_group.setTitle(
+            self._set_group_title(
+                self.analog_group,
                 f"Analog output {caps['analog_output']} (max {ceiling:g}%)")
         self._show_loop_controls(caps)
         # A different box, loop or output is a different "now": whatever the
@@ -1694,6 +1727,46 @@ class ViewerWindow(QtWidgets.QMainWindow):
             return None if heater is None else int(heater)
         return self._loop if self._loop in caps["heater_outputs"] else None
 
+    def _place_instrument_selector(self) -> None:
+        """Lend the first visible group's title to the selector's row.
+
+        A QGroupBox draws its title *above* its frame, so a row placed against
+        the group's widget top leaves the whole title band -- 18 px on this
+        style -- visibly empty between the selector and the box. Taking the
+        title off that group removes the band entirely: its frame then starts
+        at its widget top, and the row above sits directly on the border.
+
+        Every group keeps its own title while it is not first, which is why
+        the originals are held in `_group_titles` rather than recomputed.
+        """
+        if not self._group_titles:
+            return
+        first = next((g for g in self._group_titles if not g.isHidden()), None)
+        for group, title in self._group_titles.items():
+            group.setTitle("" if group is first else title)
+        self.group_title.setText(
+            self._group_titles.get(first, "") if first is not None else "")
+        # Blanking a title changes the group's size hint, and hiding the
+        # groups above it leaves the stack holding stale positions -- on a 218
+        # the analog group sat 15 px down inside a stack whose own geometry
+        # was still 0x0. Nothing schedules that re-layout for us here.
+        if self._group_stack is not None:
+            self._group_stack.invalidate()
+            self._group_stack.activate()
+
+    def _set_group_title(self, group, title: str) -> None:
+        """Set the title a group *should* show.
+
+        Two of these are dynamic -- "Heater range (output 2)", "Analog output
+        1 (max 70%)" -- and the group that is currently first is showing a
+        blank one on the selector's behalf. So the intended title is stored
+        here and applied by `_place_instrument_selector`; writing it straight
+        onto the widget would either clobber the blank or be clobbered by the
+        next re-place, depending on the order the two happened to run in.
+        """
+        self._group_titles[group] = title
+        self._place_instrument_selector()
+
     def _show_loop_controls(self, caps: dict) -> None:
         """Show the grouping the selected loop can actually be commanded with.
 
@@ -1711,7 +1784,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         heater = self._heater_for_selected_loop(caps) if caps["has_loops"] else None
 
         self.range_group.setVisible(caps["has_heater_range"] and heater is not None)
-        self.range_group.setTitle(
+        self._set_group_title(
+            self.range_group,
             "Heater range" if heater is None else f"Heater range (output {heater})")
         self.heater_label.setText("—" if heater is None else str(heater))
 
@@ -1738,6 +1812,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         else:
             note = ""
         self._note(self.loop_note, note, theme.note_style("muted", self))
+        # Which group is first can have just changed, and the selector rides
+        # on it.
+        self._place_instrument_selector()
 
     # -- filling the command widgets with what the cryostat is at -----------------
 

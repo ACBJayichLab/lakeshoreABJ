@@ -626,7 +626,7 @@ def test_the_recorders_ceiling_caps_the_spin_box(tmp_path, qt_app):
     assert w.analog_spin.maximum() == 70.0
     w.analog_spin.setValue(90.0)
     assert w.analog_spin.value() == 70.0
-    assert "70" in w.analog_group.title()
+    assert "70" in shown_title(w, w.analog_group)
     w.close()
 
 
@@ -2136,18 +2136,35 @@ def test_the_panic_button_is_red_on_both_themes(tmp_path, qt_app):
     w.close()
 
 
-def join_gap(window, widget, group) -> int:
-    """Pixels between the bottom of `widget` and the top of `group`.
+def shown_title(window, group) -> str:
+    """The title a group is actually displaying.
+
+    The first *visible* group lends its title line to the instrument selector,
+    so its own title is blank and the text is drawn in the selector's row
+    instead. Callers care what the operator reads, not which widget holds it.
+    """
+    return group.title() or (window.group_title.text()
+                             if window._group_titles.get(group) else "")
+
+
+def frame_gap(window, widget, group) -> int:
+    """Pixels between the bottom of `widget` and the group's DRAWN border.
+
+    The group's widget rectangle is not the box anyone sees: a titled
+    QGroupBox draws its title above its frame, so the two differ by the whole
+    title band -- 18 px on this style, and that band is what read as a gap.
+    The style's own SC_GroupBoxFrame is where the border actually is.
 
     Negative means they collide, which looks like a mistake; a large positive
-    means a band of dead panel between them, which looks like another one.
-    Flush is a small non-negative number, and the exact value is the style's
-    business -- the assertion is on the sign and the scale, not on a pixel
-    count tuned to one desktop.
+    means dead panel between them, which looks like another one.
     """
     bottom = widget.mapTo(window, widget.rect().bottomLeft()).y()
-    group_top = group.mapTo(window, group.rect().topLeft()).y()
-    return group_top - bottom
+    option = QtWidgets.QStyleOptionGroupBox()
+    group.initStyleOption(option)
+    frame = group.style().subControlRect(
+        QtWidgets.QStyle.CC_GroupBox, option,
+        QtWidgets.QStyle.SC_GroupBoxFrame, group)
+    return group.mapTo(window, frame.topLeft()).y() - bottom
 
 
 def test_the_instrument_selector_sits_flush_on_the_first_group(
@@ -2161,10 +2178,15 @@ def test_the_instrument_selector_sits_flush_on_the_first_group(
     for _ in range(3):
         w.refresh()
         qt_app.processEvents()
-    # Flush: neither colliding with the group's border nor floating in a band
-    # of its own above it.
-    gap = join_gap(w, w.instrument_combo, w.setpoint_group)
-    assert 0 <= gap <= 6, f"{gap}px between the selector and the group"
+    # Flush on the group's DRAWN frame -- not on its widget rectangle, which
+    # includes a title band the group would otherwise leave visibly empty.
+    gap = frame_gap(w, w.instrument_combo, w.setpoint_group)
+    # 6, not 0: the exact figure is the style's (0 on macOS, 3 offscreen).
+    # What this rules out is the 18px title band it replaced, and any overlap.
+    assert 0 <= gap <= 6, f"{gap}px between the selector and the drawn box"
+    # The title moved onto the selector's row, which is what removes the band.
+    assert w.group_title.text() == "Setpoint"
+    assert w.setpoint_group.title() == ""
     # And at the right-hand end of the panel rather than the middle.
     combo_right = w.instrument_combo.mapTo(
         w, w.instrument_combo.rect().topRight()).x()
@@ -2187,6 +2209,12 @@ def test_the_selector_is_anchored_to_the_group_stack_not_to_one_group(
         qt_app.processEvents()
     assert w.setpoint_group.isHidden() and not w.analog_group.isHidden()
     assert not w.instrument_combo.isHidden()
-    gap = join_gap(w, w.instrument_combo, w.analog_group)
-    assert 0 <= gap <= 6, f"{gap}px between the selector and the group"
+    gap = frame_gap(w, w.instrument_combo, w.analog_group)
+    # 6, not 0: the exact figure is the style's (0 on macOS, 3 offscreen).
+    # What this rules out is the 18px title band it replaced, and any overlap.
+    assert 0 <= gap <= 6, f"{gap}px between the selector and the drawn box"
+    assert "Analog output" in w.group_title.text()
+    # And Setpoint, which is hidden here, keeps its own title for when it is
+    # not the first visible group.
+    assert w.setpoint_group.title() == "Setpoint"
     w.close()
