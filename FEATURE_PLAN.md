@@ -209,6 +209,9 @@ Recorded because the concern was that intent had been flattened, and most of it 
 2. **The loop table would have deleted thermometers.** "218: 1 row" turns an
    eight-input monitor into one channel, when recording every thermometer continuously
    is the recorder's stated job. L1 adds a table; it does not replace one.
+   *(Later: the two were merged after all — see [The two tables became
+   one](#the-two-tables-became-one). This concern is exactly why the merge had
+   to be done the way it was.)*
 3. **The warning icon would have been lit permanently.** OR-ing "not at setpoint" into
    it guaranteed it. W1 splits the marks and suppresses them when the loop is not trying.
 4. **Three features sourced from config what the instrument knows.** `loop_heater_map`
@@ -350,3 +353,30 @@ and the band is about ±7 K of authority, so the anomaly hold always fires
 first — what you will see is `holding`, not `RAIL`. And when health goes bad
 both marks go quiet, because the loop has stopped trying; the row is coloured
 instead, since that is the moment it most needs to catch an eye.
+
+## The two tables became one
+
+**2026-08-28, after X1, at Jeff's call.** L1 deliberately put the loop table
+*beneath* the per-channel readouts rather than replacing them, for the reason in
+[What changed](#what-changed-from-the-first-draft) item 2.
+
+On a 33x-only cryostat the two are the same lines twice, though — every channel
+is some loop's sensor, so the readouts said "Coldplate 295.4" and the loop table
+said "1 · Coldplate · 295.4 · …" directly beneath it.
+
+The merge keeps the original concern intact by inverting the row:
+
+- **the row is the channel and the loop is a set of columns on it.** Every
+  thermometer gets a row whether a loop reads it or not;
+- a loop whose sensor matches no channel — an unresolved `OUTMODE` binding, or a
+  second loop on a channel that already has one — keeps a row of its own rather
+  than being dropped or overwriting the first;
+- the software loop is just another loop, and lands on the row for the channel
+  it controls, which also retired X1's separate "sw" row.
+
+So a 218 with eight inputs and no loops still draws eight rows, with the loop
+columns empty. `reading_rows` in `lschart/gui/source.py` is the join;
+`tests/test_gui_source.py` pins the "no thermometer is ever lost" half
+specifically, because that is the part that would be easy to regress quietly.
+
+W1's two marks are unchanged, and still appear only on rows that have a loop.

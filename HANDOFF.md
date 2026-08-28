@@ -1,9 +1,9 @@
-# Handoff — 2026-08-28 (tenth session: X1, then the bench 336 on hardware)
+# Handoff — 2026-08-28 (tenth session: X1, the bench 336, and the viewer)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
 **Everything in [`FEATURE_PLAN.md`](FEATURE_PLAN.md) is now implemented and
-tested, X1 included. 627 tests passing (from 584), ruff clean.** Verified
+tested, X1 included. 694 tests passing (from 584), ruff clean.** Verified
 against a live armed sim recorder driving a real `ltspm3` software loop through
 a hold and back. **No hardware was touched this session** — the bench 336 was
 not connected.
@@ -11,9 +11,15 @@ not connected.
 ## Start here
 
 The feature plan is no longer a to-do list; it is a record of why things are
-shaped the way they are. Two sections at the end are worth reading before you
-touch any of it: **Where phase 3 differed from the plan**, and **X1, and the
-half of its question that was wrong**.
+shaped the way they are. Three sections at the end are worth reading before you
+touch any of it: **Where phase 3 differed from the plan**, **X1, and the half of
+its question that was wrong**, and **The two tables became one**.
+
+**Most of this session was the viewer, and none of it was planned** — it came
+from Jeff opening the thing on a real screen. If you are picking the viewer up,
+read [Themes](docs/recorder/gui.md#themes) and the reading-table section of
+[gui.md](docs/recorder/gui.md) first: both encode rules that are easy to break
+by accident and were broken by accident here.
 
 **Windows deployment is nearly closed out.** Of the three unknowns
 `windows.md` listed, two are now settled: the clock-resolution worry is pinned
@@ -25,6 +31,76 @@ unattended-running choice (Task Scheduler vs NSSM), which is a decision rather
 than a defect.
 
 ## What landed this session
+
+### The viewer, after real use on a real screen (`d5309a7`..`af2f6be`)
+
+Eight commits, all of them from Jeff looking at the thing rather than from a
+plan. Worth reading as a group, because several are the same lesson.
+
+**Dark mode ate the text** (`3358b7a`). Reported from macOS. The viewer was
+written on a light desktop and wrote its foregrounds down as constants, so the
+tables forced `#000000` onto a `#171717` base — a contrast ratio of **1.17**,
+which is not "hard to read", it is not there. Never a macOS bug: a dark Windows
+or KDE theme would have done the same.
+
+New `lschart/gui/theme.py`, and two rules worth keeping when you add a widget:
+
+- **Never paint the normal case.** Ordinary text has no colour of its own; it
+  is whatever the palette says. A hardcoded black is a bug on a dark theme and
+  a hardcoded white is the same bug on a light one, so the fix is not a better
+  constant, it is *no* constant.
+- **Paint the exceptional case from a measured pair.** `tests/test_gui_theme.py`
+  computes contrast ratios against the grounds Qt actually reports, 4.5:1
+  floor. That caught the existing warning orange failing at 3.79 on white —
+  wrong on light mode all along.
+
+Colours resolve at call time, so a desktop that switches theme under a running
+viewer is followed on the spot.
+
+**The chart itself stays white on both themes, deliberately.** The ten curve
+colours are chosen to separate on white and the stat panel is drawn to sit on
+it. Say so before changing it; it is a design decision, not an oversight.
+
+**The panel did not fit and did not scroll** (`f8fa8a9`, `4114986`). It wanted
+**1404 px** against the ~795 a 949 px screen leaves, and a bare `QVBoxLayout`
+answers that by squeezing children below their minimums — which is how
+Setpoint, PID gains and Heater range came to be three titles with nothing under
+them. It is a `QScrollArea` now, and the trace list is both what takes spare
+height and the first to give it back (Jeff's call: it has its own scrollbar and
+loses nothing by being short).
+
+Then: one table instead of two, a status strip across the bottom, denser button
+rows, P/I/D on one line, shorter notes. **1404 → 706 px**, no scrollbar.
+
+**One table, not two** (`f8fa8a9`). See
+[FEATURE_PLAN.md](FEATURE_PLAN.md)'s "The two tables became one" — this
+reverses an L1 decision, and the reason that decision existed is what shapes
+the merge. The row is the channel; the loop is columns on it.
+
+**The status strip** carries Panic, "Listen to" and link health across the
+window. "Listen to" gained MATLAB and **Other clients** beside this viewer;
+*Other* is not a client, it is the overlay's own `default`, and it is the only
+way to shut out a label nobody knew in advance. `sources.py` learned to honour
+a `default` in the overlay for it — narrowing only, like every overlay entry.
+
+**Panic is red, twice as wide, and opens a modal** (`f22c96b`). A popup is a
+small target beside the pointer and the two things in it are "stop heating this
+cryostat" and "freeze it where it is". Still three interactions — open, choose,
+confirm.
+
+**The instrument selector took three attempts** (`d51b4b9`, `3db3f92`,
+`af2f6be`), and the reason is worth remembering: **a titled `QGroupBox` draws
+its title above its frame**, so the widget rectangle and the box anyone sees
+differ by the whole title band. Flush against the widget rect is not flush
+against the box. The fix is that the first *visible* group gives up its title
+to the selector's row. Watch for the two traps it hides: the group titles must
+be **stored** (two change at runtime) and the stack needs a **trailing stretch**
+or the slack lands above the first visible group.
+
+**One defect found by the hardware run** (`d5309a7`): the *Send PID* button
+stayed live while `ipc.allow_pid` was false, so it could only ever produce a
+refusal. The spin boxes stay readable — the gains are worth seeing where they
+cannot be written — and only the button is disabled.
 
 ### X1 — the software loop finally has a row (`9a5754c`)
 
@@ -253,7 +329,7 @@ Do not guess. Nothing in this session changed those values.
 
 ## State of the tree
 
-- `627 passed`, `ruff` clean, on `main`. Nothing is running.
+- `694 passed`, `ruff` clean, on `main`. Nothing is running.
 - Example configs: all three validate, all three now poll `PID?`.
   **`examples/config-336-usb.yaml` moved to a 2 s cadence** — it did not
   validate before this session, because `read_analog_outputs: true` had been

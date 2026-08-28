@@ -126,9 +126,18 @@ lschart/                    GENERIC -- any Lake Shore cryostat
   gui/               The strip chart. A SEPARATE PROCESS, not a thread.
     source.py        CsvTail + StatusSource, plus the arithmetic the window is
                      not allowed to hold: region statistics, hover lookup, the
-                     region export, and the loop-table projections.  No Qt --
-                     this is what the tests cover.
-    window.py        pyqtgraph. The only module in the repo that imports Qt.
+                     region export, and the table projections.  `reading_rows`
+                     is the join behind the ONE table -- every thermometer is a
+                     row and its loop is a set of columns on it, which is what
+                     keeps an 8-input 218 from collapsing to however many loops
+                     it has.  No Qt -- this is what the tests cover.
+    theme.py         Colours, resolved from the Qt PALETTE at call time.  Never
+                     paint the normal case: ordinary text has no colour of its
+                     own, and a hardcoded black is a bug on a dark desktop
+                     exactly as a hardcoded white is on a light one.  Every
+                     exceptional pair is contrast-checked by
+                     tests/test_gui_theme.py rather than by eye.
+    window.py        pyqtgraph, and everything else that draws.
                      Left-drag on either panel zooms to exactly that rectangle;
                      that is ZoomViewBox, and `_span` (time, shared) and
                      `_ylim` (per panel) are what it sets.  The X/Y buttons
