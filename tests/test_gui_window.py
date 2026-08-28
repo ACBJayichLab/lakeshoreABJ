@@ -657,8 +657,12 @@ def test_a_shut_gate_disables_its_control_and_says_where_to_go_instead(
             commands={"accepted": True, "recent": [],
                       "allow_analog_output": False})
     assert "allow_analog_output" in w.analog_note.text()
-    assert "including to 0" in w.analog_note.text()
-    assert "Panic" in w.analog_note.text()
+    assert "ipc.allow_analog_output: false" in w.analog_note.text()
+    # The reasoning is a hover away, not three lines of the panel forever.
+    assert "including to 0" in w.analog_note.toolTip()
+    # A shut gate is a signpost, not a wall: the way that still works has to
+    # be named. It is named in the hover now rather than in the panel.
+    assert "Panic" in w.analog_note.toolTip()
     assert not w.analog_button.isEnabled()
     assert not w.analog_spin.isEnabled()
     assert w.panic_button.isEnabled()
@@ -671,7 +675,8 @@ def test_a_shut_range_gate_disables_the_range_control_too(tmp_path, qt_app):
                       "allow_heater_range": False})
     assert not w.range_button.isEnabled()
     assert not w.range_combo.isEnabled()
-    assert "including to 0" in w.range_note.text()
+    assert "ipc.allow_heater_range: false" in w.range_note.text()
+    assert "including to 0" in w.range_note.toolTip()
     assert w.panic_button.isEnabled()
     w.close()
 
@@ -680,7 +685,8 @@ def test_an_open_gate_still_warns_that_there_is_no_ramp(tmp_path, qt_app):
     w = cryostat(tmp_path, qt_app, [MON],
             commands={"accepted": True, "recent": [],
                       "allow_analog_output": True})
-    assert "No ramp" in w.analog_note.text()
+    assert "no ramp" in w.analog_note.text()
+    assert "as fast as the cryostat allows" in w.analog_note.toolTip()
     w.close()
 
 
@@ -1308,13 +1314,13 @@ def test_the_gain_boxes_fill_from_what_the_recorder_read(tmp_path, qt_app):
 def test_gains_that_are_not_polled_say_so_rather_than_showing_zero(tmp_path, qt_app):
     """Blank because nobody is looking is not the same as refused."""
     w = with_gains(tmp_path, qt_app, aux={})
-    assert "read_pid" in w.pid_note.text()
+    assert "read_pid: false" in w.pid_note.text()
 
 
 def test_a_recorder_that_will_not_retune_says_that_instead(tmp_path, qt_app):
     w = with_gains(tmp_path, qt_app, aux={"ls336.p1": 60.0},
                    commands={"accepted": True, "recent": [], "allow_pid": False})
-    assert "ipc.allow_pid" in w.pid_note.text()
+    assert "ipc.allow_pid: false" in w.pid_note.text()
 
 
 def test_a_shut_pid_gate_keeps_the_numbers_readable_and_the_button_dead(
@@ -1348,7 +1354,7 @@ def test_gains_may_be_sent_to_a_recorder_that_does_not_read_them_back(
     that the instrument refuses new ones. `set_pid()` verifies by readback."""
     w = with_gains(tmp_path, qt_app, aux={},
                    commands={"accepted": True, "recent": [], "allow_pid": True})
-    assert "read_pid" in w.pid_note.text()
+    assert "read_pid: false" in w.pid_note.text()
     assert w.pid_button.isEnabled()
     w.close()
 
@@ -1356,7 +1362,8 @@ def test_gains_may_be_sent_to_a_recorder_that_does_not_read_them_back(
 def test_a_recorder_that_will_retune_says_it_applies_no_power(tmp_path, qt_app):
     w = with_gains(tmp_path, qt_app, aux={"ls336.p1": 60.0},
                    commands={"accepted": True, "recent": [], "allow_pid": True})
-    assert "does not apply power" in w.pid_note.text()
+    assert "the instrument's own gains" in w.pid_note.text()
+    assert "does not apply power" in w.pid_note.toolTip()
 
 
 def test_all_three_gains_go_out_in_one_command(tmp_path, qt_app, monkeypatch):
@@ -1978,4 +1985,74 @@ def test_a_short_window_scrolls_instead_of_crushing_the_controls(
     assert w._panel_scroll.verticalScrollBar().isVisible()
     assert w.setpoint_group.height() >= w.setpoint_group.minimumSizeHint().height()
     assert w.pid_group.height() >= w.pid_group.minimumSizeHint().height()
+    w.close()
+
+
+def test_an_empty_note_claims_no_height(tmp_path, qt_app):
+    """A word-wrapped QLabel still takes a line when it has nothing in it, and
+    a line of nothing above the trace list is exactly the empty vertical space
+    this panel cannot afford."""
+    w = cryostat(tmp_path, qt_app, [CTRL], commands=dict(OPEN))
+    w.refresh()
+    assert w.export_note.text() == "" and w.export_note.isHidden()
+    w.close()
+
+
+def test_the_loop_row_names_the_sensor_instead_of_a_sentence_below_it(
+        tmp_path, qt_app):
+    """"loop 1 reads Coldplate (closed loop)" said what the Loop row says, one
+    group further down the panel. The mode is in the hover."""
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[loop_entry(1, "Coldplate")])])
+    w.refresh()
+    assert w.loop_label.text() == "1 → Coldplate"
+    assert "closed loop" in w.loop_label.toolTip()
+    # And the standing sentence is gone rather than merely shortened.
+    assert w.loop_note.isHidden()
+    w.close()
+
+
+def test_a_gate_note_is_the_key_and_the_reasoning_is_the_hover(tmp_path, qt_app):
+    """Three lines explaining a disabled control are read once and then occupy
+    the panel forever. The key is what somebody acts on."""
+    w = cryostat(tmp_path, qt_app, [CTRL], commands={
+        "accepted": True, "recent": [], "allow_heater_range": False})
+    w.refresh()
+    assert w.range_note.text() == "ipc.allow_heater_range: false"
+    assert len(w.range_note.toolTip()) > len(w.range_note.text())
+    w.close()
+
+
+def test_the_cursor_buttons_take_the_width_the_zoom_steppers_do_not(
+        tmp_path, qt_app):
+    """The steppers are two-character controls; stretching them would make
+    four big buttons out of four small ones for no gain."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.resize(1500, 949)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    zoom = list(w.zoom_buttons.values())[0]
+    assert zoom.width() <= 40
+    assert w.cursor_button.width() > zoom.width() * 2
+    assert w.export_button.width() > w.cursor_button.width()
+    w.close()
+
+
+def test_the_channel_names_are_not_elided_at_the_readout_font(tmp_path, qt_app):
+    """The bigger font is only worth having if the names still fit beside it.
+    At 500 px they did not, and "Stage 1" and "Stage 2" both became "Stag…"."""
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
+        loop_entry(1, "Coldplate"), loop_entry(2, "Stage 2"),
+        loop_entry(3, "Rad Shield"), loop_entry(4, "Stage 1")])])
+    w.resize(1500, 949)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    metrics = w.readings.fontMetrics()
+    width = w.readings.columnWidth(COL_CHANNEL)
+    for name in ("Coldplate", "Stage 2", "Rad Shield", "Stage 1"):
+        assert metrics.horizontalAdvance(name) <= width, f"{name} elides"
+    assert not w.readings.horizontalScrollBar().isVisible()
     w.close()

@@ -126,6 +126,11 @@ without paying that price:
 So a 218 with eight inputs and no loops draws eight rows with the loop columns
 empty, which is exactly the table it had before.
 
+The table runs three points above the panel font: live values are what
+somebody walks over to read from across the room, and the left panel is sized
+so the channel names fit beside it rather than eliding — two thermometers
+showing as `Stag…` is worse than useless.
+
 **Clicking a row with an instrument loop selects it** and every control in the
 command panel follows. There is no loop spin box and no output combo; two ways
 to choose a loop is two things that can disagree about where a setpoint is
@@ -326,6 +331,17 @@ exception, deliberately: that reasoning inverts for the stopping direction — n
 pending command can make it wrong to stop, and an operator reaching for Panic
 while somebody's setpoint is still being acknowledged must not find it greyed
 out.
+
+### Notes under a dead control
+
+A control the recorder will refuse is disabled, and the line under it names the
+**config key** and nothing else — `ipc.allow_pid: false`. The reasoning, and
+the way that still works, are in the hover. Three lines of prose explaining a
+disabled control are read once and then occupy the panel forever; the key is
+what somebody acts on.
+
+A note with nothing to say is hidden rather than left blank, because an empty
+word-wrapped label still claims a line.
 
 ## The Panic menu
 

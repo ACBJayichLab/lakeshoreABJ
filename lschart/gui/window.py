@@ -188,10 +188,10 @@ def _compact(button: QtWidgets.QAbstractButton, width: int = 0) -> None:
     frame, which is right for a dialog and wasteful for a strip of five
     two-character controls in a panel that is short of height either way.
     """
-    button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+    button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred)
     hint = button.fontMetrics().horizontalAdvance(button.text()) + 18
     button.setFixedWidth(width or max(hint, 34))
-    button.setFixedHeight(22)
+    button.setMinimumHeight(26)
 
 
 def _state_text(mode) -> str:
@@ -530,11 +530,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         splitter.addWidget(self._plots())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        # 500, not 430: the loop table's eight fixed columns want 352 px
-        # between them, so at 430 the sensor name was squeezed to 52 px and
-        # both "Stage 1" and "Stage 2" elided to the same "Stag…". The extra
-        # 70 px comes out of a 900 px chart, which does not miss it.
-        splitter.setSizes([500, 900])
+        # 560, and the number is arithmetic rather than taste: at the readout
+        # font the reading table's eight fixed columns want 426 px between
+        # them and "Rad Shield" wants 86 more. Below that the channel name
+        # elides, and "Stage 1" and "Stage 2" both become "Stag…" -- two
+        # different thermometers reading the same, which is worse than
+        # useless. It comes out of the chart, which has it to spare.
+        splitter.setSizes([560, 900])
         outer.addWidget(splitter, 1)
         # Across the whole window, under the chart. The plot gives up ~26 px
         # for it, which it does not miss, and the left panel gets three rows
@@ -582,6 +584,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.readings.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
         self.readings.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.readings.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        # Live values are what somebody walks over to read from across the
+        # room, which is why the old readouts table ran three points up. The
+        # merged table inherits that, and the space the shortened notes and
+        # the dropped duplicate sentence gave back is what pays for it.
+        font = self.readings.font()
+        font.setPointSize(font.pointSize() + 3)
+        self.readings.setFont(font)
         self.readings.setSizePolicy(QtWidgets.QSizePolicy.Preferred,
                                     QtWidgets.QSizePolicy.Fixed)
         self.readings.itemSelectionChanged.connect(self._loop_row_selected)
@@ -661,8 +670,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "are up the left button places cursors instead of drawing a zoom "
             "rectangle; the wheel, Shift-drag and the X/Y buttons still zoom.")
         self.cursor_button.clicked.connect(self._toggle_cursors)
-        _compact(self.cursor_button)
-        cursor_row.addWidget(self.cursor_button, 0)
+        # These two take the horizontal slack rather than leaving it empty at
+        # the right-hand end. The zoom steppers keep their fixed width -- they
+        # are two-character controls, and stretching them would make four big
+        # buttons out of four small ones for no gain at all.
+        self.cursor_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                                         QtWidgets.QSizePolicy.Preferred)
+        self.cursor_button.setMinimumHeight(26)
+        cursor_row.addWidget(self.cursor_button, 1)
 
         self.export_button = QtWidgets.QPushButton("Export region…")
         self.export_button.setEnabled(False)
@@ -670,14 +685,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "Write the samples between the cursors to a CSV, at full "
             "resolution — not the thinned overview the chart draws.")
         self.export_button.clicked.connect(self._export_region)
-        _compact(self.export_button)
-        cursor_row.addWidget(self.export_button, 0)
-        cursor_row.addStretch(1)
+        self.export_button.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                                         QtWidgets.QSizePolicy.Preferred)
+        self.export_button.setMinimumHeight(26)
+        cursor_row.addWidget(self.export_button, 2)
         box.addLayout(zoom_row)
 
         self.export_note = QtWidgets.QLabel("")
         self.export_note.setWordWrap(True)
         self.export_note.setStyleSheet(theme.note_style("muted", self))
+        self.export_note.setVisible(False)
         box.addWidget(self.export_note)
 
         traces = QtWidgets.QGroupBox("Traces")
@@ -738,9 +755,15 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # What the selected loop is bound to, in a sentence.  From the
         # recorder's OUTMODE reading, so it is the instrument's answer and not
         # a map kept in here that could go stale.
+        # No standing "loop N reads X" line: it said what the Loop row of the
+        # Setpoint group says, one group further down the panel. What is left
+        # here is the handful of cases that genuinely have something else to
+        # say -- a schema-1 recorder, a read-only box -- and it takes no height
+        # when it is empty.
         self.loop_note = QtWidgets.QLabel("")
         self.loop_note.setWordWrap(True)
         self.loop_note.setStyleSheet(theme.note_style("muted", self))
+        self.loop_note.setVisible(False)
         box.addWidget(self.loop_note)
 
         box.addWidget(self._setpoint_group())
@@ -1433,6 +1456,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         the label how tall it needs to be at the width it is being given.
         """
         label.setText(text)
+        # An empty note takes no height at all. A word-wrapped QLabel still
+        # claims a line when it has nothing in it, and a line of nothing above
+        # the trace list is exactly the empty vertical space this panel cannot
+        # afford.
+        label.setVisible(bool(text))
         if style:
             label.setStyleSheet(style)
         policy = label.sizePolicy()
@@ -1587,20 +1615,23 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.analog_group.setVisible(
             caps["has_analog"] and (not caps["has_loops"] or heater is None))
 
-        self.loop_label.setText(str(self._loop) if caps["has_loops"] else "—")
+        # The loop AND the sensor it reads, on the row that was already there.
         row = self._selected_loop_row()
         if not caps["has_loops"]:
-            note = ""
-        elif not row:
-            note = (f"loop {self._loop} — this recorder does not publish loop "
-                    "bindings (schema 1); the sensor and mode are unknown")
+            self.loop_label.setText("—")
         else:
-            note = (f"loop {self._loop} reads {row.get('sensor') or '?'} "
-                    f"({row.get('mode') or 'mode unknown'})")
-            if heater is None:
-                note += (" and drives an analog output, which this recorder "
-                         "has no command for")
-        self.loop_note.setText(note)
+            sensor = str(row.get("sensor") or "") if row else ""
+            self.loop_label.setText(
+                f"{self._loop} → {sensor}" if sensor else str(self._loop))
+            self.loop_label.setToolTip(str(row.get("mode") or "") if row else "")
+        if caps["has_loops"] and not row:
+            note = ("this recorder does not publish loop bindings (schema 1); "
+                    "the sensor and mode are unknown")
+        elif caps["has_loops"] and heater is None:
+            note = "drives an analog output, which this recorder cannot command"
+        else:
+            note = ""
+        self._note(self.loop_note, note, theme.note_style("muted", self))
 
     # -- filling the command widgets with what the cryostat is at -----------------
 
@@ -1660,9 +1691,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 self.instrument_combo.setCurrentIndex(names.index(instrument))
                 return
         elif instrument:
-            self.loop_note.setText(
-                f"{instrument} is read-only on this recorder; its loops can be "
-                "watched here but not commanded")
+            self._note(self.loop_note,
+                       f"{instrument} is read-only here: watched, not commanded",
+                       theme.note_style("muted", self))
         # A different loop is a different "now" for every field in the panel.
         self._setpoint_dirty = False
         self._range_dirty = False
@@ -1771,24 +1802,32 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if range_ok:
             self._note(self.range_note, "")
         else:
-            self._note(self.range_note,
-                       "This recorder will not change a heater range from a "
-                       "file (ipc.allow_heater_range: false) — including to 0. "
-                       "Use Panic → All heaters OFF, which is exempt from this.",
+            # The key, and nothing else. Three lines explaining a disabled
+            # control are read once and then occupy the panel forever; the key
+            # is what somebody acts on, and the reasoning is a hover away.
+            self._note(self.range_note, "ipc.allow_heater_range: false",
                        theme.note_style("warn", self))
+            self.range_note.setToolTip(
+                "This recorder will not change a heater range from a file, "
+                "including to 0 — cutting a heater is not automatically the "
+                "safe direction. Panic → All heaters OFF is exempt from this "
+                "gate and always works.")
         analog_ok = self.source.allows_analog_output()
         self.analog_spin.setEnabled(analog_ok)
         self.analog_button.setEnabled(analog_ok)
         if analog_ok:
-            self._note(self.analog_note,
-                       "No ramp: this is one step, as fast as the cryostat "
-                       "allows.", theme.note_style("muted", self))
+            self._note(self.analog_note, "one step, no ramp",
+                       theme.note_style("muted", self))
+            self.analog_note.setToolTip(
+                "This is one step, as fast as the cryostat allows — there is "
+                "no ramp on this path.")
         else:
-            self._note(self.analog_note,
-                       "This recorder will not drive this output from a file "
-                       "(ipc.allow_analog_output: false) — including to 0. Use "
-                       "Panic → All heaters OFF, which is exempt from this.",
+            self._note(self.analog_note, "ipc.allow_analog_output: false",
                        theme.note_style("warn", self))
+            self.analog_note.setToolTip(
+                "This recorder will not drive this output from a file, "
+                "including to 0. Panic → All heaters OFF is exempt from this "
+                "gate and always works.")
 
         # The gains are the one control that is worth *reading* where it
         # cannot be written, so the shut gate disables the button and leaves
@@ -1810,20 +1849,24 @@ class ViewerWindow(QtWidgets.QMainWindow):
                                      f"{key}{self._loop}") is not None
                      for key in self.pid_spins)
         if not polled:
-            self._note(self.pid_note,
-                       "This recorder does not read the loop gains, so these "
-                       "are not the instrument's (read_pid: false in its "
-                       "config).", theme.note_style("warn", self))
-        elif not self.source.allows_pid():
-            self._note(self.pid_note,
-                       "Shown from the instrument, but this recorder will not "
-                       "change them from a file (ipc.allow_pid: false).",
+            self._note(self.pid_note, "read_pid: false — not the instrument's",
                        theme.note_style("warn", self))
+            self.pid_note.setToolTip(
+                "This recorder does not poll PID?, so these boxes are not the "
+                "instrument's own gains. Set read_pid: true in its config.")
+        elif not self.source.allows_pid():
+            self._note(self.pid_note, "ipc.allow_pid: false",
+                       theme.note_style("warn", self))
+            self.pid_note.setToolTip(
+                "Shown from the instrument, but this recorder will not change "
+                "them from a file. The gains apply no power on their own — a "
+                "loop at range 0 stays inert however it is tuned.")
         else:
-            self._note(self.pid_note,
-                       "The instrument's own gains. Changing them does not "
-                       "apply power; it changes how the loop gets anywhere at "
-                       "all.", theme.note_style("muted", self))
+            self._note(self.pid_note, "the instrument's own gains",
+                       theme.note_style("muted", self))
+            self.pid_note.setToolTip(
+                "Changing these does not apply power; it changes how the loop "
+                "gets anywhere at all.")
 
         self._update_pending()
 
@@ -2013,7 +2056,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             x0, x1 = self.k_plot.getViewBox().viewRange()[0]
             width = x1 - x0
             self._cursors = (x0 + width / 3.0, x0 + 2.0 * width / 3.0)
-        self.export_note.setText("")
+        self._note(self.export_note, "")
         self._sync_cursor_items()
         self._update_region_stats()
 
@@ -2204,13 +2247,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
             rows = write_region_csv(chosen, samples,
                                     columns=self.tail.columns())
         except OSError as exc:
-            self.export_note.setText(f"could not write {chosen}: {exc}")
-            self.export_note.setStyleSheet(theme.note_style("bad", self))
+            self._note(self.export_note, f"could not write {chosen}: {exc}",
+                       theme.note_style("bad", self))
             return
-        self.export_note.setText(
-            f"wrote {rows} row(s) over {_duration(t1 - t0)} to "
-            f"{os.path.basename(chosen)}")
-        self.export_note.setStyleSheet(theme.note_style("ok", self))
+        self._note(self.export_note,
+                   f"wrote {rows} row(s) over {_duration(t1 - t0)} to "
+                   f"{os.path.basename(chosen)}",
+                   theme.note_style("ok", self))
 
     # -- choosing the window with the mouse --------------------------------
 
