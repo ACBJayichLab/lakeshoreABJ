@@ -1097,7 +1097,7 @@ def y_limits(plot):
 def test_the_value_axis_stops_where_the_viewer_says(viewer):
     lo, hi = y_limits(viewer.k_plot)
     assert lo <= 0.0
-    assert hi == pytest.approx(450.0)
+    assert hi == pytest.approx(350.0)
     lo, hi = y_limits(viewer.pct_plot)
     assert hi == pytest.approx(100.0)
 

@@ -18,7 +18,7 @@ pip install -e ".[gui]"      # pyqtgraph + PySide6
 | `--refresh S` | redraw cadence, default 1.0 |
 | `--max-points N` | default 200,000 |
 | `--gap-factor N` | how many sample intervals a hole must exceed to be drawn as a gap, default 4 |
-| `--max-kelvin N` | where the temperature panel stops panning and zooming outward, default 450 |
+| `--max-kelvin N` | where the temperature panel stops panning and zooming outward, default 350 |
 | `--max-percent N` | the same stop for the output panel, default 100 |
 | `--read-only` | open with no command spool at all, so the whole control panel is dead |
 | `--log-level` | |
@@ -486,7 +486,7 @@ it is just as fixed as one dragged out, and the status bar says so.
 
 ### The value axis has a comfort stop
 
-Zoom and pan on a value axis stop at **0–450 K** and **0–100 %** — *unless the
+Zoom and pan on a value axis stop at **0–350 K** and **0–100 %** — *unless the
 data goes outside them*, in which case the stop widens to the data. A 300 K
 axis panned out to 10 000 K is a chart nobody can read; a sensor that has come
 loose and reads 1400 K is a chart somebody has to be able to read, and an axis

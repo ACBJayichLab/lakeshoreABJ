@@ -154,7 +154,7 @@ SATURATED_LOW_PCT = 1.0
 #: Here rather than in ``window`` because ``lschart.gui.__main__`` builds its
 #: ``--max-kelvin`` / ``--max-percent`` defaults from them, and it has to be
 #: able to print its help on a machine with no Qt installed.
-COMFORT_STOP_K = (0.0, 450.0)
+COMFORT_STOP_K = (0.0, 350.0)
 COMFORT_STOP_PCT = (0.0, 100.0)
 
 
