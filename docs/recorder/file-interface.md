@@ -18,7 +18,7 @@ to close, and nothing to get out of step. **Python never learns that MATLAB
 exists**, which is the strongest available form of "do not crash if the client
 does".
 
-## The two files
+## The files
 
 Both live in `ipc.directory` (`data/` by default), alongside the CSV, so one
 directory is the whole interface.
@@ -27,6 +27,7 @@ directory is the whole interface.
 |---|---|
 | `status.json` | rewritten **in full** every cycle via `os.replace`, so a reader sees one cycle or the other and never a torn mixture |
 | `commands/` | the command spool, maildir-style. A client writes `<stem>.json.tmp` and renames it to `<stem>.json`; the recorder globs `*.json`, applies, deletes. No locking, no contention |
+| `sources.json` | optional, and the only one an **operator** writes: which clients are switched off right now. Absent by default. See [a sixth gate](#a-sixth-gate-on-a-different-axis) |
 
 ### `status.json`
 
@@ -146,6 +147,76 @@ of them wants to be open and the other emphatically does not.
 Turning a heater **off** — a range to 0, or an analog output to 0% — never
 needs either of the last two: the safe direction is always available.
 
+### A sixth gate, on a different axis
+
+Those five all answer the same question from different heights: *may this
+action happen at all*. None of them can say "the operator at this terminal may
+drive the cryostat, the analysis script may not", because none of them knows
+there is more than one client.
+
+```
+ipc.sources              may this CLIENT ask                (default: no policy)
+<ipc.directory>/sources.json   the same, narrowed at runtime, never widened
+```
+
+Every command carries a `source` label — `matlab`, `lschart-gui`,
+`lschart-cli/<pid>` — and the policy is keyed on the part before the first `/`,
+because no fixed key in a config file could ever match a pid.
+
+```yaml
+ipc:
+  sources:
+    default: false          # anything not named below
+    matlab: true
+    lschart-cli: true
+```
+
+Leave `sources:` out entirely and there is no policy: every source may ask, and
+the five gates above are the whole of it. Write it and `default:` is **false**
+unless you say otherwise — naming your clients is how you say you have thought
+about the list, and a typo in one of those names has to fail closed.
+
+**This is an interlock against habit and mistake, not against malice.** `source`
+is self-declared in the command file; anything that can write to the spool can
+write any label. That is the accepted trade — the spool is already a directory
+on a machine you trust, and keys and signatures would buy nothing the
+filesystem's own permissions do not, at the cost of the protocol no longer
+being readable by forty lines of MATLAB.
+
+### `sources.json` — switching a client off without stopping the recorder
+
+A small file beside `status.json`, re-read every cycle:
+
+```json
+{"lschart-gui": false}
+```
+
+It can only ever **narrow** what `ipc.sources` permits. Granting something the
+config refuses means editing the config and restarting, which is the point: a
+restart always returns to the audited ceiling.
+
+It is a file and not a command kind, deliberately. A *command* that disabled the
+viewer would leave the viewer with no way to re-enable itself — the one client
+that needs to undo it is the one it just silenced. A file can be edited by hand,
+by anything, and never requires stopping the recorder and making it drop the
+port.
+
+Delete the file (or the entry) to clear a lockout. A file caught mid-edit is a
+torn read: the recorder keeps the last overlay it managed to parse rather than
+widening the policy, because half a file is not permission.
+
+**The panic commands are exempt**, and are the only things that are —
+`heaters_off` bypasses the source policy *and* the two power gates above. It
+does not bypass `ipc.accept_commands`, `allow_writes` or `transport.read_only`:
+a box configured read-only stays read-only and is named in the reply. The
+exemption belongs to the command **kind**, not to the viewer — the recorder
+cannot tell a menu press from a script, so MATLAB's `heatersOff()` gets it too.
+That is deliberate: an automated abort is a large part of why a panic command
+exists.
+
+`lschart -c CONFIG status` prints the effective policy, and `check` prints the
+configured ceiling before anything is running.
+
 A refusal is not a crash. A driver limit saying no (`max_setpoint_k`,
 `max_output_pct`, a loop the box does not have) comes back as
 `refused: <reason>` and is logged at WARNING, not as an ERROR with a traceback
@@ -159,6 +230,7 @@ ipc:
   accept_commands: true       # reads commands/    -- needed to WRITE
   allow_heater_range: false   # may a file turn a 33x heater ON
   allow_analog_output: false  # may a file drive a 218 output above 0
+  sources: {}                 # WHO may ask; empty means everyone
 ```
 
 Reading and commanding are separate permissions, and commanding *also* needs

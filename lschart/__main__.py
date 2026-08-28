@@ -147,6 +147,15 @@ def cmd_check(args) -> int:
         print(f"  commands       : "
               f"{'accepted from ' + ipc.command_path() if ipc.accept_commands else 'not accepted'}"
               f"{'  (' + ' and '.join(allowed) + ' ALLOWED from a file)' if allowed else ''}")
+        if ipc.sources:
+            named = ", ".join(f"{k}={'on' if v else 'OFF'}"
+                              for k, v in sorted(ipc.sources.items())
+                              if k != "default")
+            print(f"  source policy  : {named or 'nothing named'}; "
+                  f"anything else: "
+                  f"{'on' if ipc.sources.get('default', False) else 'OFF'}")
+            print(f"  runtime overlay: {ipc.sources_path()} "
+                  "(may narrow this, never widen it)")
     else:
         print("  status file    : disabled (ipc.enabled: false) -- the viewer and "
               "MATLAB have nothing to read")
@@ -376,6 +385,19 @@ def cmd_status(args) -> int:
         print(f"  commands   : "
               f"{'accepted' if cmds.get('accepted') else 'NOT accepted'}, "
               f"{cmds.get('applied', 0)} applied / {cmds.get('refused', 0)} refused")
+        if cmds.get("source_policy"):
+            # Only printed when there is one.  A line saying "every source may
+            # ask" on every recorder that has never heard of the policy would
+            # be noise on the common case.
+            entries = cmds.get("sources") or []
+            print("  sources    : "
+                  + ", ".join(
+                      f"{e.get('name')}="
+                      + ("on" if e.get("allowed") else
+                         "OFF (runtime)" if e.get("configured") else "OFF (config)")
+                      for e in entries)
+                  + f"{'; ' if entries else ''}anything else: "
+                  + ("on" if cmds.get("source_default") else "OFF"))
         control = status.get("control")
         if control:
             print(f"  control    : {control.get('state')} "

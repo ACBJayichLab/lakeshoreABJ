@@ -977,6 +977,43 @@ class StatusSource:
         cmds = (self.status or {}).get("commands") or {}
         return bool(cmds.get("allow_analog_output"))
 
+    def source_allowed(self, name: str = "lschart-gui") -> bool:
+        """Is this client's own label switched on at the recorder?
+
+        Unlike the two power gates above, this one *is* a reason to disable a
+        control: it does not spare a direction.  A recorder that has switched
+        this viewer off will refuse everything it sends except the panic kinds,
+        so a live-looking setpoint box would be a lie.
+
+        Degrades open for a recorder too old to publish a policy, the same way
+        :func:`capabilities` degrades: an absent key means the question had not
+        been invented yet, not that the answer is no.
+        """
+        cmds = (self.status or {}).get("commands") or {}
+        if not cmds.get("source_policy"):
+            return True
+        for entry in cmds.get("sources") or []:
+            if str(entry.get("name", "")) == name:
+                return bool(entry.get("allowed"))
+        return bool(cmds.get("source_default", True))
+
+    def source_note(self, name: str = "lschart-gui") -> str:
+        """One sentence on why this viewer is locked out, or ``""``."""
+        if self.source_allowed(name):
+            return ""
+        cmds = (self.status or {}).get("commands") or {}
+        for entry in cmds.get("sources") or []:
+            if str(entry.get("name", "")) == name:
+                if entry.get("disabled_at_runtime"):
+                    return (f"Commands from {name!r} are switched off at the "
+                            "recorder (sources.json in its IPC directory). "
+                            "Delete that entry to allow them again — no "
+                            "restart needed.")
+                break
+        return (f"Commands from {name!r} are not permitted by this recorder's "
+                "configuration (ipc.sources). Changing that needs a config "
+                "edit and a restart.")
+
     def writable_links(self) -> list[dict]:
         """The instruments a command could actually reach, in order."""
         return [ln for ln in self.links() if ln.get("writable")]

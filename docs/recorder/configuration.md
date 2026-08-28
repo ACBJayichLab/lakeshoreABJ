@@ -201,12 +201,21 @@ Full explanation in [file-interface.md](file-interface.md).
 | `max_commands_per_cycle` | `4` | bounds how much bus time one cycle spends on commands |
 | **`allow_heater_range`** | **`false`** | may a *file* raise a **33x** heater range. Turning one **off** is always allowed |
 | **`allow_analog_output`** | **`false`** | may a *file* raise a **218** analog output above 0. Commanding 0 is always allowed |
+| **`sources`** | `{}` | which **clients** may ask at all: `{default: false, matlab: true}`. Empty means no policy and every source may ask |
 | `ack_history` | `20` | acknowledgements carried in `status.json`. A client polling slower than this fills up may miss its own answer |
 
-The last two are one gate each rather than one gate for both. They are
-different commands on different boxes, and the common shape on a shared
-cryostat is that exactly one of them should be open: this program drives its
-own sample heater and only *watches* the controller holding somebody else's.
+`allow_heater_range` and `allow_analog_output` are one gate each rather than one
+gate for both. They are different commands on different boxes, and the common
+shape on a shared cryostat is that exactly one of them should be open: this
+program drives its own sample heater and only *watches* the controller holding
+somebody else's.
+
+`sources` is on a different axis from all of them — those ask *may this action
+happen*, it asks *may this client ask for it*. Written non-empty, `default:` is
+**false** unless it says otherwise, so a typo in a source name fails closed. It
+is narrowed at runtime, and never widened, by `sources.json` in `directory`.
+Both are documented in
+[file-interface](file-interface.md#a-sixth-gate-on-a-different-axis).
 
 ## `sim:`
 

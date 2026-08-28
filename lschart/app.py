@@ -269,6 +269,8 @@ class Application:
                 accept_commands=cfg.ipc.accept_commands,
                 allow_heater_range=cfg.ipc.allow_heater_range,
                 allow_analog_output=cfg.ipc.allow_analog_output,
+                sources=cfg.ipc.sources,
+                sources_path=cfg.ipc.sources_path(),
                 max_commands_per_cycle=cfg.ipc.max_commands_per_cycle,
                 ack_history=cfg.ipc.ack_history,
                 config_path=cfg.source_path,

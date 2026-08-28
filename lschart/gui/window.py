@@ -93,6 +93,11 @@ DEFAULT_VIEW_WINDOW_S = 24 * 3600.0
 #: an hour so the edge of a full window has samples to bracket it.
 BACKFILL_COVERAGE_S = VIEW_WINDOWS[-1][1] + 3600.0
 
+#: How this viewer labels itself in every command it writes.  A recorder's
+#: `ipc.sources` policy is keyed on exactly this string, so it is a constant
+#: and not a literal repeated at each call site.
+GUI_SOURCE = "lschart-gui"
+
 BANNER_STYLE = {
     "ok":      "background:#e8f5e9; color:#1b5e20; padding:6px; border-radius:4px;",
     "stale":   "background:#fff3e0; color:#e65100; padding:6px; border-radius:4px;",
@@ -1051,13 +1056,21 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._instrument_changed()
 
         accepted = self.source.accepts_commands()
-        enabled = bool(self.spool) and accepted and bool(names)
+        allowed = self.source.source_allowed(GUI_SOURCE)
+        enabled = bool(self.spool) and accepted and allowed and bool(names)
         self.command_group.setEnabled(enabled)
+        # The panic button is exempt from the source policy at the recorder, so
+        # it must not be greyed out by it here.  Disabling a control the
+        # recorder would in fact obey is the one way this panel can lie.
+        if not enabled and self.spool and accepted and not allowed:
+            self.off_button.setEnabled(True)
         if not self.spool:
             why = "this viewer was started without a command spool"
         elif not accepted:
             why = ("the recorder is not accepting commands — set "
                    "ipc.accept_commands: true in its config and restart it")
+        elif not allowed:
+            why = self.source.source_note(GUI_SOURCE)
         elif not names:
             why = ("no instrument on this recorder allows writes — set "
                    "allow_writes: true on the box you mean to drive")
@@ -1912,7 +1925,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             instrument = self.instrument_combo.currentText()
         try:
             cid = self.spool.submit(
-                kind, instrument=instrument, source="lschart-gui", **args,
+                kind, instrument=instrument, source=GUI_SOURCE, **args,
             )
         except OSError as exc:
             self.ack_label.setText(f"could not queue the command: {exc}")

@@ -32,6 +32,12 @@ particular:
 * the safe direction is always available.  Turning a heater **off**, or
   commanding an analog output to zero, needs neither extra opt-in.
 
+On a different axis again, ``ipc.sources`` and its runtime overlay ask *who is
+asking* rather than *what is being asked* -- see :mod:`lschart.ipc.sources`.
+The panic kinds in :data:`PANIC_KINDS` are the only things exempt from it, and
+they are exempt from the per-kind power gates too; they are exempt from nothing
+else.
+
 Failure policy: no command, however malformed, may stop the recording.  Every
 handler's exceptions are caught and turned into a refusal that the client can
 read back in ``status.json``.
@@ -44,9 +50,20 @@ from collections import deque
 
 from ..model import Frame
 from .commands import Command, CommandResult, CommandSpool
+from .sources import SourcePolicy
 from .status import StatusWriter
 
 log = logging.getLogger(__name__)
+
+
+#: The kinds that get out from under the source policy and the per-kind power
+#: gates.  Deliberately a property of the **command kind** and not of the
+#: client: the recorder cannot tell a menu press from a script, it sees the
+#: kind, and an automated abort is a large part of why a panic command exists.
+#: What they do *not* bypass is `ipc.accept_commands`, `allow_writes` or
+#: `transport.read_only` -- a box configured read-only stays read-only, and is
+#: named in the reply rather than silently skipped.
+PANIC_KINDS = frozenset({"heaters_off"})
 
 
 class CommandError(ValueError):
@@ -91,6 +108,8 @@ class IpcService:
         accept_commands: bool = False,
         allow_heater_range: bool = False,
         allow_analog_output: bool = False,
+        sources: dict | None = None,
+        sources_path: str | None = None,
         max_commands_per_cycle: int = 4,
         config_path: str | None = None,
         ack_history: int = 20,
@@ -103,6 +122,7 @@ class IpcService:
         self.accept_commands = accept_commands
         self.allow_heater_range = allow_heater_range
         self.allow_analog_output = allow_analog_output
+        self.sources = SourcePolicy(sources, overlay_path=sources_path)
         self.max_commands_per_cycle = max(1, int(max_commands_per_cycle))
         self.interval_s = interval_s
         #: Set by the application once the poller exists; read duck-typed so
@@ -138,6 +158,12 @@ class IpcService:
                 "ALLOWED" if self.allow_heater_range else "refused",
                 "ALLOWED" if self.allow_analog_output else "refused",
             )
+            if not self.sources.unconfigured:
+                log.warning("IPC: source policy: %s (default %s)",
+                            ", ".join(f"{k}={'on' if v else 'OFF'}" for k, v
+                                      in sorted(self.sources.configured.items()))
+                            or "nothing named",
+                            "on" if self.sources.default else "OFF")
         else:
             log.info("IPC: status -> %s; commands are NOT accepted "
                      "(set ipc.accept_commands: true to enable)", self.writer.path)
@@ -158,6 +184,7 @@ class IpcService:
 
     def on_frame(self, frame: Frame) -> None:
         """Called by the poller after every cycle.  Must never raise."""
+        self.sources.refresh()
         results = self._drain()
         for r in results:
             self._acks.append(r)
@@ -190,6 +217,12 @@ class IpcService:
         if stale:
             log.warning("IPC: refusing %s command %s: %s", cmd.kind, cmd.id, stale)
             return CommandResult(cmd.id, cmd.kind, False, stale)
+
+        if cmd.kind not in PANIC_KINDS and not self.sources.allows(cmd.source):
+            refusal = self.sources.refusal(cmd.source)
+            log.warning("IPC: refusing %s command %s: %s",
+                        cmd.kind, cmd.id, refusal)
+            return CommandResult(cmd.id, cmd.kind, False, refusal)
 
         handler = getattr(self, f"_do_{cmd.kind}", None)
         if handler is None:
@@ -397,6 +430,15 @@ class IpcService:
             "ttl_s": self.spool.ttl_s,
             "allow_heater_range": bool(self.allow_heater_range),
             "allow_analog_output": bool(self.allow_analog_output),
+            # An array of uniform objects, never an object keyed by source
+            # name: `lschart-cli` would reach MATLAB as `lschart_cli`.
+            "sources": self.sources.as_status(),
+            "source_policy": not self.sources.unconfigured,
+            # What an unlisted source gets.  Published because a source the
+            # policy never names appears nowhere in the array above, and a
+            # client cannot otherwise tell "not mentioned, therefore fine" from
+            # "not mentioned, therefore refused".
+            "source_default": self.sources.unconfigured or self.sources.default,
             "queued": len(self.spool.pending()) if self.accept_commands else 0,
             "applied": self.applied,
             "refused": self.refused,

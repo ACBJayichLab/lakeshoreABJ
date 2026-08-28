@@ -272,6 +272,23 @@ class IpcConfig:
     #: client may only raise it above zero if this says so; commanding it to
     #: zero is always allowed.
     allow_analog_output: bool = False
+
+    #: Per-client policy: which *sources* may ask at all.  The five interlocks
+    #: above all answer "may this action happen"; this one answers "may this
+    #: client ask for it", which none of the others can express.
+    #:
+    #: A mapping of source label to bool, plus a `default:` for labels not
+    #: listed.  Matched on the part before the first "/", because the CLI
+    #: stamps its pid into its label.  Left empty -- the default -- there is no
+    #: policy and every source may ask, which is what every existing config
+    #: means.  Written non-empty, `default:` is **false** unless it says
+    #: otherwise: naming your clients is how you say you have thought about the
+    #: list, and a typo in one of those names must fail closed.
+    #:
+    #: Narrowed at runtime, never widened, by `sources.json` in the IPC
+    #: directory -- see :mod:`lschart.ipc.sources`.
+    sources: dict = field(default_factory=dict)
+
     #: How many acknowledgements ``status.json`` carries.  A client that polls
     #: slower than this fills up may miss its own answer.
     ack_history: int = 20
@@ -281,6 +298,17 @@ class IpcConfig:
 
     def command_path(self) -> str:
         return os.path.join(self.directory, self.command_directory)
+
+    def sources_path(self) -> str:
+        """The runtime source overlay -- see :mod:`lschart.ipc.sources`.
+
+        Beside the status file rather than inside the command spool: the spool
+        is a queue whose files are consumed and deleted, and a file that must
+        persist has no business living in one.
+        """
+        from .ipc.sources import SOURCES_FILE
+
+        return os.path.join(self.directory, SOURCES_FILE)
 
 
 @dataclass
@@ -501,6 +529,21 @@ class AppConfig:
                 problems.append(
                     "ipc.command_directory must be a directory name; commands "
                     "cannot share a directory with the status file they answer"
+                )
+            for key, value in self.ipc.sources.items():
+                if not isinstance(value, bool):
+                    problems.append(
+                        f"ipc.sources.{key} must be true or false, got "
+                        f"{value!r}; a source policy that cannot be read as a "
+                        "yes or a no is not a policy"
+                    )
+            if self.ipc.sources and not any(
+                v for k, v in self.ipc.sources.items() if k != "default"
+            ) and not self.ipc.sources.get("default", False):
+                problems.append(
+                    "ipc.sources permits nothing at all, so every command "
+                    "would be refused; remove the section to permit every "
+                    "source, or name the ones you mean"
                 )
         elif self.ipc.accept_commands:
             problems.append(
