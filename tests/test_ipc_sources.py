@@ -490,3 +490,71 @@ def test_the_status_file_shows_a_client_it_has_been_told_to_ignore(tmp_path):
         "name": "lschart-gui", "allowed": False,
         "configured": True, "disabled_at_runtime": True,
     }
+
+
+# -- the overlay's own default: "mute everything I have not named" ------------
+#
+# The config has a `default` for unlisted clients; this is the runtime half.
+# It is the only way to shut out a label you do not know in advance -- a script
+# somebody wrote this morning, a second viewer -- and like every overlay entry
+# it may only narrow what the config already allows.
+
+
+def test_the_overlay_default_mutes_clients_it_does_not_name(tmp_path):
+    path = tmp_path / "sources.json"
+    path.write_text(json.dumps({"default": False}))
+    policy = SourcePolicy({}, overlay_path=path)
+    policy.refresh()
+    assert not policy.allows("matlab")
+    assert not policy.allows("lschart-cli/999")
+
+
+def test_a_named_exception_survives_the_overlay_default(tmp_path):
+    """"Mute everything except this one" has to be expressible, or the switch
+    is all-or-nothing and nobody can use it."""
+    path = tmp_path / "sources.json"
+    path.write_text(json.dumps({"default": False, "lschart-gui": True}))
+    policy = SourcePolicy({}, overlay_path=path)
+    policy.refresh()
+    assert policy.allows("lschart-gui")
+    assert not policy.allows("matlab")
+
+
+def test_the_overlay_default_still_may_only_narrow(tmp_path):
+    """It cannot open a source the config refuses -- the whole rule of the
+    overlay, and it must not have a back door."""
+    path = tmp_path / "sources.json"
+    path.write_text(json.dumps({"default": True}))
+    policy = SourcePolicy({"matlab": False, "default": False},
+                          overlay_path=path)
+    policy.refresh()
+    assert not policy.allows("matlab")
+    assert not policy.allows("anything-else")
+
+
+def test_enabling_the_default_is_refused_where_the_config_refuses_it(tmp_path):
+    policy = SourcePolicy({"default": False, "matlab": True},
+                          overlay_path=tmp_path / "sources.json")
+    with pytest.raises(PermissionError):
+        policy.set_runtime("default", True)
+
+
+def test_muting_the_default_is_written_and_readable_again(tmp_path):
+    path = tmp_path / "sources.json"
+    policy = SourcePolicy({}, overlay_path=path)
+    policy.set_runtime("default", False)
+    assert json.loads(path.read_text())["default"] is False
+    reread = SourcePolicy({}, overlay_path=path)
+    reread.refresh()
+    assert not reread.allows("matlab")
+
+
+def test_a_client_muted_by_the_default_is_told_which_switch_did_it(tmp_path):
+    """The refusal has to name the thing that has to change, and "default" is
+    not a name anybody would guess from a bare "not accepted"."""
+    path = tmp_path / "sources.json"
+    path.write_text(json.dumps({"default": False}))
+    policy = SourcePolicy({}, overlay_path=path)
+    policy.refresh()
+    why = policy.refusal("matlab")
+    assert "default" in why and "no restart" in why

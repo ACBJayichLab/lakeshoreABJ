@@ -57,8 +57,8 @@ from ..ipc.commands import CommandSpool
 from . import theme
 from .source import (
     COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, CsvTail, StatusSource, capabilities,
-    SATURATED_HIGH_PCT, SATURATED_LOW_PCT, classify_column, connect_flags, control_row,
-    loop_marks, loop_rows, nearest_series, region_stats, write_region_csv,
+    SATURATED_HIGH_PCT, SATURATED_LOW_PCT, classify_column, connect_flags,
+    loop_marks, loop_rows, nearest_series, reading_rows, region_stats, write_region_csv,
 )
 
 log = logging.getLogger(__name__)
@@ -99,6 +99,19 @@ BACKFILL_COVERAGE_S = VIEW_WINDOWS[-1][1] + 3600.0
 #: and not a literal repeated at each call site.
 GUI_SOURCE = "lschart-gui"
 
+#: The clients the source strip offers a switch for, and what to call them.
+#:
+#: ``default`` is not a client: it is the overlay's own catch-all, and unticking
+#: it mutes every client the policy does not name -- the CLI, a second viewer,
+#: a script somebody wrote this morning. It is the only way to shut out a label
+#: you do not know in advance, and like every overlay entry it may only narrow
+#: what the config already allows.
+SOURCE_CHOICES = (
+    ("matlab", "MATLAB"),
+    (GUI_SOURCE, "This viewer"),
+    ("default", "Other clients"),
+)
+
 BANNER_STATES = (
     # Kept only as the list of states.  The colours moved to `gui.theme`,
     # which resolves them per theme at call time -- a module-level string
@@ -115,28 +128,34 @@ BANNER_STATES = (
 ZOOM_STEP = 1.5
 
 
-#: The loop table's columns.  ``Rail`` and ``Off SP`` are deliberately two
-#: columns and not one: OR-ing them into a single warning gives an icon that is
-#: lit through every cooldown, and an icon that is always lit is an icon nobody
-#: reads.  They also mean different things -- a loop pinned at its rail has run
-#: out of authority, a loop far from its setpoint may simply be on the way.
-#: Headings are terse because the panel is narrow and a loop table that
+#: The one reading table's columns.  ``Rail`` and ``Off SP`` are deliberately
+#: two columns and not one: OR-ing them into a single warning gives an icon
+#: that is lit through every cooldown, and an icon that is always lit is an
+#: icon nobody reads.  They also mean different things -- a loop pinned at its
+#: rail has run out of authority, a loop far from its setpoint may simply be on
+#: the way.  Headings are terse because the panel is narrow and a table that
 #: scrolls sideways hides the very marks it exists to show.
 #:
 #: ``State`` carries what the loop is *doing*, which used to be reachable only
 #: by hovering.  It decides whether either mark applies at all, so a loop that
 #: has quietly stopped trying -- switched to open loop, or a software loop
 #: locked out after a fault -- was previously invisible without a mouse.
-LOOP_COLUMNS = ["#", "Sensor", "K", "SP", "Out", "Rng", "State", "Rail", "Off SP"]
+#:
+#: **One table and not two.**  There used to be a per-channel readouts table
+#: with a loop table beneath it, which on a 33x-only cryostat is the same four
+#: lines twice.  The row is the *channel* and the loop is a set of columns on
+#: it, which is what keeps the eight inputs of a 218 from being collapsed into
+#: however many loops it has -- see `reading_rows` in `gui.source`.
+READING_COLUMNS = ["Channel", "K", "Loop", "SP", "Out", "Rng",
+                   "State", "Rail", "Off SP"]
 
 #: Column indices, by name.  Derived rather than written down: the marks moved
-#: one to the right when ``State`` was added, and two hardcoded 6s and 7s are
-#: exactly the kind of thing that moves silently.
-COL_LOOP, COL_SENSOR, COL_KELVIN = 0, 1, 2
+#: when ``State`` was added, and hardcoded 6s and 7s move silently.
+COL_CHANNEL, COL_KELVIN, COL_LOOP = 0, 1, 2
 COL_SETPOINT, COL_OUTPUT, COL_RANGE = 3, 4, 5
-COL_STATE = LOOP_COLUMNS.index("State")
-COL_SATURATED = LOOP_COLUMNS.index("Rail")
-COL_UNSETTLED = LOOP_COLUMNS.index("Off SP")
+COL_STATE = READING_COLUMNS.index("State")
+COL_SATURATED = READING_COLUMNS.index("Rail")
+COL_UNSETTLED = READING_COLUMNS.index("Off SP")
 
 #: What each mark says when it is lit.  Words rather than glyphs: this is read
 #: at 2 a.m. by somebody who has not seen the legend.
@@ -148,6 +167,31 @@ MARK_UNSETTLED = "OFF SP"
 #: on a dark desktop, and so was the black it was paired with.
 def warn_colour(widget=None) -> str:
     return theme.colour("bad", widget)
+
+
+def _tighten(layout) -> None:
+    """Trim a group's padding.
+
+    Qt's defaults are laid out for a dialog with room to breathe. This panel
+    is short of height on every screen it has been opened on, and the padding
+    is the cheapest thing in it to give up -- nothing is removed and nothing
+    becomes harder to hit.
+    """
+    layout.setContentsMargins(8, 6, 8, 6)
+    layout.setSpacing(4)
+
+
+def _compact(button: QtWidgets.QAbstractButton, width: int = 0) -> None:
+    """Trim a button to its text.
+
+    Qt's default push button reserves a generous minimum width and a tall
+    frame, which is right for a dialog and wasteful for a strip of five
+    two-character controls in a panel that is short of height either way.
+    """
+    button.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+    hint = button.fontMetrics().horizontalAdvance(button.text()) + 18
+    button.setFixedWidth(width or max(hint, 34))
+    button.setFixedHeight(22)
 
 
 def _state_text(mode) -> str:
@@ -469,7 +513,20 @@ class ViewerWindow(QtWidgets.QMainWindow):
         outer.addWidget(self.banner)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-        splitter.addWidget(self._left_panel())
+        # The panel scrolls rather than crushes.  Its content genuinely wants
+        # more height than a laptop screen has -- the command box alone asks
+        # for 700 px of the ~850 a 949 px screen leaves after the banner and
+        # the status bar -- and a plain QVBoxLayout answers that by squeezing
+        # children below their minimums, which is how the Setpoint, PID and
+        # Heater range groups came to be three titles with no controls under
+        # them.  A scroll area gives the panel its minimumSizeHint instead, so
+        # nothing is ever drawn smaller than it can be read at.
+        self._panel_scroll = QtWidgets.QScrollArea()
+        self._panel_scroll.setWidgetResizable(True)
+        self._panel_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._panel_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._panel_scroll.setWidget(self._left_panel())
+        splitter.addWidget(self._panel_scroll)
         splitter.addWidget(self._plots())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -479,6 +536,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # 70 px comes out of a 900 px chart, which does not miss it.
         splitter.setSizes([500, 900])
         outer.addWidget(splitter, 1)
+        # Across the whole window, under the chart. The plot gives up ~26 px
+        # for it, which it does not miss, and the left panel gets three rows
+        # back -- which it very much does.
+        outer.addWidget(self._status_strip(), 0)
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("waiting for the recorder…")
@@ -491,70 +552,56 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _left_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
         box = QtWidgets.QVBoxLayout(panel)
+        _tighten(box)
 
-        self.readouts = QtWidgets.QTableWidget(0, 2)
-        self.readouts.setHorizontalHeaderLabels(["Channel", "Kelvin"])
-        self.readouts.horizontalHeader().setStretchLastSection(True)
-        self.readouts.verticalHeader().setVisible(False)
-        self.readouts.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.readouts.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
-        # Live values are what someone walks over to read from across the room.
-        font = self.readouts.font()
-        font.setPointSize(font.pointSize() + 3)
-        self.readouts.setFont(font)
-        self.readouts.setSizePolicy(QtWidgets.QSizePolicy.Preferred,
-                                    QtWidgets.QSizePolicy.Fixed)
-        # Sized to its rows in _update_readouts, not given a stretch: a cryostat
-        # with four channels should not reserve half the panel for the six it
-        # does not have, while the trace list underneath goes unscrollable.
-        box.addWidget(self.readouts, 0)
-
-        # The loop table, *beneath* the per-channel readouts and not instead of
-        # them.  Recording every thermometer continuously is the recorder's
-        # job, and a loop-centric view that replaced the channel list would
-        # turn an eight-input monitor into however many loops it has.
-        self.loops = QtWidgets.QTableWidget(0, len(LOOP_COLUMNS))
-        self.loops.setHorizontalHeaderLabels(LOOP_COLUMNS)
-        self.loops.verticalHeader().setVisible(False)
-        self.loops.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.loops.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.loops.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        self.loops.horizontalHeader().setStretchLastSection(False)
-        header = self.loops.horizontalHeader()
-        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
-        # Every column sized to its contents except the sensor name, which
-        # takes what is left and elides when there is not enough.
+        # ONE table, not two.  There used to be a per-channel readouts table
+        # with a loop table beneath it; on a 33x-only cryostat that is the same
+        # four lines twice, because every channel is some loop's sensor.
         #
-        # Something has to give: nine columns of contents want 427 px in a
-        # 404 px panel, and the alternative is the sideways scroll this table
-        # must not do -- it would hide the two marks the table exists to show,
-        # which is exactly backwards.  The sensor name is the right thing to
-        # cut because it is the one column repeated elsewhere: it is in the
-        # readouts table directly above and in this row's own tooltip. A
-        # truncated "Rad S…" is still identifiable; a mark scrolled off the
-        # right-hand edge is not there at all.
-        header.setSectionResizeMode(COL_SENSOR, QtWidgets.QHeaderView.Stretch)
-        self.loops.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
-        self.loops.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self.loops.setSizePolicy(QtWidgets.QSizePolicy.Preferred,
-                                 QtWidgets.QSizePolicy.Fixed)
-        # Never a vertical scrollbar: the table is sized to its rows below,
-        # and one that scrolled would hide a loop behind a scrollbar in a
-        # panel that has the room for it.
-        self.loops.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self.loops.itemSelectionChanged.connect(self._loop_row_selected)
-        self.loops.setToolTip(
-            "One row per control loop, as the instrument reports it "
-            "(OUTMODE?). Click a row to point the command panel at that "
-            "loop. A software loop, where there is one, is the last row and "
-            "is read rather than clicked — it takes Arm and the panic Hold, "
-            "not a setpoint, a range or gains.")
-        #: Row index -> (instrument name, loop row), so a click can say which
+        # What the two tables were protecting against is still real: a
+        # loop-centric table that *replaced* the channel list would turn an
+        # eight-input 218 into however many loops it has, and recording every
+        # thermometer continuously is the recorder's job.  So the row is the
+        # channel and the loop is a set of columns on it -- see `reading_rows`,
+        # which does the join and is where the rules live.
+        self.readings = QtWidgets.QTableWidget(0, len(READING_COLUMNS))
+        self.readings.setHorizontalHeaderLabels(READING_COLUMNS)
+        self.readings.verticalHeader().setVisible(False)
+        self.readings.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.readings.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.readings.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        header = self.readings.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        # Every column sized to its contents except the channel name, which
+        # takes what is left and elides when there is not enough.  Something
+        # has to give and it should be the name: it is the one column repeated
+        # in the trace list and in this row's own tooltip, while a mark
+        # scrolled off the right-hand edge is not anywhere.
+        header.setSectionResizeMode(COL_CHANNEL, QtWidgets.QHeaderView.Stretch)
+        self.readings.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
+        self.readings.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.readings.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.readings.setSizePolicy(QtWidgets.QSizePolicy.Preferred,
+                                    QtWidgets.QSizePolicy.Fixed)
+        self.readings.itemSelectionChanged.connect(self._loop_row_selected)
+        self.readings.setToolTip(
+            "Every thermometer the recorder reads, with the control loop bound "
+            "to it where there is one (from the instrument's own OUTMODE?). "
+            "Click a row with a loop to point the command panel at it. A "
+            "software loop is read rather than clicked — it takes Arm and the "
+            "panic Hold, not a setpoint, a range or gains.")
+        #: Row index -> (instrument name, joined row), so a click can say which
         #: loop was picked without parsing the cells back out again.
         self._loop_index: list[tuple[str, dict]] = []
-        box.addWidget(self.loops, 0)
+        box.addWidget(self.readings, 0)
 
+        # Three rows of labelled buttons became two dense ones.  These are
+        # small, frequently-hit controls and they were spending three rows of a
+        # panel that has none to spare; compact buttons and a shared row lose
+        # nothing but padding.
         view_row = QtWidgets.QHBoxLayout()
+        view_row.setSpacing(3)
         view_row.addWidget(QtWidgets.QLabel("View"))
         # Live-referenced windows: the last N hours, riding forward with the
         # recorder.  Every one of them is a fixed extent ending at the newest
@@ -565,6 +612,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             button.setCheckable(True)
             button.setChecked(seconds == self._follow_span_s)
             button.setToolTip(f"the last {label}, following the recorder")
+            _compact(button)
             button.clicked.connect(
                 lambda _checked=False, s=seconds: self._follow_window(s))
             view_row.addWidget(button, 0)
@@ -576,6 +624,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # The drag is always the whole rectangle; these are how a single axis
         # gets moved without redrawing a box to do it.
         zoom_row = QtWidgets.QHBoxLayout()
+        zoom_row.setSpacing(3)
         zoom_row.addWidget(QtWidgets.QLabel("Zoom"))
         self.zoom_buttons: dict[str, QtWidgets.QPushButton] = {}
         for label, tip, zoom, factor in (
@@ -588,18 +637,21 @@ class ViewerWindow(QtWidgets.QMainWindow):
         ):
             button = QtWidgets.QPushButton(label)
             button.setToolTip(f"{tip}, about the middle of what is shown")
-            button.setMaximumWidth(40)
+            _compact(button, width=34)
             button.clicked.connect(
                 lambda _checked=False, z=zoom, f=factor: z(f))
             zoom_row.addWidget(button, 0)
             self.zoom_buttons[label] = button
-        zoom_row.addStretch(1)
-        box.addLayout(zoom_row)
+        # The cursor pair shares the zoom row rather than taking a third: they
+        # answer different questions -- zoom chooses what is on screen, cursors
+        # measure a piece of it -- but a separator says that as well as a whole
+        # row of empty panel did.
+        separator = QtWidgets.QFrame()
+        separator.setFrameShape(QtWidgets.QFrame.VLine)
+        separator.setFrameShadow(QtWidgets.QFrame.Sunken)
+        zoom_row.addWidget(separator)
 
-        # Two cursors and what is between them.  A separate row from the view
-        # and zoom rows because it answers a different question: those choose
-        # what is on screen, this measures a piece of it.
-        cursor_row = QtWidgets.QHBoxLayout()
+        cursor_row = zoom_row
         self.cursor_button = QtWidgets.QPushButton("Cursors")
         self.cursor_button.setCheckable(True)
         self.cursor_button.setToolTip(
@@ -609,6 +661,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "are up the left button places cursors instead of drawing a zoom "
             "rectangle; the wheel, Shift-drag and the X/Y buttons still zoom.")
         self.cursor_button.clicked.connect(self._toggle_cursors)
+        _compact(self.cursor_button)
         cursor_row.addWidget(self.cursor_button, 0)
 
         self.export_button = QtWidgets.QPushButton("Export region…")
@@ -617,9 +670,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "Write the samples between the cursors to a CSV, at full "
             "resolution — not the thinned overview the chart draws.")
         self.export_button.clicked.connect(self._export_region)
+        _compact(self.export_button)
         cursor_row.addWidget(self.export_button, 0)
         cursor_row.addStretch(1)
-        box.addLayout(cursor_row)
+        box.addLayout(zoom_row)
 
         self.export_note = QtWidgets.QLabel("")
         self.export_note.setWordWrap(True)
@@ -632,11 +686,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(traces)
-        scroll.setMinimumHeight(160)
-        # The one thing in this panel that should absorb spare height: a cryostat
-        # with two instruments has a dozen traces, and hunting for one of them
-        # through a three-line window is the difference between a usable
-        # viewer and a tolerated one.
+        # Two rows, not ten.  This is both the one thing that absorbs spare
+        # height and the first thing to give it back, which is the right way
+        # round: a trace list has its own scrollbar and loses nothing by being
+        # short, while every other control in this panel either disappears or
+        # becomes unreadable when squeezed.  On a tall window it still takes
+        # all the slack -- a cryostat with two instruments has a dozen traces
+        # and hunting for one through a three-line window is the difference
+        # between a usable viewer and a tolerated one.
+        scroll.setMinimumHeight(72)
+        self.traces_scroll = scroll
         box.addWidget(scroll, 1)
 
         box.addWidget(self._command_box())
@@ -645,11 +704,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # recorder, so when that policy switches the panel off these must stay
         # live -- and a Qt child of a disabled parent is disabled however
         # firmly you enable it.
-        box.addWidget(self._panic_box())
-        box.addWidget(self._source_box())
-        self.links_label = QtWidgets.QLabel("")
-        self.links_label.setWordWrap(True)
-        box.addWidget(self.links_label)
+        # The panic menu, the source policy and the link health used to live
+        # here, stacked. They are now a horizontal strip spanning the whole
+        # window under the chart -- see `_status_strip`. Three short controls
+        # in a narrow column is the worst shape for them, and this panel is the
+        # thing that is short of height.
         return panel
 
     def _command_box(self) -> QtWidgets.QWidget:
@@ -668,6 +727,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """
         self.command_group = QtWidgets.QGroupBox("Command")
         box = QtWidgets.QVBoxLayout(self.command_group)
+        _tighten(box)
 
         top = QtWidgets.QFormLayout()
         self.instrument_combo = QtWidgets.QComboBox()
@@ -738,6 +798,25 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.panic_button.setMenu(menu)
         return self.panic_button
 
+    def _status_strip(self) -> QtWidgets.QWidget:
+        """Panic, the source policy and link health, across the window.
+
+        These three were a vertical stack at the bottom of the left panel,
+        which is the column that has no height to spare -- and all three are
+        short and wide by nature. Spanning them under the chart costs a little
+        plot height and gives the panel back three rows.
+        """
+        strip = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(strip)
+        row.setContentsMargins(6, 2, 6, 2)
+        row.setSpacing(10)
+        row.addWidget(self._panic_box())
+        row.addWidget(self._source_box())
+        row.addStretch(1)
+        self.links_label = QtWidgets.QLabel("")
+        row.addWidget(self.links_label, 0)
+        return strip
+
     def _source_box(self) -> QtWidgets.QWidget:
         """Whether the recorder is listening to *this viewer*, and a way back.
 
@@ -753,61 +832,80 @@ class ViewerWindow(QtWidgets.QMainWindow):
         the widget, because "disabled" on a panel full of greyed-out controls
         looks a lot like "broken".
         """
-        self.source_check = QtWidgets.QCheckBox("Accept commands from this viewer")
-        self.source_check.setChecked(True)
-        self.source_check.toggled.connect(self._source_toggled)
-        return self.source_check
+        box = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(QtWidgets.QLabel("Listen to:"))
+        self.source_checks: dict[str, QtWidgets.QCheckBox] = {}
+        for name, label in SOURCE_CHOICES:
+            check = QtWidgets.QCheckBox(label)
+            check.setChecked(True)
+            check.toggled.connect(
+                lambda checked, n=name: self._source_toggled(n, checked))
+            self.source_checks[name] = check
+            row.addWidget(check)
+        #: The one this viewer is, kept for the places that ask about itself.
+        self.source_check = self.source_checks[GUI_SOURCE]
+        return box
 
-    def _source_toggled(self, checked: bool) -> None:
+    def _source_toggled(self, name: str, checked: bool) -> None:
         """Queue the mute or the un-mute.  Only ever a human's click: the
         periodic fill in :meth:`_sync_source_box` goes through ``_quiet``."""
         if self.spool is None:
             return
+        label = dict(SOURCE_CHOICES).get(name, name)
+        mine = name == GUI_SOURCE
         if not checked and not self._confirm(
-            "Ignore this viewer",
-            "Tell the recorder to ignore commands from this viewer?\n\n"
-            "The chart, the readouts and the loop table carry on exactly as "
-            "they are — this is only about commands, and reading is not a "
-            "command.\n\n"
-            "You can undo it from this same box: the command that sets this is "
-            "exempt from the policy it sets, so muting is not a one-way door. "
-            "The Panic menu also keeps working throughout.",
+            f"Ignore {label}",
+            f"Tell the recorder to ignore commands from {label}?\n\n"
+            + ("The chart, the readouts and the loop table carry on exactly as "
+               "they are — this is only about commands, and reading is not a "
+               "command.\n\n" if mine else
+               "This only stops the recorder *listening* to that client. "
+               "Anything reading status.json — its chart, its readouts — "
+               "carries on exactly as before.\n\n")
+            + ("You can undo it from this same strip: the command that sets "
+               "this is exempt from the policy it sets, so muting is not a "
+               "one-way door. The Panic menu also keeps working throughout."),
         ):
-            with _quiet(self.source_check):
-                self.source_check.setChecked(True)
+            with _quiet(self.source_checks[name]):
+                self.source_checks[name].setChecked(True)
             return
-        self._queue("source", instrument="",
-                    name=GUI_SOURCE, allowed=bool(checked))
+        self._queue("source", instrument="", name=name, allowed=bool(checked))
         self._awaiting = None
 
     def _sync_source_box(self) -> None:
         """Reflect the recorder's answer, without the reflection sending one."""
-        allowed = self.source.source_allowed(GUI_SOURCE)
-        permitted = self.source.source_configured(GUI_SOURCE)
-        with _quiet(self.source_check):
-            self.source_check.setChecked(allowed)
-        # A source the *config* refuses cannot be un-muted from here at any
-        # price: the overlay may only narrow. Offering the click would be
-        # offering a refusal.
-        self.source_check.setEnabled(bool(self.spool) and permitted
-                                     and self.source.accepts_commands())
-        if not permitted:
-            self.source_check.setToolTip(
-                "This recorder's config (ipc.sources) refuses this viewer "
-                "outright. The runtime overlay may only narrow that, so "
-                "enabling it needs a config edit and a restart.")
-        elif allowed:
-            self.source_check.setToolTip(
-                "Untick to have the recorder ignore commands from this viewer. "
-                "Reading carries on either way, and you can tick it again.")
-        else:
-            self.source_check.setToolTip(
-                "The recorder is ignoring commands from this viewer. Tick to "
-                "have it listen again — no restart needed.")
+        live = bool(self.spool) and self.source.accepts_commands()
+        for name, label in SOURCE_CHOICES:
+            check = self.source_checks[name]
+            allowed = self.source.source_allowed(name)
+            permitted = self.source.source_configured(name)
+            with _quiet(check):
+                check.setChecked(allowed)
+            # A source the *config* refuses cannot be un-muted from here at any
+            # price: the overlay may only narrow. Offering the click would be
+            # offering a refusal.
+            check.setEnabled(live and permitted)
+            if not permitted:
+                check.setToolTip(
+                    f"This recorder's config (ipc.sources) refuses {label} "
+                    "outright. The runtime overlay may only narrow that, so "
+                    "enabling it needs a config edit and a restart.")
+            elif allowed:
+                check.setToolTip(
+                    f"Untick to have the recorder ignore commands from {label}. "
+                    "Reading carries on either way, and you can tick it again.")
+            else:
+                check.setToolTip(
+                    f"The recorder is ignoring commands from {label}. Tick to "
+                    "have it listen again — no restart needed.")
 
     def _setpoint_group(self) -> QtWidgets.QWidget:
         self.setpoint_group = QtWidgets.QGroupBox("Setpoint")
         form = QtWidgets.QFormLayout(self.setpoint_group)
+        _tighten(form)
 
         # No loop selector here.  The loop table above *is* the selector, and
         # two ways to choose a loop is two things that can disagree about
@@ -849,8 +947,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """
         self.pid_group = QtWidgets.QGroupBox("PID gains")
         form = QtWidgets.QFormLayout(self.pid_group)
+        _tighten(form)
 
+        # P, I and D on ONE row, not three.  They are one command on the
+        # instrument and they are sent together whatever happens, so stacking
+        # them spent two rows of a panel that has none to spare in order to
+        # separate three things that never travel apart.
         self.pid_spins = {}
+        gains = QtWidgets.QHBoxLayout()
+        gains.setContentsMargins(0, 0, 0, 0)
+        gains.setSpacing(4)
         for key, label, decimals in (
             ("p", "P", 1), ("i", "I", 1), ("d", "D", 1),
         ):
@@ -860,11 +966,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
             # value the box will refuse.
             spin.setRange(0.0 if key == "d" else 0.1, 1000.0 if key != "d" else 200.0)
             spin.setDecimals(decimals)
+            spin.setMinimumWidth(64)
             spin.valueChanged.connect(self._pid_edited)
             self.pid_spins[key] = spin
-            form.addRow(label, spin)
+            gains.addWidget(QtWidgets.QLabel(label))
+            gains.addWidget(spin, 1)
         # One flag for the three of them, because they are one command.
         self._pid_dirty = False
+        row = QtWidgets.QWidget()
+        row.setLayout(gains)
+        form.addRow(row)
 
         self.pid_button = QtWidgets.QPushButton("Send PID…")
         self.pid_button.clicked.connect(self._send_pid)
@@ -888,6 +999,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """
         self.range_group = QtWidgets.QGroupBox("Heater range")
         form = QtWidgets.QFormLayout(self.range_group)
+        _tighten(form)
 
         # No output selector either.  On this family the loop number *is* the
         # output number by protocol, so the output a range applies to is
@@ -924,6 +1036,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """
         self.analog_group = QtWidgets.QGroupBox("Analog output")
         form = QtWidgets.QFormLayout(self.analog_group)
+        _tighten(form)
 
         self.analog_spin = QtWidgets.QDoubleSpinBox()
         self.analog_spin.setRange(0.0, 100.0)
@@ -1084,8 +1197,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.loop_note.setStyleSheet(theme.note_style("muted", self))
             state, _ = self.source.health()
             self.banner.setStyleSheet(theme.banner_style(state, self))
-            self._update_readouts()
-            self._update_loops()
+            self._update_readings()
             self._update_gate_notes()
         except Exception:  # pragma: no cover - cosmetic, never fatal
             log.debug("could not re-apply the theme", exc_info=True)
@@ -1095,8 +1207,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         try:
             self.source.poll()
             self._update_banner()
-            self._update_readouts()
-            self._update_loops()
+            self._update_readings()
             self._update_links()
             self._update_commands()
             self._sync_command_values()
@@ -1133,186 +1244,146 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.banner.setText(f"{prefix}{age_text} — {message}")
         self.banner.setStyleSheet(theme.banner_style(state, self))
 
-    def _update_readouts(self) -> None:
-        channels = self.source.channels()
-        if self.readouts.rowCount() != len(channels):
-            self.readouts.setRowCount(len(channels))
-            self.readouts.resizeRowsToContents()
-            height = self.readouts.horizontalHeader().height() + 2 * self.readouts.frameWidth()
-            for row in range(len(channels)):
-                height += self.readouts.rowHeight(row)
-            self.readouts.setFixedHeight(height)
-        for row, ch in enumerate(channels):
-            name = str(ch.get("name", "?"))
-            kelvin = ch.get("kelvin")
-            usable = bool(ch.get("usable"))
-            text = "—" if kelvin is None else f"{float(kelvin):.4f}"
-            if not usable:
-                # Never a bare number for a rejected sample: the whole point of
-                # the validity flag is that this reading is not a measurement.
-                text = f"{text}  ({ch.get('validity', 'rejected')})"
-            self._set_cell(row, 0, name)
-            item = self._set_cell(row, 1, text)
-            if usable:
-                # No colour of its own: a reading that is fine is ordinary
-                # text, and ordinary text is whatever the palette says.
-                theme.clear_foreground(item)
-            else:
-                item.setForeground(QtGui.QBrush(QtGui.QColor(warn_colour(self))))
+    def _update_readings(self) -> None:
+        """Fill the one table: every thermometer, with its loop where it has one.
 
-    def _set_cell(self, row: int, col: int, text: str) -> QtWidgets.QTableWidgetItem:
-        item = self.readouts.item(row, col)
-        if item is None:
-            item = QtWidgets.QTableWidgetItem()
-            self.readouts.setItem(row, col, item)
-        item.setText(text)
-        return item
-
-    def _update_loops(self) -> None:
-        """Fill the loop table from what the recorder read off the instruments.
-
-        Every link's loops, in link order, the way the readouts show every
-        link's channels -- a loop table that showed only the selected box
-        would hide the loop somebody needs to notice.
-
-        The kelvin column is looked up by the loop's *sensor name*, which is
-        the same string the trace and the readout carry, because the recorder
-        resolved it once from ``OUTMODE?`` and the input labels.  Nothing here
-        maps loops to sensors; there is no table in this file to go stale.
+        The join is in `reading_rows`, which has no Qt in it and is where the
+        rules about not losing a thermometer are written down and tested. This
+        method is only the painting.
         """
-        kelvin_by_name = {}
-        for channel in self.source.channels():
-            kelvin_by_name[str(channel.get("name", ""))] = (
-                channel.get("kelvin"), bool(channel.get("usable")))
-
         entries: list[tuple[str, dict]] = []
-        for link in self.source.links():
-            name = str(link.get("name", ""))
-            for row in loop_rows(link):
-                entries.append((name, row))
-        # The software loop last, after every loop that lives on a box, because
-        # it is the one row that is read rather than clicked -- see
-        # `_fill_loop_row`.  `""` for the instrument: it belongs to no link,
-        # and the entry is here only to keep this list the same length as the
-        # table it indexes.
-        software = control_row(self.source.control())
-        if software is not None:
-            entries.append(("", software))
+        for row in reading_rows(self.source.channels(), self.source.links(),
+                               self.source.control()):
+            entries.append((str(row.get("instrument") or ""), row))
         self._loop_index = entries
 
-        # Hidden entirely rather than left as an empty header: a recorder with
-        # no loops (or one too old to say) should not reserve panel height for
-        # a table that will never have a row in it.
-        self.loops.setVisible(bool(entries))
-        grew = self.loops.rowCount() != len(entries)
+        self.readings.setVisible(bool(entries))
+        grew = self.readings.rowCount() != len(entries)
         if grew:
-            self.loops.setRowCount(len(entries))
+            self.readings.setRowCount(len(entries))
 
         selected = -1
         for index, (instrument, row) in enumerate(entries):
-            kelvin, usable = kelvin_by_name.get(str(row.get("sensor") or ""),
-                                                (None, False))
-            self._fill_loop_row(index, instrument, row,
-                                kelvin if usable else None)
-            if (instrument and instrument == self.instrument_combo.currentText()
+            self._fill_reading_row(index, row)
+            if (row.get("has_loop") and instrument
+                    and instrument == self.instrument_combo.currentText()
                     and int(row.get("loop") or 0) == self._loop):
                 selected = index
 
         if grew:
             # Sized *after* the cells are filled.  Measuring an empty table
             # measures the row height of a row with nothing in it, which is
-            # how the last loop came to sit behind a scrollbar; and a
-            # horizontal scrollbar, if the panel is too narrow for the
-            # columns, eats a row's worth of height on its own.
-            self.loops.resizeRowsToContents()
-            height = (self.loops.horizontalHeader().height()
-                      + 2 * self.loops.frameWidth())
+            # how the last row came to sit behind a scrollbar.
+            self.readings.resizeRowsToContents()
+            height = (self.readings.horizontalHeader().height()
+                      + 2 * self.readings.frameWidth())
             for r in range(len(entries)):
-                height += self.loops.rowHeight(r)
-            # No allowance for a horizontal scrollbar any more: the sensor
-            # column stretches and elides so the table always fits its panel,
-            # and the bar is switched off outright. Kept as a comment rather
-            # than deleted silently, because this used to be a real cause of
-            # the last loop sitting behind one.
-            self.loops.setFixedHeight(height)
+                height += self.readings.rowHeight(r)
+            self.readings.setFixedHeight(height)
 
-        if selected >= 0 and not self.loops.selectionModel().isRowSelected(
+        if selected >= 0 and not self.readings.selectionModel().isRowSelected(
                 selected, QtCore.QModelIndex()):
-            with _quiet(self.loops):
-                self.loops.selectRow(selected)
+            with _quiet(self.readings):
+                self.readings.selectRow(selected)
 
-    def _fill_loop_row(self, index: int, instrument: str, row: dict,
-                       kelvin: float | None) -> None:
-        """One row of the loop table, instrument loop or software loop alike.
+    def _fill_reading_row(self, index: int, row: dict) -> None:
+        """One row: a thermometer, and the loop bound to it if there is one.
 
-        The two differ in three places and nowhere else, which is why they
-        share this: a software loop has no loop number and no range, and it is
-        **not selectable** -- the command panel it would point at has a
-        setpoint, a range and a set of gains, and the software loop takes none
-        of those three commands.  What it takes is `arm` and the panic `hold`,
-        which are buttons of their own.  A row that could be clicked into a
-        selection the panel cannot honour would be a row that lies.
+        Three shapes share this. A channel with no loop fills the first two
+        columns and leaves the rest blank -- that is the eight-input 218 case,
+        and it is the whole reason this is one table rather than a loop table
+        that quietly drops thermometers. A channel with an instrument loop
+        fills everything and is **selectable**, which is how the command panel
+        is pointed. A software loop fills everything but is **not** selectable:
+        it takes no setpoint, range or PID command, only `arm` and the panic
+        `hold`, so a row that could be clicked into a selection the panel
+        cannot honour would be a row that lies.
         """
-        software = not instrument
-        marks = loop_marks(row, kelvin, rails=row.get("rails"))
+        has_loop = bool(row.get("has_loop"))
+        instrument = str(row.get("instrument") or "")
+        software = has_loop and not instrument
+        kelvin = row.get("kelvin") if row.get("usable") else None
+        marks = (loop_marks(row, kelvin, rails=row.get("rails")) if has_loop
+                 else {"trying": False, "saturated": False, "unsettled": False})
         heater = row.get("heater_output")
-        cells = [""] * len(LOOP_COLUMNS)
-        cells[COL_LOOP] = str(row.get("loop") or "")
-        cells[COL_SENSOR] = str(row.get("sensor") or "—")
-        cells[COL_KELVIN] = "—" if kelvin is None else f"{float(kelvin):.3f}"
-        cells[COL_SETPOINT] = self._maybe(row.get("setpoint_k"), "{:.3f}")
-        cells[COL_OUTPUT] = self._maybe(row.get("output_pct"), "{:.1f}")
-        # n/a and not "—": a loop whose output is analog-only does not have a
-        # range that happens to be unknown, it has none at all.  The software
-        # loop is the same case for a stronger reason -- the 218 has no inert
-        # half, so there is no range for it to have.
-        cells[COL_RANGE] = ("n/a" if heater is None
-                            else self._maybe(row.get("range"), "{:.0f}"))
-        cells[COL_STATE] = _state_text(row.get("mode"))
-        cells[COL_SATURATED] = MARK_SATURATED if marks["saturated"] else ""
-        cells[COL_UNSETTLED] = MARK_UNSETTLED if marks["unsettled"] else ""
+
+        name = str(row.get("channel") or "—")
+        if has_loop and row.get("kelvin") is not None and not row.get("usable"):
+            # Never a bare number for a rejected sample: the point of the
+            # validity flag is that this reading is not a measurement.
+            name = name
+        cells = [""] * len(READING_COLUMNS)
+        cells[COL_CHANNEL] = name
+        raw_k = row.get("kelvin")
+        if raw_k is None:
+            cells[COL_KELVIN] = "—"
+        elif row.get("usable"):
+            cells[COL_KELVIN] = f"{float(raw_k):.3f}"
+        else:
+            cells[COL_KELVIN] = (f"{float(raw_k):.3f} "
+                                 f"({row.get('validity') or 'rejected'})")
+        if has_loop:
+            cells[COL_LOOP] = str(row.get("loop") or "")
+            cells[COL_SETPOINT] = self._maybe(row.get("setpoint_k"), "{:.3f}")
+            cells[COL_OUTPUT] = self._maybe(row.get("output_pct"), "{:.1f}")
+            # n/a and not "—": a loop whose output is analog-only does not have
+            # a range that happens to be unknown, it has none at all. The
+            # software loop is the same case for a stronger reason -- the 218
+            # has no inert half, so there is no range for it to have.
+            cells[COL_RANGE] = ("n/a" if heater is None
+                                else self._maybe(row.get("range"), "{:.0f}"))
+            cells[COL_STATE] = _state_text(row.get("mode"))
+            cells[COL_SATURATED] = MARK_SATURATED if marks["saturated"] else ""
+            cells[COL_UNSETTLED] = MARK_UNSETTLED if marks["unsettled"] else ""
 
         # A software loop whose health is anything but ok is coloured like a
         # lit mark, because it *is* the same class of news: the supervisor has
         # stopped trusting its own measurement, and the two marks are silent
         # precisely because it is no longer trying.
         unhealthy = software and row.get("health") not in ("ok", "", None)
+        bad_reading = raw_k is not None and not row.get("usable")
         for column, text in enumerate(cells):
-            item = self.loops.item(index, column)
+            item = self.readings.item(index, column)
             if item is None:
                 item = QtWidgets.QTableWidgetItem()
-                self.loops.setItem(index, column, item)
+                self.readings.setItem(index, column, item)
             item.setText(text)
             lit = column in (COL_SATURATED, COL_UNSETTLED) and text
-            if lit or unhealthy:
+            reading_cell = column in (COL_CHANNEL, COL_KELVIN)
+            if lit or unhealthy or (bad_reading and reading_cell):
                 item.setForeground(QtGui.QBrush(QtGui.QColor(warn_colour(self))))
             else:
                 theme.clear_foreground(item)
             flags = item.flags()
-            item.setFlags(flags & ~QtCore.Qt.ItemIsSelectable if software
-                          else flags | QtCore.Qt.ItemIsSelectable)
+            selectable = has_loop and not software
+            item.setFlags(flags | QtCore.Qt.ItemIsSelectable if selectable
+                          else flags & ~QtCore.Qt.ItemIsSelectable)
 
-        self.loops.item(index, COL_SENSOR).setToolTip(
+        if not has_loop:
+            self.readings.item(index, COL_CHANNEL).setToolTip(
+                "recorded, but no control loop reads it on this recorder")
+            return
+        self.readings.item(index, COL_CHANNEL).setToolTip(
             self._software_tooltip(row) if software else
             f"{instrument} loop {row.get('loop')}: "
             f"{row.get('mode') or 'mode unknown'}"
             + ("" if marks["trying"] else
                " — not trying to reach a setpoint, so neither warning "
                "applies"))
-        self.loops.item(index, COL_STATE).setToolTip(
+        self.readings.item(index, COL_STATE).setToolTip(
             self._software_tooltip(row) if software else
             f"what OUTMODE? says loop {row.get('loop')} is doing: "
             f"{row.get('mode') or 'unknown'}")
         rails = row.get("rails") if software else None
         low, high = ((rails[0], rails[1]) if rails and rails[0] is not None
                      else (SATURATED_LOW_PCT, SATURATED_HIGH_PCT))
-        self.loops.item(index, COL_SATURATED).setToolTip(
+        self.readings.item(index, COL_SATURATED).setToolTip(
             f"the output is at a rail (at or beyond {float(high):g}% or "
             f"{float(low):g}%): this loop has no authority left in the "
             "direction it is asking for"
             if marks["saturated"] else "")
-        self.loops.item(index, COL_UNSETTLED).setToolTip(
-            f"{row.get('sensor') or 'the sensor'} is further than "
+        self.readings.item(index, COL_UNSETTLED).setToolTip(
+            f"{row.get('channel') or 'the sensor'} is further than "
             f"{self._maybe(row.get('threshold_k'), '{:g}')} K from the "
             "setpoint ("
             + ("max_error_k in the controller's config)" if software
@@ -1568,13 +1639,18 @@ class ViewerWindow(QtWidgets.QMainWindow):
         to another is exactly the mistake having one selector is meant to
         remove.
         """
-        rows = self.loops.selectionModel().selectedRows()
+        rows = self.readings.selectionModel().selectedRows()
         if not rows:
             return
         index = rows[0].row()
         if not 0 <= index < len(self._loop_index):
             return
         instrument, row = self._loop_index[index]
+        if not row.get("has_loop") or not instrument:
+            # A bare thermometer, or the software loop: neither points the
+            # command panel anywhere. Both are non-selectable at the item
+            # level, so this is belt and braces rather than the usual path.
+            return
         self._loop = int(row.get("loop") or 1)
         names = [self.instrument_combo.itemText(i)
                  for i in range(self.instrument_combo.count())]

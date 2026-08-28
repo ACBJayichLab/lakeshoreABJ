@@ -24,8 +24,9 @@ pytest.importorskip("pyqtgraph")
 from PySide6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
 from lschart.gui import theme  # noqa: E402
+from lschart.gui.window import GUI_SOURCE as GUI_SOURCE_NAME  # noqa: E402
 from lschart.gui.window import (  # noqa: E402
-    COL_SATURATED, COL_SENSOR, DEFAULT_VIEW_WINDOW_S, ViewerWindow, warn_colour,
+    COL_CHANNEL, COL_SATURATED, DEFAULT_VIEW_WINDOW_S, ViewerWindow, warn_colour,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -459,9 +460,25 @@ def cryostat(tmp_path, qt_app, links, commands=None, csv_name="log.csv",
     stamp = _dt.datetime.fromtimestamp(time.time()).isoformat(timespec="milliseconds")
     csv.write_text(HEADER + f"{stamp},0.0,96.0,77.0,12.5,,,\n")
     status = tmp_path / f"status-{csv_name}.json"
+    # Channels are the union of "Sample" and every sensor the links say their
+    # loops read. The viewer draws one row per *thermometer* now, so a status
+    # naming a loop on a channel that does not exist is not a realistic
+    # recorder -- it would put the loop on a row of its own, which is the
+    # unresolved-binding case rather than the ordinary one.
+    sensors = []
+    for link in links:
+        for entry in link.get("loops") or ():
+            if isinstance(entry, dict):
+                name = str(entry.get("sensor") or "")
+                if name and name not in sensors:
+                    sensors.append(name)
+    if control and str(control.get("sensor") or "") not in sensors:
+        sensors.append(str(control.get("sensor") or "Sample"))
+    if not sensors:
+        sensors = ["Sample"]
     status.write_text(json.dumps({
         "t_wall": time.time(), "cycle": 3, "running": True, "interval_s": 1.0,
-        "channels": [{"name": "Sample", "kelvin": 96.0, "usable": True}],
+        "channels": [{"name": n, "kelvin": 96.0, "usable": True} for n in sensors],
         "links": links,
         "aux": [{"name": "ls336.setpoint1", "value": 77.0}],
         "recorder": {"path": str(csv), "rows": 60},
@@ -490,14 +507,17 @@ def showing(widget) -> bool:
     return not widget.isHidden()
 
 
-def loop_entry(n, sensor="Sample", **kw):
+def loop_entry(n, sensor=None, **kw):
     """One entry of a schema-2 ``links[].loops`` array.
 
     Every key present on every entry, which is the promise the status file
     makes -- MATLAB's jsondecode returns a struct array only when they agree.
     """
     entry = {
-        "loop": n, "sensor": sensor, "input": "ABCD"[n - 1],
+        # A distinct sensor per loop by default. Four loops all reading the
+        # same input is legal but unusual, and modelling it by accident made
+        # the merged table draw three extra rows for the duplicates.
+        "loop": n, "sensor": sensor or f"Sensor {n}", "input": "ABCD"[n - 1],
         "mode": "closed loop", "mode_code": 1,
         "heater_output": n if n in (1, 2) else None,
         "setpoint_k": 77.0, "output_pct": 0.0,
@@ -547,7 +567,7 @@ def test_the_range_control_follows_the_loop_the_table_selected(tmp_path, qt_app)
     output number, and a second control offering to disagree could only put
     power somewhere nobody meant it to go."""
     w = cryostat(tmp_path, qt_app, [CTRL])
-    w.loops.selectRow(1)                        # loop 2
+    w.readings.selectRow(1)                        # loop 2
     assert w._loop == 2
     assert w.heater_label.text() == "2"
     assert "output 2" in w.range_group.title()
@@ -558,7 +578,7 @@ def test_a_loop_with_no_heater_range_is_offered_none(tmp_path, qt_app):
     """A 336's loops 3 and 4 drive an analog output: no range to set, so the
     control that sets one is not shown."""
     w = cryostat(tmp_path, qt_app, [CTRL])
-    w.loops.selectRow(2)                        # loop 3
+    w.readings.selectRow(2)                        # loop 3
     assert w._loop == 3
     assert showing(w.setpoint_group)
     assert not showing(w.range_group)
@@ -571,9 +591,9 @@ def test_a_row_names_the_sensor_the_instrument_says_it_reads(tmp_path, qt_app):
     w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
         loop_entry(1, "Coldplate"), loop_entry(2, "Stage 2"),
         loop_entry(3, "Rad Shield"), loop_entry(4, "Stage 1")])])
-    sensors = [w.loops.item(r, 1).text() for r in range(w.loops.rowCount())]
+    sensors = [w.readings.item(r, 0).text() for r in range(w.readings.rowCount())]
     assert sensors == ["Coldplate", "Stage 2", "Rad Shield", "Stage 1"]
-    ranges = [w.loops.item(r, 5).text() for r in range(w.loops.rowCount())]
+    ranges = [w.readings.item(r, 5).text() for r in range(w.readings.rowCount())]
     assert ranges == ["0", "0", "n/a", "n/a"]
     w.close()
 
@@ -583,8 +603,11 @@ def test_a_recorder_too_old_to_publish_loops_still_offers_them(tmp_path, qt_app)
     should offer its loops rather than decide the box has none."""
     w = cryostat(tmp_path, qt_app, [OLD_CTRL])
     assert showing(w.setpoint_group) and showing(w.range_group)
-    assert w.loops.rowCount() == 0             # no rows to invent
-    assert not w.loops.isVisible()
+    # The thermometers are still drawn -- they come from `channels`, which
+    # schema 1 had. What is missing is the loop half of each row, because a
+    # schema-1 recorder never said which loop reads what.
+    assert w.readings.rowCount() == 1
+    assert w.readings.item(0, 2).text() == ""     # no loop number to invent
     assert "schema 1" in w.loop_note.text()
     w.close()
 
@@ -678,7 +701,7 @@ def test_sending_a_heater_range_queues_the_right_command(
         tmp_path, qt_app, monkeypatch):
     w = cryostat(tmp_path, qt_app, [CTRL])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
-    w.loops.selectRow(1)                              # loop 2 -> output 2
+    w.readings.selectRow(1)                              # loop 2 -> output 2
     w.range_combo.setCurrentIndex(3)                  # range 3, high
     w.range_button.click()
 
@@ -786,9 +809,15 @@ def aux_status(tmp_path, links, aux):
             timespec="milliseconds")
         csv.write_text(HEADER + f"{stamp},0.0,96.0,77.0,12.5,,,\n")
     path = tmp_path / f"status-{abs(hash(json.dumps(aux)))}.json"
+    # Same rule as `cryostat`: the channels are the sensors the loops say they
+    # read, so the table has one row per loop in loop order and selectRow(n)
+    # means what it used to.
+    sensors = [str(e.get("sensor") or "") for link in links
+               for e in (link.get("loops") or ()) if isinstance(e, dict)]
+    sensors = list(dict.fromkeys(n for n in sensors if n)) or ["Sample"]
     path.write_text(json.dumps({
         "t_wall": time.time(), "cycle": 3, "running": True, "interval_s": 1.0,
-        "channels": [{"name": "Sample", "kelvin": 96.0, "usable": True}],
+        "channels": [{"name": n, "kelvin": 96.0, "usable": True} for n in sensors],
         "links": links,
         "aux": [{"name": k, "value": v} for k, v in aux.items()],
         "recorder": {"path": str(csv), "rows": 60},
@@ -809,7 +838,7 @@ def test_changing_loop_refills_the_setpoint_field(tmp_path, qt_app):
                       {"ls336.setpoint1": 4.2, "ls336.setpoint2": 77.35})
     w = ViewerWindow(str(path), refresh_ms=10_000_000)
     assert w.setpoint_spin.value() == pytest.approx(4.2)
-    w.loops.selectRow(1)
+    w.readings.selectRow(1)
     assert w.setpoint_spin.value() == pytest.approx(77.35)
     w.close()
 
@@ -830,7 +859,7 @@ def test_the_range_combo_follows_the_current_range(tmp_path, qt_app):
                       {"ls336.range1": 1, "ls336.range2": 3})
     w = ViewerWindow(str(path), refresh_ms=10_000_000)
     assert w.range_combo.currentData() == 1
-    w.loops.selectRow(1)                            # loop 2 -> output 2
+    w.readings.selectRow(1)                            # loop 2 -> output 2
     assert w.range_combo.currentData() == 3
     w.close()
 
@@ -845,8 +874,8 @@ def test_an_edited_field_stops_tracking_until_the_selection_changes(
     assert w.setpoint_spin.value() == pytest.approx(300.0)
 
     # A different loop is a different question; the field tracks again.
-    w.loops.selectRow(1)
-    w.loops.selectRow(0)
+    w.readings.selectRow(1)
+    w.readings.selectRow(0)
     w.refresh()
     assert w.setpoint_spin.value() == pytest.approx(4.2)
     w.close()
@@ -1531,8 +1560,8 @@ def test_a_muted_viewer_still_draws_everything(tmp_path, qt_app):
     controls must not be mistaken for a broken viewer."""
     w = cryostat(tmp_path, qt_app, [CTRL], commands=muted())
     w.refresh()
-    assert w.readouts.rowCount() > 0
-    assert w.loops.rowCount() > 0
+    assert w.readings.rowCount() > 0
+    assert w.readings.rowCount() > 0
     assert w.panic_button.isEnabled()
     w.close()
 
@@ -1553,28 +1582,45 @@ SOFTWARE = {
 }
 
 
+def row_for(window, channel: str) -> int:
+    """The table row showing this channel, by name.
+
+    The software loop merges into the row for the channel it controls rather
+    than sitting at the bottom, so an index is no longer a stable way to find
+    it -- and a name is what somebody reading the table would use anyway.
+    """
+    for r in range(window.readings.rowCount()):
+        if window.readings.item(r, 0).text() == channel:
+            return r
+    raise AssertionError(
+        f"no row for {channel!r}; rows are "
+        f"{[window.readings.item(r, 0).text() for r in range(window.readings.rowCount())]}")
+
+
 def cells(window, row):
-    return [window.loops.item(row, c).text() for c in range(window.loops.columnCount())]
+    return [window.readings.item(row, c).text()
+            for c in range(window.readings.columnCount())]
 
 
 def test_a_plain_recorder_grows_no_software_row(tmp_path, qt_app):
     """Most recorders have no controller at all, and `control` is null."""
     w = cryostat(tmp_path, qt_app, [CTRL])
-    assert w.loops.rowCount() == 4
-    assert [w.loops.item(r, 0).text() for r in range(4)] == ["1", "2", "3", "4"]
+    assert w.readings.rowCount() == 4
+    assert [w.readings.item(r, 2).text() for r in range(4)] == ["1", "2", "3", "4"]
     w.close()
 
 
-def test_the_software_loop_is_the_last_row_and_carries_its_own_sensor(
+def test_the_software_loop_lands_on_the_row_for_the_channel_it_controls(
         tmp_path, qt_app):
-    """Last, after every loop that lives on a box; and the kelvin column fills
-    itself, because the sensor is named by the same string the readout uses."""
+    """Not a row of its own: it reads a thermometer like any other loop, so it
+    fills the loop columns of that thermometer's row. On LTSPM3 that is the
+    218's Sample channel, with the 336's own loops on their own rows."""
     w = cryostat(tmp_path, qt_app, [CTRL], control=dict(SOFTWARE))
-    assert w.loops.rowCount() == 5
-    row = cells(w, 4)
-    assert row[0] == "sw"                      # not a loop number
-    assert row[1] == "Sample"
-    assert row[2] == "96.000"                  # from the channel readout
+    # Four 336 loops on four sensors, plus Sample: five thermometers.
+    assert w.readings.rowCount() == 5
+    row = cells(w, row_for(w, "Sample"))
+    assert row[1] == "96.000"                  # the channel's own reading
+    assert row[2] == "sw"                      # not a loop number
     assert row[3] == "96.000" and row[4] == "63.1"
     assert row[5] == "n/a"                     # no range, not an unknown one
     assert row[6] == "tracking"
@@ -1586,7 +1632,7 @@ def test_a_recorder_that_is_only_a_software_loop_still_gets_a_table(
     """A 218 has no loops of its own.  Before this the table was hidden
     entirely on exactly the cryostat that has a loop worth watching."""
     w = cryostat(tmp_path, qt_app, [MON], control=dict(SOFTWARE))
-    assert w.loops.rowCount() == 1 and showing(w.loops)
+    assert w.readings.rowCount() == 1 and showing(w.readings)
     w.close()
 
 
@@ -1596,12 +1642,12 @@ def test_the_software_row_cannot_be_selected_into_the_command_panel(
     Hold.  A row that could be clicked into a selection the panel cannot
     honour would be a row that lies."""
     w = cryostat(tmp_path, qt_app, [CTRL], control=dict(SOFTWARE))
-    w.loops.selectRow(1)                       # loop 2, a real one
+    w.readings.selectRow(1)                       # loop 2, a real one
     assert w._loop == 2
-    w.loops.selectRow(4)                       # the software row
+    w.readings.selectRow(4)                       # the software row
     assert w._loop == 2                        # unmoved
-    assert not w.loops.item(4, 0).flags() & QtCore.Qt.ItemIsSelectable
-    assert w.loops.item(0, 0).flags() & QtCore.Qt.ItemIsSelectable
+    assert not w.readings.item(row_for(w, 'Sample'), 2).flags() & QtCore.Qt.ItemIsSelectable
+    assert w.readings.item(0, 2).flags() & QtCore.Qt.ItemIsSelectable
     w.close()
 
 
@@ -1613,8 +1659,8 @@ def test_a_locked_out_software_loop_says_so_in_the_state_column(
                  control=dict(SOFTWARE, state="locked_out", mode="pid",
                               health="fault", output_pct=0.0,
                               alarms=["sensor lost for 60 s"]))
-    assert cells(w, 4)[6] == "locked out"
-    assert "sensor lost for 60 s" in w.loops.item(4, 1).toolTip()
+    assert cells(w, row_for(w, 'Sample'))[6] == "locked out"
+    assert "sensor lost for 60 s" in w.readings.item(row_for(w, 'Sample'), 0).toolTip()
     w.close()
 
 
@@ -1624,11 +1670,11 @@ def test_a_held_loop_is_told_apart_from_one_that_was_never_armed(
     in the hover because the State column has room for one word."""
     held = cryostat(tmp_path, qt_app, [CTRL],
                     control=dict(SOFTWARE, state="idle", mode="manual"))
-    assert "mode manual" in held.loops.item(4, 1).toolTip()
+    assert "mode manual" in held.readings.item(row_for(held, 'Sample'), 0).toolTip()
     held.close()
     never = cryostat(tmp_path, qt_app, [CTRL],
                      control=dict(SOFTWARE, state="idle", mode="off"))
-    assert "mode off" in never.loops.item(4, 1).toolTip()
+    assert "mode off" in never.readings.item(row_for(never, 'Sample'), 0).toolTip()
     never.close()
 
 
@@ -1638,7 +1684,7 @@ def test_a_ramping_down_loop_is_not_abbreviated_into_an_ordinary_ramp(
     fault backing the heater off."""
     w = cryostat(tmp_path, qt_app, [CTRL],
                  control=dict(SOFTWARE, state="ramping_down", health="fault"))
-    assert cells(w, 4)[6] == "ramping down"
+    assert cells(w, row_for(w, 'Sample'))[6] == "ramping down"
     w.close()
 
 
@@ -1649,7 +1695,7 @@ def test_a_software_loop_that_is_not_tracking_lights_neither_mark(
     w = cryostat(tmp_path, qt_app, [CTRL],
                  control=dict(SOFTWARE, mode="manual", state="idle",
                               demand_pct=99.0, setpoint_k=40.0))
-    row = cells(w, 4)
+    row = cells(w, row_for(w, 'Sample'))
     assert row[7] == "" and row[8] == ""
     w.close()
 
@@ -1659,8 +1705,8 @@ def test_the_software_loop_rails_at_its_own_clamp(tmp_path, qt_app):
     this mark could never light."""
     w = cryostat(tmp_path, qt_app, [CTRL],
                  control=dict(SOFTWARE, demand_pct=64.5))
-    assert cells(w, 4)[7] == "RAIL"
-    assert "64.076%" in w.loops.item(4, 7).toolTip()
+    assert cells(w, row_for(w, 'Sample'))[7] == "RAIL"
+    assert "64.076%" in w.readings.item(row_for(w, 'Sample'), 7).toolTip()
     w.close()
 
 
@@ -1671,11 +1717,11 @@ def test_an_unhealthy_software_loop_is_coloured_even_with_both_marks_dark(
     w = cryostat(tmp_path, qt_app, [CTRL],
                  control=dict(SOFTWARE, health="fault", state="holding",
                               reason="reading rejected"))
-    assert cells(w, 4)[7] == "" and cells(w, 4)[8] == ""
-    assert w.loops.item(4, 1).foreground().color().name() == warn_colour(w)
+    assert cells(w, row_for(w, 'Sample'))[7] == "" and cells(w, row_for(w, 'Sample'))[8] == ""
+    assert w.readings.item(row_for(w, 'Sample'), 0).foreground().color().name() == warn_colour(w)
     # And a healthy row has no colour of its own at all -- it is whatever the
     # palette says, which is the only value that is right on both themes.
-    assert w.loops.item(0, 1).data(QtCore.Qt.ItemDataRole.ForegroundRole) is None
+    assert w.readings.item(0, 0).data(QtCore.Qt.ItemDataRole.ForegroundRole) is None
     w.close()
 
 
@@ -1713,8 +1759,8 @@ def test_an_ordinary_reading_is_never_given_a_colour_of_its_own(tmp_path, qt_app
     dark desktop, and forcing white would do the same on a light one."""
     w = cryostat(tmp_path, qt_app, [CTRL])
     role = QtCore.Qt.ItemDataRole.ForegroundRole
-    assert w.readouts.item(0, 1).data(role) is None
-    assert w.loops.item(0, 0).data(role) is None
+    assert w.readings.item(0, 1).data(role) is None
+    assert w.readings.item(0, 2).data(role) is None
     w.close()
 
 
@@ -1723,8 +1769,9 @@ def test_a_rejected_reading_still_gets_a_colour(tmp_path, qt_app):
     w = cryostat(tmp_path, qt_app, [CTRL])
     w.source.status["channels"] = [
         {"name": "Sample", "kelvin": 96.0, "usable": False, "validity": "rejected"}]
-    w._update_readouts()
-    assert w.readouts.item(0, 1).foreground().color().name() == warn_colour(w)
+    w._update_readings()
+    assert w.readings.item(0, 1).foreground().color().name() == warn_colour(w)
+    assert "rejected" in w.readings.item(0, 1).text()
     w.close()
 
 
@@ -1737,12 +1784,12 @@ def test_the_window_follows_the_desktop_changing_theme_under_it(tmp_path, qt_app
     repaint(qt_app, w, dark=True)
     assert w.loop_note.styleSheet() == theme.note_style("muted", w)
     assert theme.DARK["muted"] in w.loop_note.styleSheet()
-    dark_mark = w.loops.item(0, COL_SATURATED).foreground().color().name()
+    dark_mark = w.readings.item(0, COL_SATURATED).foreground().color().name()
     assert dark_mark == theme.DARK["bad"]
 
     repaint(qt_app, w, dark=False)
     assert theme.LIGHT["muted"] in w.loop_note.styleSheet()
-    assert w.loops.item(0, COL_SATURATED).foreground().color().name() == \
+    assert w.readings.item(0, COL_SATURATED).foreground().color().name() == \
         theme.LIGHT["bad"]
     w.close()
 
@@ -1781,7 +1828,7 @@ def test_the_loop_table_never_scrolls_sideways(tmp_path, qt_app):
     for _ in range(3):
         w.refresh()
         qt_app.processEvents()
-    table = w.loops
+    table = w.readings
     assert not table.horizontalScrollBar().isVisible()
     total = sum(table.columnWidth(c) for c in range(table.columnCount()))
     assert total <= table.viewport().width()
@@ -1801,8 +1848,8 @@ def test_a_long_sensor_name_elides_rather_than_widening_the_table(tmp_path, qt_a
     for _ in range(3):
         w.refresh()
         qt_app.processEvents()
-    assert not w.loops.horizontalScrollBar().isVisible()
-    assert w.loops.item(0, COL_SATURATED) is not None
+    assert not w.readings.horizontalScrollBar().isVisible()
+    assert w.readings.item(0, COL_SATURATED) is not None
     w.close()
 
 
@@ -1818,8 +1865,8 @@ def test_the_ordinary_sensor_names_are_not_elided_at_the_default_width(
     for _ in range(3):
         w.refresh()
         qt_app.processEvents()
-    metrics = w.loops.fontMetrics()
-    width = w.loops.columnWidth(COL_SENSOR)
+    metrics = w.readings.fontMetrics()
+    width = w.readings.columnWidth(COL_CHANNEL)
     for name in ("Coldplate", "Stage 2", "Rad Shield", "Stage 1"):
         assert metrics.horizontalAdvance(name) <= width, f"{name} would elide"
     w.close()
@@ -1841,4 +1888,94 @@ def test_a_gate_note_is_given_the_height_its_wrapping_needs(tmp_path, qt_app):
     note = w.range_note
     assert note.text(), "the note should be saying why the control is dead"
     assert note.height() >= note.heightForWidth(note.width())
+    w.close()
+
+
+# -- the status strip, and the panel fitting on a screen ----------------------
+
+
+def test_the_source_strip_offers_the_three_clients_that_exist(tmp_path, qt_app):
+    """MATLAB, this viewer, and everything the policy does not name. The last
+    is the only way to shut out a label nobody knew in advance."""
+    from lschart.gui.window import GUI_SOURCE, SOURCE_CHOICES
+
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    assert [n for n, _ in SOURCE_CHOICES] == ["matlab", GUI_SOURCE, "default"]
+    assert set(w.source_checks) == {"matlab", GUI_SOURCE, "default"}
+    w.close()
+
+
+def test_unticking_a_client_queues_a_command_naming_it(tmp_path, qt_app,
+                                                       monkeypatch):
+    monkeypatch.setattr(ViewerWindow, "_confirm", lambda *a, **k: True)
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.source_checks["matlab"].setChecked(False)
+    (cmd,) = queued(w)
+    assert cmd["kind"] == "source"
+    assert cmd["name"] == "matlab" and cmd["allowed"] is False
+    w.close()
+
+
+def test_unticking_other_clients_mutes_the_overlay_default(tmp_path, qt_app,
+                                                           monkeypatch):
+    """"Other" is not a client. It is the overlay's catch-all, and the command
+    has to say `default` for the recorder to understand it."""
+    monkeypatch.setattr(ViewerWindow, "_confirm", lambda *a, **k: True)
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.source_checks["default"].setChecked(False)
+    (cmd,) = queued(w)
+    assert cmd["name"] == "default" and cmd["allowed"] is False
+    w.close()
+
+
+def test_the_strip_stays_live_when_the_command_group_is_switched_off(
+        tmp_path, qt_app):
+    """Structural, not cosmetic: the panic kinds and the `source` command are
+    exempt at the recorder, so they must not be children of the group the
+    source policy disables -- a Qt child of a disabled parent is disabled
+    however firmly you enable it."""
+    w = cryostat(tmp_path, qt_app, [CTRL], commands={
+        "accepted": True, "recent": [], "source_policy": True,
+        "source_default": False,
+        "sources": [{"name": GUI_SOURCE_NAME, "allowed": False,
+                     "configured": True, "disabled_at_runtime": True}]})
+    w.refresh()
+    assert not w.command_group.isEnabled()
+    assert w.panic_button.isEnabled()
+    # The un-mute has to survive the mute, or muting is a one-way door.
+    assert w.source_checks[GUI_SOURCE_NAME].isEnabled()
+    assert not w.source_checks[GUI_SOURCE_NAME].isChecked()
+    w.close()
+
+
+def test_the_panel_fits_a_laptop_screen_without_scrolling(tmp_path, qt_app):
+    """It used to want 1404 px against the ~795 a 949 px screen leaves, and a
+    plain layout answered that by crushing the command groups into three empty
+    titles. One table instead of two, a denser button strip, P/I/D on one row
+    and the status strip moved out brought it under."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.resize(1500, 949)
+    w.show()
+    for _ in range(4):
+        w.refresh()
+        qt_app.processEvents()
+    wanted = w._panel_scroll.widget().minimumSizeHint().height()
+    available = w._panel_scroll.viewport().height()
+    assert wanted <= available, f"panel wants {wanted}px, has {available}px"
+    w.close()
+
+
+def test_a_short_window_scrolls_instead_of_crushing_the_controls(
+        tmp_path, qt_app):
+    """And when it genuinely does not fit, nothing is drawn smaller than it
+    can be read at -- which is what a bare QVBoxLayout got wrong."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.resize(1500, 500)
+    w.show()
+    for _ in range(4):
+        w.refresh()
+        qt_app.processEvents()
+    assert w._panel_scroll.verticalScrollBar().isVisible()
+    assert w.setpoint_group.height() >= w.setpoint_group.minimumSizeHint().height()
+    assert w.pid_group.height() >= w.pid_group.minimumSizeHint().height()
     w.close()

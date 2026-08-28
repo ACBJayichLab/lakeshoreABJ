@@ -100,18 +100,37 @@ Plus live readouts, link health, per-trace toggles, and the control panel
 below — all of which write into the same spool MATLAB uses, behind a
 confirmation dialog, with no privileges MATLAB lacks.
 
-## The loop table
+## The reading table
 
-Beneath the per-channel readouts, and **not instead of them**: recording every
-thermometer continuously is the recorder's job, and a loop-centric view that
-replaced the channel list would turn an eight-input monitor into however many
-loops it has.
+**One table, not two.** Every thermometer the recorder reads is a row, and the
+control loop bound to that thermometer fills the rest of the row:
+`Channel · K · Loop · SP · Out · Rng · State · Rail · Off SP`.
 
-One row per loop, across every instrument: `# · Sensor · K · SP · Out · Rng ·
-State · Rail · Off SP`. **Clicking a row selects that loop** — instrument and
-loop together — and every control in the command panel follows it. There is no
-loop spin box and no output combo; two ways to choose a loop is two things that
-can disagree about where a setpoint is going.
+There used to be a per-channel readouts table with a loop table beneath it,
+which on a 33x-only cryostat is the same four lines twice — every channel is
+some loop's sensor. The reason for two is still real, though, and the merged
+table has to respect it: a loop-centric table that *replaced* the channel list
+would turn an eight-input 218 into however many loops it has, and recording
+every thermometer continuously is the recorder's whole job. Making the
+**channel** the row and the loop a set of **columns** is what gets one table
+without paying that price:
+
+- every channel gets a row, bound to a loop or not;
+- a loop fills the loop columns of the row whose sensor it reads;
+- a loop whose sensor is not among the channels — an unresolved binding, or a
+  second loop on a channel that already has one — gets a row of its own rather
+  than being dropped or overwriting the first;
+- the software loop is just another loop, and lands on the row for the channel
+  it controls.
+
+So a 218 with eight inputs and no loops draws eight rows with the loop columns
+empty, which is exactly the table it had before.
+
+**Clicking a row with an instrument loop selects it** and every control in the
+command panel follows. There is no loop spin box and no output combo; two ways
+to choose a loop is two things that can disagree about where a setpoint is
+going. Rows with no loop, and the software loop's row, are not selectable —
+the panel has nothing to point at them with.
 
 Which sensor a loop reads comes from the **instrument** (`OUTMODE?`), not from
 a config key. On this family the loop number *is* the output number by
@@ -121,10 +140,7 @@ does not have a range that happens to be unknown; it has none.
 
 `State` is what `OUTMODE?` says the loop is doing — `closed`, `open`, `zone`,
 `monitor`, `off`. It decides whether either warning mark applies at all, so a
-loop that has quietly stopped trying is worth seeing without a hover. The full
-string stays in the tooltip; the second word of "closed loop" and "open loop"
-is the same on both and carries nothing, and a loop table that scrolls sideways
-hides the very marks it exists to show.
+loop that has quietly stopped trying is worth seeing without a hover.
 
 ### The two warning marks
 
@@ -346,32 +362,38 @@ the ramp was demanding. And hold means two different things on the two boxes —
 33x loop holds a temperature and keeps regulating; a 218 holds a power, and
 nothing regulates the sample afterwards.
 
-## Muting this viewer
+## The status strip
 
-The checkbox below the Panic menu is whether the recorder is **listening** to
-this viewer. It writes the same `sources.json` a text editor writes, through the
-`source` command.
+Along the bottom of the window, spanning it: the **Panic** menu, **Listen to**,
+and the link health line. All three are short and wide by nature and were
+previously a vertical stack at the bottom of the left panel — the one column
+that has no height to spare. Moving them costs the chart a couple of dozen
+pixels and gives the panel three rows back.
 
-It sits outside the command group for the same structural reason the Panic menu
-does — it is the control that undoes the thing which disables that group, so it
-cannot live inside it. The `source` command is exempt from the policy it edits
-precisely so this works when nothing else in the panel does: **muting is not a
-one-way door.**
+### Listen to: which clients the recorder obeys
 
-**Muted is about listening, never about reading.** The chart, the readouts, the
-loop table and the marks are all reads of `status.json` and carry on exactly as
-before. A panel full of greyed-out controls looks a lot like a broken viewer,
-which is why the confirmation says this out loud.
+Three tickboxes, and they are the runtime half of `ipc.sources`:
 
-The checkbox is disabled — with a tooltip saying why — when the recorder's
-*config* (`ipc.sources`) refuses this viewer outright. The overlay may only
-narrow, so that one needs a config edit and a restart, and offering the click
-would be offering a refusal.
+| | |
+|---|---|
+| **MATLAB** | the `matlab` source label |
+| **This viewer** | `lschart-gui` |
+| **Other clients** | the overlay's own `default` — everything the policy does not name: the CLI, a second viewer, a script somebody wrote this morning |
 
-**Arm is outside the menu**, next to it rather than in it. Arming starts the
-loop driving the heater again, which is the power-applying direction; sitting it
-beside the two stopping actions would suggest it shares their exemptions, and it
-shares none of them.
+"Other clients" is not a client. It is the only way to shut out a label you do
+not know in advance, and like every overlay entry it may only **narrow** what
+`ipc.sources` already allows — a tickbox the config refuses outright is
+disabled and says so, because enabling it needs a config edit and a restart.
+
+**Muted is about listening, never about reading.** `status.json` is a file
+anyone may open, so a muted client keeps every "getting" operation it had:
+temperatures, the reading table, the marks, the chart. Only commands stop.
+
+Un-ticking this viewer is not a one-way door. The `source` command is exempt
+from the policy it edits, so the tickbox that mutes this viewer is the tickbox
+that un-mutes it, and the Panic menu keeps working throughout. That is also why
+the strip lives **outside** the command group: a Qt child of a disabled parent
+is disabled however firmly you enable it.
 
 ## Zooming with the mouse
 

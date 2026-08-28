@@ -223,21 +223,50 @@ class SourcePolicy:
     # -- the answer --------------------------------------------------------
 
     def ceiling(self, source: str) -> bool:
-        """What the config alone permits for this source."""
+        """What the config alone permits for this source.
+
+        ``default`` is answerable here like any other name: its ceiling is the
+        config's own default, which is what makes "mute everything unlisted" a
+        narrowing of the config rather than a way around it.
+        """
         if self.unconfigured:
             return True
-        return self.configured.get(source_key(source), self.default)
+        key = source_key(source)
+        if key == self.DEFAULT_KEY:
+            return self.default
+        return self.configured.get(key, self.default)
+
+    #: The overlay key that stands for "every client this file does not name".
+    #: The config has one of these too (``ipc.sources.default``); this is the
+    #: runtime half, and like every other overlay entry it may only narrow.
+    DEFAULT_KEY = "default"
 
     def allows(self, source: str) -> bool:
         key = source_key(source)
         if not self.ceiling(source):
             return False
         # The overlay narrows and never widens, so only a False in it counts.
-        return self.overlay.get(key, True)
+        if key in self.overlay:
+            return self.overlay[key]
+        # Nothing said about this client by name, so the overlay's own default
+        # applies -- "mute everything I have not listed", which is the one way
+        # to shut out a client whose label you do not know in advance. Absent,
+        # it says nothing and the config ceiling stands alone.
+        return self.overlay.get(self.DEFAULT_KEY, True)
 
     def refusal(self, source: str) -> str:
         """Why a source was refused, in the terms of whichever layer said no."""
         key = source_key(source) or UNLABELLED
+        if (self.ceiling(source) and key not in self.overlay
+                and not self.overlay.get(self.DEFAULT_KEY, True)):
+            return (
+                f"commands from {key!r} are currently switched off in "
+                f"{self.overlay_path} by its `default` entry, which mutes "
+                "every client the file does not name; send "
+                f"`source {key} on` to name this one as an exception, or "
+                "`source default on` to stop muting the unnamed -- either "
+                "way, no restart needed"
+            )
         if not self.ceiling(source):
             listed = sorted(k for k, v in self.configured.items() if v)
             return (

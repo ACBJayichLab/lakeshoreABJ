@@ -18,7 +18,7 @@ import pytest
 from lschart.gui.source import (
     EMPTY_LOOP, SOFTWARE_LOOP_LABEL, CsvTail, Series, StatusSource, capabilities,
     classify_column, connect_flags, control_row, loop_marks, loop_rows, nearest_series,
-    region_stats, value_at, write_region_csv,
+    reading_rows, region_stats, value_at, write_region_csv,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -1132,3 +1132,96 @@ def test_the_state_is_what_the_row_shows_as_its_mode():
     software loop the supervisor's *state* is the informative half -- "pid"
     does not distinguish tracking from locked out."""
     assert control_row(a_control(state="locked_out"))["mode"] == "locked_out"
+
+
+# -- one table: channels, with their loops as columns -------------------------
+#
+# The viewer used to draw a per-channel readouts table and a loop table beneath
+# it, which on a 33x-only cryostat is the same four lines twice. Merging them
+# is only safe if the merge cannot lose a thermometer -- `FEATURE_PLAN.md`
+# rejected a loop-centric table for exactly that reason, and these are the
+# tests that keep the merged one honest about it.
+
+
+def a_channel(name, kelvin=295.0, **kw):
+    row = {"name": name, "kelvin": kelvin, "usable": True}
+    row.update(kw)
+    return row
+
+
+def test_a_monitor_with_no_loops_keeps_every_thermometer():
+    """The case the two tables existed to protect. A 218 has eight inputs and
+    no loops at all; a loop-centric table would draw nothing."""
+    channels = [a_channel(f"Ch {i}") for i in range(1, 9)]
+    rows = reading_rows(channels, [])
+    assert [r["channel"] for r in rows] == [f"Ch {i}" for i in range(1, 9)]
+    assert not any(r["has_loop"] for r in rows)
+
+
+def test_a_channel_with_a_loop_carries_it_on_the_same_row():
+    rows = reading_rows([a_channel("Sample", 96.0)],
+                        [link_with_loops(a_loop(sensor="Sample"))])
+    assert len(rows) == 1
+    assert rows[0]["channel"] == "Sample" and rows[0]["kelvin"] == 96.0
+    assert rows[0]["has_loop"] and rows[0]["loop"] == 1
+
+
+def test_a_channel_no_loop_reads_still_gets_its_row():
+    """A mixed cryostat: some thermometers are controlled, most are watched."""
+    rows = reading_rows([a_channel("Sample"), a_channel("Rad Shield")],
+                        [link_with_loops(a_loop(sensor="Sample"))])
+    assert [r["channel"] for r in rows] == ["Sample", "Rad Shield"]
+    assert rows[0]["has_loop"] and not rows[1]["has_loop"]
+
+
+def test_a_loop_whose_sensor_matched_no_channel_is_not_dropped():
+    """An OUTMODE binding the recorder could not resolve to a label. The loop
+    is still real and still driving a heater, so it gets a row with no
+    temperature rather than no row."""
+    rows = reading_rows([a_channel("Sample")],
+                        [link_with_loops(a_loop(sensor="Mystery"))])
+    assert [r["channel"] for r in rows] == ["Sample", "Mystery"]
+    assert rows[1]["has_loop"] and rows[1]["kelvin"] is None
+
+
+def test_two_loops_on_one_sensor_each_keep_a_row():
+    """Unusual but legal on a 336. Showing one of them and silently dropping
+    the other would be worse than an extra line."""
+    rows = reading_rows([a_channel("Sample")], [link_with_loops(
+        a_loop(loop=1, sensor="Sample"), a_loop(loop=2, sensor="Sample"))])
+    assert len(rows) == 2
+    assert [r["loop"] for r in rows] == [1, 2]
+    # Only the first carries the channel's reading; the second is the loop
+    # alone, and inventing a second temperature for it would be a lie.
+    assert rows[0]["kelvin"] == 295.0 and rows[1]["kelvin"] is None
+
+
+def test_the_software_loop_merges_into_the_row_for_its_own_channel():
+    """It reads a thermometer like any other loop. On LTSPM3 that is the 218's
+    Sample, and it belongs on Sample's row rather than in a section of its own."""
+    control = {"state": "tracking", "mode": "pid", "health": "ok",
+               "sensor": "Sample", "setpoint_k": 96.0, "output_pct": 63.0,
+               "demand_pct": 63.0, "rail_low_pct": 62.0, "rail_high_pct": 64.0,
+               "threshold_k": 1.0, "ramping": False, "alarms": [], "reason": "",
+               "setpoint_target_k": 96.0, "error_k": 0.0}
+    rows = reading_rows([a_channel("Sample", 96.2), a_channel("Shield")],
+                        [], control)
+    assert len(rows) == 2
+    assert rows[0]["channel"] == "Sample" and rows[0]["kelvin"] == 96.2
+    assert rows[0]["loop"] == SOFTWARE_LOOP_LABEL
+    assert not rows[1]["has_loop"]
+
+
+def test_a_recorder_with_neither_channels_nor_loops_draws_nothing():
+    assert reading_rows([], []) == []
+
+
+def test_every_row_carries_every_key():
+    """Same promise the status file makes: a caller must not have to guard
+    each lookup, and a row for a bare thermometer has the loop keys present
+    and empty rather than missing."""
+    bare, bound = reading_rows(
+        [a_channel("Watched"), a_channel("Driven")],
+        [link_with_loops(a_loop(sensor="Driven"))])
+    assert set(bare) == set(bound)
+    assert bare["loop"] == 0 and bare["setpoint_k"] is None

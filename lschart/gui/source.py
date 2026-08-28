@@ -1219,6 +1219,99 @@ def control_row(control: dict | None) -> dict | None:
     return row
 
 
+def reading_rows(channels, links, control=None) -> list[dict]:
+    """Every thermometer, carrying the loop bound to it where there is one.
+
+    **One table, not two.** The viewer used to draw a per-channel readouts
+    table and a loop table beneath it, and on a 33x-only cryostat those are the
+    same four lines twice: every channel is a loop's sensor, so the second
+    table repeated the first with more columns.
+
+    The reason there were two is still real and is what this function has to
+    respect. `FEATURE_PLAN.md` records it: a loop-centric table *replacing* the
+    channel list turns an eight-input monitor into however many loops it has,
+    and recording every thermometer continuously is the recorder's whole job.
+    The generalisation that gets one table without paying that price is to make
+    the **channel** the row and the loop a set of columns on it:
+
+    - every channel gets a row, always, bound to a loop or not;
+    - a loop fills the loop columns of the row whose sensor it reads;
+    - a loop whose sensor is not among the channels -- an unresolved binding,
+      or a second loop on a channel that already has one -- gets a row of its
+      own rather than being dropped or overwriting the first;
+    - the software loop is just another loop here, and merges into the row for
+      the channel it controls.
+
+    So a 218 with eight inputs and no loops draws eight rows with the loop
+    columns empty, which is exactly the table it had before, and a 336 draws
+    four rows instead of eight lines.
+
+    Returns rows carrying every key in :data:`EMPTY_LOOP` plus ``channel``,
+    ``kelvin``, ``usable``, ``validity``, ``instrument`` and ``has_loop``.
+    """
+    by_sensor: dict[str, list[dict]] = {}
+    order: list[dict] = []
+    for link in links or ():
+        name = str(link.get("name", ""))
+        for row in loop_rows(link):
+            row = dict(row, instrument=name)
+            by_sensor.setdefault(str(row.get("sensor") or ""), []).append(row)
+            order.append(row)
+    software = control_row(control)
+    if software is not None:
+        software = dict(software, instrument="")
+        by_sensor.setdefault(str(software.get("sensor") or ""), []).append(software)
+        order.append(software)
+
+    rows: list[dict] = []
+    claimed: list[int] = []
+    for channel in channels or ():
+        name = str(channel.get("name", ""))
+        waiting = by_sensor.get(name) or []
+        first = waiting[0] if waiting else None
+        rows.append(_joined(channel, first))
+        if first is not None:
+            claimed.append(id(first))
+        # A second loop reading the same thermometer keeps its own row: two
+        # loops on one sensor is unusual but legal on a 336, and silently
+        # showing one of them would be worse than an extra line.
+        for extra in waiting[1:]:
+            rows.append(_joined(None, extra))
+            claimed.append(id(extra))
+
+    # Loops whose sensor matched no channel: an OUTMODE binding the recorder
+    # could not resolve to a label. The loop is still real and still driving a
+    # heater, so it is shown with no temperature rather than not shown.
+    for row in order:
+        if id(row) not in claimed:
+            rows.append(_joined(None, row))
+    return rows
+
+
+def _joined(channel: dict | None, loop: dict | None) -> dict:
+    """One table row from a channel, a loop, or both."""
+    row = dict(EMPTY_LOOP)
+    row.update({
+        "channel": "", "kelvin": None, "usable": False, "validity": "",
+        "instrument": "", "has_loop": loop is not None,
+        "rails": None, "state": "", "health": "", "reason": "",
+        "alarms": [], "mode_name": "", "setpoint_target_k": None,
+        "error_k": None, "demand_pct": None,
+    })
+    if loop is not None:
+        row.update(loop)
+    if channel is not None:
+        row["channel"] = str(channel.get("name", ""))
+        row["kelvin"] = channel.get("kelvin")
+        row["usable"] = bool(channel.get("usable"))
+        row["validity"] = str(channel.get("validity", "") or "")
+    else:
+        # No channel of its own: the loop names the sensor it believes it
+        # reads, which is the only label available for it.
+        row["channel"] = str((loop or {}).get("sensor") or "")
+    return row
+
+
 def loop_marks(row: dict, kelvin: float | None, *, rails=None) -> dict:
     """The two warning marks for one loop row: ``saturated`` and ``unsettled``.
 
