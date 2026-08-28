@@ -400,6 +400,30 @@ classdef LakeShore < handle
             [ok, message, id] = obj.run('arm', args, nargout);
         end
 
+        function [ok, message, id] = setSource(obj, name, listen)
+            %SETSOURCE  Mute or un-mute one client, without restarting anything.
+            %
+            %   The recorder can be told to ignore commands from a named
+            %   client -- 'matlab', 'lschart-gui', 'lschart-cli' -- so an
+            %   operator can say "programmatic control only" or "this terminal
+            %   only" while a run is going.
+            %
+            %       ls.setSource('lschart-gui', false);   % ignore the viewer
+            %       ls.setSource('lschart-gui', true);    % listen again
+            %
+            %   This command is EXEMPT from the policy it edits, so a muted
+            %   client can un-mute itself and muting is not a one-way door.
+            %   Being muted stops the recorder listening to you; it does not
+            %   stop you READING -- status(), temperature() and loops() are
+            %   file reads and work exactly as before.
+            %
+            %   It may only ever NARROW what the recorder's `ipc.sources`
+            %   config permits. Enabling a source the config refuses needs a
+            %   config edit and a restart, and says so.
+            [ok, message, id] = obj.run('source', ...
+                struct('name', name, 'allowed', logical(listen)), nargout);
+        end
+
         function [ok, message, id] = ping(obj)
             %PING  Prove the command path works, without touching an instrument.
             %

@@ -82,6 +82,7 @@ ls.setRamp(1, 2.5);          % K/min, run by the instrument's own firmware
 ls.setRange(1, 0);           % heater range — 0 is off
 ls.setAnalog(5.0);           % 218 analog output percent — see the warning below
 ls.setPID(1, 50, 20, 0);     % the INSTRUMENT's own gains, all three together
+ls.setSource('lschart-gui', false);   % have the recorder ignore the viewer
 ls.heatersOff();             % everything the recorder may write to, to zero
 ```
 
@@ -178,7 +179,7 @@ is a large part of why the command exists. It is still refused by
 | `changing a heater range is not accepted ...` | `ipc.allow_heater_range: true`, if a remote client really should be able to move a heater. Needed for 0 as well — use `heatersOff()` or `hold()` to stop without it |
 | `retuning a loop is not accepted from a file ...` | `ipc.allow_pid: true`. Gains apply no power, but they change how the loop behaves for the rest of the run |
 | `commands from 'matlab' are not accepted by this recorder's configuration` | `ipc.sources` names which clients may ask at all. Needs a config edit and a restart |
-| `commands from 'matlab' are currently switched off in ... sources.json` | somebody switched this client off at the recorder. Delete that entry — no restart needed |
+| `commands from 'matlab' are currently switched off in ... sources.json` | somebody muted this client. `ls.setSource('matlab', true)` undoes it — that command is exempt from the policy it edits, so you are never locked out of your own un-mute. Reading was never affected |
 | `issued N s ago, older than the 30 s limit` | the recorder was not running when the command was queued |
 | `several controllers are configured` | say which: `ls.submit('setpoint', struct('loop',1,'kelvin',77), 'ls336')` |
 

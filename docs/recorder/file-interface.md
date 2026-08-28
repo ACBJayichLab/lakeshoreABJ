@@ -106,6 +106,7 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `heaters_off` | **panic** — every heater on every writable instrument to zero |
 | `hold` | **panic** — every closed loop stopped where it is; a software loop's output frozen |
 | `arm` | `kelvin` (optional) — close the software loop again. **Applies power**, and is exempt from nothing |
+| `source` | `name`, `allowed` — mute or un-mute one client. Exempt from the source policy it edits, and from nothing else |
 
 `heaters_off` and `hold` are the only commands not aimed at one box. Every other
 handler takes an argument that means something on exactly one instrument;
@@ -236,15 +237,33 @@ It can only ever **narrow** what `ipc.sources` permits. Granting something the
 config refuses means editing the config and restarting, which is the point: a
 restart always returns to the audited ceiling.
 
-It is a file and not a command kind, deliberately. A *command* that disabled the
-viewer would leave the viewer with no way to re-enable itself — the one client
-that needs to undo it is the one it just silenced. A file can be edited by hand,
-by anything, and never requires stopping the recorder and making it drop the
-port.
+Two ways to write it, and they are the same file:
 
-Delete the file (or the entry) to clear a lockout. A file caught mid-edit is a
-torn read: the recorder keeps the last overlay it managed to parse rather than
-widening the policy, because half a file is not permission.
+```bash
+python -m lschart -c config.yaml send source lschart-gui off
+python -m lschart -c config.yaml send source lschart-gui on
+```
+
+**The `source` command is exempt from the policy it edits.** That is what makes
+muting something other than a one-way door: the one client that needs to undo a
+lockout is the one it just silenced, so a gated undo would let the viewer mute
+itself into a corner. The exemption gives away nothing that was not already
+given — `source` is self-declared, so anything able to write to the spool could
+always write any label. It is *not* a panic kind: panic kinds also bypass the
+power gates, which would be meaningless for a command that touches no
+instrument.
+
+Editing by hand stays the way in when nothing is running, or when the recorder
+is on a machine whose spool you cannot reach. Delete the file (or the entry) to
+clear a lockout. A file caught mid-edit is a torn read: the recorder keeps the
+last overlay it managed to parse rather than widening the policy, because half a
+file is not permission.
+
+**Muted means the recorder stops listening to you. It does not stop you
+reading.** `status.json` is a file anyone may open, so a muted viewer still
+draws temperatures, the loop table and the marks exactly as before, and MATLAB's
+`status()`, `temperature()` and `loops()` all work. The policy is about commands
+and nothing else.
 
 **The panic commands are exempt**, and are the only things that are —
 `heaters_off` and `hold` bypass the source policy *and* the two power gates

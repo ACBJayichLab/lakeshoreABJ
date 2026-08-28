@@ -3,7 +3,7 @@
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
 **All three phases of [`FEATURE_PLAN.md`](FEATURE_PLAN.md) are implemented and
-tested. 560 tests passing (from 472), ruff clean.** Verified against a live sim
+tested, plus two follow-on commits. 584 tests passing (from 472), ruff clean.** Verified against a live sim
 recorder, a real `ltspm3` software loop, and MATLAB R2025b. **No hardware was
 touched this session** — the bench 336 was not connected.
 
@@ -35,8 +35,15 @@ used for nothing but a log line. This is what it was for.
 - `ipc.sources` is the ceiling, fixed for the process. `sources.json` beside the
   status file is a runtime overlay, re-read every cycle, **may only ever
   narrow**. A restart always returns to the audited config.
-- A file and not a command kind, deliberately: a *command* that disabled the
-  viewer would leave the viewer no way to re-enable itself.
+- **Two ways to write the overlay** — a text editor, or the `source` command
+  (CLI `send source NAME on|off`, MATLAB `setSource`, and a checkbox in the
+  viewer beside the Panic menu). The command is **exempt from the policy it
+  edits**, which is what stops muting being a one-way door. See
+  [A2 gained a command](FEATURE_PLAN.md) — this reverses an argument the
+  original plan made, at Jeff's call.
+- **Muted is about listening, never about reading.** `status.json` is a file
+  anyone may open, so a muted client keeps every "getting" operation it had:
+  temperatures, the loop table, the marks, the chart.
 - Written non-empty, `default:` is **false** unless it says otherwise. A typo in
   a source name has to fail closed.
 - Matched on the part before the first `/`, because the CLI stamps its pid in.
@@ -85,6 +92,23 @@ Both halves of the old reasoning are gone.
 `CLAUDE.md` invariant 3 is rewritten: seven interlocks, both directions, and the
 exemption named properly.
 
+### After phase 3
+
+Two follow-on commits, neither in the plan.
+
+**`961bf96` — a failed status write is no longer silent.** `windows.md` named
+this as the weak spot behind the first of its three unverified Windows
+behaviours: `os.replace` over a status file another process has open can fail
+with a sharing violation, and the handling was a `DEBUG` line plus a counter
+nobody could read. A gap in the feed was indistinguishable from a hung recorder.
+Now the **edges** are WARNING (first failure, and recovery — not every cycle,
+which is how a signal gets buried) and the next file that *is* written carries
+`status_file.failures` and `status_file.last_error`. Still unverified on
+Windows; that needs the cryostat's own machine.
+
+**The `source` command** — see the A1/A2 section above and
+`FEATURE_PLAN.md`'s "A2 gained a command".
+
 ## A config that contradicts itself
 
 **Found while auditing S6, not caused by this session, and not fixed — because
@@ -112,7 +136,7 @@ Do not guess. Nothing in this session changed those values.
 
 ## State of the tree
 
-- `560 passed`, `ruff` clean, on `main`. Nothing is running.
+- `584 passed`, `ruff` clean, on `main`. Nothing is running.
 - Example configs: all three validate, all three now poll `PID?`.
   **`examples/config-336-usb.yaml` moved to a 2 s cadence** — it did not
   validate before this session, because `read_analog_outputs: true` had been
@@ -139,4 +163,7 @@ Nothing here touched hardware. Everything below is a live process.
   `arm` returned it to `tracking`/`pid` at the temperature it had drifted to.
 - **A3**: `range 0` refused with the gate shut, the reply naming the way out;
   `heaters_off` and `hold` both applied through that same shut gate.
-- **MATLAB R2025b** ran `selftest.m` end to end against a live recorder.
+- **MATLAB R2025b** ran `selftest.m` end to end against a live recorder, and
+  separately muted and un-muted *itself* with `setSource` — reading
+  temperatures and the loop table throughout, which is the point of the
+  listening/reading split.

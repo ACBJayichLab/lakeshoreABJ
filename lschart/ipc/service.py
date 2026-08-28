@@ -40,9 +40,10 @@ particular:
 
 On a different axis again, ``ipc.sources`` and its runtime overlay ask *who is
 asking* rather than *what is being asked* -- see :mod:`lschart.ipc.sources`.
-The panic kinds in :data:`PANIC_KINDS` are the only things exempt from it, and
-they are exempt from the per-kind power gates too; they are exempt from nothing
-else.
+:data:`SOURCE_POLICY_EXEMPT` is the complete list of what escapes it: the panic
+kinds, and the ``source`` command that edits the policy itself.  The panic kinds
+are exempt from the per-kind power gates as well; nothing is exempt from
+anything else.
 
 Failure policy: no command, however malformed, may stop the recording.  Every
 handler's exceptions are caught and turned into a refusal that the client can
@@ -70,6 +71,23 @@ log = logging.getLogger(__name__)
 #: `transport.read_only` -- a box configured read-only stays read-only, and is
 #: named in the reply rather than silently skipped.
 PANIC_KINDS = frozenset({"heaters_off", "hold"})
+
+#: Exempt from the **source policy** only, and for two different reasons.
+#:
+#: The panic kinds, because an emergency stop that a client can be locked out
+#: of is not an emergency stop.  And ``source`` itself, because the one client
+#: that needs to undo a lockout is the one it just silenced -- gate the undo
+#: and a viewer can mute itself into a corner with no way back that does not
+#: involve walking to the recorder's machine.
+#:
+#: This costs nothing that was not already spent: ``source`` is self-declared,
+#: so anything able to write to the spool could always have written any label.
+#: The policy is an interlock against habit, and an exempt un-mute leaves it
+#: exactly as strong against habit as it was.
+#:
+#: Note ``source`` is NOT a panic kind: panic kinds also bypass the two power
+#: gates, which would be meaningless here -- it touches no instrument.
+SOURCE_POLICY_EXEMPT = PANIC_KINDS | {"source"}
 
 
 class CommandError(ValueError):
@@ -236,7 +254,8 @@ class IpcService:
             log.warning("IPC: refusing %s command %s: %s", cmd.kind, cmd.id, stale)
             return CommandResult(cmd.id, cmd.kind, False, stale)
 
-        if cmd.kind not in PANIC_KINDS and not self.sources.allows(cmd.source):
+        if (cmd.kind not in SOURCE_POLICY_EXEMPT
+                and not self.sources.allows(cmd.source)):
             refusal = self.sources.refusal(cmd.source)
             log.warning("IPC: refusing %s command %s: %s",
                         cmd.kind, cmd.id, refusal)
@@ -436,6 +455,45 @@ class IpcService:
         d = _as_float(cmd.args, "d")
         inst.set_pid(loop, p, i, d)
         return f"{inst.name} loop {loop} PID -> {p:.1f}, {i:.1f}, {d:.1f} (verified)"
+
+    def _do_source(self, cmd: Command) -> str:
+        """Mute or un-mute one client, at runtime, without a restart.
+
+        The other half of :mod:`lschart.ipc.sources` -- the same overlay file a
+        text editor writes, reached by command so that the viewer has a button
+        rather than a set of instructions.
+
+        **Exempt from the source policy it edits**, which is what makes it
+        usable: a muted client has to be able to un-mute itself, or muting is a
+        one-way door that ends at somebody walking to the recorder's machine.
+        That exemption gives away nothing, because `source` is self-declared and
+        anything that can write to the spool could always write any label.
+
+        It is bounded by the config ceiling like every other overlay write:
+        enabling a source the config refuses is refused here, with the config
+        edit and restart that would be needed named.
+
+        It touches no instrument, so `allow_writes`, `transport.read_only` and
+        the power gates have nothing to say about it.  `ipc.accept_commands`
+        still does, necessarily -- a recorder that reads no commands cannot read
+        this one either, and the way in then is the text editor.
+        """
+        name = str(cmd.args.get("name") or "").strip()
+        if not name:
+            raise CommandError(
+                "which source? give a `name`, matched on the part before any "
+                "'/' -- `matlab`, `lschart-gui`, `lschart-cli`"
+            )
+        if "allowed" not in cmd.args:
+            raise CommandError(
+                "missing required argument 'allowed' (true to listen to this "
+                "source, false to ignore it)"
+            )
+        allowed = bool(cmd.args["allowed"])
+        try:
+            return self.sources.set_runtime(name, allowed)
+        except (PermissionError, ValueError, OSError) as exc:
+            raise CommandError(str(exc)) from None
 
     def _do_hold(self, cmd: Command) -> str:
         """Stop everything where it is: the second panic action.

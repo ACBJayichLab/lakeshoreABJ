@@ -1394,3 +1394,101 @@ def test_a_pending_command_does_not_lock_the_panic_menu(tmp_path, qt_app,
     assert not w.send_button.isEnabled()
     assert w.panic_button.isEnabled()
     w.close()
+
+
+# -- muting this viewer, from this viewer ------------------------------------
+#
+# The control that undoes the thing which disables the command group cannot
+# live inside the command group. The `source` command is exempt from the policy
+# it edits precisely so this works when nothing else in the panel does.
+
+
+def muted(allowed=False, configured=True):
+    return {"accepted": True, "recent": [], "source_policy": True,
+            "source_default": True,
+            "sources": [{"name": "lschart-gui", "allowed": allowed,
+                         "configured": configured,
+                         "disabled_at_runtime": not allowed}]}
+
+
+def test_the_toggle_shows_the_recorder_is_listening(tmp_path, qt_app):
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.refresh()
+    assert w.source_check.isChecked()
+    w.close()
+
+
+def test_a_muted_viewer_can_still_untick_its_way_back(tmp_path, qt_app,
+                                                      monkeypatch):
+    w = cryostat(tmp_path, qt_app, [CTRL], commands=muted())
+    w.refresh()
+    assert not w.source_check.isChecked()
+    # The command group is off, and this is not in it.
+    assert not w.command_group.isEnabled()
+    assert w.source_check.isEnabled()
+
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.source_check.setChecked(True)
+    (cmd,) = queued(w)
+    assert cmd["kind"] == "source"
+    assert cmd["name"] == "lschart-gui" and cmd["allowed"] is True
+    w.close()
+
+
+def test_muting_asks_first_and_says_reading_carries_on(tmp_path, qt_app,
+                                                       monkeypatch):
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.refresh()
+    seen = {}
+    monkeypatch.setattr(w, "_confirm",
+                        lambda title, text: (seen.update(text=text), True)[1])
+    w.source_check.setChecked(False)
+    assert "not a command" in seen["text"]
+    assert "one-way door" in seen["text"]
+    (cmd,) = queued(w)
+    assert cmd["allowed"] is False
+    w.close()
+
+
+def test_cancelling_the_mute_puts_the_tick_back(tmp_path, qt_app, monkeypatch):
+    """A checkbox left unticked after a cancelled confirmation would say the
+    recorder is ignoring this viewer when it is not."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.refresh()
+    monkeypatch.setattr(w, "_confirm", lambda *a: False)
+    w.source_check.setChecked(False)
+    assert queued(w) == []
+    assert w.source_check.isChecked()
+    w.close()
+
+
+def test_the_periodic_fill_does_not_send_a_command(tmp_path, qt_app, monkeypatch):
+    """A refresh is not a click. This runs on a one-second timer."""
+    w = cryostat(tmp_path, qt_app, [CTRL], commands=muted())
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    for _ in range(3):
+        w.refresh()
+    assert queued(w) == []
+    w.close()
+
+
+def test_a_config_refusal_cannot_be_ticked_away(tmp_path, qt_app):
+    """The overlay may only narrow, so offering the click would be offering a
+    refusal."""
+    w = cryostat(tmp_path, qt_app, [CTRL],
+                 commands=muted(allowed=False, configured=False))
+    w.refresh()
+    assert not w.source_check.isEnabled()
+    assert "restart" in w.source_check.toolTip()
+    w.close()
+
+
+def test_a_muted_viewer_still_draws_everything(tmp_path, qt_app):
+    """Muted is about listening, not reading. A panel full of greyed-out
+    controls must not be mistaken for a broken viewer."""
+    w = cryostat(tmp_path, qt_app, [CTRL], commands=muted())
+    w.refresh()
+    assert w.readouts.rowCount() > 0
+    assert w.loops.rowCount() > 0
+    assert w.panic_button.isEnabled()
+    w.close()

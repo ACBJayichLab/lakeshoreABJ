@@ -587,6 +587,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # live -- and a Qt child of a disabled parent is disabled however
         # firmly you enable it.
         box.addWidget(self._panic_box())
+        box.addWidget(self._source_box())
         self.links_label = QtWidgets.QLabel("")
         self.links_label.setWordWrap(True)
         box.addWidget(self.links_label)
@@ -677,6 +678,73 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.hold_action.triggered.connect(self._send_hold)
         self.panic_button.setMenu(menu)
         return self.panic_button
+
+    def _source_box(self) -> QtWidgets.QWidget:
+        """Whether the recorder is listening to *this viewer*, and a way back.
+
+        Outside the command group for the same structural reason the panic menu
+        is: this is the control that undoes the thing that disables that group,
+        so it cannot live inside it. The `source` command is exempt from the
+        policy it edits precisely so this button works when nothing else here
+        does.
+
+        Muting stops the recorder listening. It does not stop this viewer
+        **reading** -- the chart, the readouts, the loop table and the marks are
+        all file reads and carry on exactly as before. That is worth saying on
+        the widget, because "disabled" on a panel full of greyed-out controls
+        looks a lot like "broken".
+        """
+        self.source_check = QtWidgets.QCheckBox("Accept commands from this viewer")
+        self.source_check.setChecked(True)
+        self.source_check.toggled.connect(self._source_toggled)
+        return self.source_check
+
+    def _source_toggled(self, checked: bool) -> None:
+        """Queue the mute or the un-mute.  Only ever a human's click: the
+        periodic fill in :meth:`_sync_source_box` goes through ``_quiet``."""
+        if self.spool is None:
+            return
+        if not checked and not self._confirm(
+            "Ignore this viewer",
+            "Tell the recorder to ignore commands from this viewer?\n\n"
+            "The chart, the readouts and the loop table carry on exactly as "
+            "they are — this is only about commands, and reading is not a "
+            "command.\n\n"
+            "You can undo it from this same box: the command that sets this is "
+            "exempt from the policy it sets, so muting is not a one-way door. "
+            "The Panic menu also keeps working throughout.",
+        ):
+            with _quiet(self.source_check):
+                self.source_check.setChecked(True)
+            return
+        self._queue("source", instrument="",
+                    name=GUI_SOURCE, allowed=bool(checked))
+        self._awaiting = None
+
+    def _sync_source_box(self) -> None:
+        """Reflect the recorder's answer, without the reflection sending one."""
+        allowed = self.source.source_allowed(GUI_SOURCE)
+        permitted = self.source.source_configured(GUI_SOURCE)
+        with _quiet(self.source_check):
+            self.source_check.setChecked(allowed)
+        # A source the *config* refuses cannot be un-muted from here at any
+        # price: the overlay may only narrow. Offering the click would be
+        # offering a refusal.
+        self.source_check.setEnabled(bool(self.spool) and permitted
+                                     and self.source.accepts_commands())
+        if not permitted:
+            self.source_check.setToolTip(
+                "This recorder's config (ipc.sources) refuses this viewer "
+                "outright. The runtime overlay may only narrow that, so "
+                "enabling it needs a config edit and a restart.")
+        elif allowed:
+            self.source_check.setToolTip(
+                "Untick to have the recorder ignore commands from this viewer. "
+                "Reading carries on either way, and you can tick it again.")
+        else:
+            self.source_check.setToolTip(
+                "The recorder is ignoring commands from this viewer. Tick to "
+                "have it listen again — no restart needed.")
 
     def _setpoint_group(self) -> QtWidgets.QWidget:
         self.setpoint_group = QtWidgets.QGroupBox("Setpoint")
@@ -1144,9 +1212,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         allowed = self.source.source_allowed(GUI_SOURCE)
         enabled = bool(self.spool) and accepted and allowed and bool(names)
         self.command_group.setEnabled(enabled)
-        # The panic menu is not in that group -- see `_panic_box` -- so it is
-        # unaffected here, which is the point. It follows the spool alone.
+        # Neither of these is in that group -- see `_panic_box` and
+        # `_source_box` -- so they are unaffected here, which is the point.
         self.panic_button.setEnabled(bool(self.spool) and accepted)
+        self._sync_source_box()
         if not self.spool:
             why = "this viewer was started without a command spool"
         elif not accepted:

@@ -53,7 +53,7 @@ draft is gone and is not worth reviving.
 | ID | Feature | Behavior |
 |---|---|---|
 | **A1** | Per-source command policy | New `ipc.sources` section: per-source bool plus a `default` for unlisted clients. Immutable config. `Command.source` is **already carried end to end** and already populated (`matlab`, `lschart-gui`, `lschart-cli/<pid>`) — today it reaches `_execute` and is used only for a log line. Matched on the part before the first `/`, because the CLI stamps its pid into the string and no fixed key could ever match it. |
-| **A2** | Runtime source toggle | Mutable per-source enable/disable, so an operator can say "programmatic control only" or "this terminal only" on the fly. A small `sources.json` in the IPC directory, re-read each cycle, torn reads tolerated — **not a command kind**, because a spool command that disables the viewer would leave the viewer no way to re-enable itself. **It may only ever narrow A1, never widen it**, and a restart clears it back to the config ceiling. Hand-editable, so a lockout never requires stopping the recorder and dropping the port. |
+| **A2** | Runtime source toggle | Mutable per-source enable/disable, so an operator can say "programmatic control only" or "this terminal only" on the fly. A small `sources.json` in the IPC directory, re-read each cycle, torn reads tolerated. **It may only ever narrow A1, never widen it**, and a restart clears it back to the config ceiling. Hand-editable, so a lockout never requires stopping the recorder and dropping the port. ~~Not a command kind, because a spool command that disables the viewer would leave the viewer no way to re-enable itself.~~ **Superseded — see [A2 gained a command](#a2-gained-a-command).** |
 | **A3** | No exemption outside panic | The zero-exemptions are **removed**. Today `range 0` bypasses `ipc.allow_heater_range` and `analog 0` bypasses `ipc.allow_analog_output`, on the reasoning that the direction removing heat never needs another permission. That reasoning is retired: cutting heater power is not automatically safe on this cryostat — it stops heating and it can also crash the stage. After this change both gates apply in both directions, and the only exemptions anywhere are the panic actions in K1. |
 
 `allow_writes` is **not** touched. It is driver policy on the instrument, it gates
@@ -237,6 +237,39 @@ reaches further than the code.
    `links[].loops`; what is missing is a row for it in the viewer's table, and
    a decision about what its "sensor" and "range" columns should say for a loop
    that has neither.
+
+## A2 gained a command
+
+**Decided by Jeff after phase 3 landed, and it reverses one of this plan's
+arguments.** A2 said the runtime toggle must not be a command kind, because a
+command that muted the viewer would leave the viewer no way to un-mute itself.
+
+That argument only holds if the un-mute is *gated*. Make the `source` command
+exempt from the policy it edits and the corner disappears — which is Jeff's
+framing of what enable/disable means in the first place: "do I listen to
+commands from this source (other than the command to enable/disable of course).
+It should still function normally for 'getting' operations."
+
+So there is now a `source` command, a CLI verb, a `setSource` in `LakeShore.m`,
+and a checkbox in the viewer beside the Panic menu. The file is unchanged and
+still hand-editable; the command is a second way to write it.
+
+Three things this does not change:
+
+- **The overlay still may only narrow the config ceiling.** Enabling a source
+  `ipc.sources` refuses is refused by the command too, naming the config edit
+  and restart that would be needed.
+- **The exemption gives nothing away.** `source` is self-declared, so anything
+  able to write to the spool could always write any label; the policy was always
+  an interlock against habit, and an exempt un-mute leaves it exactly as strong
+  against habit as it was.
+- **`source` is not a panic kind.** Panic kinds also bypass the two power gates,
+  which would be meaningless for a command that touches no instrument. The
+  exemption sets are separate: `PANIC_KINDS` and `SOURCE_POLICY_EXEMPT`.
+
+And one thing it clarifies: **muted is about listening, never about reading.**
+`status.json` is a file anyone may open, so a muted client keeps every "getting"
+operation it had.
 
 ## Where phase 3 differed from the plan
 

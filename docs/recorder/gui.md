@@ -161,6 +161,7 @@ in three places is the same table going stale in three places.
 | **Analog output** | a box with a settable analog output (a 218) | one percentage. **Above 0 this applies power** — there is no inert half |
 | **Arm software loop** | always | close the software loop at the temperature the cryostat is at now — the way back from a hold. **This applies power** |
 | **Panic ▾** | always, and never greyed out | a menu of the two ways to stop: **All heaters OFF** and **All temperatures HOLD** |
+| **Accept commands from this viewer** | always | whether the recorder is listening to *this viewer*. Unticking mutes it; ticking undoes that |
 
 **Only the relevant grouping is ever shown.** Selecting a 336 loop 3 or 4
 hides the heater-range control, because there is no range to set — and says so
@@ -251,6 +252,28 @@ the temperature the cryostat has reached, so holding demands *more* heat than
 the ramp was demanding. And hold means two different things on the two boxes — a
 33x loop holds a temperature and keeps regulating; a 218 holds a power, and
 nothing regulates the sample afterwards.
+
+## Muting this viewer
+
+The checkbox below the Panic menu is whether the recorder is **listening** to
+this viewer. It writes the same `sources.json` a text editor writes, through the
+`source` command.
+
+It sits outside the command group for the same structural reason the Panic menu
+does — it is the control that undoes the thing which disables that group, so it
+cannot live inside it. The `source` command is exempt from the policy it edits
+precisely so this works when nothing else in the panel does: **muting is not a
+one-way door.**
+
+**Muted is about listening, never about reading.** The chart, the readouts, the
+loop table and the marks are all reads of `status.json` and carry on exactly as
+before. A panel full of greyed-out controls looks a lot like a broken viewer,
+which is why the confirmation says this out loud.
+
+The checkbox is disabled — with a tooltip saying why — when the recorder's
+*config* (`ipc.sources`) refuses this viewer outright. The overlay may only
+narrow, so that one needs a config edit and a restart, and offering the click
+would be offering a refusal.
 
 **Arm is outside the menu**, next to it rather than in it. Arming starts the
 loop driving the heater again, which is the power-applying direction; sitting it

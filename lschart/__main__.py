@@ -590,6 +590,21 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     pid.add_argument("d", type=float)
     pid.add_argument("--loop", type=int, default=1)
 
+    src = snd_sub.add_parser(
+        "source",
+        help="mute or un-mute one client, at runtime, without a restart",
+        description="Sets one entry in the recorder's runtime source overlay "
+                    "(sources.json beside its status file) -- the same file a "
+                    "text editor writes. Exempt from the source policy it "
+                    "edits, so a muted client can un-mute itself; muting is "
+                    "not a one-way door. It may only ever NARROW what "
+                    "ipc.sources permits: enabling a source the config refuses "
+                    "needs a config edit and a restart.",
+    )
+    src.add_argument("name", help="matlab, lschart-gui, lschart-cli, ...")
+    src.add_argument("state", choices=["on", "off"],
+                     help="on: listen to this source. off: ignore it")
+
     snd_sub.add_parser(
         "hold",
         help="stop every loop where it is: setpoints to present temperature, "
@@ -632,9 +647,15 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "pid": ("p", "i", "d", "loop"),
             "hold": (),
             "arm": ("kelvin",),
+            "source": ("name", "allowed"),
             "heaters_off": (),
             "ping": (),
         }[parsed.kind]
+        if parsed.kind == "source":
+            # `on`/`off` at the terminal, a bool on the wire.  The words are
+            # for the person typing; a bare `true` next to a source name reads
+            # as a claim about the source rather than an instruction.
+            parsed.allowed = parsed.state == "on"
         return [(k, getattr(parsed, k)) for k in keys]
 
     snd.set_defaults(func=cmd_send, _collect=_collect_send_args)

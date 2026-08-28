@@ -21,11 +21,18 @@ has to edit the config and restart, which is the point.  A restart therefore
 always returns to the audited ceiling, and no amount of fiddling with the
 overlay can leave the recorder more open than its config says.
 
-It is a file and not a command kind, deliberately.  A command that disabled the
-viewer would leave the viewer with no way to re-enable itself -- the one client
-that needs to undo it is the one it just silenced.  A file can be edited by
-anything, including by hand, and never requires stopping the recorder and
-making it drop the port.
+Two ways to write the overlay, and they are the same file.  A ``source`` command
+sets one entry; a text editor sets any of them.  The command is **exempt from
+the policy it edits**, and that exemption is the whole of why a command is
+allowed to do this at all: the one client that needs to undo a lockout is the
+one it just silenced, so a gated undo would let the viewer mute itself into a
+corner.  Editing by hand stays the way in when nothing is running, or when the
+recorder is on a machine whose spool you cannot reach.
+
+Being muted stops the recorder **listening** to a source.  It does not stop that
+source **reading**: ``status.json`` is a file anyone may open, so a muted viewer
+still draws temperatures, the loop table and the marks exactly as before.  This
+policy is about commands and nothing else.
 
 What it is not
 --------------
@@ -156,6 +163,58 @@ class SourcePolicy:
                                   for k, v in sorted(overlay.items())) or "empty")
         self.overlay = overlay
 
+    def set_runtime(self, source: str, allowed: bool) -> str:
+        """Set one overlay entry and write the file.  Returns what it did.
+
+        Read-modify-write on the current contents rather than a blind
+        overwrite: the file is hand-editable, and a command that silently
+        dropped somebody else's entry would be a lockout appearing from
+        nowhere.
+
+        Enabling is bounded by the config ceiling, which is the overlay's one
+        rule: it may narrow and never widen.  Asking to enable a source the
+        config refuses is refused *here* rather than written and then quietly
+        ignored -- an overlay entry that does nothing is worse than an error,
+        because it looks like it worked.
+        """
+        key = source_key(source)
+        if not key:
+            raise ValueError("no source named")
+        if self.overlay_path is None:
+            raise ValueError(
+                "this recorder has no runtime source overlay configured"
+            )
+        if allowed and not self.ceiling(key):
+            raise PermissionError(
+                f"{key!r} is refused by this recorder's configuration "
+                f"(ipc.sources), and the runtime overlay may only ever narrow "
+                f"that, never widen it. Enabling it needs a config edit and a "
+                f"restart"
+            )
+
+        self.refresh()
+        overlay = dict(self.overlay)
+        if allowed:
+            # Removed rather than written as True.  The overlay's whole meaning
+            # is "what has been taken away", and an entry saying a source is
+            # allowed says nothing that the absence of one does not.
+            overlay.pop(key, None)
+        else:
+            overlay[key] = False
+
+        from .status import atomic_write_json
+
+        if not atomic_write_json(self.overlay_path, overlay):
+            raise OSError(f"could not write {self.overlay_path}")
+        self.overlay = overlay
+        # Force the next refresh to re-read rather than trust our own write:
+        # this file is shared with whoever else edits it.
+        self._last_signature = None
+        self._overlay_error = ""
+        return (f"commands from {key!r} are now "
+                + ("accepted" if allowed else "IGNORED")
+                + f" ({self.overlay_path})")
+
     def _note_bad(self, message: str) -> None:
         if message != self._overlay_error:
             self._overlay_error = message
@@ -190,8 +249,8 @@ class SourcePolicy:
             )
         return (
             f"commands from {key!r} are currently switched off in "
-            f"{self.overlay_path}; delete that entry (or the file) to allow "
-            "them again -- no restart needed"
+            f"{self.overlay_path}; send `source {key} on` to allow them again, "
+            "or delete that entry by hand -- either way, no restart needed"
         )
 
     # -- what the status file publishes ------------------------------------

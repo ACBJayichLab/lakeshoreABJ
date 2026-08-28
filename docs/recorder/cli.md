@@ -127,6 +127,7 @@ python -m lschart -c config.yaml send pid 50 20 0 --loop 1
 python -m lschart -c config.yaml send heaters_off
 python -m lschart -c config.yaml send hold
 python -m lschart -c config.yaml send arm            # or `send arm 96.5`
+python -m lschart -c config.yaml send source lschart-gui off
 ```
 
 Writes into the command spool and waits for the acknowledgement
@@ -159,6 +160,12 @@ sensor's present temperature — and a software loop's output frozen. **It is no
 a synonym for less power**: a ramp heading down sits below the temperature the
 cryostat has reached, so holding demands more heat than the ramp was. It never
 raises a range.
+
+`source NAME on|off` mutes or un-mutes one client at runtime — it writes the
+same `sources.json` a text editor writes. **It is exempt from the policy it
+edits**, so a muted client can un-mute itself and muting is not a one-way door.
+It may only ever narrow what `ipc.sources` permits. Muting stops the recorder
+listening to that client; it does not stop the client reading.
 
 `arm` is the way back from a hold, and is **not** a panic action: it starts the
 loop driving the heater, so it needs `ipc.allow_analog_output` and passes the

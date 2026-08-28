@@ -224,7 +224,9 @@ somebody else's.
 `sources` is on a different axis from all of them — those ask *may this action
 happen*, it asks *may this client ask for it*. Written non-empty, `default:` is
 **false** unless it says otherwise, so a typo in a source name fails closed. It
-is narrowed at runtime, and never widened, by `sources.json` in `directory`.
+is narrowed at runtime, and never widened, by `sources.json` in `directory` —
+written by hand or by the `source` command, which is exempt from the policy it
+edits so that a muted client can always un-mute itself.
 Both are documented in
 [file-interface](file-interface.md#a-sixth-gate-on-a-different-axis).
 

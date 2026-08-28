@@ -382,3 +382,111 @@ def test_a_config_carries_the_policy_through_to_the_recorder(tmp_path):
     cfg = load(str(path))
     assert cfg.ipc.sources == {"matlab": True}
     assert cfg.ipc.sources_path().endswith("sources.json")
+
+
+# -- muting and un-muting by command -----------------------------------------
+#
+# The overlay is the same file either way; this is the second way to write it.
+# The command is exempt from the policy it edits, which is what makes muting
+# something other than a one-way door -- the one client that needs to undo a
+# lockout is the one it just silenced.
+
+
+def overlay_now(tmp_path) -> dict:
+    return json.loads((tmp_path / "sources.json").read_text())
+
+
+def test_a_source_command_mutes_a_client(tmp_path):
+    svc = service(tmp_path, sources={"default": True})
+    entry = send(svc, "source", name="matlab", allowed=False, source="lschart-gui")
+    assert entry["ok"], entry["message"]
+    assert overlay_now(tmp_path) == {"matlab": False}
+    assert not send(svc, "ping", source="matlab")["ok"]
+
+
+def test_a_muted_client_can_un_mute_itself(tmp_path):
+    """The whole reason the command is exempt from the policy it edits."""
+    svc = service(tmp_path, sources={"default": True})
+    overlay(tmp_path, {"lschart-gui": False})
+    assert not send(svc, "ping", source="lschart-gui")["ok"]
+
+    entry = send(svc, "source", name="lschart-gui", allowed=True,
+                 source="lschart-gui")
+    assert entry["ok"], entry["message"]
+    assert send(svc, "ping", source="lschart-gui")["ok"]
+
+
+def test_un_muting_removes_the_entry_rather_than_writing_true(tmp_path):
+    """The overlay means "what has been taken away". An entry saying a source
+    is allowed says nothing the absence of one does not."""
+    svc = service(tmp_path, sources={"default": True})
+    overlay(tmp_path, {"matlab": False, "lschart-gui": False})
+    send(svc, "source", name="matlab", allowed=True, source="lschart-gui")
+    assert overlay_now(tmp_path) == {"lschart-gui": False}
+
+
+def test_a_source_command_does_not_disturb_other_entries(tmp_path):
+    """Read-modify-write: a blind overwrite would be a lockout appearing from
+    nowhere, or one vanishing."""
+    svc = service(tmp_path, sources={"default": True})
+    overlay(tmp_path, {"matlab": False})
+    send(svc, "source", name="lschart-cli", allowed=False, source="lschart-gui")
+    assert overlay_now(tmp_path) == {"matlab": False, "lschart-cli": False}
+
+
+def test_the_command_may_not_widen_past_the_config(tmp_path):
+    """The overlay's one rule, and it survives having a command behind it."""
+    svc = service(tmp_path, sources={"matlab": True})
+    entry = send(svc, "source", name="lschart-gui", allowed=True, source="matlab")
+    assert not entry["ok"]
+    assert "restart" in entry["message"]
+    assert not send(svc, "ping", source="lschart-gui")["ok"]
+
+
+def test_the_cli_can_be_muted_by_its_bare_name(tmp_path):
+    """It stamps its pid in, so the name is the part before the slash."""
+    svc = service(tmp_path, sources={"default": True})
+    send(svc, "source", name="lschart-cli", allowed=False, source="lschart-gui")
+    assert not send(svc, "ping", source="lschart-cli/4321")["ok"]
+
+
+def test_a_source_command_needs_to_say_which_source(tmp_path):
+    svc = service(tmp_path, sources={"default": True})
+    assert not send(svc, "source", allowed=False)["ok"]
+
+
+def test_a_source_command_needs_to_say_which_way(tmp_path):
+    """Defaulting either way would be a guess about an interlock."""
+    svc = service(tmp_path, sources={"default": True})
+    entry = send(svc, "source", name="matlab")
+    assert not entry["ok"] and "allowed" in entry["message"]
+
+
+def test_muting_does_not_stop_the_status_file_being_written(tmp_path):
+    """Muted is about listening, never about reading -- Jeff's own framing.
+    A muted client reads temperatures exactly as before."""
+    svc = service(tmp_path, sources={"default": True})
+    send(svc, "source", name="matlab", allowed=False, source="lschart-gui")
+    status = tick(svc)
+    assert status["channels"]
+    assert status["links"]
+    assert status["running"] is True
+
+
+def test_a_muted_source_still_reaches_the_panic_kinds(tmp_path):
+    inst = instrument()
+    inst.set_heater_range(1, 3)
+    svc = service(tmp_path, inst, sources={"default": True})
+    overlay(tmp_path, {"matlab": False})
+    assert send(svc, "heaters_off", source="matlab")["ok"]
+    assert inst.heater_range(1) == 0
+
+
+def test_the_status_file_shows_a_client_it_has_been_told_to_ignore(tmp_path):
+    svc = service(tmp_path, sources={"default": True})
+    send(svc, "source", name="lschart-gui", allowed=False, source="matlab")
+    by_name = {e["name"]: e for e in tick(svc)["commands"]["sources"]}
+    assert by_name["lschart-gui"] == {
+        "name": "lschart-gui", "allowed": False,
+        "configured": True, "disabled_at_runtime": True,
+    }

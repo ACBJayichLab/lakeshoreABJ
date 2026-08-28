@@ -1010,6 +1010,22 @@ class StatusSource:
                 return bool(entry.get("allowed"))
         return bool(cmds.get("source_default", True))
 
+    def source_configured(self, name: str = "lschart-gui") -> bool:
+        """Does the recorder's *config* permit this source at all?
+
+        The distinction the runtime toggle needs: a source the config refuses
+        cannot be un-muted from here at any price, because the overlay may only
+        narrow. One the config permits but the overlay has muted is one click
+        away.
+        """
+        cmds = (self.status or {}).get("commands") or {}
+        if not cmds.get("source_policy"):
+            return True
+        for entry in cmds.get("sources") or []:
+            if str(entry.get("name", "")) == name:
+                return bool(entry.get("configured"))
+        return bool(cmds.get("source_default", True))
+
     def source_note(self, name: str = "lschart-gui") -> str:
         """One sentence on why this viewer is locked out, or ``""``."""
         if self.source_allowed(name):
