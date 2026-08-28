@@ -2136,16 +2136,54 @@ def test_the_panic_button_is_red_on_both_themes(tmp_path, qt_app):
     w.close()
 
 
-def test_the_instrument_row_sits_on_the_setpoint_boundary(tmp_path, qt_app):
+def overlaps_title_band(window, widget, group) -> bool:
+    """Is `widget` drawn on `group`'s title line rather than in a row above it?
+
+    Geometric overlap rather than a pixel offset: exactly how far a combo box
+    sits from a group-box title is the *style's* business, and it differs
+    between the real macOS style and the offscreen one CI runs. What does not
+    differ is whether the two rectangles meet at all -- in the old layout the
+    selector had a row of its own and they were strictly disjoint.
+    """
+    top = widget.mapTo(window, widget.rect().topLeft()).y()
+    bottom = widget.mapTo(window, widget.rect().bottomLeft()).y()
+    group_top = group.mapTo(window, group.rect().topLeft()).y()
+    return top <= group_top <= bottom
+
+
+def test_the_instrument_selector_sits_on_the_first_group_title_line(
+        tmp_path, qt_app):
     """It is one combo box; it does not need a band of its own between the
-    Command title and the first group."""
+    Command title and the first group. Level with "Setpoint", at the other end
+    of the same line."""
     w = cryostat(tmp_path, qt_app, [CTRL])
     w.resize(1500, 949)
     w.show()
     for _ in range(3):
         w.refresh()
         qt_app.processEvents()
-    combo_y = w.instrument_combo.mapTo(w, w.instrument_combo.rect().center()).y()
-    group_y = w.setpoint_group.mapTo(w, w.setpoint_group.rect().topLeft()).y()
-    assert 0 < group_y - combo_y < 30, f"gap is {group_y - combo_y}px"
+    assert overlaps_title_band(w, w.instrument_combo, w.setpoint_group)
+    # And at the other end of that line from the title.
+    combo_right = w.instrument_combo.mapTo(
+        w, w.instrument_combo.rect().topRight()).x()
+    group_right = w.setpoint_group.mapTo(
+        w, w.setpoint_group.rect().topRight()).x()
+    assert group_right - combo_right < 40
+    w.close()
+
+
+def test_the_selector_is_anchored_to_the_group_stack_not_to_one_group(
+        tmp_path, qt_app):
+    """A 218 has no loops, so Setpoint is hidden and the analog group is what
+    shows. Overlaying the selector on Setpoint itself would have taken the
+    selector away with it."""
+    w = cryostat(tmp_path, qt_app, [MON])
+    w.resize(1500, 949)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    assert w.setpoint_group.isHidden() and not w.analog_group.isHidden()
+    assert not w.instrument_combo.isHidden()
+    assert overlaps_title_band(w, w.instrument_combo, w.analog_group)
     w.close()
