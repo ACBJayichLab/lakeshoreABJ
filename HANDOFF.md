@@ -1,6 +1,161 @@
-# Handoff — 2026-08-28 (tenth session: X1, the bench 336, and the viewer)
+# Handoff — 2026-08-28 (eleventh session: the panic button did not hold)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
+**An audit of the software PID found that `heaters_off` did not stop an armed
+`ltspm3` loop — it put 63% back on the heater four minutes later.** Fixed on
+both sides, pinned by a new `tests_ltspm3/test_panic_seam.py`, and verified
+against a live armed sim recorder. **710 tests passing (from 696), ruff clean.**
+No hardware was touched.
+
+One pre-existing defect was *surfaced* rather than fixed, and it needs a
+decision: **[the authority band's lower rail overrides the rate
+limiter](#the-band-floor-overrides-the-rate-limiter-undecided)**, so a loop
+armed while its heater is at 0 goes to 62% in a single cycle. That is reachable
+today by the documented post-fault recovery, and was not introduced here.
+
+## What landed this session
+
+### `heaters_off` did not stop the software loop
+
+`_do_hold` called `software_loop.hold()`. `_do_heaters_off` called nothing — it
+iterated instruments and wrote `ANALOG 0` around the supervisor, which stayed in
+PID mode with `output_pct` still remembering 63.08%. Measured against the real
+harness: the sample fell, the guard tripped, the loop held for `anomaly_hold_s`,
+and then began its fault ramp-down **from the remembered value** — commanding
+63.05% onto a heater an operator had just cut, and walking it down over two
+hours while the sample reheated 72 K → 79.5 K.
+
+Every layer behaved exactly as designed. The only thing wrong was that one of
+them was reasoning from memory about a world somebody else had changed.
+
+**Not reachable on any shipped config, and that was luck rather than design.**
+`config.yaml` is the only one with a `control:` section and has no `ipc:` block
+at all, so `accept_commands` defaults false; `config-ltspm3-heater.yaml` has
+every gate open and no `control:` section. The two have never overlapped. `hold`
+and `arm` were exercised against a live software loop in session nine (K3/K4);
+`heaters_off` never was, and `tests/test_ipc_service.py` only ever tested it
+against a stand-in that agreed with whatever it was asked.
+
+Two fixes, and they are not alternatives:
+
+- **`lschart`** — `_do_heaters_off` disarms the software loop **first**, before
+  it zeroes anything. Nothing may be writing to an output at the moment the
+  zero lands.
+- **`ltspm3`** — `_where_the_heater_is()`. Every *relative* move now reads the
+  output instead of remembering it: the rate limiter's base, the fault
+  ramp-down's base, and the value a manual hold adopts. It only re-reads after a
+  cycle that wrote nothing, so a tracking loop pays no extra transaction —
+  `_write_output` has just verified the value by readback anyway.
+
+**`disarm`, not `hold`, and that distinction is the interesting part.** A held
+loop is still a driving loop: a manual output is **still clamped to the
+authority band**, so a loop merely held and then zeroed would be rate-limited
+back up to ~62% over the following hour. There is no manual zero on this loop.
+`MANUAL` freezes the heater where it is; only `OFF` writes nothing at all. Hence
+a second seam, `panic_off()`, alongside `panic_hold()`.
+
+A lockout **survives** `panic_off`. Stopping the heater is not the same as
+having looked at the cryostat, and the panic button is pressed precisely when
+nobody has diagnosed anything yet.
+
+### The status file disagreed with itself — caught on the live recorder
+
+The first fix left a lie behind, and only a live run showed it. `output_pct` is
+what the loop last *commanded*, and it went on being reported after the loop had
+let go. One CSV row read `heater_pct=63.0800` beside `ls218.aout1=0.0000`, with
+the sample falling — the permanent record claiming the loop held 63% power at
+the moment the heater was off.
+
+`panic_off()` now clears `output_pct`. Null is the honest answer for a loop that
+is not driving, the instrument's own `aout1` still carries the truth, and blank
+is properly distinct from both 0 and 63.08 in the log. `status` prints
+`not driving` rather than `None%`.
+
+### A lockout was clearable by nothing at all
+
+`require_ack_after_fault` defaults true, so a completed fault ramp-down latches
+the loop out. `acknowledge()` existed and was reachable from **no** command, CLI
+verb, MATLAB method or button. `arm` refused with a message naming
+`acknowledge()` — a Python method an operator at a terminal cannot call — and
+the only way back was restarting the recorder, which with `on_exit: hold` is
+exactly what you do not want to do to a live cryostat. Every other shut gate in
+this system names its own way out; this one named a wall.
+
+New `ack` command: CLI `send ack`, MATLAB `ack()`, and a **Clear lockout** button
+beside Arm in the viewer. **Not a panic kind** — the exemption the panic kinds
+get is for stopping, never for starting, and this is the first of the two steps
+back to driving the heater, so it passes `ipc.allow_analog_output` and the
+source policy exactly as `arm` does. It leaves the loop **disarmed**: recovery
+stays two acts, which is the whole point of a latch that exists to make somebody
+look at the cryostat.
+
+### The software loop's gains reach the status file
+
+`kp`/`ti` are published as `p`/`i`, under the same names an instrument loop uses,
+so the loop table's existing columns fill themselves. There is no `d`: this
+controller takes its derivative from a regressed slope rather than a gain, and a
+zero there would read as "tuned to nothing" instead of "not a thing this loop
+has". Worth more than a 33x's fixed pair, because these are *scheduled* — the
+tuner re-solves them at the present temperature, so they move as the cryostat
+does.
+
+### The band floor overrides the rate limiter (undecided)
+
+**Found by the live run, pre-existing, and not fixed here.** In `step()`:
+
+```python
+target = self._rate_limit(current, target, dt)
+target = self.clamp(target)          # <-- undoes the line above, from below
+```
+
+`clamp` raises anything under the band to `operating_point_pct -
+authority_pct`. So a loop armed while its heater is at 0 is rate-limited to
+0.0033% and then clamped to **62.076% in one cycle** — seen on the live
+recorder going 0 → 62.08 in a single row. `max_step_pct: 0.02` exists precisely
+to prevent that.
+
+This is reachable **today**, before any change here, by the recovery
+[running.md](docs/ltspm3/running.md) documents: fault ramp-down to
+`safe_output_pct: 0.0`, then `ack`, then `arm`. `set_mode(PID)` has always
+re-read the output, so `output_pct` was already 0 on that path. This session's
+change adds one more route to it (`heaters_off` then `arm`), it did not create
+it.
+
+Three answers, and it is Jeff's call which — it is a change to the envelope, and
+the limit belongs in `SupervisorConfig` either way (invariant 7):
+
+1. **Clamp before rate-limiting**, so the rails are approached at the limited
+   rate. Honest, but at 0.20%/min a loop below its band takes five hours to
+   reach it, which may make arming from cold useless.
+2. **Leave it.** The band is where this loop lives and entering it is what
+   arming *means*; the band itself is the cap on heat, and 62% is inside it.
+3. **A separate approach rate** toward the band — a third number, faster than
+   the trim limiter and slower than instant.
+
+Nothing was changed pending that decision.
+
+### Smaller
+
+- `tests_ltspm3/conftest.py` still built its 218 with `Cold Head`/`Shield`,
+  which `5a8956f` had renamed to `Coldplate`/`Magnet` everywhere else.
+- `cli.md` said `ipc.allow_heater_range` was needed for `range` *above 0*, and
+  `ipc.allow_analog_output` for `analog` *above 0*. `ada3413` made zero gated
+  like any other value nine commits earlier.
+
+## Still open
+
+- **`tests/test_gui_window.py::test_the_loop_table_never_scrolls_sideways`
+  fails on this machine** — 928 px of columns against a 542 px viewport. It
+  survived the viewer session's integration, so it is not stale WIP. Untouched
+  here: it is the viewer's, and this session was the control loop's.
+- The three items under [Before the first armed
+  run](docs/ltspm3/running.md#before-the-first-armed-run) are all still open,
+  `verify_readback` on the 218 over GPIB most of all.
+
+---
+
+# Handoff — 2026-08-28 (tenth session: X1, the bench 336, and the viewer)
 
 **Everything in [`FEATURE_PLAN.md`](FEATURE_PLAN.md) is now implemented and
 tested, X1 included. 694 tests passing (from 584), ruff clean.** Verified

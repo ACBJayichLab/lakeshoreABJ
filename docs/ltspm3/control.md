@@ -14,13 +14,22 @@ Reading  ->  SensorGuard  ->  filters  ->  PID  ->  HeaterSupervisor  ->  dither
 **`HeaterSupervisor` owns the output.** The PID proposes; the supervisor
 disposes. Nothing else may write to the analog output.
 
-That includes the file interface. `lschart`'s `hold` and `arm` commands reach
-this loop through `panic_hold()` and `arm()` — **called duck-typed, by name**,
-so `lschart` still never imports `ltspm3` (invariant 1). Going through the
-supervisor rather than around it is the point: a panic hold is
-`abort_ramp()` + `set_mode(MANUAL)`, and the clamp and the rate limiter still
-apply to everything that leaves. See
+That includes the file interface. `lschart`'s `hold`, `heaters_off`, `arm` and
+`ack` commands reach this loop through `panic_hold()`, `panic_off()`, `arm()`
+and `acknowledge()` — **called duck-typed, by name**, so `lschart` still never
+imports `ltspm3` (invariant 1). Going through the supervisor rather than around
+it is the point: a panic hold is `abort_ramp()` + `set_mode(MANUAL)`, and the
+clamp and the rate limiter still apply to everything that leaves. See
 [running](running.md#stopping-the-loop-deliberately-from-a-file).
+
+**"Owns the output" is a claim about this program, not about the world.** A
+front panel, another process, or `lschart`'s own `analog` command can all move
+that DAC, and the supervisor cannot stop any of them. What it must not do is
+compute its next move from a value that stopped being true: every limit it
+enforces — the rate limit, the ramp-down step, the output a manual hold adopts
+— is a limit on a step from *here*, so it reads where the heater is rather than
+remembering where it left it. See `_where_the_heater_is`, and
+`tests_ltspm3/test_panic_seam.py` for what it cost when it did not.
 
 ## The modules
 

@@ -229,6 +229,10 @@ class HeaterSupervisor:
         self._pending_approach = False
         self._model_warned = False
         self._last_feedback = 0.0
+        #: Did the previous cycle actually send bytes?  What decides whether
+        #: `output_pct` may be trusted as "where the heater is" -- see
+        #: :meth:`_where_the_heater_is`.
+        self._wrote_last_cycle = False
 
     # -- authority band ----------------------------------------------------
 
@@ -268,8 +272,14 @@ class HeaterSupervisor:
 
     def set_mode(self, mode: LoopMode) -> None:
         if self.state is SupervisorState.LOCKED_OUT and mode is not LoopMode.OFF:
+            # Name the way out, the way every other refusal in this system
+            # does.  This used to say "acknowledge() first", which is a Python
+            # method an operator at a terminal has no way to call -- a signpost
+            # pointing at a wall.
             raise PermissionError(
-                f"supervisor is locked out ({self._locked_reason}); acknowledge() first"
+                f"supervisor is locked out ({self._locked_reason}). Look at the "
+                "cryostat, then clear the latch with `send ack` (or "
+                "acknowledge() in process); `arm` again after that"
             )
         if mode is self.mode:
             return
@@ -281,9 +291,14 @@ class HeaterSupervisor:
             # ramp-down those differ by the whole ramp, and priming from the
             # stale value makes the first demand a phantom step of that size,
             # which the anomaly check then reads as a broken premise.
-            current = self._read_output(default=self.output_pct)
-            if current is None:
-                current = self.cfg.operating_point_pct
+            # Read, else the last value we commanded, else the operating point.
+            # The middle rung can be absent now -- `panic_off` clears it -- so
+            # the fallback is spelled out rather than left to `_read_output`,
+            # which raises when handed no default at all.
+            current = self._read_output(
+                default=self.output_pct if self.output_pct is not None
+                else self.cfg.operating_point_pct
+            )
             self.output_pct = current
             self.pid.prime(self.clamp(current))
             self._last_feedback = 0.0
@@ -300,7 +315,12 @@ class HeaterSupervisor:
             self._pending_approach = True
             self.state = SupervisorState.TRACKING
         elif mode is LoopMode.MANUAL:
-            self.manual_pct = self.output_pct if self.output_pct is not None else self.manual_pct
+            # Adopt where the heater actually is, not where we last left it.
+            # A panic hold arriving *after* something else moved the output
+            # would otherwise "freeze" it at a value it is no longer at, and
+            # then rate-limit its way back up to it -- which is the opposite of
+            # freezing.  PID mode has always re-read here; manual had not.
+            self.manual_pct = self._where_the_heater_is(default=self.manual_pct)
             self.state = SupervisorState.IDLE
         else:
             self.state = SupervisorState.IDLE
@@ -393,6 +413,55 @@ class HeaterSupervisor:
         log.warning("PANIC HOLD: loop open, heater frozen at %.3f%%", held)
         return held
 
+    def panic_off(self) -> float | None:
+        """Let go of the heater entirely, so it can be switched off and stay off.
+
+        The controller half of ``lschart``'s ``heaters_off``, and the second
+        seam that package reaches into this one by -- called duck-typed by
+        name, exactly like :meth:`panic_hold`.
+
+        **Deliberately not** :meth:`panic_hold`.  A hold keeps the loop alive
+        in ``MANUAL``, and a manual output is still clamped to the authority
+        band: a loop merely held and then zeroed would be rate-limited straight
+        back up to ``operating_point_pct - authority_pct``, which on this
+        cryostat is about 62%.  There is no "manual zero" on this loop, because
+        the band is an unconditional statement about where the heater lives.
+        ``MANUAL`` is for freezing the heater where it is; ``OFF`` is for
+        letting go of it, and only ``OFF`` writes nothing at all, ever.
+
+        So the caller's order matters and is the caller's job: disarm first,
+        *then* zero the output.  Nothing may be driving that output at the
+        moment the zero lands.
+
+        Returns the output being abandoned, for the message, or ``None`` if
+        this loop never commanded one.  :meth:`arm` is the way back, and it is
+        not a panic action -- it applies power.
+        """
+        # A lockout survives this.  Stopping the heater is not the same as
+        # having looked at the cryostat, and the panic button is pressed
+        # precisely when nobody has diagnosed anything yet.  `acknowledge()`
+        # clears a lockout; nothing else does.
+        was_locked = self.state is SupervisorState.LOCKED_OUT
+        self.abort_ramp()
+        self.set_mode(LoopMode.OFF)
+        if was_locked:
+            self.state = SupervisorState.LOCKED_OUT
+        abandoned = self.output_pct
+        # And stop claiming to know where the heater is.  The caller zeroes the
+        # output immediately after this, so `output_pct` would otherwise go on
+        # reporting the abandoned value -- into `status.json`'s `control` block
+        # and into the CSV's `heater_pct` column, which is the permanent record.
+        # It read 63.08 beside an `ls218.aout1` of 0.00 in the same row, which
+        # is a log that disagrees with itself about whether the heater is on.
+        # A loop that has let go does not have an output; null is the honest
+        # answer, and the instrument's own `aout1` still carries the truth.
+        self.output_pct = None
+        log.warning(
+            "PANIC OFF: software loop disarmed at %s%%; nothing is driving the "
+            "heater now", "?" if abandoned is None else f"{abandoned:.3f}",
+        )
+        return abandoned
+
     def set_manual_percent(self, pct: float) -> None:
         """Request a manual output.  Still clamped and rate limited on the way out."""
         self.manual_pct = pct
@@ -429,6 +498,32 @@ class HeaterSupervisor:
             if default is None:
                 raise
             return default
+
+    def _where_the_heater_is(self, *, default: float) -> float:
+        """Where the output actually is -- read, not remembered.
+
+        ``self.output_pct`` is what this supervisor last *commanded*, and it is
+        authoritative only while this supervisor is the only thing writing to
+        the analog output.  It is not.  ``lschart``'s ``heaters_off`` zeroes the
+        218 directly and ``analog`` drives it to a number; either can land while
+        this loop is holding and writing nothing at all.
+
+        Every *relative* move computes from this value -- the rate limiter's
+        step, the fault ramp-down's step, the value a manual hold adopts -- so a
+        stale one does not merely mislead.  It re-commands the old output onto a
+        heater somebody has just cut.  That is what turned the panic button into
+        a four-minute pause: ``heaters_off`` wrote 0%, this loop held for
+        ``anomaly_hold_s`` while the sample fell, then began its fault ramp-down
+        from a remembered 63.08% and put the heat straight back on.
+
+        Reading costs a transaction, so this only re-reads when the belief could
+        have gone stale -- after a cycle in which nothing was written.  While the
+        loop is writing, :meth:`_write_output` has just confirmed the value by
+        readback and there is nothing better to know.
+        """
+        if self._wrote_last_cycle and self.output_pct is not None:
+            return self.output_pct
+        return self._read_output(default=default)
 
     def _write_output(self, pct: float, status: SupervisorStatus) -> bool:
         """Write, then prove it landed.  Returns True if the value was sent."""
@@ -540,6 +635,7 @@ class HeaterSupervisor:
             )
             s.state = self.state
             s.output_pct = self.output_pct
+            self._wrote_last_cycle = False
             self.status = s
             return s
 
@@ -553,13 +649,14 @@ class HeaterSupervisor:
         if target is None:                      # hold: re-send nothing, change nothing
             s.state = self.state
             s.output_pct = self.output_pct
+            self._wrote_last_cycle = False
             self.status = s
             return s
 
         # -- rate limit ------------------------------------------------------
-        current = self.output_pct
-        if current is None:
-            current = self._read_output(default=self.clamp(self.cfg.operating_point_pct))
+        current = self._where_the_heater_is(
+            default=self.clamp(self.cfg.operating_point_pct)
+        )
 
         if self.state is SupervisorState.RAMPING_DOWN:
             # A ramp-down has to be able to leave the authority band -- otherwise
@@ -594,6 +691,10 @@ class HeaterSupervisor:
             s.wrote = self._write_output(code, s)
         else:
             self.output_pct = code
+        # Only a write that landed leaves `output_pct` worth trusting next
+        # cycle.  "Already there, nothing to send" does not: nothing confirmed
+        # the output this cycle, so next cycle re-reads.
+        self._wrote_last_cycle = bool(s.wrote)
         if self._rampdown_complete and self.cfg.require_ack_after_fault:
             self.state = SupervisorState.LOCKED_OUT
             self._rampdown_complete = False
@@ -795,9 +896,7 @@ class HeaterSupervisor:
             self._locked_reason = why
         s.alarms.append(f"ramping down: {why}")
 
-        current = self.output_pct
-        if current is None:
-            current = self._read_output(default=self.cfg.safe_output_pct)
+        current = self._where_the_heater_is(default=self.cfg.safe_output_pct)
 
         # Deliberately slow.  A fault is not an emergency on this cryostat; the risk
         # of a fast change is greater than the risk of a slow one.

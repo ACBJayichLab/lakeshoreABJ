@@ -1215,6 +1215,13 @@ def control_row(control: dict | None) -> dict | None:
         "alarms": [str(a) for a in control.get("alarms") or []],
         "setpoint_target_k": control.get("setpoint_target_k"),
         "error_k": control.get("error_k"),
+        # The scheduled gains, under the same keys an instrument loop uses, so
+        # the P and I columns need no special case for this row.  `d` stays
+        # absent rather than zero: this controller has no derivative gain to
+        # report, and a 0 there would read as "tuned to zero" instead of "not
+        # a thing this loop has".
+        "p": control.get("p"),
+        "i": control.get("i"),
     })
     return row
 

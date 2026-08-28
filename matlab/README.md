@@ -84,7 +84,17 @@ ls.setAnalog(5.0);           % 218 analog output percent — see the warning bel
 ls.setPID(1, 50, 20, 0);     % the INSTRUMENT's own gains, all three together
 ls.setSource('lschart-gui', false);   % have the recorder ignore the viewer
 ls.heatersOff();             % everything the recorder may write to, to zero
+ls.hold();                   % every loop stopped where it is
+ls.ack();                    % clear a software loop's fault lockout
+ls.arm();                    % close the software loop again
 ```
+
+`heatersOff()` also **disarms a software loop**, before it zeroes anything:
+writing zero once to an output something else drives every cycle does not turn
+it off. `ack()` and `arm()` are the two halves of recovering from a fault
+lockout, in that order — `ack()` clears the latch and leaves the loop
+disarmed, deliberately, because the latch exists to make somebody look at the
+cryostat.
 
 `loops()` is the one worth knowing about if you are scripting a loop rather
 than a channel. It answers **which sensor a loop reads** with the
@@ -165,9 +175,11 @@ struct fields cannot contain spaces, so "Rad Shield" becomes `RadShield` there.
 A command from MATLAB passes exactly the same interlocks as one typed at the
 recorder's own command line. The file interface is not a back door.
 
-The one exception runs the other way: `heatersOff()` is a panic command, and
-panic commands are exempt from the per-client source policy and from the two
-power gates. MATLAB gets that exemption for the same reason the viewer does —
+The one exception runs the other way: `heatersOff()` and `hold()` are panic
+commands, and panic commands are exempt from the per-client source policy and
+from the two power gates. `arm()` and `ack()` are **not** among them — they are
+the two steps back toward driving the heater, and the exemption is for stopping
+only. MATLAB gets that exemption for the same reason the viewer does —
 the recorder sees the command *kind*, not who sent it, and an automated abort
 is a large part of why the command exists. It is still refused by
 `ipc.accept_commands`, by `allow_writes` and by `transport.read_only`.

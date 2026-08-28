@@ -40,8 +40,24 @@ a live cryostat is its own hazard (rule 6).
 ## After a fault
 
 A completed fault ramp-down **locks out**. Recovery is always the operator's
-call (rule 7): `acknowledge()` disarms the loop, and re-arming is a deliberate
-act that re-primes the PID and the filter from current conditions.
+call (rule 7), and it is deliberately two acts:
+
+```bash
+python -m ltspm3 -c config.yaml send ack      # clear the latch. Loop stays OFF
+python -m ltspm3 -c config.yaml send arm      # close it again
+```
+
+`ack` clears the latch and stops there — it disarms the loop rather than
+resuming it, because the latch exists to make somebody look at the cryostat,
+and a recovery that was one keystroke would not. Re-arming is the separate,
+deliberate act that re-primes the PID and the filter from current conditions.
+
+`ack` is **not** a panic command: it is the first step back toward driving the
+heater, so it passes `ipc.allow_analog_output` and the source policy exactly as
+`arm` does. `acknowledge()` in process does the same thing; until `send ack`
+existed it was the *only* way, which meant a locked-out recorder could only be
+recovered by restarting it — and with `on_exit: hold` that is precisely what
+you do not want to do to a live cryostat.
 
 Nothing raises the heater in response to a fault, ever (rule 1). The only fault
 responses are freeze and slow ramp-down.
@@ -51,8 +67,9 @@ responses are freeze and slow ramp-down.
 Distinct from a fault: this is an operator asking, not the supervisor deciding.
 
 ```bash
-python -m ltspm3 -c config.yaml send hold      # loop OPEN, heater frozen
-python -m ltspm3 -c config.yaml send arm       # closed again, holding here
+python -m ltspm3 -c config.yaml send hold          # loop OPEN, heater frozen
+python -m ltspm3 -c config.yaml send heaters_off   # loop DISARMED, heater to 0
+python -m ltspm3 -c config.yaml send arm           # closed again, holding here
 ```
 
 `hold` reaches `HeaterSupervisor.panic_hold()`, which is `abort_ramp()` plus
@@ -69,10 +86,41 @@ does to a 33x loop, which keeps regulating at the temperature it was at.
 cryostat is at *now*. If it drifted while held, that error is real; the clamp
 and rate limiter bound what the output may do about it.
 
-`panic_hold()` is **the one seam `lschart` reaches into this package by**,
-called duck-typed by name from `lschart/app.py` — so `lschart` still never
-imports `ltspm3` (invariant 1). The same command from a plain recorder finds no
-software loop and says so.
+### `heaters_off` disarms this loop — it does not hold it
+
+`hold` freezes a power; `heaters_off` lets go of the heater entirely, and on
+this loop those have to be different mechanisms. A held loop is still a driving
+loop: a manual output is **still clamped to the authority band**, so a loop
+merely held and then zeroed would be rate-limited back up to
+`operating_point_pct - authority_pct` — about 62 % here — over the following
+hour. There is no manual zero on this loop, because the band is an
+unconditional statement about where the heater lives. `MANUAL` freezes the
+heater where it is; only `OFF` writes nothing at all.
+
+So `heaters_off` calls `panic_off()`, which is `abort_ramp()` plus
+`set_mode(OFF)`, and `lschart` calls it **before** it zeroes the 218 — nothing
+may be driving that output at the moment the zero lands. A lockout survives it:
+stopping the heater is not the same as having looked at the cryostat, and the
+panic button is pressed precisely when nobody has diagnosed anything yet.
+
+`arm` is the way back from this one too, and it is the whole way back — there
+is no latch to clear unless the loop had *also* faulted.
+
+### The seams
+
+Four methods, and they are the only ones `lschart` reaches into this package
+by — called duck-typed by name from `lschart/app.py`, so `lschart` still never
+imports `ltspm3` (invariant 1):
+
+| | |
+|---|---|
+| `panic_hold()` | the `hold` command. Freeze the output, stop regulating |
+| `panic_off()` | the `heaters_off` command. Let go of the output entirely |
+| `arm()` | the `arm` command. Close the loop |
+| `acknowledge()` | the `ack` command. Clear a fault lockout |
+
+Any of these from a plain recorder finds no software loop and says so by name,
+rather than quietly succeeding.
 
 ## Watching it on screen
 
@@ -85,10 +133,18 @@ against a live armed recorder:
 
 The software loop is the **last row of the loop table**, marked `sw`, beneath
 whatever loops the 336 has. It carries the channel it controls, that channel's
-temperature, the setpoint, the output percent, and the supervisor's own state —
-`tracking`, `idle`, `holding`, `ramping down`, `locked out`. The loop mode
-(`off` / `manual` / `pid`) is in the hover, because `idle` alone cannot tell a
-loop that was never armed from one that was armed and then held.
+temperature, the setpoint, the output percent, the gains in force, and the
+supervisor's own state — `tracking`, `idle`, `holding`, `ramping down`,
+`locked out`. The loop mode (`off` / `manual` / `pid`) is in the hover, because
+`idle` alone cannot tell a loop that was never armed from one that was armed
+and then held.
+
+**The P and I on that row are not settings.** They are scheduled: the tuner
+re-solves them from the measured gain and time constant at the present
+temperature, so they move as the cryostat does. There is no D — this controller
+takes its derivative from a regressed slope rather than from a gain, so the
+column stays empty rather than showing a zero that would read as "tuned to
+nothing".
 
 Two things about that row are specific to this cryostat and worth knowing
 before you read the warning marks:

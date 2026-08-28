@@ -60,7 +60,7 @@ class Harness:
         # separates a fast cooldown from a sick sensor.
         self.inst = LS218(
             LoopbackTransport(self.sim),
-            channels={1: "Sample", 2: "Cold Head", 3: "Shield"},
+            channels={1: "Sample", 2: "Coldplate", 3: "Magnet"},
             # What an armed LTSPM3 config has to say, and for the same two
             # reasons.  `allow_writes` because the 218's analog output is the
             # sample heater and the driver now gates it like any other heater;

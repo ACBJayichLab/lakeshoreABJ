@@ -877,6 +877,18 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.arm_button.clicked.connect(self._send_arm)
         box.addWidget(self.arm_button)
 
+        # Beside Arm and not in the panic menu, for the same reason Arm is not:
+        # this is the first of the two steps back to driving the heater, and it
+        # is gated exactly as Arm is. Named for what it does rather than for
+        # the command, because "Ack" beside an acknowledgement label would be
+        # two unrelated meanings of the word in one panel.
+        self.clear_lockout_button = QtWidgets.QPushButton("Clear lockout…")
+        self.clear_lockout_button.setToolTip(
+            "Clear a software loop's fault lockout after a ramp-down. This "
+            "does NOT resume the loop — it stays disarmed until you arm it.")
+        self.clear_lockout_button.clicked.connect(self._send_clear_lockout)
+        box.addWidget(self.clear_lockout_button)
+
         self.ack_label = QtWidgets.QLabel("")
         self.ack_label.setWordWrap(True)
         box.addWidget(self.ack_label)
@@ -2654,7 +2666,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         other write.
         """
         return [self.send_button, self.pid_button, self.range_button,
-                self.analog_button, self.arm_button]
+                self.analog_button, self.arm_button, self.clear_lockout_button]
 
     def _confirm(self, title: str, text: str) -> bool:
         return QtWidgets.QMessageBox.question(
@@ -2839,6 +2851,25 @@ class ViewerWindow(QtWidgets.QMainWindow):
         ):
             return
         self._queue("arm", instrument="")
+        self._awaiting = None
+
+    def _send_clear_lockout(self) -> None:
+        """Clear a fault lockout.  Half the way back, deliberately."""
+        if self.spool is None:
+            return
+        if not self._confirm(
+            "Clear the lockout",
+            "Clear the software loop's fault lockout?\n\n"
+            "The loop latched itself out after a fault ramp-down. That latch "
+            "exists so that somebody looks at the cryostat before it drives "
+            "the heater again — clearing it is a claim that you have.\n\n"
+            "This does NOT resume the loop. It stays disarmed; use “Arm "
+            "software loop” when you are ready to close it.\n\n"
+            "It is not a panic action: it is the first step back toward "
+            "applying power, so it is gated like arming.",
+        ):
+            return
+        self._queue("ack", instrument="")
         self._awaiting = None
 
     def _setpoint_now(self, instrument: str) -> str:

@@ -638,6 +638,44 @@ class IpcService:
             return "software loop ARMED, holding the temperature it is at now"
         return f"software loop ARMED at {kelvin:.4f} K"
 
+    def _do_ack(self, cmd: Command) -> str:
+        """Clear a software loop's fault lockout.  Gated like `arm`, not exempt.
+
+        A completed fault ramp-down latches the loop out, and until this
+        existed the latch was reachable from nothing: `arm` refused with a
+        message naming ``acknowledge()``, a Python method no operator can call,
+        and the only way back was restarting the recorder -- which with
+        ``on_exit: hold`` is exactly what you do not want to do to a live
+        cryostat.
+
+        **Not a panic kind.** The exemption the panic kinds get is for
+        stopping, never for starting, and this is the first of the two steps
+        back to driving the heater. It is deliberately not the whole way there:
+        `ltspm3`'s ``acknowledge`` leaves the loop disarmed, so recovery stays
+        two separate acts -- clear the latch, look at the cryostat, then `arm`.
+
+        A lockout means the supervisor has already decided something is wrong.
+        Clearing it is a claim that a person has looked, which is why it is
+        gated by the same key and the same source policy as arming.
+        """
+        if not getattr(self.software_loop, "has_loop", False):
+            raise CommandError(
+                "this recorder has no software loop, so it has no lockout to "
+                "clear -- a software loop comes from `ltspm3`, not from "
+                "`lschart`"
+            )
+        if not self.allow_analog_output:
+            raise CommandError(
+                "clearing a lockout is the first step back to driving the "
+                "heater, and this recorder does not accept that from a file; "
+                "set ipc.allow_analog_output: true if a remote client really "
+                "should be able to acknowledge a fault"
+            )
+        try:
+            return self.software_loop.acknowledge()
+        except RuntimeError as exc:
+            raise CommandError(str(exc)) from None
+
     def _do_heaters_off(self, cmd: Command) -> str:
         """The panic button.  Exempt because of what it *is*, not what it sets.
 
@@ -657,9 +695,32 @@ class IpcService:
         Instruments this recorder may not write to are skipped rather than
         failed on: on a shared cryostat a read-only box is somebody else's, and
         refusing the whole command because of it would leave *our* heaters on.
+
+        **The software loop is disarmed first, and disarmed rather than held.**
+        Zeroing an output that something is still driving does not turn it off;
+        it starts an argument, and the driver wins because it runs every cycle.
+        `ltspm3`'s supervisor held its own idea of where the heater was, and
+        four minutes after this command it began a fault ramp-down *from that
+        remembered value* -- putting 63% back onto a heater an operator had
+        just cut. Holding it is not enough either: a held loop is still clamped
+        to its authority band, so it would climb back to the bottom of that
+        band instead. Only "not driving" is off.
         """
         done: list[str] = []
         skipped: list[str] = []
+
+        # Before the instruments, deliberately: nothing may be writing to an
+        # output at the moment the zero lands.  A recorder with no software
+        # loop is the ordinary case and is passed over in silence -- unlike
+        # `hold`, where a client asking to freeze a loop that does not exist
+        # has made a mistake worth naming.
+        if getattr(self.software_loop, "has_loop", False):
+            try:
+                done.append(self.software_loop.disarm())
+            except Exception as exc:  # noqa: BLE001 - a panic must not give up halfway
+                log.exception("heaters_off: the software loop refused to disarm")
+                skipped.append(f"software loop ({exc})")
+
         for inst in self.instruments:
             if not getattr(inst, "allow_writes", False):
                 if hasattr(inst, "all_heaters_off") or hasattr(inst, "analog_off"):

@@ -400,6 +400,25 @@ classdef LakeShore < handle
             [ok, message, id] = obj.run('arm', args, nargout);
         end
 
+        function [ok, message, id] = ack(obj)
+            %ACK  Clear a software loop's fault lockout.
+            %
+            %   A completed fault ramp-down latches the loop out, and arm()
+            %   then refuses until this is called.  The latch exists to make
+            %   somebody look at the cryostat, so recovery is two acts on
+            %   purpose: ack() clears the latch and leaves the loop DISARMED,
+            %   and arm() is what closes it again.
+            %
+            %   NOT a panic command.  The exemption the panic kinds get is for
+            %   stopping, never for starting, and this is the first step back
+            %   to driving the heater -- so it passes the source policy and
+            %   `ipc.allow_analog_output` exactly as arm() does.
+            %
+            %   A no-op on a recorder with no software loop, which it says by
+            %   name rather than quietly succeeding.
+            [ok, message, id] = obj.run('ack', struct(), nargout);
+        end
+
         function [ok, message, id] = setSource(obj, name, listen)
             %SETSOURCE  Mute or un-mute one client, without restarting anything.
             %

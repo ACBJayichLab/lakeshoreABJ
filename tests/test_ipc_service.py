@@ -619,14 +619,21 @@ def test_the_status_file_reports_the_pid_gate(tmp_path):
 class FakeLoop:
     """A software loop, duck-typed exactly as `IpcService` reaches for one.
 
-    Three names, which is the whole contract: `has_loop`, `hold`, `arm`.
-    `present=False` is the recorder-only case -- the object is still handed
-    over, because "there is no loop here" is an answer a client needs by name.
+    Five names, which is the whole contract: `has_loop`, `hold`, `arm`,
+    `disarm` and `acknowledge`.  `present=False` is the recorder-only case --
+    the object is still handed over, because "there is no loop here" is an
+    answer a client needs by name.
+
+    `hold` and `disarm` are not the same thing and the difference is the point:
+    a held loop is still driving (clamped to its authority band), a disarmed
+    one is not driving at all.  Only the second lets a zeroed heater stay zero.
     """
 
     def __init__(self, *, present=True):
         self.has_loop = present
         self.held = False
+        self.disarmed = False
+        self.acknowledged = False
         self.armed_at = "not armed"
 
     def hold(self):
@@ -639,6 +646,18 @@ class FakeLoop:
         if not self.has_loop:
             raise RuntimeError("no controller is configured -- this is a recorder")
         self.armed_at = setpoint_k
+
+    def disarm(self):
+        if not self.has_loop:
+            raise RuntimeError("no software loop is configured -- this is a recorder")
+        self.disarmed = True
+        return "software loop DISARMED, releasing 43.000%"
+
+    def acknowledge(self):
+        if not self.has_loop:
+            raise RuntimeError("no software loop is configured -- this is a recorder")
+        self.acknowledged = True
+        return "lockout cleared; the loop is disarmed -- `arm` to close it again"
 
 
 def held_frame(**readings):
@@ -787,3 +806,92 @@ def test_a_recorder_with_no_loop_is_told_that_and_not_about_a_gate(tmp_path):
     entry = send(svc, "arm")
     assert "only records" in entry["message"]
     assert "ipc.allow_analog_output" not in entry["message"]
+
+
+# -- the panic button and the software loop ----------------------------------
+
+
+def test_heaters_off_disarms_the_software_loop(tmp_path):
+    """Zeroing an output something else is driving starts an argument, not a stop.
+
+    The driver wins that argument, because it runs every cycle and the command
+    ran once.  `tests_ltspm3/test_panic_seam.py` measures what that cost against
+    a real supervisor: 63% back on the heater four minutes after the button.
+    """
+    mon = monitor()
+    mon.set_analog_percent(40.0)
+    svc = service(tmp_path, mon)
+    svc.software_loop = FakeLoop()
+
+    assert send(svc, "heaters_off")["ok"]
+    assert svc.software_loop.disarmed is True
+    assert mon.get_analog_percent() == 0.0
+
+
+def test_heaters_off_disarms_rather_than_holds(tmp_path):
+    """A held loop is still a driving loop, clamped to its authority band.
+
+    Holding it and then zeroing the heater would walk it back up to the bottom
+    of that band at the rate limiter's pace.  `hold` is the wrong verb here and
+    must not be the one that gets called.
+    """
+    svc = service(tmp_path, monitor())
+    svc.software_loop = FakeLoop()
+
+    send(svc, "heaters_off")
+    assert svc.software_loop.disarmed is True
+    assert svc.software_loop.held is False
+
+
+def test_heaters_off_on_a_plain_recorder_says_nothing_about_a_loop(tmp_path):
+    """Most recorders have no software loop and never did.
+
+    Unlike `hold`, where a client asking to freeze a loop that does not exist
+    has made a mistake worth naming, here it is simply the ordinary case.
+    """
+    svc = service(tmp_path, monitor())
+    svc.software_loop = FakeLoop(present=False)
+
+    message = send(svc, "heaters_off")["message"]
+    assert "analog output 0%" in message
+    assert "software loop" not in message
+
+
+# -- ack: the way back from a lockout ----------------------------------------
+
+
+def test_ack_clears_the_lockout(tmp_path):
+    svc = service(tmp_path, monitor(), allow_analog_output=True)
+    svc.software_loop = FakeLoop()
+
+    entry = send(svc, "ack")
+    assert entry["ok"] and svc.software_loop.acknowledged is True
+    # It clears the latch and stops there: the loop stays disarmed, so the
+    # reply has to point at the second half of the recovery.
+    assert "arm" in entry["message"]
+
+
+def test_ack_is_not_a_panic_kind_and_needs_the_analog_gate(tmp_path):
+    """The exemption the panic kinds get is for stopping, never for starting.
+
+    Clearing a lockout is the first of the two steps back to driving the
+    heater, so it passes the same gate `arm` does.
+    """
+    svc = service(tmp_path, monitor())          # allow_analog_output defaults off
+    svc.software_loop = FakeLoop()
+
+    entry = send(svc, "ack")
+    assert entry["ok"] is False
+    assert "allow_analog_output" in entry["message"]
+    assert svc.software_loop.acknowledged is False
+
+
+def test_ack_on_a_recorder_with_no_software_loop_says_so_by_name(tmp_path):
+    """And before the gate, so nobody is sent to edit a key that changes nothing."""
+    svc = service(tmp_path, monitor())
+    svc.software_loop = FakeLoop(present=False)
+
+    entry = send(svc, "ack")
+    assert entry["ok"] is False
+    assert "no lockout to clear" in entry["message"]
+    assert "allow_analog_output" not in entry["message"]

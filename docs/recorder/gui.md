@@ -292,6 +292,7 @@ in three places is the same table going stale in three places.
 | **Heater range** | a selected loop that drives a heater output | 0/1/2/3, applied to **that loop's** output. **Above 0 this applies power** |
 | **Analog output** | a box with a settable analog output (a 218) | one percentage. **Above 0 this applies power** — there is no inert half |
 | **Arm software loop** | always | close the software loop at the temperature the cryostat is at now — the way back from a hold. **This applies power** |
+| **Clear lockout** | always | clear a software loop's fault lockout. Does **not** resume the loop — it stays disarmed until armed. Beside Arm and not in the Panic menu, because it is the first step back toward power and is gated the same way |
 | **Panic ▾** | always, and never greyed out | a menu of the two ways to stop: **All heaters OFF** and **All temperatures HOLD** |
 | **Accept commands from this viewer** | always | whether the recorder is listening to *this viewer*. Unticking mutes it; ticking undoes that |
 
@@ -380,7 +381,7 @@ on, and cancelling costs nothing.
 
 | | |
 |---|---|
-| **All heaters OFF** | 33x ranges to 0 and 218 analog outputs to 0%, on every writable box. Setpoints are not changed |
+| **All heaters OFF** | 33x ranges to 0 and 218 analog outputs to 0%, on every writable box, and a software loop **disarmed** first so the zero sticks. Setpoints are not changed |
 | **All temperatures HOLD** | every closed loop's ramping switched off (the rate is kept) and its setpoint moved to its own sensor's present temperature; a software loop's output frozen |
 
 Neither is aimed at the selected instrument. Every other control needs an

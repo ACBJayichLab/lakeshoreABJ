@@ -390,6 +390,15 @@ class StatusWriter:
             "demand_pct": _num(getattr(status, "demand_pct", None)),
             "rail_low_pct": _num(rail_low),
             "rail_high_pct": _num(rail_high),
+            # The gains in force *this cycle*, under the same names an
+            # instrument loop publishes them, so the loop table's existing P/I
+            # columns fill themselves.  A software loop's gains are scheduled
+            # -- they move with temperature -- which makes them worth more here
+            # than a 33x's fixed pair, and the row was showing blanks.  There
+            # is no `d`: this controller takes its derivative from a regressed
+            # slope rather than a gain, so a number there would be an invention.
+            "p": _num(getattr(status, "kp", None)),
+            "i": _num(getattr(status, "ti", None)),
             "threshold_k": _num(getattr(cfg, "max_error_k", None)),
             "alarms": [str(a) for a in getattr(status, "alarms", []) or []],
             "reason": str(getattr(status, "reason", "") or ""),

@@ -95,7 +95,14 @@ client can tell "no such loop" from "a loop with nothing to say".
 | `demand_pct` | what the PID asked for *before* the band clamped it. `null` outside the PID branch |
 | `rail_low_pct`, `rail_high_pct` | the authority band the supervisor enforces |
 | `threshold_k` | the loop's `max_error_k` — "this should only ever be a small correction" |
+| `p`, `i` | the gains **in force this cycle**, under the same names an instrument loop uses. There is no `d`: this controller takes its derivative from a regressed slope, not from a gain, so a number there would be an invention |
 | `alarms`, `reason` | sentences, not cells |
+
+**Why the gains are worth reading here.** A 33x loop's P/I/D are whatever
+somebody typed into it and stay put. A software loop's are *scheduled* — the
+tuner re-solves them from the measured gain and time constant at the present
+temperature, so they move as the cryostat does, and the pair on screen is a fact
+about right now rather than a setting.
 
 **Why the band is published.** A software loop pinned at its clamp has run out
 of authority exactly the way a heater at 100 % has, but the number is nowhere
@@ -140,9 +147,10 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `range` | `output`, `value` 0–3 — **applies power** on a 33x |
 | `analog` | `percent` — **applies power** on a 218; there is no inert half to it |
 | `pid` | `loop`, `p`, `i`, `d` — the instrument's own gains, all three together |
-| `heaters_off` | **panic** — every heater on every writable instrument to zero |
+| `heaters_off` | **panic** — every heater on every writable instrument to zero, and the software loop disarmed so the zero sticks |
 | `hold` | **panic** — every closed loop stopped where it is; a software loop's output frozen |
 | `arm` | `kelvin` (optional) — close the software loop again. **Applies power**, and is exempt from nothing |
+| `ack` | clear a software loop's fault lockout. The first of the two steps back to driving, so gated exactly like `arm` |
 | `source` | `name`, `allowed` — mute or un-mute one client. Exempt from the source policy it edits, and from nothing else |
 
 `heaters_off` and `hold` are the only commands not aimed at one box. Every other
@@ -343,6 +351,30 @@ admits it could not.
 
 On the software loop, `hold` freezes the output where it is and stops
 regulating.
+
+**`heaters_off` disarms the software loop, and disarms rather than holds.**
+Zeroing an output that something else is still driving does not turn it off; it
+starts an argument, and the driver wins, because it runs every cycle and the
+command ran once. This was a real defect and its shape is worth remembering:
+`heaters_off` wrote `ANALOG 0` around the supervisor, which stayed in PID mode
+still remembering 63.08%, held while the sample fell, and then began its fault
+ramp-down *from that remembered value* — putting 63% back on a heater an
+operator had just cut. Holding it would not have been enough either: a held
+loop is still clamped to its authority band, so it would have climbed back to
+the bottom of that band instead. Only "not driving" is off. The loop is
+disarmed **before** the outputs are zeroed, because nothing may be writing to
+an output at the moment the zero lands.
+
+**`ack`** clears a fault lockout. A completed fault ramp-down latches the
+software loop out and `arm` refuses until the latch is cleared; before this
+existed the latch was reachable from nothing, and the only way back was
+restarting the recorder — which, with `on_exit: hold`, is exactly what you do
+not want to do to a live cryostat. It is deliberately **not** a panic kind: the
+exemption the panic kinds get is for stopping, never for starting, and this is
+the first of two steps back to driving the heater. It is also deliberately not
+the whole way there — it leaves the loop disarmed, so recovery stays two acts,
+which is the point of a latch that exists to make somebody look at the
+cryostat.
 
 **Two honest things about `hold`.** It is not a synonym for less power: while a
 ramp is heading *down*, its setpoint sits below the temperature the cryostat has

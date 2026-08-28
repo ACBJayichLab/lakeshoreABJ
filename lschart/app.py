@@ -382,6 +382,57 @@ class Application:
         held = panic()
         return f"software loop OPEN, heater frozen at {float(held):.3f}%"
 
+    def disarm(self) -> str:
+        """Stop the software loop driving at all, so the heater can be zeroed.
+
+        The other half of a ``heaters_off`` command, and **not** the same thing
+        as :meth:`hold`.  A held loop is still a driving loop: `ltspm3` clamps
+        a manual output to its authority band, so zeroing the heater under a
+        loop that had merely been held would be undone at the rate limiter's
+        pace over the following hour.  Turning a heater off means nothing may
+        be writing to it.
+
+        Duck-typed by name like ``panic_hold``, for the same reason: what a
+        supervisor is belongs to `ltspm3`, and `lschart` may not import it.
+
+        Raises RuntimeError on a recorder with no software loop.  The caller
+        decides whether that is worth reporting -- for ``heaters_off`` it is
+        not, because most recorders have no loop and never did.
+        """
+        panic = getattr(self.supervisor, "panic_off", None)
+        if not callable(panic):
+            raise RuntimeError(
+                "no software loop is configured -- this is a recorder, and "
+                "there is nothing here that could be driving a heater"
+            )
+        abandoned = panic()
+        if abandoned is None:
+            return "software loop DISARMED (it had commanded no output)"
+        return f"software loop DISARMED, releasing {float(abandoned):.3f}%"
+
+    def acknowledge(self) -> str:
+        """Clear a fault lockout, after the operator has looked at the cryostat.
+
+        The third and last seam into `ltspm3`, duck-typed like the other two.
+        This does not resume the loop -- `ltspm3`'s ``acknowledge`` disarms it
+        deliberately, so recovery is always two acts: clear the latch, then
+        ``arm``.
+
+        Without this the latch was reachable from nothing at all. A completed
+        fault ramp-down locks the loop out, ``arm`` then refuses with a message
+        naming a Python method no operator can call, and the only way back was
+        restarting the recorder -- which, with ``on_exit: hold``, is exactly
+        what you do not want to do to a live cryostat.
+        """
+        ack = getattr(self.supervisor, "acknowledge", None)
+        if not callable(ack):
+            raise RuntimeError(
+                "no software loop is configured -- this is a recorder, and "
+                "there is no lockout here to clear"
+            )
+        ack()
+        return "lockout cleared; the loop is disarmed -- `arm` to close it again"
+
     def current_temperature(self) -> float | None:
         """Latest usable reading on the control channel, or None."""
         frame = self.ring.latest()

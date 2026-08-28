@@ -409,9 +409,13 @@ def cmd_status(args) -> int:
                      else " -- writing again now"))
         control = status.get("control")
         if control:
+            # A disarmed loop has no output, and says so rather than printing
+            # "None%".  Null here is not a missing reading: it is a loop that
+            # has let go of the heater, which `ls218.aout1` above still reports.
+            out = control.get("output_pct")
+            out = "not driving" if out is None else f"output {out}%"
             print(f"  control    : {control.get('state')} "
-                  f"setpoint {control.get('setpoint_k')} K "
-                  f"output {control.get('output_pct')}%")
+                  f"setpoint {control.get('setpoint_k')} K {out}")
             for alarm in control.get("alarms", []):
                 print(f"    ALARM: {alarm}")
 
@@ -633,8 +637,21 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     arm.add_argument("kelvin", type=float, nargs="?", default=None)
 
     snd_sub.add_parser(
+        "ack",
+        help="clear a software loop's fault lockout -- the first step back",
+        description="A completed fault ramp-down latches the loop out and "
+                    "refuses to arm. This clears the latch; it does NOT "
+                    "resume the loop, which stays disarmed until you `arm` "
+                    "it. Recovery is two acts on purpose: the latch exists to "
+                    "make somebody look at the cryostat. Not a panic action -- "
+                    "it is the first step back to driving the heater, so it "
+                    "needs ipc.allow_analog_output like `arm` does.",
+    )
+
+    snd_sub.add_parser(
         "heaters_off",
-        help="every writable heater to zero: 33x ranges AND 218 analog outputs")
+        help="every writable heater to zero: 33x ranges AND 218 analog outputs, "
+             "and the software loop disarmed so the zero sticks")
     snd_sub.add_parser("ping", help="prove the command path works, touching nothing")
 
     def _collect_send_args(parsed) -> list[tuple]:
@@ -647,6 +664,7 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "pid": ("p", "i", "d", "loop"),
             "hold": (),
             "arm": ("kelvin",),
+            "ack": (),
             "source": ("name", "allowed"),
             "heaters_off": (),
             "ping": (),

@@ -160,7 +160,8 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
   __main__.py        Swaps one BUILDER; everything else is shared with lschart.
   control/           supervisor (the envelope -- read first), health, coherence,
                      pid, tuning, feedforward, ramp, filters, dither.
-                     `panic_hold()`/`arm()` are the only METHODS lschart calls
+                     `panic_hold()`/`panic_off()`/`arm()`/`acknowledge()` are
+                     the only METHODS lschart calls
                      here; `status.py` also READS `band` and `cfg.max_error_k`
                      for the status file's `control` block.  All of it
                      duck-typed by name and defaulted, so invariant 1 holds --

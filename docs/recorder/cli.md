@@ -127,6 +127,7 @@ python -m lschart -c config.yaml send pid 50 20 0 --loop 1
 python -m lschart -c config.yaml send heaters_off
 python -m lschart -c config.yaml send hold
 python -m lschart -c config.yaml send arm            # or `send arm 96.5`
+python -m lschart -c config.yaml send ack            # clear a fault lockout
 python -m lschart -c config.yaml send source lschart-gui off
 ```
 
@@ -152,7 +153,9 @@ recorder configured with `read_pid: true`.
 
 `heaters_off` is the panic button and covers *every* writable instrument — 33x
 ranges and 218 analog outputs alike — not just one. Read-only boxes are skipped
-and named in the reply.
+and named in the reply. It also **disarms a software loop**, before it zeroes
+anything: an output something else is still driving cannot be turned off by
+writing zero to it once, because the driver runs every cycle and wins.
 
 `hold` is the other panic action: every closed loop stopped where it is —
 ramping off first (the rate is kept), then the setpoint moved to that loop's own
@@ -172,9 +175,15 @@ loop driving the heater, so it needs `ipc.allow_analog_output` and passes the
 source policy like any other write. With no kelvin it arms to hold the
 temperature the cryostat is at now.
 
+`ack` clears a software loop's fault lockout, which is what `arm` refuses on
+until it is cleared. It leaves the loop **disarmed** — recovery is `ack` then
+`arm`, two acts, because the latch exists to make somebody look at the
+cryostat. Gated exactly like `arm`, and for the same reason: the panic kinds'
+exemption is for stopping, and this is the first step back to starting.
+
 Requires `ipc.accept_commands: true`, plus the instrument's `allow_writes`, plus
-`ipc.allow_heater_range` for `range` above 0, `ipc.allow_analog_output` for
-`analog` above 0, and `ipc.allow_pid` for `pid`. A recorder with an
+`ipc.allow_heater_range` for `range`, `ipc.allow_analog_output` for `analog`,
+`arm` and `ack`, and `ipc.allow_pid` for `pid`. A recorder with an
 `ipc.sources` policy may also refuse the CLI by name — it labels itself
 `lschart-cli`. Full rules in [file-interface.md](file-interface.md).
 
