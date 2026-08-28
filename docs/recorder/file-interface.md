@@ -214,7 +214,7 @@ ipc:
 ```
 
 Leave `sources:` out entirely and there is no policy: every source may ask, and
-the five gates above are the whole of it. Write it and `default:` is **false**
+the gates above are the whole of it. Write it and `default:` is **false**
 unless you say otherwise — naming your clients is how you say you have thought
 about the list, and a typo in one of those names has to fail closed.
 

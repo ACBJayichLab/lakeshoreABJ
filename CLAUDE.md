@@ -203,7 +203,7 @@ tests/               Generic. tests_ltspm3/ has the virtual-clock control harnes
 ```bash
 uv venv --allow-existing .venv
 uv pip install --python .venv/bin/python -e ".[dev,serial]"
-.venv/bin/python -m pytest -q                          # ~395 tests
+.venv/bin/python -m pytest -q                          # ~584 tests
 .venv/bin/python -m ruff check .                       # gated in CI
 
 # generic recorder -- any cryostat, no control section in the config

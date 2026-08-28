@@ -14,11 +14,19 @@ Reading  ->  SensorGuard  ->  filters  ->  PID  ->  HeaterSupervisor  ->  dither
 **`HeaterSupervisor` owns the output.** The PID proposes; the supervisor
 disposes. Nothing else may write to the analog output.
 
+That includes the file interface. `lschart`'s `hold` and `arm` commands reach
+this loop through `panic_hold()` and `arm()` — **called duck-typed, by name**,
+so `lschart` still never imports `ltspm3` (invariant 1). Going through the
+supervisor rather than around it is the point: a panic hold is
+`abort_ramp()` + `set_mode(MANUAL)`, and the clamp and the rate limiter still
+apply to everything that leaves. See
+[running](running.md#stopping-the-loop-deliberately-from-a-file).
+
 ## The modules
 
 | Module | |
 |---|---|
-| `supervisor.py` | **the safety envelope. Read this first.** Owns the output, the authority band, the fault states, the lockout |
+| `supervisor.py` | **the safety envelope. Read this first.** Owns the output, the authority band, the fault states, the lockout. `panic_hold()` is the one method `lschart` reaches in by, duck-typed |
 | `health.py` | `SensorGuard`: the validity gate and the OK / SUSPECT / FAULT / RECOVERING state machine |
 | `coherence.py` | cross-channel corroboration. Read together with `health.py` |
 | `pid.py` | derivative on a **regressed slope**, integral clamped in **output units**, bumpless `prime()`, feedforward-aware |

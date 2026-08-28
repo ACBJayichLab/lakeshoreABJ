@@ -14,6 +14,7 @@ python -m lschart -c config.yaml run          # record until Ctrl-C
 
 python -m lschart.gui -c config.yaml          # the strip chart, another terminal
 python -m lschart -c config.yaml status       # or a one-shot text digest
+python -m lschart -c config.yaml send ping    # prove the command path works
 ```
 
 **Going live is a config edit, not a code change**: change `driver:` from `sim`
@@ -54,7 +55,12 @@ constraint explains most of the design.
 
 **A setpoint does nothing while the heater range is 0.** Raising the range is
 what applies power, and nothing in this software raises one as a side effect of
-anything. Writes are off by default at four independent layers; see
+anything. Writes are off by default at **seven independent layers** — the byte
+level, the driver, the file door, one per command that applies power, retuning,
+and which *client* is asking. Every one applies in both directions: commanding a
+heater to zero needs the same permission as raising it, because cutting a heater
+is not automatically the safe direction. The only exemptions anywhere are the
+two panic commands. See
 [instruments.md](docs/recorder/instruments.md#the-interlocks-in-the-order-they-apply).
 
 ## Layout
@@ -73,7 +79,7 @@ tests/        generic;  tests_ltspm3/ is the control half
 ```bash
 uv venv --allow-existing .venv
 uv pip install --python .venv/bin/python -e ".[dev,serial]"
-.venv/bin/python -m pytest -q          # 395 tests, no hardware required
+.venv/bin/python -m pytest -q          # 584 tests, no hardware required
 ```
 
 Development is macOS; deployment is **Windows** —

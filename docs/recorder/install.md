@@ -79,7 +79,7 @@ Everything runs against simulated instruments by default, so this works on a
 laptop with nothing plugged in:
 
 ```bash
-.venv/bin/python -m pytest -q                    # 395 tests, ~13 s
+.venv/bin/python -m pytest -q                    # 584 tests, ~21 s
 .venv/bin/python -m ruff check .                 # must pass; CI gates on it
 .venv/bin/python -m lschart init config.yaml     # starter config, driver: sim
 .venv/bin/python -m lschart -c config.yaml check

@@ -293,8 +293,8 @@ class IpcConfig:
     #: gates above -- a loop with range 0 stays inert however it is tuned.
     allow_pid: bool = False
 
-    #: Per-client policy: which *sources* may ask at all.  The five interlocks
-    #: above all answer "may this action happen"; this one answers "may this
+    #: Per-client policy: which *sources* may ask at all.  Every interlock
+    #: above answers "may this action happen"; this one answers "may this
     #: client ask for it", which none of the others can express.
     #:
     #: A mapping of source label to bool, plus a `default:` for labels not

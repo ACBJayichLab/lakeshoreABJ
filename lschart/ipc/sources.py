@@ -1,13 +1,13 @@
 """Who may ask, as opposed to what may be done.
 
-The five interlocks in ``CLAUDE.md`` all answer the same question from
-different heights: *may this action happen at all*.  ``transport.read_only``
+Every other interlock in ``CLAUDE.md`` answers the same question from a
+different height: *may this action happen at all*.  ``transport.read_only``
 answers it in bytes, ``allow_writes`` in driver policy, ``ipc.accept_commands``
-at the door, and the two power gates per command kind.  None of them can
+at the door, and the per-kind gates one command at a time.  None of them can
 express "the operator at this terminal may drive the cryostat, the analysis
 script may not" -- because none of them knows there is more than one client.
 
-This module is the sixth gate, on a new axis: *may this client ask*.
+This module is the one gate on a different axis: *may this client ask*.
 
 Two layers, and the second may only ever narrow the first
 ---------------------------------------------------------

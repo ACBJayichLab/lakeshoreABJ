@@ -5,9 +5,14 @@ or a 336 on GPIB, USB or TCP; it reads every thermometer on a fixed cadence,
 writes a CSV that has no row limit, and publishes what it is doing to a file
 that anything else can read.
 
-It can also *command* an instrument — setpoint, ramp rate, heater range — but
-only through interlocks that are off by default. Recording is what it does;
-writing is what it must be told to do.
+It can also *command* an instrument — setpoint, ramp rate, heater range, the
+loop's own PID gains — but only through interlocks that are off by default, and
+which apply in **both** directions: commanding a heater to zero needs the same
+permission as raising it. Recording is what it does; writing is what it must be
+told to do.
+
+The two exceptions are the panic commands, `heaters_off` and `hold`. Stopping
+the cryostat is the one thing that must never wait on a config edit.
 
 Nothing in this directory is specific to one cryostat.
 

@@ -66,6 +66,15 @@ link-level failure raises. Check `RDGST?` decoding by turning on `read_status`.
 transport that is down is retrying with backoff from 1 s to 30 s, and
 `last_error` says why.
 
+**There is a gap in the status feed.** A recorder that stalled and one that
+could not *write* look identical from outside, because a failed write cannot
+report itself in the file it failed to write. The next file that is written
+tells you which: `status_file.failures` will have jumped and
+`status_file.last_error` says why, and `lschart status` prints that line
+whenever the count is non-zero. The first failure and the recovery are also
+logged at WARNING. This is mostly a Windows concern —
+see [windows](windows.md).
+
 **The vendor driver is flooding the log.** It logs every transaction at INFO,
 two lines per query — about 1.6 M lines a day at 1 Hz. It is quietened to
 WARNING unless the root logger is at DEBUG; if you see the flood, the root
@@ -80,12 +89,35 @@ Every refusal names its own fix.
 | `this recorder is not accepting commands` | `ipc.accept_commands: true` |
 | `... is configured read-only` | `allow_writes: true` on that instrument |
 | `changing a heater range is not accepted ...` | `ipc.allow_heater_range: true` — needed for 0 as well. To stop the cryostat now, send `heaters_off` or `hold`, which are exempt |
+| `driving a 218 analog output is not accepted ...` | `ipc.allow_analog_output: true` — likewise needed for 0 |
+| `retuning a loop is not accepted ...` | `ipc.allow_pid: true`. Gains apply no power, but they change how the loop behaves for the rest of the run |
+| `commands from 'X' are not accepted by this recorder's configuration` | `ipc.sources` does not list `X`. Needs a config edit and a restart — the runtime overlay may only narrow that, never widen it |
+| `commands from 'X' are currently switched off in ... sources.json` | somebody muted that client. `send source X on` undoes it, or delete the entry by hand. No restart |
+| `arming the software loop starts it driving the heater ...` | `ipc.allow_analog_output: true`. `arm` is not a panic action and is exempt from nothing |
+| `this recorder has no software loop to arm` | `arm` and the software half of `hold` need `ltspm3` and a `control:` section. Plain `lschart` records and drives the instrument's own loops |
 | `issued N s ago, older than the 30 s limit` | the recorder was not running when the command was queued. Not a bug: replaying an hour of stale setpoints into a live cryostat is the hazard this prevents |
 | `several controllers are configured` | say which, with `--instrument` |
 
 **The setpoint was applied and nothing got warmer.** A setpoint does nothing
 while that output's heater range is 0. Raising the range is what applies power,
 and nothing does it as a side effect.
+
+**The viewer's command panel is greyed out but the chart is fine.** Most likely
+this viewer has been muted: `ipc.sources` or the runtime overlay says the
+recorder is not listening to `lschart-gui`. The checkbox below the Panic menu
+says so and ticks it back on. Muting only ever stops the recorder *listening* —
+reading was never affected, which is why the chart looks normal. `status`
+prints the effective policy.
+
+The Panic menu stays live throughout, deliberately: those two kinds are exempt
+from the source policy, and a panel that greyed out a button the recorder would
+in fact obey would be lying at the moment it matters most.
+
+**`hold` reported loops it "left alone".** Not a failure. A loop is skipped and
+named when there is nothing sensible to hold it at: no `OUTMODE?` binding read
+yet, a mode other than closed loop, or a sensor whose reading was unusable that
+cycle. A hold that wrote a bad setpoint would be worse than one that says it
+could not.
 
 **`FAILED: ... did not take ... do not assume the instrument is in the state
 you asked for`.** The command was sent, the instrument acknowledged nothing

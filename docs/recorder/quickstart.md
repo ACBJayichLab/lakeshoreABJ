@@ -82,9 +82,20 @@ python -m lschart -c config.yaml set --loop 1 --setpoint 77
 ```
 
 `send` needs `ipc.accept_commands: true`; both need `allow_writes: true` on the
-instrument. Raising a heater range from a file needs
-`ipc.allow_heater_range: true` as well. See
+instrument. Changing a heater range from a file needs
+`ipc.allow_heater_range: true` as well — **in either direction**, because
+cutting a heater is not automatically the safe direction. See
 [file-interface.md](file-interface.md) for why there are that many gates.
+
+What is always available, whatever the gates say, is stopping:
+
+```bash
+python -m lschart -c config.yaml send heaters_off   # every writable heater to 0
+python -m lschart -c config.yaml send hold          # every loop where it is
+```
+
+Those two are the only exemptions in the system. In the viewer they are behind
+the **Panic** menu, three clicks by design.
 
 **A setpoint does nothing while the heater range is 0.** Raising the range is
 the act that applies power, and nothing in this software raises one as a side
