@@ -16,9 +16,9 @@ import time
 import pytest
 
 from lschart.gui.source import (
-    EMPTY_LOOP, CsvTail, Series, StatusSource, capabilities, classify_column,
-    connect_flags, loop_marks, loop_rows, nearest_series, region_stats, value_at,
-    write_region_csv,
+    EMPTY_LOOP, SOFTWARE_LOOP_LABEL, CsvTail, Series, StatusSource, capabilities,
+    classify_column, connect_flags, control_row, loop_marks, loop_rows, nearest_series,
+    region_stats, value_at, write_region_csv,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -999,3 +999,136 @@ def test_a_loop_with_no_range_at_all_can_still_be_trying():
 
 def test_a_channel_with_no_usable_reading_settles_nothing():
     assert not loop_marks(a_loop(), None)["unsettled"]
+
+
+# -- the software loop's own row ---------------------------------------------
+#
+# X1.  A viewer pointed at a running `ltspm3` used to show the heater percent
+# as a trace and say nothing about the loop driving it.  What is worth testing
+# here is the three answers that an instrument loop gets for free -- the loop
+# number it does not have, the sensor it does, the range it does not -- and
+# that its rail is its own clamp rather than 99%.
+
+
+def a_control(**kw):
+    """The `control` block of a healthy, closed software loop."""
+    block = {
+        "state": "tracking", "mode": "pid", "health": "ok", "sensor": "Sample",
+        "setpoint_k": 96.0, "setpoint_target_k": 96.0, "ramping": False,
+        "error_k": 0.02, "output_pct": 63.07, "demand_pct": 63.10,
+        "rail_low_pct": 62.076, "rail_high_pct": 64.076, "threshold_k": 1.0,
+        "alarms": [], "reason": "",
+    }
+    block.update(kw)
+    return block
+
+
+def test_a_recorder_with_no_software_loop_gets_no_row():
+    """Most recorders are plain: `lschart` drives the instrument's own loops
+    and has no controller at all.  A row there would claim a loop exists."""
+    assert control_row(None) is None
+    assert control_row({}) is None
+    assert StatusSource("nowhere.json").control() is None
+
+
+def test_the_software_row_is_not_numbered_like_a_loop_that_can_be_commanded():
+    """There is no `SETP 5` to send.  A digit would put it in the same
+    namespace as the loops the command panel addresses."""
+    row = control_row(a_control())
+    assert row["loop"] == SOFTWARE_LOOP_LABEL
+    assert not str(row["loop"]).isdigit()
+
+
+def test_the_software_loop_names_the_sensor_it_reads():
+    """Half of X1's open question was wrong: it does have a sensor, and the
+    recorder publishes it by the same name the trace and the readout carry --
+    which is what makes the kelvin column fill itself."""
+    assert control_row(a_control(sensor="Coldplate"))["sensor"] == "Coldplate"
+
+
+def test_the_software_loop_has_no_range_rather_than_an_unknown_one():
+    """The 218 has no inert half: no loop, no range, one ANALOG command whose
+    percentage *is* the power."""
+    row = control_row(a_control())
+    assert row["range"] is None and row["heater_output"] is None
+
+
+def test_the_software_loop_is_trying_only_while_it_is_closed_and_tracking():
+    """Idle, manual, holding, ramping down and locked out are all "not
+    trying" -- the same suppression a heater at range 0 gets."""
+    assert loop_marks(control_row(a_control()), 96.0)["trying"]
+    for block in (a_control(mode="manual", state="idle"),
+                  a_control(mode="off", state="idle"),
+                  a_control(state="holding"),
+                  a_control(state="locked_out"),
+                  a_control(ramping=True)):
+        row = control_row(block)
+        assert loop_marks(row, 96.0, rails=row["rails"]) == {
+            "trying": False, "saturated": False, "unsettled": False}
+
+
+def test_the_software_loop_rails_at_its_own_clamp_and_not_at_99_percent():
+    """Its authority band is about a percent wide.  Judged against the fixed
+    rails a heater output uses, the mark could never light at all."""
+    row = control_row(a_control(demand_pct=64.5))     # above rail_high_pct
+    assert loop_marks(row, 96.0, rails=row["rails"])["saturated"]
+    # And the same numbers against the fixed pair say nothing whatever.
+    assert not loop_marks(row, 96.0)["saturated"]
+
+
+def test_the_rail_is_judged_on_what_the_loop_asked_for_not_what_it_wrote():
+    """A saturated software loop writes *below* its own rail: the value is
+    quantised to a DAC code and the band is re-applied by stepping down one.
+    Testing `output_pct` against the band would never fire."""
+    row = control_row(a_control(demand_pct=64.5, output_pct=64.07))
+    assert float(row["output_pct"]) < float(row["rails"][1])
+    assert loop_marks(row, 96.0, rails=row["rails"])["saturated"]
+
+
+def test_an_instrument_loop_still_rails_at_the_fixed_pair():
+    """`rails` is not a per-loop knob let in by the back door: no instrument
+    row passes one, and 99% stays the answer there."""
+    assert loop_marks(a_loop(output_pct=99.4), 100.0)["saturated"]
+    assert not loop_marks(a_loop(output_pct=64.5), 100.0)["saturated"]
+
+
+def test_the_software_loop_is_settled_against_its_own_premise():
+    """`max_error_k` -- "this should only ever be a small correction" -- is a
+    real per-loop threshold in kelvin, which is exactly what the column asks
+    for."""
+    row = control_row(a_control(setpoint_k=96.0, threshold_k=1.0))
+    assert loop_marks(row, 98.0, rails=row["rails"])["unsettled"]
+    assert not loop_marks(row, 96.5, rails=row["rails"])["unsettled"]
+
+
+def test_a_controller_that_offers_no_threshold_gets_no_opinion():
+    """Same rule as an instrument loop with none configured: silence beats a
+    number this software picked."""
+    row = control_row(a_control(threshold_k=None))
+    marks = loop_marks(row, 400.0, rails=row["rails"])
+    assert marks["trying"] and not marks["unsettled"]
+
+
+def test_the_software_row_carries_the_sentences_that_have_no_column():
+    """Health, reason and alarms are sentences, not cells.  They ride along on
+    the row so the window can put them in one hover."""
+    row = control_row(a_control(health="suspect", reason="reading rejected",
+                                alarms=["sensor glitch"]))
+    assert row["health"] == "suspect"
+    assert row["reason"] == "reading rejected"
+    assert row["alarms"] == ["sensor glitch"]
+
+
+def test_the_loop_mode_is_kept_beside_the_state_and_not_instead_of_it():
+    """`idle` alone cannot tell a loop that was never armed from one that was
+    armed and then held, and the State column has room for only one of the
+    two."""
+    assert control_row(a_control(state="idle", mode="off"))["mode_name"] == "off"
+    assert control_row(a_control(state="idle", mode="manual"))["mode_name"] == "manual"
+
+
+def test_the_state_is_what_the_row_shows_as_its_mode():
+    """The `mode` key is what the loop table's State column reads, and for a
+    software loop the supervisor's *state* is the informative half -- "pid"
+    does not distinguish tracking from locked out."""
+    assert control_row(a_control(state="locked_out"))["mode"] == "locked_out"

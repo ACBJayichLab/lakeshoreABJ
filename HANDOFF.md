@@ -1,27 +1,80 @@
-# Handoff — 2026-08-27 (ninth session: phase 3, the write path)
+# Handoff — 2026-08-28 (tenth session: X1, the software loop's row)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
-**All three phases of [`FEATURE_PLAN.md`](FEATURE_PLAN.md) are implemented and
-tested, plus two follow-on commits. 584 tests passing (from 472), ruff clean.** Verified against a live sim
-recorder, a real `ltspm3` software loop, and MATLAB R2025b. **No hardware was
-touched this session** — the bench 336 was not connected.
+**Everything in [`FEATURE_PLAN.md`](FEATURE_PLAN.md) is now implemented and
+tested, X1 included. 622 tests passing (from 584), ruff clean.** Verified
+against a live armed sim recorder driving a real `ltspm3` software loop through
+a hold and back. **No hardware was touched this session** — the bench 336 was
+not connected.
 
 ## Start here
 
-Phase 3 is done, so the feature plan is no longer a to-do list; it is a record
-of why things are shaped the way they are, plus a short
-**Where phase 3 differed from the plan** section at the end that is worth
-reading before you touch any of it.
+The feature plan is no longer a to-do list; it is a record of why things are
+shaped the way they are. Two sections at the end are worth reading before you
+touch any of it: **Where phase 3 differed from the plan**, and **X1, and the
+half of its question that was wrong**.
 
-**What is left is Windows deployment**, which was never part of that plan, and
-X1 (the software loop's own row in the loop table), which was deferred
-deliberately.
+**What is left is Windows deployment**, which was never part of that plan.
+Specifically the two things `docs/recorder/windows.md` still lists as
+unverified — the ~15 ms clock resolution behind the command sequence number,
+and whether MATLAB's `movefile` is a rename — neither of which can be settled
+without the cryostat's own machine accepting commands.
 
-**One thing needs a decision from Jeff before the LTSPM3 cryostat runs armed —
-see [A config that contradicts itself](#a-config-that-contradicts-itself).**
+## What landed this session
 
-## What landed
+### X1 — the software loop finally has a row (this commit)
+
+A viewer pointed at a running `ltspm3` used to draw the heater percent as a
+trace and say **nothing whatever** about the loop driving it — not its
+setpoint, not its health, and not that it had locked itself out after a fault.
+The loop that most needed watching was the one loop with no row. On a 218-only
+cryostat the loop table was hidden entirely.
+
+The plan asked "what should its `sensor` and `range` columns say for a loop
+that has neither". **Half of that was wrong:** it does have a sensor, the
+recorder's `control_channel`, which was simply never published — a fact that
+never changes does not end up in a per-cycle struct. Published, the `K` column
+fills itself by the same lookup every other row uses. `range` really is `n/a`,
+the word a 336's loops 3 and 4 already get, for the stronger reason in
+invariant 4.
+
+Three things beyond that, none in the plan:
+
+- **A `State` column, on every row.** Instrument rows show what `OUTMODE?`
+  says; the software row shows the supervisor's state. It is what decides
+  whether either W1 mark applies and it used to be reachable only by hover, so
+  a loop that had quietly stopped trying was invisible without a mouse.
+- **The software loop rails at its own authority band, not at 99%.** That band
+  is about a percent wide, so the fixed rails could never light the mark on the
+  one loop whose authority is genuinely scarce. Not a per-loop knob by the back
+  door: no instrument row passes one, and this is the clamp the supervisor
+  actually enforces, published as `rail_low_pct`/`rail_high_pct`.
+- **The mark is judged on `demand_pct`, not `output_pct`.** A saturated
+  software loop writes *below* its own rail — quantised to a DAC code, then the
+  band re-applied by stepping down one — so testing what it wrote would never
+  fire.
+
+**The row is read, not clicked.** It takes no setpoint, range or PID command,
+only `arm` and the panic `hold`, so it is not selectable: a row that could be
+clicked into a selection the command panel cannot honour would be a row that
+lies.
+
+Two things to expect on the real cryostat. On the shipped numbers a *tracking*
+software loop cannot rail at all — `max_error_k` is 1.0 K against about ±7 K of
+authority, so the anomaly hold fires first and you see `holding`. And when
+health goes bad both marks go **quiet**, because the loop has stopped trying;
+the row is coloured instead.
+
+`tests_ltspm3/test_status_projection.py` is new and is the one that matters:
+`_control` reads every field by name off whatever the poller holds, so a rename
+in `ltspm3` would leave a status file that still parses and is quietly full of
+nulls. It pins the names against a real supervisor.
+
+**The config decision from last session is settled** — `a11dfe9` says the 336
+is writable because it is.
+
+## What landed in the session before this one (phase 3)
 
 Four commits, in the order the plan's priority section gives.
 
@@ -109,10 +162,10 @@ Windows; that needs the cryostat's own machine.
 **The `source` command** — see the A1/A2 section above and
 `FEATURE_PLAN.md`'s "A2 gained a command".
 
-## A config that contradicts itself
+## A config that contradicts itself — SETTLED
 
-**Found while auditing S6, not caused by this session, and not fixed — because
-fixing it either way is a decision about a real cryostat.**
+**Resolved in `a11dfe9` after this was written: the comments were rewritten to
+say the 336 is writable, because it is. Kept here for the reasoning.**
 
 `config-ltspm3-heater.yaml` says one thing in its header and does another:
 
@@ -136,7 +189,7 @@ Do not guess. Nothing in this session changed those values.
 
 ## State of the tree
 
-- `584 passed`, `ruff` clean, on `main`. Nothing is running.
+- `622 passed`, `ruff` clean, on `main`. Nothing is running.
 - Example configs: all three validate, all three now poll `PID?`.
   **`examples/config-336-usb.yaml` moved to a 2 s cadence** — it did not
   validate before this session, because `read_analog_outputs: true` had been
@@ -151,6 +204,15 @@ Do not guess. Nothing in this session changed those values.
 ## What was verified, and how
 
 Nothing here touched hardware. Everything below is a live process.
+
+**This session (X1).** An armed sim recorder with the software loop closed:
+the table drew `sw | Sample | 96.209 | 95.997 | 63.1 | n/a | tracking` beneath
+the 336's four loops. `send hold` moved it to `idle`, mode `manual`, with both
+marks dark and the frozen 63.070% still in the output column; `send arm`
+returned it to `tracking` at the temperature it had drifted to. The row refused
+selection throughout while the instrument rows accepted it.
+
+**Earlier sessions, phase 3.**
 
 - **A1/A2**: a sim recorder refused the CLI by config with the remedy that needs
   a restart, applied MATLAB, then refused MATLAB via `sources.json` with the

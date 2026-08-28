@@ -720,6 +720,12 @@ class IpcService:
             instruments=self.instruments,
             recorder=self.recorder,
             control=getattr(poller, "last_control_status", None),
+            # The supervisor itself, alongside its last answer: its authority
+            # band and its error premise are properties of the loop rather than
+            # of a cycle, so they are not in the per-cycle struct.  Both read
+            # duck-typed in `_control`; None on a plain recorder.
+            controller=getattr(poller, "supervisor", None),
+            control_channel=getattr(poller, "control_channel", None),
             commands=self._commands_block(),
             running=running,
         )

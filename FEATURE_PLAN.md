@@ -13,8 +13,8 @@ implemented, tested and exercised against a live recorder.
 
 Phase 3 landed in four commits, in the order the priority section gives:
 `56fdf2e` (A1, A2), `5db2d9a` (P1, S3, S4), `16a90e0` (K1-K4), `ada3413`
-(A3, S6). What is left is X1 under [Open](#open), and the Windows deployment
-that was never part of this plan.
+(A3, S6). X1, the last item under [Open](#open), landed on 2026-08-28. What is
+left is the Windows deployment that was never part of this plan.
 
 The viewer and the MATLAB interface are the priority; the software PID is not.
 Nothing here asks for work in `control/` except one seam, named where it comes up.
@@ -191,8 +191,8 @@ Written for a session that has not read the tree. Line numbers drift; the names 
 
 ### Baseline as of 2026-08-27
 
-`408 passed` when this plan was written; `560 passed` with all three phases in.
-`ruff` clean throughout.
+`408 passed` when this plan was written; `560 passed` with all three phases in;
+`622 passed` with X1. `ruff` clean throughout.
 
 ---
 
@@ -232,11 +232,9 @@ reaches further than the code.
 
 ## Open
 
-1. **X1 — the software loop's own state in the loop table.** Wanted eventually,
-   deferred deliberately. `status.json` already carries `control` beside
-   `links[].loops`; what is missing is a row for it in the viewer's table, and
-   a decision about what its "sensor" and "range" columns should say for a loop
-   that has neither.
+Nothing. X1 landed on 2026-08-28 — see [X1, and the half of its
+question that was wrong](#x1-and-the-half-of-its-question-that-was-wrong).
+What is left is the Windows deployment that was never part of this plan.
 
 ## A2 gained a command
 
@@ -298,3 +296,55 @@ did not validate. `read_analog_outputs: true` had been added without raising its
 cadence, so the file a coworker installs was refused by `check`. It now runs at
 2 s, and `tests/test_config.py` checks every shipped example loads and fits its
 own cadence — nothing did before.
+
+## X1, and the half of its question that was wrong
+
+**Done, 2026-08-28.** X1 asked for a row for the software loop in the viewer's
+table, plus "a decision about what its `sensor` and `range` columns should say
+for a loop that has neither".
+
+One half of that premise was wrong. **It does have a sensor** — the recorder's
+own `control_channel`, which was simply never published in the `control` block
+because a per-cycle struct is not where a fact that never changes ends up. Once
+it is published the `K` column fills itself by the same name lookup every other
+row uses, and no viewer-side table has to exist to go stale.
+
+The other half stands, and the answer was already in the tree: **`n/a`**, which
+is the word a 336's loops 3 and 4 already get, for a stronger version of the
+same reason. Invariant 4 says the 218 has no inert half — no loop, no range,
+one `ANALOG` command whose percentage *is* the power — so this is a fact about
+the loop, not a gap in what the recorder knows.
+
+Three things beyond the two columns, none of them in the plan:
+
+1. **A `State` column, for every row.** Without one the software loop's most
+   important fact — closed? held? locked out after a fault? — had nowhere to
+   go but a tooltip, which means a locked-out heater is invisible until someone
+   hovers. Instrument rows gained it too, and it was already worth having
+   there: `State` is what decides whether either W1 mark applies, and it used
+   to be reachable only by hover.
+2. **The software loop's rail is its own clamp, not 99%.** W1 fixed the rails
+   deliberately, and that stands for every heater output. The software loop's
+   authority band is about a percent wide, so judged against 99% the mark could
+   never light on the one loop whose authority is genuinely scarce. This is not
+   a per-loop knob let in by the back door: no instrument row passes one, and
+   what the software loop passes is not a preference but the clamp the
+   supervisor is enforcing.
+3. **The mark is judged on `demand_pct`, not `output_pct`.** A saturated
+   software loop writes *below* its own rail — the value is quantised to a DAC
+   code and the band re-applied by stepping down one — so testing what it wrote
+   against the band would never fire. What ran out of room is what it asked
+   for. An instrument never says what its PID wanted, so 99% remains the only
+   evidence available there.
+
+And one thing the row is deliberately not: **selectable.** The software loop
+takes no setpoint, range or PID command — it takes `arm` and the panic `hold`,
+which are buttons of their own. A row that could be clicked into a selection
+the command panel cannot honour would be a row that lies.
+
+Two notes for whoever reads the marks on the real cryostat. On the shipped
+numbers a *tracking* software loop cannot rail at all: `max_error_k` is 1.0 K
+and the band is about ±7 K of authority, so the anomaly hold always fires
+first — what you will see is `holding`, not `RAIL`. And when health goes bad
+both marks go quiet, because the loop has stopped trying; the row is coloured
+instead, since that is the moment it most needs to catch an eye.

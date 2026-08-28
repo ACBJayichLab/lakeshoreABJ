@@ -151,8 +151,14 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
   __main__.py        Swaps one BUILDER; everything else is shared with lschart.
   control/           supervisor (the envelope -- read first), health, coherence,
                      pid, tuning, feedforward, ramp, filters, dither.
-                     `panic_hold()` is the ONE seam lschart reaches in by, and
-                     it is called duck-typed by name so invariant 1 holds.
+                     `panic_hold()`/`arm()` are the only METHODS lschart calls
+                     here; `status.py` also READS `band` and `cfg.max_error_k`
+                     for the status file's `control` block.  All of it
+                     duck-typed by name and defaulted, so invariant 1 holds --
+                     and pinned against a real supervisor by
+                     tests_ltspm3/test_status_projection.py, because a rename
+                     up here would otherwise leave a status file that still
+                     parses and is quietly full of nulls.
   tools/             replay.py (the only test on genuine data), steptest.py.
 
 matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus

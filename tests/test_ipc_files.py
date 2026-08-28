@@ -217,6 +217,112 @@ def test_the_plain_loop_number_list_did_not_go_away_it_moved(tmp_path):
     assert link["heater_outputs"] == [1, 2]
 
 
+# -- the software loop's block ----------------------------------------------
+#
+# `lschart` must never import `ltspm3`, so every field here is read by name off
+# whatever object the poller happens to be holding.  That is exactly the kind
+# of coupling that breaks silently, which is why it is pinned twice: with a
+# stand-in here, and against a real supervisor in `tests_ltspm3`.
+
+
+class FakeSupervisorStatus:
+    """What a controller's last answer looks like, to a reader that must not
+    know what a controller is."""
+
+    def __init__(self, **kw):
+        self.state = kw.pop("state", "tracking")
+        self.mode = kw.pop("mode", "pid")
+        self.health = kw.pop("health", "ok")
+        self.setpoint_k = kw.pop("setpoint_k", 96.0)
+        self.setpoint_target_k = kw.pop("setpoint_target_k", 96.0)
+        self.ramping = kw.pop("ramping", False)
+        self.error_k = kw.pop("error_k", 0.02)
+        self.output_pct = kw.pop("output_pct", 63.07)
+        self.demand_pct = kw.pop("demand_pct", 63.10)
+        self.alarms = kw.pop("alarms", [])
+        self.reason = kw.pop("reason", "")
+        assert not kw, kw
+
+
+class FakeSupervisor:
+    def __init__(self, band=(62.076, 64.076), max_error_k=1.0):
+        self.band = band
+        self.cfg = type("cfg", (), {"max_error_k": max_error_k})()
+
+
+def control_of(tmp_path, status, controller=None, channel="Sample"):
+    writer = StatusWriter(tmp_path / "status.json")
+    writer.write(frame(), control=status, controller=controller,
+                 control_channel=channel)
+    return read_status(tmp_path / "status.json")["control"]
+
+
+def test_a_recorder_with_no_controller_says_null_rather_than_an_empty_block(
+        tmp_path):
+    """Most recorders are plain.  An empty block would read as a loop that
+    exists and has nothing to say, which is a different claim."""
+    assert control_of(tmp_path, None) is None
+
+
+def test_the_software_loop_publishes_the_channel_it_controls(tmp_path):
+    """By the same name the trace and the readout carry, so a client can look
+    up its temperature without being told separately which sensor it is."""
+    block = control_of(tmp_path, FakeSupervisorStatus(), FakeSupervisor(),
+                       channel="Coldplate")
+    assert block["sensor"] == "Coldplate"
+
+
+def test_the_authority_band_reaches_the_status_file(tmp_path):
+    """A software loop pinned at its clamp has run out of authority exactly
+    the way a heater at 100% has -- but the number is nowhere near 100, so a
+    client cannot work it out from the percentage alone."""
+    block = control_of(tmp_path, FakeSupervisorStatus(),
+                       FakeSupervisor(band=(10.0, 20.0)))
+    assert block["rail_low_pct"] == 10.0 and block["rail_high_pct"] == 20.0
+
+
+def test_the_demand_is_published_beside_the_output_it_was_clamped_into(
+        tmp_path):
+    """The written value is quantised to a DAC code and the band re-applied by
+    stepping *down* one, so a saturated loop writes a number strictly below
+    its own rail.  What ran out of authority is the demand."""
+    block = control_of(tmp_path, FakeSupervisorStatus(demand_pct=99.0,
+                                                      output_pct=64.07),
+                       FakeSupervisor())
+    assert block["demand_pct"] == 99.0 and block["output_pct"] == 64.07
+
+
+def test_the_error_premise_is_published_as_the_settle_threshold(tmp_path):
+    """`max_error_k` is "this should only ever be a small correction" -- a
+    real per-loop threshold in kelvin, which is what the column asks for."""
+    block = control_of(tmp_path, FakeSupervisorStatus(),
+                       FakeSupervisor(max_error_k=2.5))
+    assert block["threshold_k"] == 2.5
+
+
+def test_a_controller_offering_none_of_that_is_reported_as_silent(tmp_path):
+    """Read duck-typed and defaulted throughout: an object without a band or a
+    config is a controller with nothing to say about its rails, not a crash
+    and not a zero."""
+    block = control_of(tmp_path, FakeSupervisorStatus(), object(), channel="")
+    assert block["rail_low_pct"] is None and block["rail_high_pct"] is None
+    assert block["threshold_k"] is None
+    assert block["sensor"] == "" and block["state"] == "tracking"
+
+
+def test_an_enum_reaches_the_file_as_its_value_and_not_its_repr(tmp_path):
+    """JSON has no enums.  `SupervisorState.TRACKING` in the file would be a
+    string no client could match on."""
+    import enum
+
+    class State(enum.Enum):
+        TRACKING = "tracking"
+
+    block = control_of(tmp_path, FakeSupervisorStatus(state=State.TRACKING),
+                       FakeSupervisor())
+    assert block["state"] == "tracking"
+
+
 # -- the command spool -------------------------------------------------------
 
 

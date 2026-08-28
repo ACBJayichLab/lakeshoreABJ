@@ -56,8 +56,8 @@ from ..instruments.ls33x import HEATER_RANGE_NAMES
 from ..ipc.commands import CommandSpool
 from .source import (
     COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, CsvTail, StatusSource, capabilities,
-    SATURATED_HIGH_PCT, SATURATED_LOW_PCT, classify_column, connect_flags, loop_marks,
-    loop_rows, nearest_series, region_stats, write_region_csv,
+    SATURATED_HIGH_PCT, SATURATED_LOW_PCT, classify_column, connect_flags, control_row,
+    loop_marks, loop_rows, nearest_series, region_stats, write_region_csv,
 )
 
 log = logging.getLogger(__name__)
@@ -120,12 +120,46 @@ ZOOM_STEP = 1.5
 #: out of authority, a loop far from its setpoint may simply be on the way.
 #: Headings are terse because the panel is narrow and a loop table that
 #: scrolls sideways hides the very marks it exists to show.
-LOOP_COLUMNS = ["#", "Sensor", "K", "SP", "Out", "Rng", "Rail", "Off SP"]
+#:
+#: ``State`` carries what the loop is *doing*, which used to be reachable only
+#: by hovering.  It decides whether either mark applies at all, so a loop that
+#: has quietly stopped trying -- switched to open loop, or a software loop
+#: locked out after a fault -- was previously invisible without a mouse.
+LOOP_COLUMNS = ["#", "Sensor", "K", "SP", "Out", "Rng", "State", "Rail", "Off SP"]
+
+#: Column indices, by name.  Derived rather than written down: the marks moved
+#: one to the right when ``State`` was added, and two hardcoded 6s and 7s are
+#: exactly the kind of thing that moves silently.
+COL_LOOP, COL_SENSOR, COL_KELVIN = 0, 1, 2
+COL_SETPOINT, COL_OUTPUT, COL_RANGE = 3, 4, 5
+COL_STATE = LOOP_COLUMNS.index("State")
+COL_SATURATED = LOOP_COLUMNS.index("Rail")
+COL_UNSETTLED = LOOP_COLUMNS.index("Off SP")
 
 #: What each mark says when it is lit.  Words rather than glyphs: this is read
 #: at 2 a.m. by somebody who has not seen the legend.
 MARK_SATURATED = "RAIL"
 MARK_UNSETTLED = "OFF SP"
+
+#: Red, for a lit mark and for a software loop whose health is not ``ok``.
+WARN_COLOUR = "#b71c1c"
+
+
+def _state_text(mode) -> str:
+    """The ``State`` cell: one word where one word will do.
+
+    ``OUTMODE`` says "closed loop" and "open loop", where the second word is
+    the same on both and carries nothing: the panel is narrow and a loop table
+    that scrolls sideways hides the very marks it exists to show.  Nothing else
+    is shortened -- the supervisor's "ramping down" is a fault backing the
+    heater off, and clipping it to "ramping" would make it read as an ordinary
+    setpoint traversal.  The full string stays in the tooltip either way.
+    """
+    text = str(mode or "").replace("_", " ").strip()
+    if text.endswith(" loop"):
+        text = text[:-len(" loop")]
+    return text or "—"
+
 
 #: The two region cursors, and the shading between them.  Deliberately not one
 #: of CURVE_COLORS: a cursor that is the same colour as a trace reads as part
@@ -489,7 +523,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.loops.setToolTip(
             "One row per control loop, as the instrument reports it "
             "(OUTMODE?). Click a row to point the command panel at that "
-            "loop.")
+            "loop. A software loop, where there is one, is the last row and "
+            "is read rather than clicked — it takes Arm and the panic Hold, "
+            "not a setpoint, a range or gains.")
         #: Row index -> (instrument name, loop row), so a click can say which
         #: loop was picked without parsing the cells back out again.
         self._loop_index: list[tuple[str, dict]] = []
@@ -1095,6 +1131,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
             name = str(link.get("name", ""))
             for row in loop_rows(link):
                 entries.append((name, row))
+        # The software loop last, after every loop that lives on a box, because
+        # it is the one row that is read rather than clicked -- see
+        # `_fill_loop_row`.  `""` for the instrument: it belongs to no link,
+        # and the entry is here only to keep this list the same length as the
+        # table it indexes.
+        software = control_row(self.source.control())
+        if software is not None:
+            entries.append(("", software))
         self._loop_index = entries
 
         # Hidden entirely rather than left as an empty header: a recorder with
@@ -1109,45 +1153,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         for index, (instrument, row) in enumerate(entries):
             kelvin, usable = kelvin_by_name.get(str(row.get("sensor") or ""),
                                                 (None, False))
-            marks = loop_marks(row, kelvin if usable else None)
-            heater = row.get("heater_output")
-            cells = [
-                str(row.get("loop") or ""),
-                str(row.get("sensor") or "—"),
-                "—" if kelvin is None else f"{float(kelvin):.3f}",
-                self._maybe(row.get("setpoint_k"), "{:.3f}"),
-                self._maybe(row.get("output_pct"), "{:.1f}"),
-                # N/A and not "—": a loop whose output is analog-only does not
-                # have a range that happens to be unknown, it has none at all.
-                "n/a" if heater is None else self._maybe(row.get("range"), "{:.0f}"),
-                MARK_SATURATED if marks["saturated"] else "",
-                MARK_UNSETTLED if marks["unsettled"] else "",
-            ]
-            for column, text in enumerate(cells):
-                item = self.loops.item(index, column)
-                if item is None:
-                    item = QtWidgets.QTableWidgetItem()
-                    self.loops.setItem(index, column, item)
-                item.setText(text)
-                item.setForeground(QtGui.QBrush(QtGui.QColor(
-                    "#b71c1c" if column >= 6 and text else "#000000")))
-            self.loops.item(index, 1).setToolTip(
-                f"{instrument} loop {row.get('loop')}: "
-                f"{row.get('mode') or 'mode unknown'}"
-                + ("" if marks["trying"] else
-                   " — not trying to reach a setpoint, so neither warning "
-                   "applies"))
-            self.loops.item(index, 6).setToolTip(
-                f"the output is at a rail (at or beyond {SATURATED_HIGH_PCT:g}% "
-                f"or {SATURATED_LOW_PCT:g}%): this loop has no authority left "
-                "in the direction it is asking for"
-                if marks["saturated"] else "")
-            self.loops.item(index, 7).setToolTip(
-                f"{row.get('sensor') or 'the sensor'} is further than "
-                f"{self._maybe(row.get('threshold_k'), '{:g}')} K from the "
-                "setpoint (loop_thresholds in the recorder's config)"
-                if marks["unsettled"] else "")
-            if (instrument == self.instrument_combo.currentText()
+            self._fill_loop_row(index, instrument, row,
+                                kelvin if usable else None)
+            if (instrument and instrument == self.instrument_combo.currentText()
                     and int(row.get("loop") or 0) == self._loop):
                 selected = index
 
@@ -1171,6 +1179,111 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 selected, QtCore.QModelIndex()):
             with _quiet(self.loops):
                 self.loops.selectRow(selected)
+
+    def _fill_loop_row(self, index: int, instrument: str, row: dict,
+                       kelvin: float | None) -> None:
+        """One row of the loop table, instrument loop or software loop alike.
+
+        The two differ in three places and nowhere else, which is why they
+        share this: a software loop has no loop number and no range, and it is
+        **not selectable** -- the command panel it would point at has a
+        setpoint, a range and a set of gains, and the software loop takes none
+        of those three commands.  What it takes is `arm` and the panic `hold`,
+        which are buttons of their own.  A row that could be clicked into a
+        selection the panel cannot honour would be a row that lies.
+        """
+        software = not instrument
+        marks = loop_marks(row, kelvin, rails=row.get("rails"))
+        heater = row.get("heater_output")
+        cells = [""] * len(LOOP_COLUMNS)
+        cells[COL_LOOP] = str(row.get("loop") or "")
+        cells[COL_SENSOR] = str(row.get("sensor") or "—")
+        cells[COL_KELVIN] = "—" if kelvin is None else f"{float(kelvin):.3f}"
+        cells[COL_SETPOINT] = self._maybe(row.get("setpoint_k"), "{:.3f}")
+        cells[COL_OUTPUT] = self._maybe(row.get("output_pct"), "{:.1f}")
+        # n/a and not "—": a loop whose output is analog-only does not have a
+        # range that happens to be unknown, it has none at all.  The software
+        # loop is the same case for a stronger reason -- the 218 has no inert
+        # half, so there is no range for it to have.
+        cells[COL_RANGE] = ("n/a" if heater is None
+                            else self._maybe(row.get("range"), "{:.0f}"))
+        cells[COL_STATE] = _state_text(row.get("mode"))
+        cells[COL_SATURATED] = MARK_SATURATED if marks["saturated"] else ""
+        cells[COL_UNSETTLED] = MARK_UNSETTLED if marks["unsettled"] else ""
+
+        # A software loop whose health is anything but ok is coloured like a
+        # lit mark, because it *is* the same class of news: the supervisor has
+        # stopped trusting its own measurement, and the two marks are silent
+        # precisely because it is no longer trying.
+        unhealthy = software and row.get("health") not in ("ok", "", None)
+        for column, text in enumerate(cells):
+            item = self.loops.item(index, column)
+            if item is None:
+                item = QtWidgets.QTableWidgetItem()
+                self.loops.setItem(index, column, item)
+            item.setText(text)
+            lit = column in (COL_SATURATED, COL_UNSETTLED) and text
+            item.setForeground(QtGui.QBrush(QtGui.QColor(
+                WARN_COLOUR if lit or unhealthy else "#000000")))
+            flags = item.flags()
+            item.setFlags(flags & ~QtCore.Qt.ItemIsSelectable if software
+                          else flags | QtCore.Qt.ItemIsSelectable)
+
+        self.loops.item(index, COL_SENSOR).setToolTip(
+            self._software_tooltip(row) if software else
+            f"{instrument} loop {row.get('loop')}: "
+            f"{row.get('mode') or 'mode unknown'}"
+            + ("" if marks["trying"] else
+               " — not trying to reach a setpoint, so neither warning "
+               "applies"))
+        self.loops.item(index, COL_STATE).setToolTip(
+            self._software_tooltip(row) if software else
+            f"what OUTMODE? says loop {row.get('loop')} is doing: "
+            f"{row.get('mode') or 'unknown'}")
+        rails = row.get("rails") if software else None
+        low, high = ((rails[0], rails[1]) if rails and rails[0] is not None
+                     else (SATURATED_LOW_PCT, SATURATED_HIGH_PCT))
+        self.loops.item(index, COL_SATURATED).setToolTip(
+            f"the output is at a rail (at or beyond {float(high):g}% or "
+            f"{float(low):g}%): this loop has no authority left in the "
+            "direction it is asking for"
+            if marks["saturated"] else "")
+        self.loops.item(index, COL_UNSETTLED).setToolTip(
+            f"{row.get('sensor') or 'the sensor'} is further than "
+            f"{self._maybe(row.get('threshold_k'), '{:g}')} K from the "
+            "setpoint ("
+            + ("max_error_k in the controller's config)" if software
+               else "loop_thresholds in the recorder's config)")
+            if marks["unsettled"] else "")
+
+    @staticmethod
+    def _software_tooltip(row: dict) -> str:
+        """Everything the supervisor has to say, in one hover.
+
+        The alarms and the reason have nowhere else to go: they are sentences,
+        not cells, and a table wide enough for them would be a table that
+        scrolls sideways.
+        """
+        parts = [f"the software loop, reading {row.get('sensor') or '?'}: "
+                 f"{row.get('state') or 'state unknown'}"]
+        # The state cell shows the supervisor's *state*, which is the half that
+        # moves; the mode is what says whether the loop is closed at all, and
+        # `idle` alone cannot tell "never armed" from "armed and then held".
+        if row.get("mode_name"):
+            parts.append(f"mode {row['mode_name']}")
+        if row.get("health"):
+            parts.append(f"health {row['health']}")
+        target = row.get("setpoint_target_k")
+        if row.get("ramping") and target is not None:
+            parts.append(f"ramping toward {float(target):g} K")
+        if row.get("reason"):
+            parts.append(str(row["reason"]))
+        for alarm in row.get("alarms") or []:
+            parts.append(str(alarm))
+        parts.append("this loop is watched here, not commanded here: it takes "
+                     "no setpoint, range or PID command, only Arm and the "
+                     "panic Hold")
+        return " — ".join(parts)
 
     @staticmethod
     def _maybe(value, fmt: str) -> str:

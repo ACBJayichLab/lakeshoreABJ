@@ -77,6 +77,43 @@ offer the loops it finds under either key, and show no loop table rather than
 inventing rows. `capabilities()` and `loop_rows()` in `lschart/gui/source.py`
 are the worked example.
 
+#### `control` — the software loop, where there is one
+
+`null` on a plain recorder, which is most of them: `lschart` drives the
+instrument's own loops and has no controller at all. Absent and not empty, so a
+client can tell "no such loop" from "a loop with nothing to say".
+
+| Field | |
+|---|---|
+| `state` | the supervisor's own state: `tracking`, `idle`, `holding`, `ramping_down`, `locked_out` |
+| `mode` | the loop mode: `off`, `manual`, `pid`. `idle` alone cannot tell a loop that was never armed from one that was armed and then held |
+| `health` | `ok`, `suspect`, `fault`, `recovering`, `unknown` |
+| `sensor` | the channel it controls, by the same name the trace and the readout carry |
+| `setpoint_k`, `setpoint_target_k` | what the PID is chasing now, and where a ramp is heading |
+| `ramping`, `error_k` | still traversing, and how far off it is |
+| `output_pct` | what was actually written to the DAC |
+| `demand_pct` | what the PID asked for *before* the band clamped it. `null` outside the PID branch |
+| `rail_low_pct`, `rail_high_pct` | the authority band the supervisor enforces |
+| `threshold_k` | the loop's `max_error_k` — "this should only ever be a small correction" |
+| `alarms`, `reason` | sentences, not cells |
+
+**Why the band is published.** A software loop pinned at its clamp has run out
+of authority exactly the way a heater at 100 % has, but the number is nowhere
+near 100 — the band is about a percent wide on this cryostat. A client cannot
+work that out from the percentage alone, so it is told.
+
+**Why `demand_pct` is published beside `output_pct`.** The written value is
+quantised to a DAC code and the band is re-applied by stepping *down* a code,
+so a saturated loop writes a number strictly below its own rail. Testing the
+output against the band would never fire; the demand is what ran out of room.
+
+**Everything here is read by name and defaulted.** `lschart` must never import
+`ltspm3`, so a field the controller does not have is reported `null` rather
+than assumed. That is the kind of coupling that breaks silently — a rename
+upstream leaves a file that still parses and is quietly full of nulls — so it
+is pinned by a test against a real supervisor in
+`tests_ltspm3/test_status_projection.py`.
+
 **Arrays, not objects.** Channels are `[{"name": ..., "kelvin": ...}, ...]`
 rather than `{"Rad Shield": 295.3}`, because MATLAB's `jsondecode` passes
 object *keys* through `matlab.lang.makeValidName` and silently mangles them. A

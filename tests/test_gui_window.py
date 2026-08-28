@@ -24,7 +24,7 @@ pytest.importorskip("pyqtgraph")
 from PySide6 import QtCore, QtWidgets  # noqa: E402
 
 from lschart.gui.window import (  # noqa: E402
-    DEFAULT_VIEW_WINDOW_S, ViewerWindow,
+    DEFAULT_VIEW_WINDOW_S, WARN_COLOUR, ViewerWindow,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -445,8 +445,13 @@ OPEN = {"accepted": True, "recent": [],
         "allow_heater_range": True, "allow_analog_output": True}
 
 
-def cryostat(tmp_path, qt_app, links, commands=None, csv_name="log.csv"):
-    """A viewer watching a recorder with the given instruments."""
+def cryostat(tmp_path, qt_app, links, commands=None, csv_name="log.csv",
+             control=None):
+    """A viewer watching a recorder with the given instruments.
+
+    ``control`` is the software loop's block, or None for the plain recorder
+    that most installs are -- which is what the status file itself writes.
+    """
     from lschart.ipc.commands import CommandSpool
 
     csv = tmp_path / csv_name
@@ -459,6 +464,7 @@ def cryostat(tmp_path, qt_app, links, commands=None, csv_name="log.csv"):
         "links": links,
         "aux": [{"name": "ls336.setpoint1", "value": 77.0}],
         "recorder": {"path": str(csv), "rows": 60},
+        "control": control,
         "commands": commands or dict(OPEN),
     }))
     window = ViewerWindow(str(status), refresh_ms=10_000_000,
@@ -1491,4 +1497,154 @@ def test_a_muted_viewer_still_draws_everything(tmp_path, qt_app):
     assert w.readouts.rowCount() > 0
     assert w.loops.rowCount() > 0
     assert w.panic_button.isEnabled()
+    w.close()
+
+
+# -- X1: the software loop's own row -----------------------------------------
+#
+# A viewer pointed at a running `ltspm3` used to show the heater percent as a
+# trace and say nothing about the loop driving it -- not its setpoint, not its
+# health, and not that it had locked itself out after a fault.  The loop that
+# most needed watching was the one loop with no row.
+
+SOFTWARE = {
+    "state": "tracking", "mode": "pid", "health": "ok", "sensor": "Sample",
+    "setpoint_k": 96.0, "setpoint_target_k": 96.0, "ramping": False,
+    "error_k": 0.02, "output_pct": 63.07, "demand_pct": 63.10,
+    "rail_low_pct": 62.076, "rail_high_pct": 64.076, "threshold_k": 1.0,
+    "alarms": [], "reason": "",
+}
+
+
+def cells(window, row):
+    return [window.loops.item(row, c).text() for c in range(window.loops.columnCount())]
+
+
+def test_a_plain_recorder_grows_no_software_row(tmp_path, qt_app):
+    """Most recorders have no controller at all, and `control` is null."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    assert w.loops.rowCount() == 4
+    assert [w.loops.item(r, 0).text() for r in range(4)] == ["1", "2", "3", "4"]
+    w.close()
+
+
+def test_the_software_loop_is_the_last_row_and_carries_its_own_sensor(
+        tmp_path, qt_app):
+    """Last, after every loop that lives on a box; and the kelvin column fills
+    itself, because the sensor is named by the same string the readout uses."""
+    w = cryostat(tmp_path, qt_app, [CTRL], control=dict(SOFTWARE))
+    assert w.loops.rowCount() == 5
+    row = cells(w, 4)
+    assert row[0] == "sw"                      # not a loop number
+    assert row[1] == "Sample"
+    assert row[2] == "96.000"                  # from the channel readout
+    assert row[3] == "96.000" and row[4] == "63.1"
+    assert row[5] == "n/a"                     # no range, not an unknown one
+    assert row[6] == "tracking"
+    w.close()
+
+
+def test_a_recorder_that_is_only_a_software_loop_still_gets_a_table(
+        tmp_path, qt_app):
+    """A 218 has no loops of its own.  Before this the table was hidden
+    entirely on exactly the cryostat that has a loop worth watching."""
+    w = cryostat(tmp_path, qt_app, [MON], control=dict(SOFTWARE))
+    assert w.loops.rowCount() == 1 and showing(w.loops)
+    w.close()
+
+
+def test_the_software_row_cannot_be_selected_into_the_command_panel(
+        tmp_path, qt_app):
+    """It takes no setpoint, range or PID command -- only Arm and the panic
+    Hold.  A row that could be clicked into a selection the panel cannot
+    honour would be a row that lies."""
+    w = cryostat(tmp_path, qt_app, [CTRL], control=dict(SOFTWARE))
+    w.loops.selectRow(1)                       # loop 2, a real one
+    assert w._loop == 2
+    w.loops.selectRow(4)                       # the software row
+    assert w._loop == 2                        # unmoved
+    assert not w.loops.item(4, 0).flags() & QtCore.Qt.ItemIsSelectable
+    assert w.loops.item(0, 0).flags() & QtCore.Qt.ItemIsSelectable
+    w.close()
+
+
+def test_a_locked_out_software_loop_says_so_in_the_state_column(
+        tmp_path, qt_app):
+    """A fault ramp-down ending in a lockout is the single most important
+    thing this row exists to show, and it must not need a hover."""
+    w = cryostat(tmp_path, qt_app, [CTRL],
+                 control=dict(SOFTWARE, state="locked_out", mode="pid",
+                              health="fault", output_pct=0.0,
+                              alarms=["sensor lost for 60 s"]))
+    assert cells(w, 4)[6] == "locked out"
+    assert "sensor lost for 60 s" in w.loops.item(4, 1).toolTip()
+    w.close()
+
+
+def test_a_held_loop_is_told_apart_from_one_that_was_never_armed(
+        tmp_path, qt_app):
+    """Both sit at state `idle`.  The mode is what separates them, and it goes
+    in the hover because the State column has room for one word."""
+    held = cryostat(tmp_path, qt_app, [CTRL],
+                    control=dict(SOFTWARE, state="idle", mode="manual"))
+    assert "mode manual" in held.loops.item(4, 1).toolTip()
+    held.close()
+    never = cryostat(tmp_path, qt_app, [CTRL],
+                     control=dict(SOFTWARE, state="idle", mode="off"))
+    assert "mode off" in never.loops.item(4, 1).toolTip()
+    never.close()
+
+
+def test_a_ramping_down_loop_is_not_abbreviated_into_an_ordinary_ramp(
+        tmp_path, qt_app):
+    """"ramping" alone would read as a setpoint traversal.  This one is a
+    fault backing the heater off."""
+    w = cryostat(tmp_path, qt_app, [CTRL],
+                 control=dict(SOFTWARE, state="ramping_down", health="fault"))
+    assert cells(w, 4)[6] == "ramping down"
+    w.close()
+
+
+def test_a_software_loop_that_is_not_tracking_lights_neither_mark(
+        tmp_path, qt_app):
+    """Same rule as a heater at range 0: a loop that was never going to the
+    setpoint is not failing to reach it."""
+    w = cryostat(tmp_path, qt_app, [CTRL],
+                 control=dict(SOFTWARE, mode="manual", state="idle",
+                              demand_pct=99.0, setpoint_k=40.0))
+    row = cells(w, 4)
+    assert row[7] == "" and row[8] == ""
+    w.close()
+
+
+def test_the_software_loop_rails_at_its_own_clamp(tmp_path, qt_app):
+    """Its band is about a percent wide.  Against the fixed 99% a heater uses,
+    this mark could never light."""
+    w = cryostat(tmp_path, qt_app, [CTRL],
+                 control=dict(SOFTWARE, demand_pct=64.5))
+    assert cells(w, 4)[7] == "RAIL"
+    assert "64.076%" in w.loops.item(4, 7).toolTip()
+    w.close()
+
+
+def test_an_unhealthy_software_loop_is_coloured_even_with_both_marks_dark(
+        tmp_path, qt_app):
+    """The marks go quiet exactly when the supervisor stops trusting itself,
+    which is the moment the row most needs to catch an eye."""
+    w = cryostat(tmp_path, qt_app, [CTRL],
+                 control=dict(SOFTWARE, health="fault", state="holding",
+                              reason="reading rejected"))
+    assert cells(w, 4)[7] == "" and cells(w, 4)[8] == ""
+    assert w.loops.item(4, 1).foreground().color().name() == WARN_COLOUR
+    assert w.loops.item(0, 1).foreground().color().name() == "#000000"
+    w.close()
+
+
+def test_the_instrument_rows_gained_the_state_column_too(tmp_path, qt_app):
+    """It decides whether either mark applies, and it used to be reachable
+    only by hovering -- so a loop switched to open loop was invisible."""
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
+        loop_entry(1), loop_entry(2, mode="open loop", mode_code=3),
+        loop_entry(3), loop_entry(4, mode="off", mode_code=0)])])
+    assert [cells(w, r)[6] for r in range(4)] == ["closed", "open", "closed", "off"]
     w.close()

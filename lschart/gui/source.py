@@ -949,6 +949,16 @@ class StatusSource:
     def links(self) -> list[dict]:
         return list((self.status or {}).get("links", []) or [])
 
+    def control(self) -> dict | None:
+        """The software loop's block, or ``None`` on a recorder that has none.
+
+        Absent and not empty on a plain recorder, which is the distinction
+        :func:`control_row` turns into "draw no row" rather than "draw a row
+        with nothing in it".
+        """
+        control = (self.status or {}).get("control")
+        return control if isinstance(control, dict) else None
+
     def log_path(self) -> str | None:
         return ((self.status or {}).get("recorder") or {}).get("path") or None
 
@@ -1128,7 +1138,88 @@ def loop_rows(link: dict) -> list[dict]:
     return rows
 
 
-def loop_marks(row: dict, kelvin: float | None) -> dict:
+#: The row a software loop is drawn as when it is closed and healthy.  Not a
+#: loop number on any instrument -- there is no `SETP 5` to send -- so the `#`
+#: column says what kind of loop it is instead.  A digit there would collide
+#: with a real loop in the same table, which is the one reading that must not
+#: be possible.
+SOFTWARE_LOOP_LABEL = "sw"
+
+
+def control_row(control: dict | None) -> dict | None:
+    """The software loop as one more row of the loop table, or ``None``.
+
+    ``None`` on a plain recorder, which is most of them: `lschart` runs the
+    instrument's own loops and has no controller at all, and the `control` key
+    is then simply absent.  A viewer that drew an empty software row there
+    would be claiming a loop exists.
+
+    **Why it belongs in the same table.** Until this, a viewer pointed at a
+    running `ltspm3` showed the heater percent as a trace and said nothing
+    whatever about the loop driving it -- not its setpoint, not its health, and
+    not that it had locked itself out after a fault.  The loop that most needs
+    watching was the one loop with no row.
+
+    Three columns need an answer that an instrument loop gets for free, and the
+    honest answers are not all the same shape:
+
+    ``#``
+        :data:`SOFTWARE_LOOP_LABEL`.  It has no loop number, and inventing one
+        would put it in the same namespace as loops that can be commanded.
+    ``Sensor``
+        It *does* have one, and the recorder publishes it: the control channel,
+        by the same name the trace and the readout carry.  So the kelvin column
+        fills itself by the same lookup every other row uses.
+    ``Rng``
+        It genuinely has none.  The 218 has no inert half -- no loop, no range,
+        one `ANALOG` command whose percentage *is* the power -- so this is a
+        fact about the loop and not a gap in what the recorder knows.  The
+        caller shows ``n/a``, the same word a 336's loops 3 and 4 already get,
+        for the same reason.
+
+    ``mode_code`` is set to 1 -- closed loop, the code an instrument uses --
+    only when the supervisor is both in PID mode *and* tracking.  Idle, manual,
+    holding, ramping down and locked out are all "not trying", which is what
+    suppresses both warning marks, exactly as a range of 0 does on a heater.
+    """
+    if not isinstance(control, dict) or not control:
+        # Empty and absent mean the same thing here.  A block with nothing in
+        # it describes no loop, and a row of dashes for it would be inventing
+        # one -- the same degrade `loop_rows` makes for a schema-1 recorder.
+        return None
+    mode = str(control.get("mode") or "")
+    state = str(control.get("state") or "")
+    row = dict(EMPTY_LOOP)
+    row.update({
+        "loop": SOFTWARE_LOOP_LABEL,
+        "sensor": str(control.get("sensor") or ""),
+        "mode": state or mode,
+        "mode_code": 1 if (mode == "pid" and state == "tracking") else 0,
+        "heater_output": None,
+        "range": None,
+        "setpoint_k": control.get("setpoint_k"),
+        "output_pct": control.get("output_pct"),
+        "threshold_k": control.get("threshold_k"),
+        "ramping": bool(control.get("ramping")),
+        # Not in EMPTY_LOOP: no instrument loop has any of these, and a key
+        # that is null on every row but one is a column nobody can read.
+        "demand_pct": control.get("demand_pct"),
+        "rails": (control.get("rail_low_pct"), control.get("rail_high_pct")),
+        "state": state,
+        # The LoopMode -- off / manual / pid.  Kept under its own name because
+        # `mode` in a loop row is what the State column reads, and for a
+        # software loop the *state* is the informative half of the pair.
+        "mode_name": mode,
+        "health": str(control.get("health") or ""),
+        "reason": str(control.get("reason") or ""),
+        "alarms": [str(a) for a in control.get("alarms") or []],
+        "setpoint_target_k": control.get("setpoint_target_k"),
+        "error_k": control.get("error_k"),
+    })
+    return row
+
+
+def loop_marks(row: dict, kelvin: float | None, *, rails=None) -> dict:
     """The two warning marks for one loop row: ``saturated`` and ``unsettled``.
 
     **Two marks and never one.** OR-ing them together makes an icon that is lit
@@ -1145,6 +1236,24 @@ def loop_marks(row: dict, kelvin: float | None) -> dict:
     ``unsettled`` needs a threshold, and a loop with none configured has no
     opinion about being settled: the mark stays off rather than being decided
     by a number this software picked. See ``loop_thresholds`` in the config.
+
+    ``rails`` is ``(low_pct, high_pct)`` and defaults to the fixed pair above.
+    It is **not** a per-loop knob reintroduced by the back door: an instrument
+    loop never passes it, because "the output has run out of authority" is the
+    same fact on every heater. What passes it is :func:`control_row`, whose
+    clamp is not a display preference but the band the supervisor is actually
+    enforcing -- about a percent wide on this cryostat, so judging it against
+    99% would mean never lighting the mark on the one loop whose authority is
+    genuinely scarce.
+
+    The percentage judged against those rails is ``demand_pct`` where the row
+    has one and ``output_pct`` otherwise -- what the loop *asked for*, in
+    preference to what it *wrote*. An instrument never says what its PID
+    wanted, so a heater at 100% is the only evidence available there. A
+    software loop does say, and its written output is the wrong thing to test:
+    the value is quantised to a DAC code and the band is re-applied by stepping
+    *down* a code, so a fully saturated loop writes a value strictly below its
+    own rail and would never compare equal to it.
     """
     trying = (
         row.get("mode_code") == 1                # closed loop, and only that
@@ -1153,11 +1262,16 @@ def loop_marks(row: dict, kelvin: float | None) -> dict:
     )
     if not trying:
         return {"trying": False, "saturated": False, "unsettled": False}
-    pct = row.get("output_pct")
+    pct = row.get("demand_pct")
+    if pct is None:
+        pct = row.get("output_pct")
     setpoint = row.get("setpoint_k")
     threshold = row.get("threshold_k")
+    low, high = SATURATED_LOW_PCT, SATURATED_HIGH_PCT
+    if rails is not None and rails[0] is not None and rails[1] is not None:
+        low, high = float(rails[0]), float(rails[1])
     saturated = pct is not None and (
-        float(pct) >= SATURATED_HIGH_PCT or float(pct) <= SATURATED_LOW_PCT)
+        float(pct) >= high or float(pct) <= low)
     unsettled = (
         kelvin is not None and setpoint is not None and threshold is not None
         and abs(float(kelvin) - float(setpoint)) > float(threshold)

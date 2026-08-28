@@ -108,16 +108,23 @@ replaced the channel list would turn an eight-input monitor into however many
 loops it has.
 
 One row per loop, across every instrument: `# · Sensor · K · SP · Out · Rng ·
-Rail · Off SP`. **Clicking a row selects that loop** — instrument and loop
-together — and every control in the command panel follows it. There is no loop
-spin box and no output combo; two ways to choose a loop is two things that can
-disagree about where a setpoint is going.
+State · Rail · Off SP`. **Clicking a row selects that loop** — instrument and
+loop together — and every control in the command panel follows it. There is no
+loop spin box and no output combo; two ways to choose a loop is two things that
+can disagree about where a setpoint is going.
 
 Which sensor a loop reads comes from the **instrument** (`OUTMODE?`), not from
 a config key. On this family the loop number *is* the output number by
 protocol, so the heater binding is derived too. A loop whose output is
 analog-only — a 336's 3 and 4 — shows `n/a` in the range column, because it
 does not have a range that happens to be unknown; it has none.
+
+`State` is what `OUTMODE?` says the loop is doing — `closed`, `open`, `zone`,
+`monitor`, `off`. It decides whether either warning mark applies at all, so a
+loop that has quietly stopped trying is worth seeing without a hover. The full
+string stays in the tooltip; the second word of "closed loop" and "open loop"
+is the same on both and carries nothing, and a loop table that scrolls sideways
+hides the very marks it exists to show.
 
 ### The two warning marks
 
@@ -144,6 +151,56 @@ Worth expecting: a closed-loop output with **no range to switch it off** — a
 lit. That is literally true (it is asking for a temperature it cannot reach,
 with the output pinned at zero) and it is what the suppression rules above
 allow, because such a loop has no inert half to be switched off by.
+
+### The software loop's row
+
+On a cryostat running `ltspm3`'s software PID, the **last row** of the table is
+that loop, marked `sw` in the `#` column. Before this the viewer drew the
+heater percent as a trace and said nothing whatever about the loop driving it —
+not its setpoint, not its health, and not that it had locked itself out after a
+fault. The loop that most needed watching was the one loop with no row.
+
+Three columns need an answer an instrument loop gets for free:
+
+| | |
+|---|---|
+| `#` | `sw`. It has no loop number — there is no `SETP 5` to send — and a digit would put it in the same namespace as loops the command panel can address |
+| `Sensor` | it *does* have one: the recorder's control channel, published by the same name the trace and the readout carry, so the `K` column fills itself by the same lookup every other row uses |
+| `Rng` | `n/a`. It genuinely has none: the 218 has no inert half — no loop, no range, one `ANALOG` command whose percentage *is* the power |
+
+`State` carries the **supervisor's** state rather than `OUTMODE?`'s mode —
+`tracking`, `idle`, `holding`, `ramping down`, `locked out`. `ramping down` is
+never shortened to `ramping`: it is a fault backing the heater off, not a
+setpoint traversal. The loop mode (`off` / `manual` / `pid`) is in the hover,
+because `idle` alone cannot tell a loop that was never armed from one that was
+armed and then held.
+
+The two marks work the same way with two differences, both because the loop is
+not an instrument:
+
+- **`Rail` is judged against the supervisor's own authority band**, not against
+  99 %. That band is about a percent wide on this cryostat, so the fixed rails
+  a heater output uses could never light the mark at all. It is not a per-loop
+  knob let in by the back door — no instrument row has one — it is the clamp
+  the supervisor is actually enforcing.
+- **It is judged on what the loop asked for, not on what it wrote.** The
+  written value is quantised to a DAC code and the band re-applied by stepping
+  *down* a code, so a saturated loop writes a number strictly below its own
+  rail and would never compare equal to it.
+
+`Off SP` uses the loop's own `max_error_k` — "this should only ever be a small
+correction" — which is a real threshold in kelvin and exactly what the column
+asks for. On the shipped numbers the premise check fires long before the clamp
+does, so a *tracking* loop railing is not something to expect: what you will
+see instead is the anomaly hold, as `holding` in the State column.
+
+**The row is read, not clicked.** It is the one row the command panel cannot
+follow: the software loop takes no setpoint, range or PID command — it takes
+`arm` and the panic `hold`, which are buttons of their own. Clicking it leaves
+the selection where it was, rather than pointing the panel at a loop it cannot
+honour. When health is anything but `ok` the row is coloured like a lit mark,
+because both marks go quiet exactly when the supervisor stops trusting its own
+measurement — which is the moment the row most needs to catch an eye.
 
 ## The control panel
 

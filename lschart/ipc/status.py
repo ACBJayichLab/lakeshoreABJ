@@ -324,12 +324,39 @@ class StatusWriter:
         }
 
     @staticmethod
-    def _control(status) -> dict | None:
+    def _control(status, controller=None, channel: str | None = None) -> dict | None:
         """A software loop's state, projected generically.
 
         ``lschart`` must not import ``ltspm3``, so nothing here knows what a
         ``SupervisorStatus`` is -- every field is read by name and defaulted.
         A recorder-only install passes ``None`` and the key is simply absent.
+
+        Two of these come from outside the status object, because the software
+        loop's own answers to "what does it read" and "where are its rails" do
+        not change from cycle to cycle and so were never put in a per-cycle
+        struct.  They are what let a client draw this loop in the same table as
+        the instrument's:
+
+        ``sensor``
+            The channel the loop controls -- the recorder's ``control_channel``,
+            which is the same string the trace and the readout carry.  Without
+            it a client can show the loop's temperature only by being told
+            separately which one it is.
+        ``rail_low_pct`` / ``rail_high_pct``
+            The authority band the supervisor actually enforces.  A software
+            loop pinned at *its* clamp has run out of authority exactly the way
+            a heater at 100% has, but the number is nowhere near 100 -- on this
+            cryostat the band is about a percent wide.  Judging it against the
+            fixed rails a heater output uses would mean never lighting the mark.
+        ``threshold_k``
+            The loop's own "this should only ever be a small correction"
+            premise (``max_error_k``).  Null where the controller does not
+            offer one, which a client must already handle: a loop with no
+            configured threshold gets no opinion about being settled.
+
+        All three are read duck-typed and default to ``None``, so a controller
+        that does not have them is reported as having nothing to say rather
+        than misreported.
         """
         if status is None:
             return None
@@ -338,15 +365,32 @@ class StatusWriter:
             v = getattr(status, name, None)
             return getattr(v, "value", v if v is None else str(v))
 
+        band = getattr(controller, "band", None)
+        try:
+            rail_low, rail_high = (float(band[0]), float(band[1]))
+        except (TypeError, ValueError, IndexError):
+            rail_low = rail_high = None
+        cfg = getattr(controller, "cfg", None)
+
         return {
             "state": enum_value("state"),
             "mode": enum_value("mode"),
             "health": enum_value("health"),
+            "sensor": str(channel or ""),
             "setpoint_k": _num(getattr(status, "setpoint_k", None)),
             "setpoint_target_k": _num(getattr(status, "setpoint_target_k", None)),
             "ramping": bool(getattr(status, "ramping", False)),
             "error_k": _num(getattr(status, "error_k", None)),
             "output_pct": _num(getattr(status, "output_pct", None)),
+            # What the PID asked for before the band clamped it.  This and not
+            # `output_pct` is what says the loop has run out of authority: the
+            # written value is quantised to a DAC code and the band is
+            # re-applied by stepping *down* a code, so a saturated loop writes
+            # a number strictly below its own rail.
+            "demand_pct": _num(getattr(status, "demand_pct", None)),
+            "rail_low_pct": _num(rail_low),
+            "rail_high_pct": _num(rail_high),
+            "threshold_k": _num(getattr(cfg, "max_error_k", None)),
             "alarms": [str(a) for a in getattr(status, "alarms", []) or []],
             "reason": str(getattr(status, "reason", "") or ""),
         }
@@ -361,6 +405,8 @@ class StatusWriter:
         instruments: list | None = None,
         recorder=None,
         control=None,
+        controller=None,
+        control_channel: str | None = None,
         commands: dict | None = None,
         running: bool = True,
     ) -> dict:
@@ -393,7 +439,7 @@ class StatusWriter:
                 "path": str(getattr(recorder, "path", "") or ""),
                 "rows": int(getattr(recorder, "rows_written", 0)),
             },
-            "control": self._control(control),
+            "control": self._control(control, controller, control_channel),
             "commands": commands or {},
             # This file's own write history.  A client that finds a gap in the
             # feed can tell a recorder that stalled from one that could not
