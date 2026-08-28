@@ -74,6 +74,40 @@ called duck-typed by name from `lschart/app.py` — so `lschart` still never
 imports `ltspm3` (invariant 1). The same command from a plain recorder finds no
 software loop and says so.
 
+## Watching it on screen
+
+The viewer is a separate process and holds no port, so it is safe to open
+against a live armed recorder:
+
+```bash
+.venv/bin/python -m lschart.gui -c config.yaml
+```
+
+The software loop is the **last row of the loop table**, marked `sw`, beneath
+whatever loops the 336 has. It carries the channel it controls, that channel's
+temperature, the setpoint, the output percent, and the supervisor's own state —
+`tracking`, `idle`, `holding`, `ramping down`, `locked out`. The loop mode
+(`off` / `manual` / `pid`) is in the hover, because `idle` alone cannot tell a
+loop that was never armed from one that was armed and then held.
+
+Two things about that row are specific to this cryostat and worth knowing
+before you read the warning marks:
+
+- **It rails against the authority band, not against 99 %.** The band is about
+  a percent wide here, so the fixed rails a heater output is judged by could
+  never light the mark. On the shipped numbers a *tracking* loop cannot rail
+  at all — `max_error_k` is 1.0 K against roughly ±7 K of authority, so the
+  anomaly hold fires first and what you see is `holding`.
+- **When health goes bad both marks go quiet**, because the loop has stopped
+  trying. The row is coloured red instead. An unhealthy loop is not a loop
+  failing to reach a setpoint; it is a loop that has stopped chasing one.
+
+The row is **read, not clicked**: the software loop takes no setpoint, range or
+PID command, only the `hold` and `arm` above, so it is the one row that will
+not select. Everything it shows comes from `status.json`, which any number of
+readers may open — see
+[file-interface](../recorder/file-interface.md#control--the-software-loop-where-there-is-one).
+
 ## Before the first armed run
 
 Three things are outstanding, in priority order.
@@ -123,7 +157,7 @@ stale-slew-reference bug that no simulated fault would have.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q                 # everything, 395 tests
+.venv/bin/python -m pytest -q                 # everything
 .venv/bin/python -m pytest -q tests_ltspm3     # the control half
 ```
 

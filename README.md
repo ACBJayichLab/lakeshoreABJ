@@ -79,7 +79,7 @@ tests/        generic;  tests_ltspm3/ is the control half
 ```bash
 uv venv --allow-existing .venv
 uv pip install --python .venv/bin/python -e ".[dev,serial]"
-.venv/bin/python -m pytest -q          # 584 tests, no hardware required
+.venv/bin/python -m pytest -q          # the whole suite, no hardware required
 ```
 
 Development is macOS; deployment is **Windows** —

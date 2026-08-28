@@ -189,10 +189,12 @@ Written for a session that has not read the tree. Line numbers drift; the names 
 - **`ruff check .` gates CI** — `F`, `E9`, `E501` at 100 columns.
 - Every new command kind needs four things, not one: the handler, a CLI verb, a `LakeShore.m` method, and `selftest.m` coverage.
 
-### Baseline as of 2026-08-27
+### Baselines, as each thing landed
 
-`408 passed` when this plan was written; `560 passed` with all three phases in;
-`622 passed` with X1. `ruff` clean throughout.
+`408 passed` when this plan was written (2026-08-27); `560 passed` with all
+three phases in; `622 passed` with X1 (2026-08-28). `ruff` clean throughout.
+A current count belongs in `HANDOFF.md`, which is the file that is allowed to
+go stale — it is written down in one place for that reason.
 
 ---
 
