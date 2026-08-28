@@ -1,10 +1,10 @@
 # LTSPM3 -- the two boxes on the GPIB board, with the SAMPLE HEATER LIVE.
 #
-# This is `config-ltspm3.yaml` with exactly one thing opened up: manual control
-# of the 218's analog output 1, which on this cryostat is the sample heater.  Keep
-# both files.  `config-ltspm3.yaml` stays the default for watching; this one is
-# picked up on purpose, and choosing it is the first half of the decision to
-# heat something.
+# This is `config-ltspm3-read-only.yaml` with the write path opened: manual control of the
+# 218's analog output 1, which on this cryostat is the sample heater, AND the
+# 336's own loops.  Keep both files.  `config-ltspm3-read-only.yaml` stays the default for
+# watching; this one is picked up on purpose, and choosing it is the first half
+# of the decision to heat something.
 #
 #   python -m lschart -c config-ltspm3-heater.yaml check     validate, touch nothing
 #   python -m lschart -c config-ltspm3-heater.yaml probe     read everything once
@@ -16,23 +16,37 @@
 # WHAT THIS FILE TURNS OFF, AND WHAT IT LEAVES ON
 # ---------------------------------------------------------------------------
 #
-# Opened, on the 218 ONLY:
+# Opened, on BOTH boxes:
 #
 #   transport.read_only: false      bytes that change state may now leave this
-#                                   program -- for the 218 and nothing else
-#   allow_writes: true              the ANALOG command is permitted
+#                                   program -- for the 218 and for the 336
+#   allow_writes: true              the 218's ANALOG command, and the 336's
+#                                   SETP / RANGE / PID / RAMP.  Driver policy,
+#                                   so it gates `set` at the CLI as well as the
+#                                   file path
 #   ipc.accept_commands: true       a file may command this recorder
-#   ipc.allow_analog_output: true   ...including moving that output above 0
+#   ipc.allow_analog_output: true   ...including moving the sample heater
+#   ipc.allow_heater_range: true    ...and changing a 336 heater range
+#
+# READ THIS ONE TWICE.  `allow_writes` on the 336 plus `ipc.allow_heater_range`
+# means a file command can change the range on heater 2 -- the heater holding
+# THE CHONKE, railed at 100%, with no headroom.  Nothing in this software will
+# do that on its own (no setpoint, no arm, no fault response raises a range),
+# but a typed command or a script can.  That is the deliberate consequence of
+# opening the 336; if that is not what you want, this is the file to change.
 #
 # Still shut, deliberately:
 #
-#   the whole 336                   read_only AND allow_writes: false.  Loop 2
-#                                   holds THE CHONKE and heater 2 is RAILED at
-#                                   100%.  Nothing here may touch it.
-#   ipc.allow_heater_range: false   moot while the 336 is read-only, and left
-#                                   explicit so it stays moot if that changes
+#   ipc.allow_pid: false            a file may not retune a loop.  Gains apply
+#                                   no power, but they change how a loop
+#                                   behaves for the rest of the run, quietly
 #   max_output_pct: 70.0            a ceiling BELOW full scale.  See below --
 #                                   this is the guard that matters most
+#
+# Note both power gates cover ZERO as well as anything above it: cutting a
+# heater is not automatically the safe direction.  What always works regardless
+# is `send heaters_off` and `send hold` -- the two panic commands are the only
+# things exempt from any of this.
 #
 # ---------------------------------------------------------------------------
 # WHY THE CEILING IS THE GUARD THAT MATTERS
@@ -147,15 +161,23 @@ instruments:
     read_status: true
     status_every_n_cycles: 15
 
-  # The 336: watched, never touched.  Loop 2 is holding THE CHONKE and heater 2
-  # is railed at 100%; it has no headroom and it is not ours.
+  # The 336: WRITABLE.  Loop 2 is holding THE CHONKE and heater 2 is railed at
+  # 100% -- no headroom, and not ours.  Those two facts sit in the same comment
+  # on purpose: this box will now accept a setpoint, a ramp or a range from
+  # this program, and one of its loops is doing something somebody else is
+  # relying on.  Check which loop you are addressing before you send anything.
+  #
+  # The loop table (`send`-free: it is in status.json, and the viewer draws it)
+  # is the quickest way to see which sensor each loop reads and what it is
+  # doing, straight from the box's own OUTMODE?.
   - name: ls336
     model: "336"
     enabled: true
     driver: visa
     transport:
       resource: GPIB0::12::INSTR
-      read_only: false           # <-- INTERLOCK.  Leave this on.
+      read_only: false           # <-- OPENED.  Bytes that change state may
+                                 #     leave this program for this box.
       timeout_ms: 3000
       inter_command_delay: 0.05
       reconnect: true
@@ -170,7 +192,15 @@ instruments:
     read_status: true
     status_every_n_cycles: 15
 
-    allow_writes: true         # <-- INTERLOCK.  Leave this off.
+    allow_writes: true         # <-- OPENED.  Permits SETP, RANGE, PID and RAMP
+                               #     on this box.  Driver policy, so it gates
+                               #     `set` at the CLI too, not only the file
+                               #     path -- `send pid` needs ipc.allow_pid on
+                               #     top of it, and that is left off.
+                               #
+                               #     No max_setpoint_k is set here, so the
+                               #     350 K default is the only thing standing
+                               #     between a typo and a loop.
 
 # ---------------------------------------------------------------- acquisition
 
@@ -193,7 +223,7 @@ recorder:
   flush_every_sample: true
 
 runtime:
-  # Deliberately the SAME lock file as config-ltspm3.yaml.  One GPIB board has
+  # Deliberately the SAME lock file as config-ltspm3-read-only.yaml.  One GPIB board has
   # one holder; running the watching recorder and this one at once would be two
   # processes interleaving transactions on one bus.
   lock_path: data/ltspm3.lock
@@ -221,7 +251,12 @@ ipc:
   # `send hold` are exempt from this gate and are what an abort should use.
   allow_analog_output: true
 
-  # LEFT OFF.  Moot while the 336 is read-only, and stated anyway so that
-  # opening the 336 someday does not silently also hand a file the ability to
-  # raise a range on it.
+  # <-- OPENED, and this is the one to think hardest about.  A file may change
+  # a heater range on the 336, which is the act that applies power there -- and
+  # heater 2 is the one holding THE CHONKE.
+  #
+  # The gate covers 0 as well as anything above it: cutting a heater is not
+  # automatically the safe direction, so this is not "on for raising, free for
+  # lowering".  To stop the cryostat regardless of any of these gates, use
+  # `send heaters_off` or `send hold`.
   allow_heater_range: true

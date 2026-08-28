@@ -4,10 +4,10 @@
 # it is a plain `lschart` config: it records every thermometer and the sample
 # heater's output percentage, and it cannot change instrument state.
 #
-#   python -m lschart -c config-ltspm3.yaml check     validate, touch nothing
-#   python -m lschart -c config-ltspm3.yaml probe     read everything once
-#   python -m lschart -c config-ltspm3.yaml run       record until interrupted
-#   python -m lschart.gui -c config-ltspm3.yaml       the strip chart
+#   python -m lschart -c config-ltspm3-read-only.yaml check     validate, touch nothing
+#   python -m lschart -c config-ltspm3-read-only.yaml probe     read everything once
+#   python -m lschart -c config-ltspm3-read-only.yaml run       record until interrupted
+#   python -m lschart.gui -c config-ltspm3-read-only.yaml       the strip chart
 #
 # SAFETY.  Three interlocks, and the fourth does not apply because there is no
 # control section at all:
