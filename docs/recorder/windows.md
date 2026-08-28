@@ -91,6 +91,9 @@ exercises that on Windows rather than skipping it.
 
 ## Three Windows-specific things to verify
 
+One of the three is now pinned by a test that runs on Windows in CI; the other
+two still need the cryostat's own machine.
+
 1. **`os.replace` over an open `status.json`.** On Windows, replacing a file
    another process has open can fail with a sharing violation. **Not
    reproduced** in the first run — the viewer polled `status.json` while the
@@ -109,10 +112,24 @@ exercises that on Windows rather than skipping it.
    This used to be silent: the failure was logged at `DEBUG` and counted only
    in memory, so a gap in the feed was indistinguishable from a hung recorder.
 2. **The ~15 ms clock resolution** behind the command sequence number. The
-   sequence tie-break exists precisely because `time.time()` is coarse there;
-   confirm that two commands queued back to back really do share a millisecond
-   and really are applied in order. **Still unverified** — the first
-   deployment records only, with `accept_commands: false`.
+   sequence tie-break exists precisely because `time.time()` is coarse there.
+
+   **Settled in CI, and not by luck.** There was already a test queueing
+   twenty commands in a tight loop and asserting they came back in order —
+   but on a machine whose clock resolves finely that test never touches the
+   tie-break at all, and would go green on a spool that had no sequence
+   number. It was passing for a reason that had nothing to do with Windows.
+
+   `test_the_order_holds_when_every_command_shares_one_millisecond` freezes
+   the clock instead, which is the worst case of a coarse one: *every*
+   command shares a millisecond, so nothing but the sequence can order them.
+   It fails if the sequence is removed. Its neighbour pins the other half —
+   a clock that steps *backwards* mid-run must not let a later command sort
+   first, which is what clamps the filename prefix monotonic.
+
+   What that does **not** settle is the end-to-end path on the cryostat: the
+   first deployment records only, with `accept_commands: false`, so no
+   command has yet crossed that machine's spool.
 3. **`movefile` from MATLAB is a rename**, not a copy-then-delete. The command
    spool depends on the rename being what makes a file visible. **Still
    unverified**, for the same reason.

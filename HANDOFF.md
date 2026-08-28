@@ -3,7 +3,7 @@
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
 **Everything in [`FEATURE_PLAN.md`](FEATURE_PLAN.md) is now implemented and
-tested, X1 included. 622 tests passing (from 584), ruff clean.** Verified
+tested, X1 included. 624 tests passing (from 584), ruff clean.** Verified
 against a live armed sim recorder driving a real `ltspm3` software loop through
 a hold and back. **No hardware was touched this session** — the bench 336 was
 not connected.
@@ -16,14 +16,15 @@ touch any of it: **Where phase 3 differed from the plan**, and **X1, and the
 half of its question that was wrong**.
 
 **What is left is Windows deployment**, which was never part of that plan.
-Specifically the two things `docs/recorder/windows.md` still lists as
-unverified — the ~15 ms clock resolution behind the command sequence number,
-and whether MATLAB's `movefile` is a rename — neither of which can be settled
-without the cryostat's own machine accepting commands.
+The clock-resolution worry behind the command sequence number is now pinned by
+tests that run on Windows in CI (see below); what still needs the cryostat's
+own machine is `os.replace` over an open `status.json`, whether MATLAB's
+`movefile` is a rename, and the end-to-end command path — the first deployment
+records only, with `accept_commands: false`.
 
 ## What landed this session
 
-### X1 — the software loop finally has a row (this commit)
+### X1 — the software loop finally has a row (`9a5754c`)
 
 A viewer pointed at a running `ltspm3` used to draw the heater percent as a
 trace and say **nothing whatever** about the loop driving it — not its
@@ -73,6 +74,28 @@ nulls. It pins the names against a real supervisor.
 
 **The config decision from last session is settled** — `a11dfe9` says the 336
 is writable because it is.
+
+### Windows: the command ordering test was passing for the wrong reason
+
+`docs/recorder/windows.md` listed the ~15 ms clock resolution as unverified.
+There *was* a test — twenty commands queued in a tight loop, asserted to come
+back in order — but on a machine whose clock resolves finely it never touches
+the sequence tie-break at all, and would go green on a spool that had no
+sequence number. It was passing for a reason that had nothing to do with
+Windows.
+
+Two tests replace that hope with arithmetic, and both fail when the behaviour
+they pin is removed (checked by mutation, not assumed):
+
+- **the clock frozen**, so *every* command shares a millisecond — the worst
+  case of a coarse one, and nothing but the sequence can order them;
+- **the clock stepped backwards** mid-run, which must not let a later command
+  sort first. That is what clamps the filename prefix monotonic, and nothing
+  covered it before.
+
+Deterministic on every platform, which is worth more than hoping the CI
+runner's clock is coarse that day. What it does not settle is the end-to-end
+path on the cryostat's own machine, which still has `accept_commands: false`.
 
 ## What landed in the session before this one (phase 3)
 
@@ -189,7 +212,7 @@ Do not guess. Nothing in this session changed those values.
 
 ## State of the tree
 
-- `622 passed`, `ruff` clean, on `main`. Nothing is running.
+- `624 passed`, `ruff` clean, on `main`. Nothing is running.
 - Example configs: all three validate, all three now poll `PID?`.
   **`examples/config-336-usb.yaml` moved to a 2 s cadence** — it did not
   validate before this session, because `read_analog_outputs: true` had been

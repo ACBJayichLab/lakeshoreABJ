@@ -346,6 +346,46 @@ def test_commands_apply_in_the_order_they_were_issued(tmp_path):
     assert [c.args["kelvin"] for c in spool.collect()] == [float(i) for i in range(20)]
 
 
+def test_the_order_holds_when_every_command_shares_one_millisecond(
+        tmp_path, monkeypatch):
+    """The test above can pass without ever exercising the tie-break.
+
+    On a machine whose clock resolves finely, twenty submissions land in
+    twenty different milliseconds and the prefix alone orders them -- so it
+    would go green on a spool that had no sequence number at all.  The
+    Windows worry is precisely the other case, and a stopped clock is the
+    worst version of a coarse one: here *every* command shares a millisecond,
+    so nothing but the sequence can put them in order.
+
+    Deterministic on every platform, which is what makes it worth more than
+    hoping the CI runner's clock is coarse today.
+    """
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+    spool = CommandSpool(tmp_path)
+    for i in range(20):
+        spool.submit("setpoint", loop=1, kelvin=float(i))
+    stems = [p.name for p in spool.pending()]
+    assert len({name.split("-")[0] for name in stems}) == 1, "the clock moved"
+    assert [c.args["kelvin"] for c in spool.collect()] == [float(i) for i in range(20)]
+
+
+def test_a_clock_that_steps_backwards_cannot_reorder_the_spool(tmp_path,
+                                                               monkeypatch):
+    """An NTP correction mid-run must not make a later command sort first.
+
+    The filename prefix is clamped monotonic for exactly this; `issued_at`
+    inside the file is left alone, because the expiry check wants the real
+    clock however wrong it is.
+    """
+    now = [1_700_000_000.0]
+    monkeypatch.setattr(time, "time", lambda: now[0])
+    spool = CommandSpool(tmp_path)
+    spool.submit("setpoint", loop=1, kelvin=1.0)
+    now[0] -= 5.0                                   # the clock steps back
+    spool.submit("setpoint", loop=1, kelvin=2.0)
+    assert [c.args["kelvin"] for c in spool.collect()] == [1.0, 2.0]
+
+
 def test_a_command_older_than_the_ttl_is_refused(tmp_path):
     """A recorder that was down for an hour must not replay an hour of setpoints.
 
