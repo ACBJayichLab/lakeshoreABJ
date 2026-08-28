@@ -29,8 +29,14 @@ particular:
   commands on two different boxes -- a cryostat that wants its sample heater driven
   from a file has no business also being able to raise the range on a
   controller that is holding something else.
-* the safe direction is always available.  Turning a heater **off**, or
-  commanding an analog output to zero, needs neither extra opt-in.
+  **Both gates apply in both directions.**  Commanding a range to 0, or an
+  analog output to 0%, needs the same permission as raising it.  This used to
+  be exempt, on the reasoning that removing heat never needs another
+  permission -- but that reasoning does not survive contact with a cryostat
+  where cutting the heater stops heating *and* can crash the stage.  A client
+  that is not trusted to move the heater is not trusted to move it to zero
+  either; what makes an emergency stop reachable is the panic kind, not an
+  argument value.
 
 On a different axis again, ``ipc.sources`` and its runtime overlay ask *who is
 asking* rather than *what is being asked* -- see :mod:`lschart.ipc.sources`.
@@ -359,13 +365,14 @@ class IpcService:
         inst = self._target(cmd)
         output = _as_int(cmd.args, "output", required=False, default=1)
         value = _as_int(cmd.args, "value")
-        if value > 0 and not self.allow_heater_range:
+        if not self.allow_heater_range:
             raise CommandError(
-                "raising a heater range applies power to the cryostat, and this "
-                "recorder does not accept that from a file; set "
-                "ipc.allow_heater_range: true if a remote client really should "
-                "be able to turn a heater on. Turning one OFF (value 0) is "
-                "always allowed"
+                "changing a heater range is not accepted from a file on this "
+                "recorder; set ipc.allow_heater_range: true if a remote client "
+                "really should be able to move a heater. This applies to 0 as "
+                "well: cutting a heater is not automatically the safe "
+                "direction. To stop the cryostat now, use the `heaters_off` or "
+                "`hold` command, which is exempt from this gate"
             )
         inst.set_heater_range(output, value)
         return f"{inst.name} heater {output} range -> {value}"
@@ -375,19 +382,22 @@ class IpcService:
 
         The 218's equivalent of ``range`` and ``setpoint`` at once: there is no
         inert half, so the percentage is the power and it is gated like a range
-        rather than like a setpoint.  Zero is exempt, as it is everywhere else
-        here -- the direction that removes heat is never the one that needs
-        another permission.
+        rather than like a setpoint.  **Including zero**, which used to be
+        exempt: on this cryostat the sample heater is also what keeps the stage
+        where it is, so cutting it is a change of state and not a retreat to
+        safety.  ``ltspm3``'s supervisor has always agreed -- it commands a
+        configured ``safe_output_pct`` on a fault, not zero.
         """
         inst = self._analog_target(cmd)
         percent = _as_float(cmd.args, "percent")
-        if percent > 0 and not self.allow_analog_output:
+        if not self.allow_analog_output:
             raise CommandError(
-                "driving a 218 analog output above zero applies power to the "
-                "cryostat, and this recorder does not accept that from a file; set "
-                "ipc.allow_analog_output: true if a remote client really "
-                "should be able to move the heater. Commanding it to 0 is "
-                "always allowed"
+                "driving a 218 analog output is not accepted from a file on "
+                "this recorder; set ipc.allow_analog_output: true if a remote "
+                "client really should be able to move the heater. This applies "
+                "to 0 as well: cutting this heater stops heating and can also "
+                "crash the stage. To stop the cryostat now, use the "
+                "`heaters_off` or `hold` command, which is exempt from this gate"
             )
         inst.set_analog_percent(percent)
         return (f"{inst.name} analog output {inst.analog.output} -> "
@@ -571,7 +581,13 @@ class IpcService:
         return f"software loop ARMED at {kelvin:.4f} K"
 
     def _do_heaters_off(self, cmd: Command) -> str:
-        """The panic button.  Always available: lowering power is the safe direction.
+        """The panic button.  Exempt because of what it *is*, not what it sets.
+
+        It bypasses the source policy and both power gates -- and it is one of
+        exactly two commands that do.  Not because zero is safe: it is not,
+        which is why `range 0` and `analog 0` are gated like every other value.
+        It is exempt because an emergency stop that needs a config edit first
+        is not an emergency stop.
 
         Deliberately *not* routed through :meth:`_target`.  Every other handler
         acts on one box because it needs an argument that only means something

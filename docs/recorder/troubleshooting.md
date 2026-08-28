@@ -79,7 +79,7 @@ Every refusal names its own fix.
 |---|---|
 | `this recorder is not accepting commands` | `ipc.accept_commands: true` |
 | `... is configured read-only` | `allow_writes: true` on that instrument |
-| `raising a heater range applies power ...` | `ipc.allow_heater_range: true` — turning one **off** is always allowed |
+| `changing a heater range is not accepted ...` | `ipc.allow_heater_range: true` — needed for 0 as well. To stop the cryostat now, send `heaters_off` or `hold`, which are exempt |
 | `issued N s ago, older than the 30 s limit` | the recorder was not running when the command was queued. Not a bug: replaying an hour of stale setpoints into a live cryostat is the hazard this prevents |
 | `several controllers are configured` | say which, with `--instrument` |
 

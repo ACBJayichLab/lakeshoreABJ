@@ -273,13 +273,16 @@ class IpcConfig:
     #: could overrun the poll interval.
     max_commands_per_cycle: int = 4
     #: Raising a heater range is the act that applies power.  A remote client
-    #: may only do it if this says so; turning a heater OFF is always allowed.
+    #: may only do it if this says so -- in EITHER direction. Commanding a
+    #: range to 0 needs this too: cutting a heater stops heating and can also
+    #: crash the stage, so it is a change of state and not a retreat to safety.
+    #: The panic kinds are what stay reachable with this shut.
     allow_heater_range: bool = False
     #: The same permission for the 218's analog output, which needs its own
     #: switch because it is a different command with the same consequence:
     #: there is no range on a 218, so the percentage is the power.  A remote
-    #: client may only raise it above zero if this says so; commanding it to
-    #: zero is always allowed.
+    #: client may only move it if this says so -- 0 included, for the same
+    #: reason as above.
     allow_analog_output: bool = False
     #: May a file retune a loop?  Its own gate rather than riding on
     #: `allow_writes`, because changing P, I and D is a different kind of act

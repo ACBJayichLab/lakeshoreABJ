@@ -159,8 +159,14 @@ that removes heat. It is separate because gains are a different *kind* of act:
 a setpoint moves the cryostat somewhere and you watch it go, gains change how
 it gets anywhere at all, quietly, for the rest of the run.
 
-Turning a heater **off** — a range to 0, or an analog output to 0% — never
-needs either power gate: the safe direction is always available. It does still
+**Both gates apply in both directions.** A range to 0, or an analog output to
+0%, needs the same permission as raising it. Cutting a heater is not
+automatically the safe direction — it stops heating, and on a cryostat where the
+sample heater also holds the stage it can crash it. A client not trusted to move
+a heater is not trusted to move it to zero either.
+
+The way to stop the cryostat now is the panic kinds `heaters_off` and `hold`,
+which bypass both gates and the source policy — and nothing else. They still
 need `allow_writes`, because a box this program may not write to is one whose
 output may belong to somebody else.
 

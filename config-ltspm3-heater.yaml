@@ -215,8 +215,10 @@ ipc:
   # traversal is the hazard, not the destination.
   command_ttl_s: 30.0
 
-  # <-- OPENED.  Permits `analog` above 0%.  This is the switch that makes the
-  # sample heater movable from a file; `analog 0` never needed it.
+  # <-- OPENED.  This is the switch that makes the sample heater movable from a
+  # file, in EITHER direction: `analog 0` needs it too, because cutting this
+  # heater stops heating and can also crash the stage.  `send heaters_off` and
+  # `send hold` are exempt from this gate and are what an abort should use.
   allow_analog_output: true
 
   # LEFT OFF.  Moot while the 336 is read-only, and stated anyway so that

@@ -100,14 +100,30 @@ def test_ping_proves_the_command_path_without_touching_an_instrument(tmp_path):
     assert ack(tick(svc), cid)["message"] == "pong"
 
 
-def test_turning_a_heater_off_never_needs_permission(tmp_path):
-    """The safe direction is always available -- see the design rules."""
+def test_the_panic_command_needs_no_permission(tmp_path):
+    """Exempt because of what it IS -- an emergency stop that needs a config
+    edit first is not an emergency stop -- and not because zero is safe."""
     inst = instrument()
+    inst.set_heater_range(1, 3)
     svc = service(tmp_path, inst, allow_heater_range=False)
-    cid = svc.spool.submit("heaters_off")
-    assert ack(tick(svc), cid)["ok"]
-    cid = svc.spool.submit("range", output=1, value=0)
-    assert ack(tick(svc), cid)["ok"]
+    assert send(svc, "heaters_off")["ok"]
+    assert inst.heater_range(1) == 0
+
+
+def test_commanding_a_range_to_zero_is_gated_like_any_other_value(tmp_path):
+    """Cutting a heater is not automatically the safe direction: it stops
+    heating, and on some cryostats it also crashes the stage. A client not
+    trusted to move a heater is not trusted to move it to zero either."""
+    inst = instrument()
+    inst.set_heater_range(1, 3)
+    svc = service(tmp_path, inst, allow_heater_range=False)
+    entry = send(svc, "range", output=1, value=0)
+    assert not entry["ok"]
+    assert "applies to 0 as well" in entry["message"]
+    # And the refusal names the command that is exempt, so the reply is a way
+    # out and not just a door closing.
+    assert "heaters_off" in entry["message"]
+    assert inst.heater_range(1) == 3
 
 
 # -- the interlocks ----------------------------------------------------------
@@ -116,9 +132,8 @@ def test_turning_a_heater_off_never_needs_permission(tmp_path):
 def test_raising_a_heater_range_is_refused_by_default(tmp_path):
     """Raising the range is the act that applies power, so it is gated again."""
     svc = service(tmp_path, allow_heater_range=False)
-    cid = svc.spool.submit("range", output=1, value=3)
-    message = ack(tick(svc), cid)["message"]
-    assert "applies power" in message and "ipc.allow_heater_range" in message
+    message = send(svc, "range", output=1, value=3)["message"]
+    assert "ipc.allow_heater_range" in message
 
 
 def test_raising_a_heater_range_works_once_it_is_allowed(tmp_path):
@@ -377,9 +392,8 @@ def test_a_recorder_with_ipc_disabled_builds_no_service(tmp_path):
 def test_driving_the_analog_output_is_refused_by_default(tmp_path):
     """The percentage IS the power here; there is no inert half to it."""
     svc = service(tmp_path, monitor(), allow_analog_output=False)
-    cid = svc.spool.submit("analog", percent=40.0)
-    message = ack(tick(svc), cid)["message"]
-    assert "applies power" in message and "ipc.allow_analog_output" in message
+    message = send(svc, "analog", percent=40.0)["message"]
+    assert "ipc.allow_analog_output" in message
 
 
 def test_driving_the_analog_output_works_once_it_is_allowed(tmp_path):
@@ -390,13 +404,27 @@ def test_driving_the_analog_output_works_once_it_is_allowed(tmp_path):
     assert inst.get_analog_percent() == pytest.approx(40.0, abs=0.02)
 
 
-def test_commanding_the_analog_output_to_zero_never_needs_permission(tmp_path):
-    """The direction that removes heat is never the one that needs another key."""
+def test_commanding_the_analog_output_to_zero_is_gated_too(tmp_path):
+    """On this cryostat the sample heater is also what keeps the stage where it
+    is, so cutting it is a change of state and not a retreat to safety.
+    `ltspm3` has always agreed: its supervisor commands a configured
+    `safe_output_pct` on a fault, not zero."""
     inst = monitor()
     inst.set_analog_percent(30.0)
     svc = service(tmp_path, inst, allow_analog_output=False)
-    cid = svc.spool.submit("analog", percent=0)
-    assert ack(tick(svc), cid)["ok"]
+    entry = send(svc, "analog", percent=0)
+    assert not entry["ok"]
+    assert "applies to 0 as well" in entry["message"]
+    assert inst.get_analog_percent() == 30.0
+
+
+def test_the_panic_command_still_zeroes_an_output_that_is_gated(tmp_path):
+    """A3 removed the last exemption that was not a panic action, so the panic
+    action has to be the one that still works."""
+    inst = monitor()
+    inst.set_analog_percent(30.0)
+    svc = service(tmp_path, inst, allow_analog_output=False)
+    assert send(svc, "heaters_off")["ok"]
     assert inst.get_analog_percent() == 0.0
 
 

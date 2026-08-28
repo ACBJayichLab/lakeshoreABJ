@@ -51,14 +51,22 @@ in the linked document.
 2. **The recorder owns the port, exclusively.** A COM port has exactly one
    holder; two processes on one GPIB board garble replies. Everything else goes
    through files. → [file-interface](docs/recorder/file-interface.md)
-3. **Five write interlocks, all off by default**: `transport.read_only` (byte
+3. **Seven write interlocks, all off by default**: `transport.read_only` (byte
    level) · `allow_writes` (driver policy) · `ipc.accept_commands` ·
    `ipc.allow_heater_range` (a 33x range) · `ipc.allow_analog_output` (a 218
-   analog output). A command arriving by file passes exactly the gates a command
-   typed at the CLI passes. The last two are separate on purpose: different
-   commands, different boxes, and a cryostat usually wants one open and not the
-   other. Turning a heater **off** needs neither of them.
-   → [instruments](docs/recorder/instruments.md)
+   analog output) · `ipc.allow_pid` (retuning a loop) · `ipc.sources` (**which
+   client** may ask, narrowed at runtime by `sources.json` and never widened).
+   A command arriving by file passes exactly the gates a command typed at the
+   CLI passes. The two power gates are separate on purpose: different commands,
+   different boxes, and a cryostat usually wants one open and not the other.
+   **Every gate applies in both directions** — commanding a range or an output
+   to *zero* needs the same permission as raising it, because cutting a heater
+   stops heating and can also crash the stage. The only exemptions anywhere are
+   the panic kinds `heaters_off` and `hold`, which bypass the source policy and
+   the two power gates and nothing else; the exemption belongs to the command
+   kind, so MATLAB gets it too.
+   → [instruments](docs/recorder/instruments.md) ·
+   [file-interface](docs/recorder/file-interface.md)
 4. **Nothing raises a heater range as a side effect of anything.** A setpoint
    does nothing while the range is 0; raising it is what applies power.
    **The 218 is the exception and has no inert half** — no loop, no range, one
@@ -143,6 +151,8 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
   __main__.py        Swaps one BUILDER; everything else is shared with lschart.
   control/           supervisor (the envelope -- read first), health, coherence,
                      pid, tuning, feedforward, ramp, filters, dither.
+                     `panic_hold()` is the ONE seam lschart reaches in by, and
+                     it is called duck-typed by name so invariant 1 holds.
   tools/             replay.py (the only test on genuine data), steptest.py.
 
 matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus

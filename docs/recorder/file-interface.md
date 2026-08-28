@@ -149,8 +149,17 @@ different commands on different boxes. On a cryostat where this program drives i
 own sample heater but only *watches* a controller holding something else, one
 of them wants to be open and the other emphatically does not.
 
-Turning a heater **off** — a range to 0, or an analog output to 0% — never
-needs either of the two power gates: the safe direction is always available.
+**Both power gates apply in both directions.** A range to 0, or an analog
+output to 0%, needs the same permission as raising it. This used to be exempt,
+on the reasoning that removing heat never needs another permission — and that
+reasoning does not survive contact with a cryostat where the sample heater is
+also what keeps the stage where it is. Cutting it stops heating *and* can crash
+the stage. `ltspm3` always agreed: its supervisor commands a configured
+`safe_output_pct` on a fault, not zero.
+
+What makes an emergency stop reachable is the panic **kind**, not an argument
+value: `heaters_off` and `hold` bypass both gates whatever they are set to, and
+the refusal messages name them, so a shut gate is a signpost rather than a wall.
 
 `allow_pid` is not a third power gate. Retuning applies no power at all — a
 loop with its range at 0 stays inert however it is tuned — and it has no

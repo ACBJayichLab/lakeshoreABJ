@@ -137,7 +137,8 @@ consequences:
   the software's.
 
 Like `setRange`, it needs the recorder's own opt-in — `ipc.allow_analog_output:
-true` — for anything above zero. `setAnalog(0)` is always allowed.
+true` — for **any** value, `setAnalog(0)` included. To stop the heater without
+that permission, use `heatersOff()`, which is exempt.
 
 **Ramp in the instrument, not in MATLAB.** `setRamp` uses the box's own
 firmware ramp, which carries on if MATLAB stops, if the laptop sleeps, or if
@@ -174,7 +175,7 @@ is a large part of why the command exists. It is still refused by
 |---|---|
 | `this recorder is not accepting commands` | `ipc.accept_commands: true` in the recorder's config |
 | `... is configured read-only` | `allow_writes: true` on that instrument |
-| `raising a heater range applies power ...` | `ipc.allow_heater_range: true`, if a remote client really should be able to turn a heater on. Turning one **off** is always allowed |
+| `changing a heater range is not accepted ...` | `ipc.allow_heater_range: true`, if a remote client really should be able to move a heater. Needed for 0 as well — use `heatersOff()` or `hold()` to stop without it |
 | `retuning a loop is not accepted from a file ...` | `ipc.allow_pid: true`. Gains apply no power, but they change how the loop behaves for the rest of the run |
 | `commands from 'matlab' are not accepted by this recorder's configuration` | `ipc.sources` names which clients may ask at all. Needs a config edit and a restart |
 | `commands from 'matlab' are currently switched off in ... sources.json` | somebody switched this client off at the recorder. Delete that entry — no restart needed |

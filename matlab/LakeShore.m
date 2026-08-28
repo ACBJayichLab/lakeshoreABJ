@@ -279,9 +279,12 @@ classdef LakeShore < handle
             %SETRANGE  Heater range: 0 off, 1 low, 2 medium, 3 high.
             %
             %   THIS IS THE COMMAND THAT APPLIES POWER.  The recorder refuses
-            %   to raise a range from a file unless its config says
-            %   `ipc.allow_heater_range: true`.  Lowering one to 0 is always
-            %   allowed -- the safe direction never needs permission.
+            %   it from a file unless its config says
+            %   `ipc.allow_heater_range: true` -- and that covers 0 as well.
+            %   Cutting a heater is not automatically the safe direction: it
+            %   stops heating, and where the sample heater also holds the stage
+            %   it can crash it.  heatersOff() and hold() are exempt from the
+            %   gate and are what an abort should use.
             [ok, message, id] = obj.run('range', ...
                 struct('output', output, 'value', value), nargout);
         end
@@ -293,10 +296,10 @@ classdef LakeShore < handle
             %   has no range to raise and no setpoint to be inert: one number
             %   goes out and the heater dissipates accordingly, so THIS IS THE
             %   COMMAND THAT APPLIES POWER on such a box.  The recorder refuses
-            %   anything above 0 unless its config says
+            %   it from a file unless its config says
             %   `ipc.allow_analog_output: true`, and refuses anything above its
-            %   own `max_output_pct` regardless.  Commanding 0 is always
-            %   allowed.
+            %   own `max_output_pct` regardless.  The gate covers 0 too --
+            %   heatersOff() is the exempt way to stop this heater.
             %
             %   Know the gain before you type a number.  On the LTSPM3 sample
             %   heater it is about 10 KELVIN PER PERCENT near the operating

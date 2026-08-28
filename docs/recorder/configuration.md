@@ -209,8 +209,8 @@ Full explanation in [file-interface.md](file-interface.md).
 | **`accept_commands`** | **`false`** | read the command spool at all. **Needed to WRITE** |
 | `command_ttl_s` | `30.0` | a command older than this is refused, not applied |
 | `max_commands_per_cycle` | `4` | bounds how much bus time one cycle spends on commands |
-| **`allow_heater_range`** | **`false`** | may a *file* raise a **33x** heater range. Turning one **off** is always allowed |
-| **`allow_analog_output`** | **`false`** | may a *file* raise a **218** analog output above 0. Commanding 0 is always allowed |
+| **`allow_heater_range`** | **`false`** | may a *file* change a **33x** heater range. **In either direction** — 0 needs it too |
+| **`allow_analog_output`** | **`false`** | may a *file* drive a **218** analog output. **In either direction** — 0 needs it too |
 | **`allow_pid`** | **`false`** | may a *file* retune a loop (P, I, D). Applies no power, and has no always-allowed direction |
 | **`sources`** | `{}` | which **clients** may ask at all: `{default: false, matlab: true}`. Empty means no policy and every source may ask |
 | `ack_history` | `20` | acknowledgements carried in `status.json`. A client polling slower than this fills up may miss its own answer |

@@ -116,5 +116,7 @@ ipc:
 
   # Raising a heater range is the command that actually applies power.  Leave
   # this off unless an unattended script genuinely has to turn a heater on
-  # with nobody at the terminal.  Turning one OFF is always allowed.
+  # with nobody at the terminal.  This covers 0 as well: cutting a heater is
+  # not automatically the safe direction.  `send heaters_off` and `send hold`
+  # are exempt from this gate and are what an emergency stop should use.
   allow_heater_range: false

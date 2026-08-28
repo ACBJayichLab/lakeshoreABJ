@@ -437,6 +437,14 @@ def test_a_drag_leaves_no_view_button_checked(viewer):
 # button is not aimed at whichever instrument happens to be selected.
 
 
+#: The two power gates open.  Most of these tests are about what the panel does
+#: with a control, not about whether it is offered -- and since A3 a shut gate
+#: disables its control outright, so a fixture with them shut would be testing
+#: the gate over and over instead.
+OPEN = {"accepted": True, "recent": [],
+        "allow_heater_range": True, "allow_analog_output": True}
+
+
 def cryostat(tmp_path, qt_app, links, commands=None, csv_name="log.csv"):
     """A viewer watching a recorder with the given instruments."""
     from lschart.ipc.commands import CommandSpool
@@ -451,7 +459,7 @@ def cryostat(tmp_path, qt_app, links, commands=None, csv_name="log.csv"):
         "links": links,
         "aux": [{"name": "ls336.setpoint1", "value": 77.0}],
         "recorder": {"path": str(csv), "rows": 60},
-        "commands": commands or {"accepted": True, "recent": []},
+        "commands": commands or dict(OPEN),
     }))
     window = ViewerWindow(str(status), refresh_ms=10_000_000,
                           spool=CommandSpool(tmp_path / f"cmd-{csv_name}"))
@@ -610,18 +618,31 @@ def test_a_read_only_box_is_not_offered_as_a_target(tmp_path, qt_app):
     w.close()
 
 
-def test_a_shut_gate_is_announced_and_does_not_disable_the_control(
+def test_a_shut_gate_disables_its_control_and_says_where_to_go_instead(
         tmp_path, qt_app):
-    """Greying it out would remove the one direction that always works.
-
-    Range 0 and 0% are always permitted, so a disabled control would take the
-    button away at exactly the moment somebody wants to make the cryostat safe.
-    """
+    """The gate now applies to 0 as well, so a live control here could only
+    ever produce a refusal -- and what replaces it is the panic menu, which is
+    exempt from the gate and is never disabled."""
     w = cryostat(tmp_path, qt_app, [MON],
             commands={"accepted": True, "recent": [],
                       "allow_analog_output": False})
     assert "allow_analog_output" in w.analog_note.text()
-    assert w.analog_button.isEnabled()
+    assert "including to 0" in w.analog_note.text()
+    assert "Panic" in w.analog_note.text()
+    assert not w.analog_button.isEnabled()
+    assert not w.analog_spin.isEnabled()
+    assert w.panic_button.isEnabled()
+    w.close()
+
+
+def test_a_shut_range_gate_disables_the_range_control_too(tmp_path, qt_app):
+    w = cryostat(tmp_path, qt_app, [CTRL],
+            commands={"accepted": True, "recent": [],
+                      "allow_heater_range": False})
+    assert not w.range_button.isEnabled()
+    assert not w.range_combo.isEnabled()
+    assert "including to 0" in w.range_note.text()
+    assert w.panic_button.isEnabled()
     w.close()
 
 
@@ -764,7 +785,7 @@ def aux_status(tmp_path, links, aux):
         "links": links,
         "aux": [{"name": k, "value": v} for k, v in aux.items()],
         "recorder": {"path": str(csv), "rows": 60},
-        "commands": {"accepted": True, "recent": []},
+        "commands": dict(OPEN),
     }))
     return path
 

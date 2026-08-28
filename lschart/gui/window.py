@@ -1405,31 +1405,44 @@ class ViewerWindow(QtWidgets.QMainWindow):
                         self.range_combo.setCurrentIndex(index)
 
     def _update_gate_notes(self) -> None:
-        """Say which of the two power gates is open, without disabling anything.
+        """Say which of the power gates is open, and disable what is shut.
 
         Then settle any command still waiting, which is the other thing that
         decides what the command box is currently saying.
 
-        Greying these out would be the wrong shape.  Both commands are always
-        allowed in the direction that removes heat -- range 0, output 0% -- so a
-        disabled control would take away the one thing that always works, and
-        on a cryostat you have just decided to make safe that is precisely the wrong
-        moment to hide the button.
+        These used to stay live when their gate was shut, on the grounds that
+        the direction removing heat was always permitted and hiding it would
+        take away the one thing that always worked. Both halves of that are
+        gone. The gates now apply to 0 as well -- cutting a heater is not
+        automatically the safe direction -- so a live control here could only
+        ever produce a refusal, which is the shape `_show_loop_controls`
+        already refuses to offer. And the button for "make the cryostat safe
+        now" is the Panic menu, which is exempt from these gates and is never
+        disabled at all. The note points at it, so nothing is taken away
+        without being replaced.
         """
-        if self.source.allows_heater_range():
+        range_ok = self.source.allows_heater_range()
+        self.range_combo.setEnabled(range_ok)
+        self.range_button.setEnabled(range_ok)
+        if range_ok:
             self.range_note.setText("")
         else:
             self.range_note.setText(
-                "This recorder will not raise a range from a file "
-                "(ipc.allow_heater_range: false). Setting 0 still works.")
-        if self.source.allows_analog_output():
+                "This recorder will not change a heater range from a file "
+                "(ipc.allow_heater_range: false) — including to 0. Use Panic → "
+                "All heaters OFF, which is exempt from this.")
+        analog_ok = self.source.allows_analog_output()
+        self.analog_spin.setEnabled(analog_ok)
+        self.analog_button.setEnabled(analog_ok)
+        if analog_ok:
             self.analog_note.setText(
                 "No ramp: this is one step, as fast as the cryostat allows.")
             self.analog_note.setStyleSheet("color:#37474f;")
         else:
             self.analog_note.setText(
-                "This recorder will not drive an output above 0 from a file "
-                "(ipc.allow_analog_output: false). Setting 0 still works.")
+                "This recorder will not drive this output from a file "
+                "(ipc.allow_analog_output: false) — including to 0. Use Panic → "
+                "All heaters OFF, which is exempt from this.")
             self.analog_note.setStyleSheet("color:#e65100;")
 
         # Two different silences to tell apart. Blank boxes because nobody is

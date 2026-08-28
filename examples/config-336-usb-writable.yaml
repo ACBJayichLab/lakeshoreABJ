@@ -17,9 +17,11 @@
 #
 # Still OFF, deliberately:
 #
-#   ipc.allow_heater_range       a *file* may not raise a heater range.  The
-#                                CLI still can (`set --range`), which keeps
-#                                "apply power" an act someone types.
+#   ipc.allow_heater_range       a *file* may not change a heater range, in
+#                                either direction.  The CLI still can
+#                                (`set --range`), which keeps "apply power" an
+#                                act someone types.  `send heaters_off` and
+#                                `send hold` are exempt and always work.
 #
 # ---------------------------------------------------------------------------
 # THE STATE OF THIS BOX (2026-08-24)
@@ -149,6 +151,10 @@ ipc:
 
   # LEFT OFF.  Raising a heater range is the command that actually applies
   # power.  Turn this on only if an unattended script genuinely has to turn a
-  # heater on with nobody at the terminal.  Lowering a range to 0 is always
-  # allowed without it.
+  # heater on with nobody at the terminal.
+  #
+  # This covers 0 as well.  Cutting a heater is not automatically the safe
+  # direction -- it stops heating, and where the sample heater also holds the
+  # stage it can crash it.  `send heaters_off` and `send hold` are exempt from
+  # this gate and are what an emergency stop should use.
   allow_heater_range: false

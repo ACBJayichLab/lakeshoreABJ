@@ -962,18 +962,19 @@ class StatusSource:
         return bool(((self.status or {}).get("commands") or {}).get("accepted"))
 
     def allows_heater_range(self) -> bool:
-        """May a *file* raise a 33x heater range on this recorder?
+        """May a *file* change a 33x heater range on this recorder?
 
-        Not the same question as :meth:`accepts_commands`, and not a reason to
-        disable a control either: lowering a range to 0 is always permitted, so
-        a widget that greys itself out here would take away the one direction
-        that is always available.  This is for saying so, not for refusing.
+        In either direction: 0 is gated like every other value, because cutting
+        a heater is not automatically the safe direction.  So unlike
+        :meth:`allows_pid` this *is* a reason to disable the control -- a live
+        one could only produce a refusal.  What stays reachable when this is
+        shut is the panic menu, which is exempt from the gate.
         """
         cmds = (self.status or {}).get("commands") or {}
         return bool(cmds.get("allow_heater_range"))
 
     def allows_analog_output(self) -> bool:
-        """May a *file* drive a 218 analog output above 0?  Same caveat."""
+        """May a *file* drive a 218 analog output?  Same, 0 included."""
         cmds = (self.status or {}).get("commands") or {}
         return bool(cmds.get("allow_analog_output"))
 

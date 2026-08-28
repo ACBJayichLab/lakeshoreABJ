@@ -231,12 +231,15 @@ class LS218(Instrument):
         )
 
     def analog_off(self) -> str:
-        """Command the analog output to zero.  The safe direction, always.
+        """Command the analog output to zero.  What the panic path calls.
 
         Still needs ``allow_writes`` -- a box this program may not write to is
         one it may not write *zero* to either, because on a shared cryostat that
-        output may be somebody else's.  What it does not need is the extra
-        opt-in that *raising* the output needs.
+        output may be somebody else's.  What it does not need is
+        ``ipc.allow_analog_output``, and that is a property of the panic
+        *command* that reaches it rather than of zero: a plain ``analog 0``
+        from a file is gated like any other value, because cutting this heater
+        stops heating and can also crash the stage.
         """
         return self.set_analog_percent(0.0)
 
