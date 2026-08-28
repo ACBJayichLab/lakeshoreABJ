@@ -127,7 +127,7 @@ box this software is meant to drive.
 
 | Key | Default | |
 |---|---|---|
-| `channels` | `{1: Sample, 2: Cold Head, 3: Shield}` | `{input number: name}`. Only these are read and logged |
+| `channels` | `{1: Input 1, 2: Input 2, 3: Input 3}` | `{input number: name}`. Only these are read and logged. Placeholders — name them for your own cryostat |
 | `control_input` | `1` | which input carries the sample. **Leave 0 on a box that is only being logged** — this is the channel a *software* loop would control |
 | `analog_output` | `1` | |
 | `analog_decimals` | `3` | |

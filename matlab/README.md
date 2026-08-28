@@ -69,7 +69,7 @@ crash if the client does".
 ls = LakeShore('C:\lschart\data');
 
 ls.isAlive()                 % is the recorder actually running and current?
-ls.channels()                % {'Sample', 'Cold Head', 'Shield'}
+ls.channels()                % whatever the config names them, e.g. {'Sample', 'Coldplate'}
 ls.temperature()             % all of them, as a struct
 ls.temperature('Sample')     % one, in kelvin
 ls.aux('ls336.setpoint1')    % setpoints, heater percents

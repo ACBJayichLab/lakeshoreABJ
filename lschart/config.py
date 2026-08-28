@@ -122,8 +122,19 @@ class LS218Config(InstrumentConfig):
         default_factory=lambda: TransportConfig(resource="GPIB0::15::INSTR")
     )
     #: {input number: display name}.  Only these are read and logged.
+    #:
+    #: Placeholders, deliberately.  What input 2 *is* depends entirely on the
+    #: cryostat it is screwed into, so the generic default does not guess --
+    #: the same reasoning as `max_output_pct` below, which will not guess a
+    #: ceiling either.  A config that means "Coldplate" says so; one that does
+    #: not gets a name that is obviously a placeholder rather than somebody
+    #: else's thermometer.
+    #:
+    #: Numbered rather than a bare "Unknown" repeated three times: these become
+    #: the CSV header, and three columns of one name is a log nothing can read
+    #: back.
     channels: dict[int, str] = field(
-        default_factory=lambda: {1: "Sample", 2: "Cold Head", 3: "Shield"}
+        default_factory=lambda: {1: "Input 1", 2: "Input 2", 3: "Input 3"}
     )
     #: Which input carries the sample.  This is the channel a software loop
     #: controls; leave it 0 on a box that is only being logged.

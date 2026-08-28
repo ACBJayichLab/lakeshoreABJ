@@ -24,7 +24,10 @@ def write(tmp_path, text):
 def test_defaults_are_valid_and_simulated():
     cfg = config_mod.load(None)
     assert not cfg.uses_hardware
-    assert cfg.control_channel == "Sample"
+    # A placeholder, and deliberately one: the generic default does not guess
+    # what a cryostat's input 1 is.  What is being pinned here is that
+    # `control_input` still resolves to the channel it names.
+    assert cfg.control_channel == "Input 1"
 
 
 def test_partial_config_keeps_defaults(tmp_path):
