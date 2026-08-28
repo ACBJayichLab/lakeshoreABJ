@@ -37,8 +37,16 @@ count and dropped cycles, every channel (`name`, `kelvin`, `sensor_units`,
 errors, per-link health (`up`, `consecutive_failures`, `reconnects`,
 `last_error`, `writable`) and capability (`loop_numbers`, `heater_outputs`,
 `analog_output`, `max_output_pct`), the per-link **loop table** described
-below, the recorder's path and row count, control state if there is one, and
-command acknowledgements.
+below, the recorder's path and row count, control state if there is one,
+command acknowledgements, and `status_file` — this file's own write history.
+
+`status_file` carries `writes`, `failures`, `last_error` and `last_failure_t`.
+A write that fails cannot report itself in the file it failed to write, so what
+a client sees is a **gap in the feed**, which alone is indistinguishable from a
+hung recorder. The next file that *is* written closes that gap: the counter has
+jumped and `last_error` says why. `last_error` is a record and not a live flag —
+by the time you are reading it, the write plainly succeeded. This matters most
+on Windows; see [windows](windows.md).
 
 #### `links[].loops` — the loop table (schema 2)
 

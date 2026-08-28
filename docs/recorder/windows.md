@@ -97,11 +97,17 @@ exercises that on Windows rather than skipping it.
    recorder rewrote it every 2 s, and no cycles were dropped — but that is a
    short observation, not a clean bill of health.
 
-   Note the handling is weaker than this page used to claim. `_write_status`
-   **discards** the writer's return value, and the failure is logged at
-   `DEBUG`. It is counted nowhere, and at the default `INFO` it is silent. If
-   you are ever chasing a gap in a status feed, raise `log_level` to `DEBUG`
-   before concluding it did not happen.
+   **You will now be told if it happens.** The first failure and the recovery
+   are logged at WARNING (the cycles between them stay at DEBUG, so a
+   condition lasting an hour does not produce an hour of log lines), and the
+   next file that *is* written carries `status_file.failures` and
+   `status_file.last_error` — a write that fails cannot report itself in the
+   file it failed to write, so the signal is a gap in the feed followed by a
+   counter that jumped. `lschart status` prints that line whenever the count
+   is non-zero.
+
+   This used to be silent: the failure was logged at `DEBUG` and counted only
+   in memory, so a gap in the feed was indistinguishable from a hung recorder.
 2. **The ~15 ms clock resolution** behind the command sequence number. The
    sequence tie-break exists precisely because `time.time()` is coarse there;
    confirm that two commands queued back to back really do share a millisecond

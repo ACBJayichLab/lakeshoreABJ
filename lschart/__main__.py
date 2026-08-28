@@ -398,6 +398,15 @@ def cmd_status(args) -> int:
                       for e in entries)
                   + f"{'; ' if entries else ''}anything else: "
                   + ("on" if cmds.get("source_default") else "OFF"))
+        # Only when there is something to say.  A "0 failures" line on every
+        # healthy recorder is a line nobody reads, and this one has to be
+        # noticed on the day it is not zero.
+        sf = status.get("status_file") or {}
+        if sf.get("failures"):
+            print(f"  status file: {sf['failures']} failed write(s), "
+                  f"{sf.get('writes', 0)} good"
+                  + (f" -- last: {sf['last_error']}" if sf.get("last_error")
+                     else " -- writing again now"))
         control = status.get("control")
         if control:
             print(f"  control    : {control.get('state')} "

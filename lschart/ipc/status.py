@@ -21,10 +21,19 @@ Why the write may fail, and why that is fine
 --------------------------------------------
 
 On Windows, replacing a file that another process currently has open can fail
-with a sharing violation.  There is nothing to do about that and nothing that
-needs doing: the next cycle rewrites it a second later.  So a failed write is
-counted and logged at DEBUG, never raised -- an IPC convenience must not be
-able to stop the recording it is reporting on.
+with a sharing violation.  There is nothing to do about that and mostly nothing
+that needs doing: the next cycle rewrites it a second later.  It is never
+raised -- an IPC convenience must not be able to stop the recording it is
+reporting on.
+
+But it does need to be *noticeable*.  A write that fails cannot report itself
+in the file it failed to write, so what a client sees is a gap in the feed and
+nothing else -- indistinguishable from a recorder that hung.  So the **edges**
+are logged at WARNING (the first failure, and the recovery) while everything
+between them stays at DEBUG, and the counters go into the next file that does
+get written: `status_file.failures` will have jumped and `last_error` says why.
+One log line per second for as long as a condition lasts is how a real signal
+gets buried, which is why it is the edges and not every cycle.
 
 Why the shape is arrays and not objects
 ---------------------------------------
@@ -81,10 +90,18 @@ def _num(value: Any) -> Any:
     return f if math.isfinite(f) else None
 
 
-def atomic_write_json(path: str | os.PathLike, payload: dict) -> bool:
+def atomic_write_json(path: str | os.PathLike, payload: dict,
+                      *, on_error=None) -> bool:
     """Write ``payload`` to ``path`` so no reader can see it half-written.
 
     Returns True on success.  Never raises: see the module docstring.
+
+    ``on_error`` is called with the exception when the write fails.  It exists
+    because "it failed" is not enough to act on and the caller is the only one
+    that knows whether this failure is the first or the thousandth -- see
+    :meth:`StatusWriter.write`.  Returning the message instead would invert the
+    truthiness of the return value, which is the sort of thing that reads fine
+    and then gets a ``not`` wrong somewhere.
     """
     path = Path(path)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
@@ -102,6 +119,8 @@ def atomic_write_json(path: str | os.PathLike, payload: dict) -> bool:
         return True
     except (OSError, ValueError, TypeError) as exc:
         log.debug("status write to %s failed: %s", path, exc)
+        if on_error is not None:
+            on_error(exc)
         try:
             os.unlink(tmp)
         except OSError:
@@ -147,6 +166,19 @@ class StatusWriter:
         self.started_at = time.time()
         self.writes = 0
         self.failures = 0
+        #: What went wrong the last time, and when.  A durable record and not
+        #: a live flag: it is never cleared, because "when did this last fail"
+        #: stays worth knowing after it recovers.  Published in the next file
+        #: that *does* get written, which is the only place it can surface --
+        #: a write that failed cannot report itself in the file it failed to
+        #: write.  So the signal a client sees is a gap in the feed followed by
+        #: a counter that jumped, and these say when and why.
+        self.last_error = ""
+        self.last_failure_t = 0.0
+        #: Edge detector for the log, and the only thing here that is a live
+        #: flag.  Not published: a client cannot act on it -- by the time they
+        #: read the file, it is false by construction.
+        self._failing = False
         #: The most recent payload, so the CLI and tests can inspect what was
         #: written without re-reading (and re-parsing) the file.
         self.last: dict | None = None
@@ -363,14 +395,61 @@ class StatusWriter:
             },
             "control": self._control(control),
             "commands": commands or {},
+            # This file's own write history.  A client that finds a gap in the
+            # feed can tell a recorder that stalled from one that could not
+            # write, which the age alone cannot distinguish -- `failures` will
+            # have jumped and `last_error` says why.
+            #
+            # Necessarily counted from *before* the write that carries it, so
+            # `writes` is one behind.  `last_error` and `last_failure_t` are a
+            # record rather than a live flag and are never cleared -- by the
+            # time anyone reads this file the write plainly succeeded, so a
+            # field saying "not failing right now" would be telling them
+            # something they can already see.
+            "status_file": {
+                "writes": int(self.writes),
+                "failures": int(self.failures),
+                "last_error": self.last_error,
+                "last_failure_t": _num(self.last_failure_t) or 0.0,
+            },
         }
 
     def write(self, frame: Frame, **kw) -> bool:
+        """One cycle into the file.  Logs the *edges*, not every failure.
+
+        A status write that fails every cycle would otherwise produce one log
+        line per second for as long as the condition lasts, which is how a real
+        signal gets buried.  So the first failure and the recovery are WARNING
+        and everything between them is DEBUG -- and the count goes into the
+        next file that succeeds, so a client that saw the gap can find out how
+        long it lasted and why.
+
+        This matters most on Windows, where `os.replace` over a file another
+        process has open can fail with a sharing violation. That has not been
+        reproduced, but "not reproduced" and "would be noticed" are different
+        claims, and until this it was only the first.
+        """
         payload = self.payload(frame, **kw)
         self.last = payload
-        ok = atomic_write_json(self.path, payload)
+
+        def note(exc: Exception) -> None:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_failure_t = time.time()
+
+        ok = atomic_write_json(self.path, payload, on_error=note)
         if ok:
             self.writes += 1
+            if self._failing:
+                self._failing = False
+                log.warning(
+                    "status file %s is writable again after %d failure(s)",
+                    self.path, self.failures)
         else:
             self.failures += 1
+            if not self._failing:
+                self._failing = True
+                log.warning(
+                    "status file %s could not be written: %s. Clients will see "
+                    "this feed stop until it recovers",
+                    self.path, self.last_error)
         return ok

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 
 import pytest
@@ -300,3 +301,105 @@ def test_the_debris_of_a_crashed_client_is_swept(tmp_path):
     fresh.write_text("half")
     assert spool.sweep_temporaries(max_age_s=300) == 1
     assert fresh.exists() and not stale.exists()
+
+
+# -- a status write that fails ----------------------------------------------
+#
+# On Windows `os.replace` over a file another process has open can fail with a
+# sharing violation.  Nothing can be done about that and nothing needs to be:
+# the next cycle rewrites it.  What was missing was any way to *notice* -- a
+# write that fails cannot report itself in the file it failed to write, so a
+# client saw a gap and nothing else, which looks exactly like a hung recorder.
+
+
+def failing_writer(tmp_path, monkeypatch):
+    """A writer whose `os.replace` fails, the way Windows can make it."""
+    from lschart.ipc import status as status_mod
+
+    writer = StatusWriter(tmp_path / "status.json")
+    broken = {"on": True}
+
+    real = os.replace
+
+    def maybe(src, dst):
+        if broken["on"]:
+            raise PermissionError(32, "The process cannot access the file")
+        return real(src, dst)
+
+    monkeypatch.setattr(status_mod.os, "replace", maybe)
+    return writer, broken
+
+
+def test_a_failed_write_is_counted_and_says_why(tmp_path, monkeypatch, caplog):
+    writer, broken = failing_writer(tmp_path, monkeypatch)
+    with caplog.at_level("WARNING"):
+        assert writer.write(frame()) is False
+    assert writer.failures == 1
+    assert "cannot access the file" in writer.last_error
+    # The edge is a WARNING: at DEBUG it was invisible at the default level.
+    assert any("could not be written" in r.message for r in caplog.records)
+
+
+def test_a_failing_write_logs_the_edge_and_not_every_cycle(tmp_path, monkeypatch,
+                                                           caplog):
+    """One line a second for as long as it lasts is how a signal gets buried."""
+    writer, broken = failing_writer(tmp_path, monkeypatch)
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            writer.write(frame())
+    assert writer.failures == 5
+    assert sum("could not be written" in r.message for r in caplog.records) == 1
+
+
+def test_the_recovery_is_logged_once(tmp_path, monkeypatch, caplog):
+    writer, broken = failing_writer(tmp_path, monkeypatch)
+    writer.write(frame())
+    broken["on"] = False
+    with caplog.at_level("WARNING"):
+        assert writer.write(frame()) is True
+        writer.write(frame())
+    assert sum("writable again" in r.message for r in caplog.records) == 1
+
+
+def test_the_last_error_is_a_record_and_not_a_live_flag(tmp_path, monkeypatch):
+    """By the time anyone reads the file, the write plainly succeeded. A field
+    saying "not failing right now" would restate what they can already see;
+    "this failed at 14:02 because X" is the part they cannot."""
+    writer, broken = failing_writer(tmp_path, monkeypatch)
+    writer.write(frame())
+    broken["on"] = False
+    writer.write(frame())
+    assert "cannot access the file" in writer.last_error
+    assert writer.last_failure_t > 0.0
+
+
+def test_the_next_good_file_carries_the_failures_that_preceded_it(
+        tmp_path, monkeypatch):
+    """The only place it can surface: the gap plus a counter that jumped."""
+    writer, broken = failing_writer(tmp_path, monkeypatch)
+    for _ in range(3):
+        writer.write(frame())
+    broken["on"] = False
+    writer.write(frame())
+
+    published = read_status(tmp_path / "status.json")["status_file"]
+    assert published["failures"] == 3
+    assert published["last_failure_t"] > 0.0
+    # The file that recovers carries the diagnosis of what it recovered from.
+    # That is the useful ordering: this is the first file a client can read,
+    # and a count with no reason would send them to a log they have not got.
+    assert "cannot access the file" in published["last_error"]
+
+    # `writes` is one behind, necessarily: the payload is rendered before the
+    # write it describes.
+    assert published["writes"] == 0
+    writer.write(frame())
+    assert read_status(tmp_path / "status.json")["status_file"]["writes"] == 1
+
+
+def test_a_healthy_recorder_publishes_no_failures(tmp_path):
+    writer = StatusWriter(tmp_path / "status.json")
+    writer.write(frame())
+    published = read_status(tmp_path / "status.json")["status_file"]
+    assert published["failures"] == 0
+    assert published["last_error"] == ""
