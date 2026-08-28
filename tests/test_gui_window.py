@@ -21,10 +21,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
-from PySide6 import QtCore, QtWidgets  # noqa: E402
+from PySide6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
+from lschart.gui import theme  # noqa: E402
 from lschart.gui.window import (  # noqa: E402
-    DEFAULT_VIEW_WINDOW_S, WARN_COLOUR, ViewerWindow,
+    COL_SATURATED, COL_SENSOR, DEFAULT_VIEW_WINDOW_S, ViewerWindow, warn_colour,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -1671,8 +1672,10 @@ def test_an_unhealthy_software_loop_is_coloured_even_with_both_marks_dark(
                  control=dict(SOFTWARE, health="fault", state="holding",
                               reason="reading rejected"))
     assert cells(w, 4)[7] == "" and cells(w, 4)[8] == ""
-    assert w.loops.item(4, 1).foreground().color().name() == WARN_COLOUR
-    assert w.loops.item(0, 1).foreground().color().name() == "#000000"
+    assert w.loops.item(4, 1).foreground().color().name() == warn_colour(w)
+    # And a healthy row has no colour of its own at all -- it is whatever the
+    # palette says, which is the only value that is right on both themes.
+    assert w.loops.item(0, 1).data(QtCore.Qt.ItemDataRole.ForegroundRole) is None
     w.close()
 
 
@@ -1683,4 +1686,159 @@ def test_the_instrument_rows_gained_the_state_column_too(tmp_path, qt_app):
         loop_entry(1), loop_entry(2, mode="open loop", mode_code=3),
         loop_entry(3), loop_entry(4, mode="off", mode_code=0)])])
     assert [cells(w, r)[6] for r in range(4)] == ["closed", "open", "closed", "off"]
+    w.close()
+
+
+# -- the viewer on a dark desktop --------------------------------------------
+#
+# Reported from macOS dark mode: the tables forced #000000 onto a #171717 base.
+# `tests/test_gui_theme.py` checks the palettes are legible; these check the
+# window actually uses them, and keeps using them when the desktop changes
+# under a viewer that is already open.
+
+
+def repaint(qt_app, window, dark: bool):
+    """Hand the window a light or dark palette and tell it, as Qt would."""
+    pal = QtGui.QPalette(window.palette())
+    ground, base = ("#323232", "#171717") if dark else ("#f0f0f0", "#ffffff")
+    pal.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor(ground))
+    pal.setColor(QtGui.QPalette.ColorRole.Base, QtGui.QColor(base))
+    window.setPalette(pal)
+    qt_app.sendEvent(window, QtCore.QEvent(QtCore.QEvent.Type.PaletteChange))
+
+
+def test_an_ordinary_reading_is_never_given_a_colour_of_its_own(tmp_path, qt_app):
+    """The bug, at its root. A usable reading is ordinary text, and ordinary
+    text is whatever the palette says -- forcing black made it invisible on a
+    dark desktop, and forcing white would do the same on a light one."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    role = QtCore.Qt.ItemDataRole.ForegroundRole
+    assert w.readouts.item(0, 1).data(role) is None
+    assert w.loops.item(0, 0).data(role) is None
+    w.close()
+
+
+def test_a_rejected_reading_still_gets_a_colour(tmp_path, qt_app):
+    """Clearing the normal case must not clear the exceptional one."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.source.status["channels"] = [
+        {"name": "Sample", "kelvin": 96.0, "usable": False, "validity": "rejected"}]
+    w._update_readouts()
+    assert w.readouts.item(0, 1).foreground().color().name() == warn_colour(w)
+    w.close()
+
+
+def test_the_window_follows_the_desktop_changing_theme_under_it(tmp_path, qt_app):
+    """A macOS appearance switch, a Windows toggle, a Qt style swap. Every
+    colour is resolved at call time so one sweep puts the whole window right,
+    rather than waiting for the next refresh tick."""
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
+        loop_entry(1, mode_code=1, range=3, output_pct=100.0)])])
+    repaint(qt_app, w, dark=True)
+    assert w.loop_note.styleSheet() == theme.note_style("muted", w)
+    assert theme.DARK["muted"] in w.loop_note.styleSheet()
+    dark_mark = w.loops.item(0, COL_SATURATED).foreground().color().name()
+    assert dark_mark == theme.DARK["bad"]
+
+    repaint(qt_app, w, dark=False)
+    assert theme.LIGHT["muted"] in w.loop_note.styleSheet()
+    assert w.loops.item(0, COL_SATURATED).foreground().color().name() == \
+        theme.LIGHT["bad"]
+    w.close()
+
+
+def test_the_banner_repaints_for_the_new_theme_too(tmp_path, qt_app):
+    """It is the one element that paints its own background, so a stale
+    stylesheet there is a light chip punched into a dark window."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    repaint(qt_app, w, dark=True)
+    assert theme.BANNER[True][w.source.health()[0]][0] in w.banner.styleSheet()
+    repaint(qt_app, w, dark=False)
+    assert theme.BANNER[False][w.source.health()[0]][0] in w.banner.styleSheet()
+    w.close()
+
+
+def test_a_trace_toggle_does_not_colour_its_own_text(tmp_path, qt_app):
+    """The curve colour has to match a line on the white plot, so it cannot be
+    re-themed for a dark panel. It becomes a stripe and the name is left to
+    the palette -- cyan was 2.26:1 as text on white, brown 2.17:1 on dark."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.refresh()
+    for check in w.toggles.values():
+        assert "border-left" in check.styleSheet()
+        assert "color:" not in check.styleSheet()
+    w.close()
+
+
+def test_the_loop_table_never_scrolls_sideways(tmp_path, qt_app):
+    """The marks live in the last two columns, so a sideways scroll hides the
+    very thing the table exists to show. Adding the State column pushed nine
+    columns of contents into a narrower panel and did exactly that -- the
+    fourth loop went behind the scrollbar and `Off SP` off the edge."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.resize(1500, 900)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    table = w.loops
+    assert not table.horizontalScrollBar().isVisible()
+    total = sum(table.columnWidth(c) for c in range(table.columnCount()))
+    assert total <= table.viewport().width()
+    # And every row is reachable, not just the columns.
+    assert table.rowCount() == 4
+    w.close()
+
+
+def test_a_long_sensor_name_elides_rather_than_widening_the_table(tmp_path, qt_app):
+    """The sensor is the column that gives, because it is the one repeated in
+    the readouts above and in the row's own tooltip. A truncated name is still
+    identifiable; a mark scrolled off the edge is not there at all."""
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
+        loop_entry(1, "A sensor with an unreasonably long label")])])
+    w.resize(1500, 900)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    assert not w.loops.horizontalScrollBar().isVisible()
+    assert w.loops.item(0, COL_SATURATED) is not None
+    w.close()
+
+
+def test_the_ordinary_sensor_names_are_not_elided_at_the_default_width(
+        tmp_path, qt_app):
+    """At the old 430 px both "Stage 1" and "Stage 2" came out as "Stag…",
+    which is worse than useless -- two different loops reading the same."""
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
+        loop_entry(1, "Coldplate"), loop_entry(2, "Stage 2"),
+        loop_entry(3, "Rad Shield"), loop_entry(4, "Stage 1")])])
+    w.resize(1500, 900)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    metrics = w.loops.fontMetrics()
+    width = w.loops.columnWidth(COL_SENSOR)
+    for name in ("Coldplate", "Stage 2", "Rad Shield", "Stage 1"):
+        assert metrics.horizontalAdvance(name) <= width, f"{name} would elide"
+    w.close()
+
+
+def test_a_gate_note_is_given_the_height_its_wrapping_needs(tmp_path, qt_app):
+    """A word-wrapped QLabel reports a one-line sizeHint, so the layout gave
+    it one line and clipped the rest -- the range note ended mid-sentence at
+    "which is exempt from thi". These notes are the only explanation of why a
+    control is dead, so half of one is worse than none."""
+    w = cryostat(tmp_path, qt_app, [CTRL],
+                 commands={"accepted": True, "recent": [],
+                           "allow_heater_range": False})
+    w.resize(1500, 900)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    note = w.range_note
+    assert note.text(), "the note should be saying why the control is dead"
+    assert note.height() >= note.heightForWidth(note.width())
     w.close()

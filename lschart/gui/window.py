@@ -54,6 +54,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..instruments.ls33x import HEATER_RANGE_NAMES
 from ..ipc.commands import CommandSpool
+from . import theme
 from .source import (
     COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, CsvTail, StatusSource, capabilities,
     SATURATED_HIGH_PCT, SATURATED_LOW_PCT, classify_column, connect_flags, control_row,
@@ -98,12 +99,13 @@ BACKFILL_COVERAGE_S = VIEW_WINDOWS[-1][1] + 3600.0
 #: and not a literal repeated at each call site.
 GUI_SOURCE = "lschart-gui"
 
-BANNER_STYLE = {
-    "ok":      "background:#e8f5e9; color:#1b5e20; padding:6px; border-radius:4px;",
-    "stale":   "background:#fff3e0; color:#e65100; padding:6px; border-radius:4px;",
-    "stopped": "background:#eceff1; color:#37474f; padding:6px; border-radius:4px;",
-    "absent":  "background:#ffebee; color:#b71c1c; padding:6px; border-radius:4px;",
-}
+BANNER_STATES = (
+    # Kept only as the list of states.  The colours moved to `gui.theme`,
+    # which resolves them per theme at call time -- a module-level string
+    # cannot know whether the desktop is dark, and freezes whatever it was at
+    # import if it tries.
+    "ok", "stale", "stopped", "absent",
+)
 
 
 #: What one press of a zoom button does to the visible range.  A factor and
@@ -142,7 +144,10 @@ MARK_SATURATED = "RAIL"
 MARK_UNSETTLED = "OFF SP"
 
 #: Red, for a lit mark and for a software loop whose health is not ``ok``.
-WARN_COLOUR = "#b71c1c"
+#: Resolved through `gui.theme` at paint time: the old constant was invisible
+#: on a dark desktop, and so was the black it was paired with.
+def warn_colour(widget=None) -> str:
+    return theme.colour("bad", widget)
 
 
 def _state_text(mode) -> str:
@@ -460,7 +465,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         outer = QtWidgets.QVBoxLayout(central)
 
         self.banner = QtWidgets.QLabel("starting…")
-        self.banner.setStyleSheet(BANNER_STYLE["absent"])
+        self.banner.setStyleSheet(theme.banner_style("absent", self))
         outer.addWidget(self.banner)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -468,7 +473,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         splitter.addWidget(self._plots())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([430, 900])
+        # 500, not 430: the loop table's eight fixed columns want 352 px
+        # between them, so at 430 the sensor name was squeezed to 52 px and
+        # both "Stage 1" and "Stage 2" elided to the same "Stag…". The extra
+        # 70 px comes out of a 900 px chart, which does not miss it.
+        splitter.setSizes([500, 900])
         outer.addWidget(splitter, 1)
 
         self.setCentralWidget(central)
@@ -511,8 +520,22 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.loops.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.loops.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.loops.horizontalHeader().setStretchLastSection(False)
-        self.loops.horizontalHeader().setSectionResizeMode(
-            QtWidgets.QHeaderView.ResizeToContents)
+        header = self.loops.horizontalHeader()
+        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        # Every column sized to its contents except the sensor name, which
+        # takes what is left and elides when there is not enough.
+        #
+        # Something has to give: nine columns of contents want 427 px in a
+        # 404 px panel, and the alternative is the sideways scroll this table
+        # must not do -- it would hide the two marks the table exists to show,
+        # which is exactly backwards.  The sensor name is the right thing to
+        # cut because it is the one column repeated elsewhere: it is in the
+        # readouts table directly above and in this row's own tooltip. A
+        # truncated "Rad S…" is still identifiable; a mark scrolled off the
+        # right-hand edge is not there at all.
+        header.setSectionResizeMode(COL_SENSOR, QtWidgets.QHeaderView.Stretch)
+        self.loops.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
+        self.loops.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.loops.setSizePolicy(QtWidgets.QSizePolicy.Preferred,
                                  QtWidgets.QSizePolicy.Fixed)
         # Never a vertical scrollbar: the table is sized to its rows below,
@@ -600,7 +623,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         self.export_note = QtWidgets.QLabel("")
         self.export_note.setWordWrap(True)
-        self.export_note.setStyleSheet("color:#37474f;")
+        self.export_note.setStyleSheet(theme.note_style("muted", self))
         box.addWidget(self.export_note)
 
         traces = QtWidgets.QGroupBox("Traces")
@@ -657,7 +680,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # a map kept in here that could go stale.
         self.loop_note = QtWidgets.QLabel("")
         self.loop_note.setWordWrap(True)
-        self.loop_note.setStyleSheet("color:#37474f;")
+        self.loop_note.setStyleSheet(theme.note_style("muted", self))
         box.addWidget(self.loop_note)
 
         box.addWidget(self._setpoint_group())
@@ -849,7 +872,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         self.pid_note = QtWidgets.QLabel("")
         self.pid_note.setWordWrap(True)
-        self.pid_note.setStyleSheet("color:#e65100;")
+        self.pid_note.setStyleSheet(theme.note_style("warn", self))
         form.addRow(self.pid_note)
         return self.pid_group
 
@@ -888,7 +911,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         self.range_note = QtWidgets.QLabel("")
         self.range_note.setWordWrap(True)
-        self.range_note.setStyleSheet("color:#e65100;")
+        self.range_note.setStyleSheet(theme.note_style("warn", self))
         form.addRow(self.range_note)
         return self.range_group
 
@@ -918,7 +941,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         self.analog_note = QtWidgets.QLabel("")
         self.analog_note.setWordWrap(True)
-        self.analog_note.setStyleSheet("color:#e65100;")
+        self.analog_note.setStyleSheet(theme.note_style("warn", self))
         form.addRow(self.analog_note)
         return self.analog_group
 
@@ -1035,6 +1058,38 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     # -- the tick ----------------------------------------------------------
 
+    def changeEvent(self, event) -> None:
+        """Repaint for a desktop that changed theme under a running viewer.
+
+        Qt sends this when the palette changes -- a macOS appearance switch, a
+        Windows light/dark toggle, a Qt style swap. Everything colour-bearing
+        is resolved through `gui.theme` at call time precisely so that one
+        sweep is enough.
+        """
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """Re-resolve every colour this window paints itself.
+
+        The tables and the notes are rewritten on the refresh timer anyway, so
+        this exists for the gap between a theme switch and the next tick --
+        which at a 1 s cadence is short but is exactly when somebody is looking
+        at the window they just changed.  Must never raise: a theme change is
+        not a reason to lose a viewer.
+        """
+        try:
+            self.export_note.setStyleSheet(theme.note_style("muted", self))
+            self.loop_note.setStyleSheet(theme.note_style("muted", self))
+            state, _ = self.source.health()
+            self.banner.setStyleSheet(theme.banner_style(state, self))
+            self._update_readouts()
+            self._update_loops()
+            self._update_gate_notes()
+        except Exception:  # pragma: no cover - cosmetic, never fatal
+            log.debug("could not re-apply the theme", exc_info=True)
+
     def refresh(self) -> None:
         """One poll of both files.  Must never raise: it is on a timer."""
         try:
@@ -1076,7 +1131,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         }[state]
         age_text = f" · {age:.1f} s ago" if age is not None else ""
         self.banner.setText(f"{prefix}{age_text} — {message}")
-        self.banner.setStyleSheet(BANNER_STYLE[state])
+        self.banner.setStyleSheet(theme.banner_style(state, self))
 
     def _update_readouts(self) -> None:
         channels = self.source.channels()
@@ -1098,8 +1153,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 text = f"{text}  ({ch.get('validity', 'rejected')})"
             self._set_cell(row, 0, name)
             item = self._set_cell(row, 1, text)
-            item.setForeground(QtGui.QBrush(
-                QtGui.QColor("#000000" if usable else "#b71c1c")))
+            if usable:
+                # No colour of its own: a reading that is fine is ordinary
+                # text, and ordinary text is whatever the palette says.
+                theme.clear_foreground(item)
+            else:
+                item.setForeground(QtGui.QBrush(QtGui.QColor(warn_colour(self))))
 
     def _set_cell(self, row: int, col: int, text: str) -> QtWidgets.QTableWidgetItem:
         item = self.readouts.item(row, col)
@@ -1170,9 +1229,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
                       + 2 * self.loops.frameWidth())
             for r in range(len(entries)):
                 height += self.loops.rowHeight(r)
-            bar = self.loops.horizontalScrollBar()
-            if bar.isVisible():
-                height += bar.height()
+            # No allowance for a horizontal scrollbar any more: the sensor
+            # column stretches and elides so the table always fits its panel,
+            # and the bar is switched off outright. Kept as a comment rather
+            # than deleted silently, because this used to be a real cause of
+            # the last loop sitting behind one.
             self.loops.setFixedHeight(height)
 
         if selected >= 0 and not self.loops.selectionModel().isRowSelected(
@@ -1223,8 +1284,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 self.loops.setItem(index, column, item)
             item.setText(text)
             lit = column in (COL_SATURATED, COL_UNSETTLED) and text
-            item.setForeground(QtGui.QBrush(QtGui.QColor(
-                WARN_COLOUR if lit or unhealthy else "#000000")))
+            if lit or unhealthy:
+                item.setForeground(QtGui.QBrush(QtGui.QColor(warn_colour(self))))
+            else:
+                theme.clear_foreground(item)
             flags = item.flags()
             item.setFlags(flags & ~QtCore.Qt.ItemIsSelectable if software
                           else flags | QtCore.Qt.ItemIsSelectable)
@@ -1284,6 +1347,29 @@ class ViewerWindow(QtWidgets.QMainWindow):
                      "no setpoint, range or PID command, only Arm and the "
                      "panic Hold")
         return " — ".join(parts)
+
+    @staticmethod
+    def _note(label: QtWidgets.QLabel, text: str, style: str = "") -> None:
+        """Set a wrapped note and let it have the height its wrapping needs.
+
+        A word-wrapped ``QLabel`` reports a one-line ``sizeHint``, so a layout
+        gives it one line and clips the rest -- which is how the range note
+        came to end mid-sentence at "Use Panic \u2192 All heaters OFF, which is
+        exempt from thi". These notes are the only explanation of why a
+        control is dead, so half of one is worse than none.
+
+        ``setHeightForWidth`` on the size policy is what makes the layout ask
+        the label how tall it needs to be at the width it is being given.
+        """
+        label.setText(text)
+        if style:
+            label.setStyleSheet(style)
+        policy = label.sizePolicy()
+        policy.setHeightForWidth(True)
+        label.setSizePolicy(policy)
+        width = label.width()
+        if width > 0:
+            label.setMinimumHeight(label.heightForWidth(width))
 
     @staticmethod
     def _maybe(value, fmt: str) -> str:
@@ -1607,25 +1693,26 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.range_combo.setEnabled(range_ok)
         self.range_button.setEnabled(range_ok)
         if range_ok:
-            self.range_note.setText("")
+            self._note(self.range_note, "")
         else:
-            self.range_note.setText(
-                "This recorder will not change a heater range from a file "
-                "(ipc.allow_heater_range: false) — including to 0. Use Panic → "
-                "All heaters OFF, which is exempt from this.")
+            self._note(self.range_note,
+                       "This recorder will not change a heater range from a "
+                       "file (ipc.allow_heater_range: false) — including to 0. "
+                       "Use Panic → All heaters OFF, which is exempt from this.",
+                       theme.note_style("warn", self))
         analog_ok = self.source.allows_analog_output()
         self.analog_spin.setEnabled(analog_ok)
         self.analog_button.setEnabled(analog_ok)
         if analog_ok:
-            self.analog_note.setText(
-                "No ramp: this is one step, as fast as the cryostat allows.")
-            self.analog_note.setStyleSheet("color:#37474f;")
+            self._note(self.analog_note,
+                       "No ramp: this is one step, as fast as the cryostat "
+                       "allows.", theme.note_style("muted", self))
         else:
-            self.analog_note.setText(
-                "This recorder will not drive this output from a file "
-                "(ipc.allow_analog_output: false) — including to 0. Use Panic → "
-                "All heaters OFF, which is exempt from this.")
-            self.analog_note.setStyleSheet("color:#e65100;")
+            self._note(self.analog_note,
+                       "This recorder will not drive this output from a file "
+                       "(ipc.allow_analog_output: false) — including to 0. Use "
+                       "Panic → All heaters OFF, which is exempt from this.",
+                       theme.note_style("warn", self))
 
         # The gains are the one control that is worth *reading* where it
         # cannot be written, so the shut gate disables the button and leaves
@@ -1647,20 +1734,20 @@ class ViewerWindow(QtWidgets.QMainWindow):
                                      f"{key}{self._loop}") is not None
                      for key in self.pid_spins)
         if not polled:
-            self.pid_note.setText(
-                "This recorder does not read the loop gains, so these are not "
-                "the instrument's (read_pid: false in its config).")
-            self.pid_note.setStyleSheet("color:#e65100;")
+            self._note(self.pid_note,
+                       "This recorder does not read the loop gains, so these "
+                       "are not the instrument's (read_pid: false in its "
+                       "config).", theme.note_style("warn", self))
         elif not self.source.allows_pid():
-            self.pid_note.setText(
-                "Shown from the instrument, but this recorder will not change "
-                "them from a file (ipc.allow_pid: false).")
-            self.pid_note.setStyleSheet("color:#e65100;")
+            self._note(self.pid_note,
+                       "Shown from the instrument, but this recorder will not "
+                       "change them from a file (ipc.allow_pid: false).",
+                       theme.note_style("warn", self))
         else:
-            self.pid_note.setText(
-                "The instrument's own gains. Changing them does not apply "
-                "power; it changes how the loop gets anywhere at all.")
-            self.pid_note.setStyleSheet("color:#37474f;")
+            self._note(self.pid_note,
+                       "The instrument's own gains. Changing them does not "
+                       "apply power; it changes how the loop gets anywhere at "
+                       "all.", theme.note_style("muted", self))
 
         self._update_pending()
 
@@ -1680,7 +1767,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.ack_label.setText(
                 ("✓ " if ok else "✗ ") + str(ack.get("message", "")))
             self.ack_label.setStyleSheet(
-                "color:#1b5e20;" if ok else "color:#b71c1c;")
+                theme.note_style("ok" if ok else "bad", self))
             self._pending = None
             # The question the fields were answering has been settled one way
             # or the other; let them track the cryostat's readback again.  A
@@ -1697,7 +1784,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         elif QtCore.QDateTime.currentSecsSinceEpoch() > deadline:
             self.ack_label.setText(
                 "no acknowledgement — the recorder may not be reading commands")
-            self.ack_label.setStyleSheet("color:#e65100;")
+            self.ack_label.setStyleSheet(theme.note_style("warn", self))
             self._pending = None
             self._awaiting = None
         else:
@@ -1747,7 +1834,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
             check = QtWidgets.QCheckBox(name)
             check.setChecked(True)
-            check.setStyleSheet(f"color:{colour}; font-weight:600;")
+            # The curve's colour as a *swatch*, not as the text.  It has to
+            # match a line drawn on the white plot, so it cannot be re-themed
+            # for a dark panel -- and several of CURVE_COLORS are unreadable
+            # as text on one ground or the other (cyan manages 2.26:1 on
+            # white, brown 2.17:1 on a dark window). A stripe carries the same
+            # identity and leaves the name to the palette, which is legible on
+            # both.
+            check.setStyleSheet(
+                f"QCheckBox {{ border-left: 4px solid {colour};"
+                " padding-left: 6px; font-weight:600; }")
             check.stateChanged.connect(self._redraw)
             self.toggles[name] = check
             self.traces_layout.insertWidget(self.traces_layout.count() - 1, check)
@@ -2033,12 +2129,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
                                     columns=self.tail.columns())
         except OSError as exc:
             self.export_note.setText(f"could not write {chosen}: {exc}")
-            self.export_note.setStyleSheet("color:#b71c1c;")
+            self.export_note.setStyleSheet(theme.note_style("bad", self))
             return
         self.export_note.setText(
             f"wrote {rows} row(s) over {_duration(t1 - t0)} to "
             f"{os.path.basename(chosen)}")
-        self.export_note.setStyleSheet("color:#1b5e20;")
+        self.export_note.setStyleSheet(theme.note_style("ok", self))
 
     # -- choosing the window with the mouse --------------------------------
 
@@ -2262,10 +2358,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
             )
         except OSError as exc:
             self.ack_label.setText(f"could not queue the command: {exc}")
-            self.ack_label.setStyleSheet("color:#b71c1c;")
+            self.ack_label.setStyleSheet(theme.note_style("bad", self))
             return
         self.ack_label.setText(f"queued {kind} {cid}, waiting for the recorder…")
-        self.ack_label.setStyleSheet("color:#37474f;")
+        self.ack_label.setStyleSheet(theme.note_style("muted", self))
         for button in self._buttons():
             button.setEnabled(False)
         # The recorder refuses anything older than its TTL, so waiting longer
@@ -2324,7 +2420,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if output is None:
             self.ack_label.setText(
                 f"loop {self._loop} of {instrument} drives no heater range")
-            self.ack_label.setStyleSheet("color:#e65100;")
+            self.ack_label.setStyleSheet(theme.note_style("warn", self))
             return
         value = int(self.range_combo.currentData())
         name = HEATER_RANGE_NAMES.get(value, value)

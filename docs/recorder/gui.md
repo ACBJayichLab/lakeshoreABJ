@@ -202,6 +202,42 @@ honour. When health is anything but `ok` the row is coloured like a lit mark,
 because both marks go quiet exactly when the supervisor stops trusting its own
 measurement — which is the moment the row most needs to catch an eye.
 
+## Themes
+
+The viewer takes its colours from the **Qt palette**, not from a table of
+constants, so it follows whatever the desktop is doing — including a switch
+made while it is already open.
+
+This was a bug first. The viewer was written on a light desktop and hardcoded
+its foregrounds; opened in macOS dark mode it forced `#000000` onto a `#171717`
+table base, a contrast ratio of **1.17:1** — not hard to read, invisible. The
+same code would have done the same under a dark Windows or KDE theme.
+
+Two rules came out of it, and they are worth keeping when you add a widget:
+
+- **Never paint the normal case.** Ordinary text has no colour of its own; it
+  is whatever the palette says. A hardcoded "black" is a bug on a dark theme
+  and a hardcoded "white" is the same bug on a light one — the fix is not a
+  better constant, it is no constant. `theme.clear_foreground()` is how a table
+  item gets back to that.
+- **Paint the exceptional case from a pair.** Warnings do need a colour, so
+  every semantic name in `lschart/gui/theme.py` has a light value and a dark
+  one, both measured. `tests/test_gui_theme.py` computes the contrast ratios
+  rather than trusting anybody's eye, against the grounds Qt actually reports,
+  with a 4.5:1 floor.
+
+**The chart itself stays light on both themes.** `pg.setConfigOptions(
+background="w")` is deliberate: the trace colours are chosen to separate on
+white, the cursor readouts and the stat panel are drawn to sit on it, and it is
+what the chart looks like if it is printed. A white plot in a dark window is a
+deliberate choice, not an oversight — say so before changing it, because the
+ten curve colours would all need re-picking.
+
+Related: the **trace toggles** carry their curve's colour as a stripe rather
+than as the text of the label. The colour has to match a line drawn on the
+white plot, so it cannot be re-themed for a dark panel — and as text several
+of them failed on *both* grounds (cyan reaches only 2.26:1 on white).
+
 ## The control panel
 
 One instrument selector, then whatever the selected box can actually be asked
