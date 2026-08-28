@@ -162,11 +162,6 @@ COL_UNSETTLED = READING_COLUMNS.index("Off SP")
 MARK_SATURATED = "RAIL"
 MARK_UNSETTLED = "OFF SP"
 
-#: Vertical room left above the command groups for the instrument selector,
-#: which is overlaid on the first group's title line rather than given a row.
-#: Enough that the combo clears the group's own first control.
-INSTRUMENT_HEADROOM = 18
-
 #: Red, for a lit mark and for a software loop whose health is not ``ok``.
 #: Resolved through `gui.theme` at paint time: the old constant was invisible
 #: on a dark desktop, and so was the black it was paired with.
@@ -750,32 +745,35 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.command_group = QtWidgets.QGroupBox("Command")
         box = QtWidgets.QVBoxLayout(self.command_group)
         _tighten(box)
+        # No top margin: the selector row is the first thing in this group and
+        # should sit under the "Command" title, not a band below it. What is
+        # left above it is the style's own title height, which is not ours to
+        # give away.
+        margins = box.contentsMargins()
+        box.setContentsMargins(margins.left(), 0, margins.right(),
+                               margins.bottom())
 
-        # The instrument selector sits ON the first group's title line, at the
-        # right-hand end -- level with the word "Setpoint" rather than in a
-        # band of its own above it. It is one combo box and it was spending a
-        # whole row of a panel that has none to spare.
+        # The instrument selector sits flush on top of the first group, at
+        # the right-hand end: no band of its own above it, and no overlapping
+        # the group's border either. Neither gap nor collision -- the two read
+        # as one block.
         #
-        # Done by overlaying it on the group *stack* rather than on the
-        # Setpoint group itself, because which group comes first depends on
-        # the box: a 218 has no loops, so Setpoint is hidden and the analog
-        # group is what shows. Anchored to the stack, the selector is in the
-        # same place whichever group that turns out to be.
-        selector = QtWidgets.QWidget()
-        row = QtWidgets.QHBoxLayout(selector)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-        row.addWidget(QtWidgets.QLabel("Instrument"))
+        # The row and the group stack share a container with zero spacing,
+        # because a QVBoxLayout has one spacing for every item in it and this
+        # is the one join that has to close completely.
+        selector = QtWidgets.QHBoxLayout()
+        selector.setContentsMargins(0, 0, 0, 2)
+        selector.setSpacing(6)
+        selector.addStretch(1)
+        selector.addWidget(QtWidgets.QLabel("Instrument"))
         self.instrument_combo = QtWidgets.QComboBox()
         self.instrument_combo.currentIndexChanged.connect(self._instrument_changed)
-        row.addWidget(self.instrument_combo)
+        selector.addWidget(self.instrument_combo)
 
         groups = QtWidgets.QWidget()
         stack = QtWidgets.QVBoxLayout(groups)
         stack.setSpacing(4)
-        # Enough headroom for the selector to sit in the title band without
-        # touching the first group's own first row.
-        stack.setContentsMargins(0, INSTRUMENT_HEADROOM, 0, 0)
+        stack.setContentsMargins(0, 0, 0, 0)
 
         # What the selected loop is bound to, in a sentence.  From the
         # recorder's OUTMODE reading, so it is the instrument's answer and not
@@ -796,14 +794,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         stack.addWidget(self._range_group())
         stack.addWidget(self._analog_group())
 
-        overlay = QtWidgets.QGridLayout()
-        overlay.setContentsMargins(0, 0, 0, 0)
-        overlay.addWidget(groups, 0, 0)
-        # Added second, so it is painted over the group beneath it and takes
-        # the clicks in its own rectangle.
-        overlay.addWidget(selector, 0, 0,
-                          QtCore.Qt.AlignTop | QtCore.Qt.AlignRight)
-        box.addLayout(overlay)
+        head = QtWidgets.QWidget()
+        joined = QtWidgets.QVBoxLayout(head)
+        joined.setContentsMargins(0, 0, 0, 0)
+        joined.setSpacing(0)
+        joined.addLayout(selector)
+        joined.addWidget(groups)
+        box.addWidget(head)
 
         # The way back from a hold, and deliberately *outside* the panic menu:
         # arming starts the loop driving the heater again, which is the

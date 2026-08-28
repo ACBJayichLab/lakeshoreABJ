@@ -261,10 +261,10 @@ of them failed on *both* grounds (cyan reaches only 2.26:1 on white).
 
 ## The control panel
 
-The **instrument selector** sits on the first group's title line, at the
-right-hand end — level with the word "Setpoint" rather than in a band of its
-own above it. It is one combo box, and the panel has no rows to spare. It is
-anchored to the group *stack* rather than to the Setpoint group, because which
+The **instrument selector** sits flush on top of the first group, at the
+right-hand end: no band of its own above it, and no overlapping the group's
+border either. It is one combo box, and the panel has no rows to spare. It is
+joined to the group *stack* rather than to the Setpoint group, because which
 group comes first depends on the box: a 218 has no loops, so Setpoint is hidden
 and the analog group is what shows.
 

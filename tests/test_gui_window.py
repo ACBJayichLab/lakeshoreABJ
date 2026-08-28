@@ -2136,34 +2136,36 @@ def test_the_panic_button_is_red_on_both_themes(tmp_path, qt_app):
     w.close()
 
 
-def overlaps_title_band(window, widget, group) -> bool:
-    """Is `widget` drawn on `group`'s title line rather than in a row above it?
+def join_gap(window, widget, group) -> int:
+    """Pixels between the bottom of `widget` and the top of `group`.
 
-    Geometric overlap rather than a pixel offset: exactly how far a combo box
-    sits from a group-box title is the *style's* business, and it differs
-    between the real macOS style and the offscreen one CI runs. What does not
-    differ is whether the two rectangles meet at all -- in the old layout the
-    selector had a row of its own and they were strictly disjoint.
+    Negative means they collide, which looks like a mistake; a large positive
+    means a band of dead panel between them, which looks like another one.
+    Flush is a small non-negative number, and the exact value is the style's
+    business -- the assertion is on the sign and the scale, not on a pixel
+    count tuned to one desktop.
     """
-    top = widget.mapTo(window, widget.rect().topLeft()).y()
     bottom = widget.mapTo(window, widget.rect().bottomLeft()).y()
     group_top = group.mapTo(window, group.rect().topLeft()).y()
-    return top <= group_top <= bottom
+    return group_top - bottom
 
 
-def test_the_instrument_selector_sits_on_the_first_group_title_line(
+def test_the_instrument_selector_sits_flush_on_the_first_group(
         tmp_path, qt_app):
     """It is one combo box; it does not need a band of its own between the
-    Command title and the first group. Level with "Setpoint", at the other end
-    of the same line."""
+    Command title and the first group -- and it must not overlap the group's
+    border either. Neither gap nor collision."""
     w = cryostat(tmp_path, qt_app, [CTRL])
     w.resize(1500, 949)
     w.show()
     for _ in range(3):
         w.refresh()
         qt_app.processEvents()
-    assert overlaps_title_band(w, w.instrument_combo, w.setpoint_group)
-    # And at the other end of that line from the title.
+    # Flush: neither colliding with the group's border nor floating in a band
+    # of its own above it.
+    gap = join_gap(w, w.instrument_combo, w.setpoint_group)
+    assert 0 <= gap <= 6, f"{gap}px between the selector and the group"
+    # And at the right-hand end of the panel rather than the middle.
     combo_right = w.instrument_combo.mapTo(
         w, w.instrument_combo.rect().topRight()).x()
     group_right = w.setpoint_group.mapTo(
@@ -2185,5 +2187,6 @@ def test_the_selector_is_anchored_to_the_group_stack_not_to_one_group(
         qt_app.processEvents()
     assert w.setpoint_group.isHidden() and not w.analog_group.isHidden()
     assert not w.instrument_combo.isHidden()
-    assert overlaps_title_band(w, w.instrument_combo, w.analog_group)
+    gap = join_gap(w, w.instrument_combo, w.analog_group)
+    assert 0 <= gap <= 6, f"{gap}px between the selector and the group"
     w.close()
