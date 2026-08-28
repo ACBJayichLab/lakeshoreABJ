@@ -1,20 +1,20 @@
 # Feature Plan — Desired Behavior
 
 **Date:** 2026-08-27
-**Status:** **Phases 1 and 2 are done.** Phase 3 (the write path) is not started.
+**Status:** **All three phases are done.** Everything in the register below is
+implemented, tested and exercised against a live recorder.
 **Supersedes:** the 2026-08-26 draft (see [What changed](#what-changed-from-the-first-draft))
 
 | Phase | | |
 |---|---|---|
 | 1 | V1 V2 C1 C2 E1 | **done** -- viewer only, nothing on the bus |
 | 2 | S1 S2 S5 · L1 L2 L3 R1 W1 W2 | **done** -- verified against the bench 336, read path only |
-| 3 | A1 A2 P1 (S3 S4) K1-K4 A3 (S6) | **not started** -- every item is invariant territory |
+| 3 | A1 A2 P1 (S3 S4) K1-K4 A3 (S6) | **done** -- sim recorder, real software loop, MATLAB R2025b |
 
-Phase 3 changes the write path and removes the zero-exemptions. Read
-invariants 3, 4 and 5 in `CLAUDE.md` before starting it, and note that A3's
-fallout (S6) reaches further than the code: `CLAUDE.md`'s invariant 3 wording,
-two `CommandError` messages, the viewer's gate notes, three documents and
-about 33 references in `tests/test_ipc_service.py`.
+Phase 3 landed in four commits, in the order the priority section gives:
+`56fdf2e` (A1, A2), `5db2d9a` (P1, S3, S4), `16a90e0` (K1-K4), `ada3413`
+(A3, S6). What is left is X1 under [Open](#open), and the Windows deployment
+that was never part of this plan.
 
 The viewer and the MATLAB interface are the priority; the software PID is not.
 Nothing here asks for work in `control/` except one seam, named where it comes up.
@@ -191,7 +191,8 @@ Written for a session that has not read the tree. Line numbers drift; the names 
 
 ### Baseline as of 2026-08-27
 
-`408 passed`, `ruff` clean, working tree otherwise untouched by this session.
+`408 passed` when this plan was written; `560 passed` with all three phases in.
+`ruff` clean throughout.
 
 ---
 
@@ -232,4 +233,35 @@ reaches further than the code.
 ## Open
 
 1. **X1 — the software loop's own state in the loop table.** Wanted eventually,
-   deferred deliberately.
+   deferred deliberately. `status.json` already carries `control` beside
+   `links[].loops`; what is missing is a row for it in the viewer's table, and
+   a decision about what its "sensor" and "range" columns should say for a loop
+   that has neither.
+
+## Where phase 3 differed from the plan
+
+Three things were decided at the keyboard and are worth recording, because the
+plan's text does not describe what was built.
+
+1. **`read_pid` defaults to *off*.** The plan does not name a default. It cannot
+   be on: the shipped 218 + 336 config sits at 19 transactions against a 1 s
+   cadence at 50 ms pacing, and one `PID?` per loop does not fit — `check`
+   refuses a cadence a cycle cannot fit. The example configs turn it on at 2 s.
+   Where it is off the viewer's boxes are blank and name the key that fills them.
+2. **The `ltspm3` seam is `panic_hold()`, and the state it leaves is
+   `IDLE`/`MANUAL`, not `HOLDING`.** The plan quoted `SupervisorState.HOLDING`
+   ("output frozen pending clarity"), but in the code that state is a transient
+   inside the PID branch and `update()`'s manual branch overwrites it every
+   cycle. `abort_ramp()` + `set_mode(MANUAL)` is the mechanism the plan
+   actually described, and one name for the pair is what was added.
+3. **The panic menu had to leave the command group.** In Qt a child of a
+   disabled parent is disabled however firmly it is enabled, so a panic button
+   inside the group the source policy switches off is a button that lies. It
+   also had to leave `_buttons()`, because no pending command can make it wrong
+   to stop.
+
+And one defect found on the way, unrelated to the plan: `examples/config-336-usb.yaml`
+did not validate. `read_analog_outputs: true` had been added without raising its
+cadence, so the file a coworker installs was refused by `check`. It now runs at
+2 s, and `tests/test_config.py` checks every shipped example loads and fits its
+own cadence — nothing did before.
