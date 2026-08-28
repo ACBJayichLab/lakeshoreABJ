@@ -345,9 +345,20 @@ word-wrapped label still claims a line.
 
 ## The Panic menu
 
-Two ways to stop, behind a menu, and **three clicks by design**: open the menu,
-choose the action, confirm it. These are needed almost never and must not be
-reachable by accident; the middle click is what a mis-aimed one lands on.
+**Red, and its own dialog.** The button is the control somebody reaches for
+while something is going wrong on a cryostat, so it is findable without being
+read, and it is the same red on a light desktop as on a dark one — "the button
+that stops it" should not change colour with the theme.
+
+Clicking it opens a **modal**, not a dropdown. A popup is a small target beside
+the pointer, and the two things in it are "stop heating this cryostat" and
+"freeze it where it is": the wrong one must not sit a few pixels from the right
+one. Both are large, separated, and captioned with what they actually do.
+
+**Still three interactions** — open, choose, confirm — which was the point of
+the old menu and stays the point here. These are needed almost never and must
+not be reachable by accident; the middle one is what a mis-aimed click lands
+on, and cancelling costs nothing.
 
 | | |
 |---|---|
@@ -358,7 +369,7 @@ Neither is aimed at the selected instrument. Every other control needs an
 argument that means something on one box; these mean "stop", which on a two-box
 cryostat had better include the box carrying the sample heater.
 
-**The menu sits outside the command group, and that is structural.** Both kinds
+**The button sits outside the command group, and that is structural.** Both kinds
 are exempt from the recorder's per-client source policy, so when that policy
 switches the rest of the panel off these must stay live — and in Qt a child of a
 disabled parent is disabled however firmly it is enabled. A panel that greyed

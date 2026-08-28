@@ -73,6 +73,14 @@ BANNER = {
 }
 
 
+#: The panic control paints its own ground, so it is a pair like the banner
+#: rather than a foreground.  One pair for both themes on purpose: "this is the
+#: button that stops the cryostat" should not be a different colour depending on
+#: what the desktop is doing, and a control that carries its own background is
+#: legible either way.
+PANIC = ("#c62828", "#ffffff")
+
+
 def is_dark(widget: QtWidgets.QWidget | None = None) -> bool:
     """Is the palette we are painting into a dark one?
 
@@ -125,3 +133,13 @@ def clear_foreground(item) -> None:
     "paint nothing".
     """
     item.setData(QtGui.Qt.ItemDataRole.ForegroundRole, None)
+
+
+def panic_style() -> str:
+    """The Panic control's whole stylesheet.  Red on every theme."""
+    background, foreground = PANIC
+    return (f"QPushButton {{ background-color: {background}; color: {foreground};"
+            " font-weight: bold; border: none; border-radius: 4px;"
+            " padding: 5px 14px; }"
+            f"QPushButton:hover {{ background-color: #d32f2f; }}"
+            f"QPushButton:disabled {{ background-color: #6d4040; color: #cfc0c0; }}")

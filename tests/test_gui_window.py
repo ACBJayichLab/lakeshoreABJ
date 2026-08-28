@@ -1411,9 +1411,14 @@ def test_a_box_with_no_loops_offers_no_gains(tmp_path, qt_app):
 
 def test_the_panic_menu_holds_both_ways_of_stopping(tmp_path, qt_app):
     w = cryostat(tmp_path, qt_app, [CTRL])
-    labels = [a.text() for a in w.panic_button.menu().actions()]
+    labels = [w.off_action.text(), w.hold_action.text()]
     assert any("heaters OFF" in t for t in labels)
     assert any("HOLD" in t for t in labels)
+    # And the button opens a dialog rather than a dropdown: a popup is a small
+    # target beside the pointer, and these two are "stop heating this cryostat"
+    # and "freeze it where it is".
+    assert w.panic_button.menu() is None
+    assert w.panic_button.text() == "Panic Menu"
     w.close()
 
 
@@ -1440,7 +1445,7 @@ def test_arm_is_outside_the_panic_menu(tmp_path, qt_app, monkeypatch):
     """It applies power. Sitting beside the stopping actions would suggest it
     shares their exemptions, and it shares none of them."""
     w = cryostat(tmp_path, qt_app, [CTRL])
-    labels = [a.text() for a in w.panic_button.menu().actions()]
+    labels = [w.off_action.text(), w.hold_action.text()]
     assert not any("Arm" in t for t in labels)
 
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
@@ -2055,4 +2060,92 @@ def test_the_channel_names_are_not_elided_at_the_readout_font(tmp_path, qt_app):
     for name in ("Coldplate", "Stage 2", "Rad Shield", "Stage 1"):
         assert metrics.horizontalAdvance(name) <= width, f"{name} elides"
     assert not w.readings.horizontalScrollBar().isVisible()
+    w.close()
+
+
+def test_the_panic_dialog_offers_both_actions_as_large_buttons(tmp_path, qt_app):
+    """Large and separated on purpose: the two things in it are "stop heating
+    this cryostat" and "freeze it where it is", and the wrong one must not be
+    a few pixels away from the right one."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    opened = {}
+
+    def capture():
+        dialog = w._panic_dialog
+        opened["labels"] = [b.text() for b in dialog.findChildren(
+            QtWidgets.QPushButton)]
+        opened["heights"] = [b.height() or b.minimumHeight()
+                             for b in dialog.findChildren(QtWidgets.QPushButton)
+                             if b.text() in (w.off_action.text(),
+                                             w.hold_action.text())]
+        dialog.reject()
+
+    QtCore.QTimer.singleShot(0, capture)
+    w._open_panic_menu()
+    assert any("heaters OFF" in t for t in opened["labels"])
+    assert any("HOLD" in t for t in opened["labels"])
+    assert all(h >= 52 for h in opened["heights"]), opened["heights"]
+    w.close()
+
+
+def test_cancelling_the_panic_dialog_sends_nothing(tmp_path, qt_app):
+    """The middle interaction is what a mis-aimed click lands on, and it has
+    to be free."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    QtCore.QTimer.singleShot(0, lambda: w._panic_dialog.reject())
+    w._open_panic_menu()
+    assert queued(w) == []
+    w.close()
+
+
+def test_choosing_from_the_panic_dialog_still_asks_to_confirm(tmp_path, qt_app,
+                                                              monkeypatch):
+    """Three interactions by design: open, choose, confirm. The dialog
+    replaced the dropdown, not the confirmation."""
+    asked = []
+    monkeypatch.setattr(ViewerWindow, "_confirm",
+                        lambda self, title, text: (asked.append(title), True)[1])
+    w = cryostat(tmp_path, qt_app, [CTRL])
+
+    def choose():
+        for button in w._panic_dialog.findChildren(QtWidgets.QPushButton):
+            if "heaters OFF" in button.text():
+                button.click()
+                return
+        raise AssertionError("no heaters-off button in the dialog")
+
+    QtCore.QTimer.singleShot(0, choose)
+    w._open_panic_menu()
+    assert asked, "the action fired without its own confirmation"
+    (cmd,) = queued(w)
+    assert cmd["kind"] == "heaters_off"
+    w.close()
+
+
+def test_the_panic_button_is_red_on_both_themes(tmp_path, qt_app):
+    """It is the control somebody reaches for while something is going wrong.
+    It should be findable without reading, and not change colour depending on
+    what the desktop is doing."""
+    from lschart.gui import theme as _theme
+
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    repaint(qt_app, w, dark=True)
+    assert _theme.PANIC[0] in w.panic_button.styleSheet()
+    repaint(qt_app, w, dark=False)
+    assert _theme.PANIC[0] in w.panic_button.styleSheet()
+    w.close()
+
+
+def test_the_instrument_row_sits_on_the_setpoint_boundary(tmp_path, qt_app):
+    """It is one combo box; it does not need a band of its own between the
+    Command title and the first group."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.resize(1500, 949)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    combo_y = w.instrument_combo.mapTo(w, w.instrument_combo.rect().center()).y()
+    group_y = w.setpoint_group.mapTo(w, w.setpoint_group.rect().topLeft()).y()
+    assert 0 < group_y - combo_y < 30, f"gap is {group_y - combo_y}px"
     w.close()

@@ -746,10 +746,18 @@ class ViewerWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QVBoxLayout(self.command_group)
         _tighten(box)
 
-        top = QtWidgets.QFormLayout()
+        # The instrument row sits directly on top of the Setpoint group's
+        # border rather than floating in the middle of the space above it, so
+        # "Instrument" and the word "Setpoint" read at about the same height.
+        # It is one combo box; it does not need a band of its own.
+        top = QtWidgets.QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
+        top.addStretch(1)
+        top.addWidget(QtWidgets.QLabel("Instrument"))
         self.instrument_combo = QtWidgets.QComboBox()
         self.instrument_combo.currentIndexChanged.connect(self._instrument_changed)
-        top.addRow("Instrument", self.instrument_combo)
+        top.addWidget(self.instrument_combo)
         box.addLayout(top)
 
         # What the selected loop is bound to, in a sentence.  From the
@@ -805,21 +813,96 @@ class ViewerWindow(QtWidgets.QMainWindow):
         The tooltip says what the bypass covers and what it does not, rather
         than "bypasses interlocks" — which would be a promise it does not keep.
         """
-        self.panic_button = QtWidgets.QToolButton()
-        self.panic_button.setText("Panic ▾")
-        self.panic_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.panic_button = QtWidgets.QPushButton("Panic Menu")
         self.panic_button.setToolTip(
             "Two ways to stop. Both bypass the per-client source policy and "
             "the two power gates. Neither bypasses a read-only instrument, "
             "which is left alone and named in the reply.")
-        self.panic_button.setStyleSheet("font-weight:bold; padding:4px;")
-        menu = QtWidgets.QMenu(self.panic_button)
-        self.off_action = menu.addAction("All heaters OFF…")
+        self.panic_button.setStyleSheet(theme.panic_style())
+        # Red, and roughly twice the width it had. This is the control somebody
+        # reaches for while something is going wrong on a cryostat; it should
+        # be findable without reading, and the colour is the same on both
+        # themes because "the button that stops it" is not a thing that should
+        # look different on a light desktop.
+        self.panic_button.setMinimumWidth(150)
+        self.panic_button.setMinimumHeight(30)
+        self.panic_button.clicked.connect(self._open_panic_menu)
+
+        # The two actions stay QActions even though the menu is gone: they are
+        # the single place each behaviour lives, the dialog's buttons trigger
+        # them, and anything else that wants to reach one -- a test, a future
+        # shortcut -- has a handle that is not a dialog button.
+        self.off_action = QtGui.QAction("All heaters OFF…", self)
         self.off_action.triggered.connect(self._send_heaters_off)
-        self.hold_action = menu.addAction("All temperatures HOLD…")
+        self.hold_action = QtGui.QAction("All temperatures HOLD…", self)
         self.hold_action.triggered.connect(self._send_hold)
-        self.panic_button.setMenu(menu)
         return self.panic_button
+
+    def _open_panic_menu(self) -> None:
+        """The panic actions, as a modal rather than a dropdown.
+
+        Still three interactions -- open, choose, confirm -- which was the
+        point of the menu and stays the point here: these are needed almost
+        never and must not be reachable by accident.
+
+        A dialog rather than a popup because a popup is a small target next to
+        the pointer, and the two things in it are "stop heating this cryostat"
+        and "freeze it where it is". Large, separated buttons make the choice
+        deliberate and make the wrong one hard to hit by a few pixels.
+        """
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Panic")
+        dialog.setModal(True)
+        box = QtWidgets.QVBoxLayout(dialog)
+        box.setContentsMargins(20, 18, 20, 18)
+        box.setSpacing(18)
+
+        blurb = QtWidgets.QLabel(
+            "Both of these bypass the per-client source policy and the two "
+            "power gates.\n\nNeither bypasses a read-only instrument: those "
+            "are left alone and named in the reply.")
+        blurb.setWordWrap(True)
+        blurb.setStyleSheet(theme.note_style("muted", self))
+        box.addWidget(blurb)
+
+        chosen: list[QtGui.QAction] = []
+        for action, blurb_text in (
+            (self.off_action,
+             "33x heater ranges to 0 and 218 analog outputs to 0%. "
+             "Setpoints are not changed."),
+            (self.hold_action,
+             "Every loop holds the temperature it is at now. Ramping is "
+             "switched off first, and left off."),
+        ):
+            button = QtWidgets.QPushButton(action.text())
+            button.setStyleSheet(theme.panic_style())
+            button.setMinimumHeight(52)
+            font = button.font()
+            font.setPointSize(font.pointSize() + 3)
+            button.setFont(font)
+            button.clicked.connect(
+                lambda _checked=False, a=action, d=dialog: (
+                    chosen.append(a), d.accept()))
+            box.addWidget(button)
+            caption = QtWidgets.QLabel(blurb_text)
+            caption.setWordWrap(True)
+            caption.setStyleSheet(theme.note_style("muted", self))
+            box.addWidget(caption)
+            box.addSpacing(6)
+
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Cancel)
+        buttons.rejected.connect(dialog.reject)
+        box.addWidget(buttons)
+        dialog.setMinimumWidth(420)
+
+        #: The live dialog, so a test can drive it without a nested event loop.
+        self._panic_dialog = dialog
+        dialog.exec()
+        self._panic_dialog = None
+        # Fired after the dialog closes, so the action's own confirmation is
+        # not a second modal stacked on this one.
+        for action in chosen:
+            action.trigger()
 
     def _status_strip(self) -> QtWidgets.QWidget:
         """Panic, the source policy and link health, across the window.
