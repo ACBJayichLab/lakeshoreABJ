@@ -681,6 +681,39 @@ def test_a_shut_range_gate_disables_the_range_control_too(tmp_path, qt_app):
     w.close()
 
 
+def test_clearing_a_note_does_not_ask_qt_for_a_negative_height(
+        tmp_path, qt_app):
+    """An OPEN gate clears its note, and a cleared note used to be measured.
+
+    `_note` asks the label how tall it needs to be at its current width, which
+    is the right question for a wrapped note and a meaningless one for an empty
+    one -- an empty QLabel answers -1, and `setMinimumHeight(-1)` is a size Qt
+    refuses.  It refused it once per refresh, for as long as the gate stayed
+    open, which on a recorder with both power gates open is once a second
+    forever.  The symptom was the log, so the log is what this asserts.
+    """
+    messages = []
+    previous = QtCore.qInstallMessageHandler(
+        lambda mode, ctx, msg: messages.append(msg))
+    try:
+        w = cryostat(tmp_path, qt_app, [CTRL, MON],
+                commands={"accepted": True, "recent": [],
+                          "allow_heater_range": True,
+                          "allow_analog_output": True})
+        w.resize(1500, 900)
+        w.show()
+        for _ in range(3):
+            w.refresh()
+            qt_app.processEvents()
+    finally:
+        QtCore.qInstallMessageHandler(previous)
+    assert not [m for m in messages if "Negative sizes" in m], messages
+    # The cleared note claims no height, rather than keeping the last one.
+    assert w.range_note.minimumHeight() == 0
+    assert not w.range_note.isVisible()
+    w.close()
+
+
 def test_an_open_gate_still_warns_that_there_is_no_ramp(tmp_path, qt_app):
     w = cryostat(tmp_path, qt_app, [MON],
             commands={"accepted": True, "recent": [],

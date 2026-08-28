@@ -1605,8 +1605,19 @@ class ViewerWindow(QtWidgets.QMainWindow):
         policy.setHeightForWidth(True)
         label.setSizePolicy(policy)
         width = label.width()
-        if width > 0:
-            label.setMinimumHeight(label.heightForWidth(width))
+        if not text:
+            # A cleared note is hidden, so it claims no height anyway -- but it
+            # would keep whatever minimum the last text left on it, and asking
+            # an EMPTY label how tall it is at a width answers -1, which is not
+            # a size.  Qt refuses it and says so, once per refresh, for as long
+            # as the gate it describes stays open.
+            label.setMinimumHeight(0)
+        elif width > 0:
+            height = label.heightForWidth(width)
+            # -1 means "no height depends on width here" -- an unwrapped label,
+            # say.  It is an answer, not a measurement, and not a minimum.
+            if height >= 0:
+                label.setMinimumHeight(height)
 
     @staticmethod
     def _maybe(value, fmt: str) -> str:
