@@ -26,8 +26,8 @@
 # THE CRYOSTAT IS COLD.  Measured from the last legacy logs, 2026-08-24 15:54:
 #
 #   218  Sample      4.742 K     336  A RAD SHIELD   39.227 K
-#        Cold Head   5.494 K          B THE CHONKE  289.182 K  <- loop 2
-#        Shield      4.809 K          C 1st Stage    28.279 K
+#        Coldplate   5.494 K          B THE CHONKE  289.182 K  <- loop 2
+#        Magnet      4.809 K          C 1st Stage    28.279 K
 #                                     D 2nd Stage     3.346 K
 #
 #   loop 1  setpoint 295.0 K, heater 1 at 0.0%    (idle throughout)
@@ -75,8 +75,8 @@ instruments:
     # five queries out of every cycle.
     channels:
       1: Sample
-      2: Cold Head
-      3: Shield
+      2: Coldplate
+      3: Magnet
 
     # 0 = "this box is only being logged".  It is what makes `check` report
     # "records only", and it is the honest declaration for a config with no

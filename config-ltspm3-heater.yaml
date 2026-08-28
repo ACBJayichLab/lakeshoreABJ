@@ -80,8 +80,8 @@
 # ---------------------------------------------------------------------------
 #
 #   218  Sample      4.742 K     336  A RAD SHIELD   39.227 K
-#        Cold Head   5.494 K          B THE CHONKE  289.182 K  <- loop 2
-#        Shield      4.809 K          C 1st Stage    28.279 K
+#        Coldplate   5.494 K          B THE CHONKE  289.182 K  <- loop 2
+#        Magnet      4.809 K          C 1st Stage    28.279 K
 #                                     D 2nd Stage     3.346 K
 #
 #   218 analog out 1 (SAMPLE HEATER)  0.0%    <- what this file can move
