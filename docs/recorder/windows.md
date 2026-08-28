@@ -91,8 +91,10 @@ exercises that on Windows rather than skipping it.
 
 ## Three Windows-specific things to verify
 
-One of the three is now pinned by a test that runs on Windows in CI; the other
-two still need the cryostat's own machine.
+Two of the three are now settled. The clock-resolution worry is pinned by tests
+that run on Windows in CI; the command path has since been exercised on the
+cryostat's own machine with `config-ltspm3-heater.yaml`, which also retires most
+of the `movefile` question. What is left is `os.replace` under a real reader.
 
 1. **`os.replace` over an open `status.json`.** On Windows, replacing a file
    another process has open can fail with a sharing violation. **Not
@@ -127,12 +129,26 @@ two still need the cryostat's own machine.
    a clock that steps *backwards* mid-run must not let a later command sort
    first, which is what clamps the filename prefix monotonic.
 
-   What that does **not** settle is the end-to-end path on the cryostat: the
-   first deployment records only, with `accept_commands: false`, so no
-   command has yet crossed that machine's spool.
+   **The end-to-end path is settled separately, and later.** The *first*
+   deployment recorded only, with `accept_commands: false`. Since then
+   `config-ltspm3-heater.yaml` has been run on that machine and commanded
+   successfully (Jeff, 2026-08-28), so commands do cross that spool.
 3. **`movefile` from MATLAB is a rename**, not a copy-then-delete. The command
-   spool depends on the rename being what makes a file visible. **Still
-   unverified**, for the same reason.
+   spool depends on the rename being what makes a file visible.
+
+   **Largely retired, and never the hazard it looked like.** Commands now
+   cross that machine's spool (item 2), so the path works in practice. And the
+   failure mode was always bounded: a truncated JSON object has lost its
+   closing brace, so `commands.py` answers "unreadable command file" and
+   deletes it. It can only fail to parse — it can never parse into a
+   *different* command. The residual risk is a legitimate command being
+   refused with a message the operator sees, not a wrong one being run.
+
+   What is still strictly unmeasured is whether MATLAB's own `movefile` is
+   atomic there, as opposed to the spool merely working. `LakeShore.m` records
+   why `java.io.File` was rejected for the guaranteed-atomic version: it drags
+   in the JVM, which warns under `matlab -batch` and does not exist under
+   `-nojvm`, for a guarantee the fail-closed parse makes unnecessary.
 
 ## Paths
 

@@ -1,9 +1,9 @@
-# Handoff — 2026-08-28 (tenth session: X1, the software loop's row)
+# Handoff — 2026-08-28 (tenth session: X1, then the bench 336 on hardware)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
 **Everything in [`FEATURE_PLAN.md`](FEATURE_PLAN.md) is now implemented and
-tested, X1 included. 624 tests passing (from 584), ruff clean.** Verified
+tested, X1 included. 627 tests passing (from 584), ruff clean.** Verified
 against a live armed sim recorder driving a real `ltspm3` software loop through
 a hold and back. **No hardware was touched this session** — the bench 336 was
 not connected.
@@ -15,12 +15,14 @@ shaped the way they are. Two sections at the end are worth reading before you
 touch any of it: **Where phase 3 differed from the plan**, and **X1, and the
 half of its question that was wrong**.
 
-**What is left is Windows deployment**, which was never part of that plan.
-The clock-resolution worry behind the command sequence number is now pinned by
-tests that run on Windows in CI (see below); what still needs the cryostat's
-own machine is `os.replace` over an open `status.json`, whether MATLAB's
-`movefile` is a rename, and the end-to-end command path — the first deployment
-records only, with `accept_commands: false`.
+**Windows deployment is nearly closed out.** Of the three unknowns
+`windows.md` listed, two are now settled: the clock-resolution worry is pinned
+by tests that run on Windows in CI, and `config-ltspm3-heater.yaml` has since
+been run *and commanded* on the cryostat's own machine (Jeff, 2026-08-28),
+which also largely retires the `movefile` question. **What is left is
+`os.replace` over an open `status.json` under a real reader**, plus the
+unattended-running choice (Task Scheduler vs NSSM), which is a decision rather
+than a defect.
 
 ## What landed this session
 
@@ -74,6 +76,45 @@ nulls. It pins the names against a real supervisor.
 
 **The config decision from last session is settled** — `a11dfe9` says the 336
 is writable because it is.
+
+### The bench 336 (LTSPM2), on real hardware
+
+**First hardware run since phase 2.** Everything from phase 3 had only ever
+seen the simulator. `LSA26E0` over USB, cryo off, all four inputs ~295-297 K,
+both heater ranges 0 throughout — **no power was applied at any point**, and
+the box was left exactly as found.
+
+What it settled, in order:
+
+- `probe` — forces read-only regardless of config. `LSCI,MODEL336,LSA26E0`,
+  firmware 3.1, four inputs, all four loops `OUTMODE` closed.
+- `check` — 27 transactions, 1.35 s inside the 2.0 s cadence, exactly what the
+  config's own comment predicted.
+- **`read_pid` against real hardware for the first time.** P/I/D came back per
+  loop (100/5/0, 124/10/1, 325/10/0, 350/10/0) and reached the viewer's boxes.
+  P1 had only ever been exercised against sim and MATLAB.
+- **The W1 marks, confirmed on hardware in the case `gui.md` says to expect.**
+  Loops 1-2 are silent at range 0. Loops 3-4 are analog-only, so they have no
+  range to be switched off by, sit ~20 K above a 275 K setpoint with the output
+  at 0 %, and light *both* marks and keep them lit. That is the documented
+  behaviour, seen for real.
+- **A3, on hardware.** `send range 0` refused, with the message naming the
+  panic path; `send pid` refused (`allow_pid` defaults off); `send heaters_off`
+  **applied through the same gate that had just refused `range 0`**. That is
+  the exemption working outside the simulator.
+- A setpoint written and verified by readback (`SETP 1,280.0000 (verified)`),
+  then restored. Inert throughout, because the range was 0 — invariant 4 doing
+  its job on a real box.
+- 73 cycles, **0 dropped, 0 status-write failures**, clean SIGINT shutdown
+  leaving `running: false`.
+
+**One defect found, fixed, and pinned.** The viewer's *Send PID* button stayed
+live while `ipc.allow_pid` was false, so it could only ever produce a refusal —
+the same shape A3 removed from the range control. The spin boxes stay readable
+(the gains are worth seeing where they cannot be written); the button no longer
+does. Three tests now pin all three states, including that a recorder with
+`read_pid: false` may still be *sent* gains — a missing capability is not a
+withheld permission.
 
 ### Windows: the command ordering test was passing for the wrong reason
 
@@ -212,7 +253,7 @@ Do not guess. Nothing in this session changed those values.
 
 ## State of the tree
 
-- `624 passed`, `ruff` clean, on `main`. Nothing is running.
+- `627 passed`, `ruff` clean, on `main`. Nothing is running.
 - Example configs: all three validate, all three now poll `PID?`.
   **`examples/config-336-usb.yaml` moved to a 2 s cadence** — it did not
   validate before this session, because `read_analog_outputs: true` had been

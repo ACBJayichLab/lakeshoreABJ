@@ -1627,6 +1627,18 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 "All heaters OFF, which is exempt from this.")
             self.analog_note.setStyleSheet("color:#e65100;")
 
+        # The gains are the one control that is worth *reading* where it
+        # cannot be written, so the shut gate disables the button and leaves
+        # the boxes live. Greying the numbers would take away the thing that
+        # still works; leaving the button live would offer a click that can
+        # only ever produce a refusal, which is the shape A3 removed from the
+        # range control. Neither half is right on its own.
+        #
+        # Not conditioned on `polled` below: a recorder with `read_pid: false`
+        # can still be *sent* gains, and `set_pid()` verifies them by readback.
+        # That is a missing capability, not a withheld permission.
+        self.pid_button.setEnabled(self.source.allows_pid())
+
         # Two different silences to tell apart. Blank boxes because nobody is
         # polling the gains is not the same as a recorder that will not accept
         # new ones, and an operator who cannot see the difference will conclude

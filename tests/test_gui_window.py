@@ -1287,6 +1287,42 @@ def test_a_recorder_that_will_not_retune_says_that_instead(tmp_path, qt_app):
     assert "ipc.allow_pid" in w.pid_note.text()
 
 
+def test_a_shut_pid_gate_keeps_the_numbers_readable_and_the_button_dead(
+        tmp_path, qt_app):
+    """The gains are the one control worth *reading* where it cannot be
+    written, so the two halves are treated differently on purpose.
+
+    Greying the numbers would take away the thing that still works. Leaving
+    the button live would offer a click that can only ever produce a refusal,
+    which is exactly the shape A3 removed from the range control. Found on the
+    bench 336: the button was live behind a shut gate.
+    """
+    w = with_gains(tmp_path, qt_app, aux={"ls336.p1": 60.0},
+                   commands={"accepted": True, "recent": [], "allow_pid": False})
+    assert all(spin.isEnabled() for spin in w.pid_spins.values())
+    assert not w.pid_button.isEnabled()
+    w.close()
+
+
+def test_an_open_pid_gate_leaves_the_button_live(tmp_path, qt_app):
+    w = with_gains(tmp_path, qt_app, aux={"ls336.p1": 60.0},
+                   commands={"accepted": True, "recent": [], "allow_pid": True})
+    assert w.pid_button.isEnabled()
+    w.close()
+
+
+def test_gains_may_be_sent_to_a_recorder_that_does_not_read_them_back(
+        tmp_path, qt_app):
+    """A missing capability is not a withheld permission. `read_pid: false`
+    means the boxes are not the instrument's -- which the note says -- not
+    that the instrument refuses new ones. `set_pid()` verifies by readback."""
+    w = with_gains(tmp_path, qt_app, aux={},
+                   commands={"accepted": True, "recent": [], "allow_pid": True})
+    assert "read_pid" in w.pid_note.text()
+    assert w.pid_button.isEnabled()
+    w.close()
+
+
 def test_a_recorder_that_will_retune_says_it_applies_no_power(tmp_path, qt_app):
     w = with_gains(tmp_path, qt_app, aux={"ls336.p1": 60.0},
                    commands={"accepted": True, "recent": [], "allow_pid": True})
