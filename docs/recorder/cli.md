@@ -159,7 +159,8 @@ writing zero to it once, because the driver runs every cycle and wins.
 
 `hold` is the other panic action: every closed loop stopped where it is —
 ramping off first (the rate is kept), then the setpoint moved to that loop's own
-sensor's present temperature — and a software loop's output frozen. **It is not
+sensor's present temperature — and a software loop disengaged, its
+heater left exactly where it is. **It is not
 a synonym for less power**: a ramp heading down sits below the temperature the
 cryostat has reached, so holding demands more heat than the ramp was. It never
 raises a range.

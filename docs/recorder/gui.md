@@ -382,7 +382,7 @@ on, and cancelling costs nothing.
 | | |
 |---|---|
 | **All heaters OFF** | 33x ranges to 0 and 218 analog outputs to 0%, on every writable box, and a software loop **disarmed** first so the zero sticks. Setpoints are not changed |
-| **All temperatures HOLD** | every closed loop's ramping switched off (the rate is kept) and its setpoint moved to its own sensor's present temperature; a software loop's output frozen |
+| **All temperatures HOLD** | every closed loop's ramping switched off (the rate is kept) and its setpoint moved to its own sensor's present temperature; a software loop DISENGAGED, its heater left where it is |
 
 Neither is aimed at the selected instrument. Every other control needs an
 argument that means something on one box; these mean "stop", which on a two-box

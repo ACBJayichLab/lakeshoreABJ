@@ -72,11 +72,20 @@ python -m ltspm3 -c config.yaml send heaters_off   # loop DISARMED, heater to 0
 python -m ltspm3 -c config.yaml send arm           # closed again, holding here
 ```
 
-`hold` reaches `HeaterSupervisor.panic_hold()`, which is `abort_ramp()` plus
-`set_mode(MANUAL)` under one name — the loop stops regulating and the heater is
-left exactly where it was. **The clamp and the rate limiter still apply**;
-manual mode is not raw access to the DAC, which is why this goes through the
-supervisor rather than around it. The state reads `idle` / `manual`.
+**Both of these disengage the loop.** A person reaching for either has decided
+the loop should stop deciding, and the software does not get to override that.
+`hold` reaches `HeaterSupervisor.panic_hold()` — `abort_ramp()` plus
+`set_mode(OFF)` — and `OFF` writes nothing at all, ever. The heater keeps
+exactly the value it had. The state reads `idle` / `off`.
+
+**It used to switch to `MANUAL`, and manual was not a hold.** A manual output is
+still clamped to the authority band and still rate limited, so a hold taken
+while the heater sat outside that band moved it on the very next cycle. Told to
+freeze at 20 % it reported `holding 20.000%` and wrote **62.080 %**; told to
+freeze at 68 % it wrote **64.070 %**. It only ever really held when the heater
+happened already to be inside the band, and either way the number in the reply
+was one it was about to leave. A freeze that freezes only sometimes is worse
+than none, because it will be believed.
 
 That is a hold of a **power**, not of a temperature. Nothing regulates the
 sample afterwards, so it drifts with the cryostat — the opposite of what `hold`
@@ -86,22 +95,18 @@ does to a 33x loop, which keeps regulating at the temperature it was at.
 cryostat is at *now*. If it drifted while held, that error is real; the clamp
 and rate limiter bound what the output may do about it.
 
-### `heaters_off` disarms this loop — it does not hold it
+### `heaters_off` also disarms, and differs only in what happens next
 
-`hold` freezes a power; `heaters_off` lets go of the heater entirely, and on
-this loop those have to be different mechanisms. A held loop is still a driving
-loop: a manual output is **still clamped to the authority band**, so a loop
-merely held and then zeroed would be rate-limited back up to
-`operating_point_pct - authority_pct` — about 62 % here — over the following
-hour. There is no manual zero on this loop, because the band is an
-unconditional statement about where the heater lives. `MANUAL` freezes the
-heater where it is; only `OFF` writes nothing at all.
+Both panic actions leave the loop in `OFF`. They differ in what becomes of the
+heater afterwards, and therefore in what the loop may still claim to know:
+`hold` leaves the output alone and goes on reporting it, while `heaters_off`
+zeroes it and so stops reporting one at all — `output_pct` goes null, and the
+218's own `aout1` carries the truth from there.
 
-So `heaters_off` calls `panic_off()`, which is `abort_ramp()` plus
-`set_mode(OFF)`, and `lschart` calls it **before** it zeroes the 218 — nothing
-may be driving that output at the moment the zero lands. A lockout survives it:
-stopping the heater is not the same as having looked at the cryostat, and the
-panic button is pressed precisely when nobody has diagnosed anything yet.
+`lschart` calls `panic_off()` **before** it zeroes the 218 — nothing may be
+driving that output at the moment the zero lands. A lockout survives either
+action: stopping the heater is not the same as having looked at the cryostat,
+and a panic button is pressed precisely when nobody has diagnosed anything yet.
 
 `arm` is the way back from this one too, and it is the whole way back — there
 is no latch to clear unless the loop had *also* faulted.

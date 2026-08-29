@@ -148,7 +148,7 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `analog` | `percent` — **applies power** on a 218; there is no inert half to it |
 | `pid` | `loop`, `p`, `i`, `d` — the instrument's own gains, all three together |
 | `heaters_off` | **panic** — every heater on every writable instrument to zero, and the software loop disarmed so the zero sticks |
-| `hold` | **panic** — every closed loop stopped where it is; a software loop's output frozen |
+| `hold` | **panic** — every closed loop stopped where it is; a software loop disengaged, its heater left where it is |
 | `arm` | `kelvin` (optional) — close the software loop again. **Applies power**, and is exempt from nothing |
 | `ack` | clear a software loop's fault lockout. The first of the two steps back to driving, so gated exactly like `arm` |
 | `source` | `name`, `allowed` — mute or un-mute one client. Exempt from the source policy it edits, and from nothing else |
@@ -359,11 +359,13 @@ command ran once. This was a real defect and its shape is worth remembering:
 `heaters_off` wrote `ANALOG 0` around the supervisor, which stayed in PID mode
 still remembering 63.08%, held while the sample fell, and then began its fault
 ramp-down *from that remembered value* — putting 63% back on a heater an
-operator had just cut. Holding it would not have been enough either: a held
-loop is still clamped to its authority band, so it would have climbed back to
-the bottom of that band instead. Only "not driving" is off. The loop is
-disarmed **before** the outputs are zeroed, because nothing may be writing to
-an output at the moment the zero lands.
+operator had just cut. The loop is disarmed **before** the outputs are zeroed,
+because nothing may be writing to an output at the moment the zero lands.
+
+`hold` disengages the software loop too — both panic actions do, because a
+person reaching for either has decided the loop should stop deciding. They
+differ only in what happens to the heater afterwards: `hold` leaves it where it
+is, `heaters_off` zeroes it.
 
 **`ack`** clears a fault lockout. A completed fault ramp-down latches the
 software loop out and `arm` refuses until the latch is cleared; before this

@@ -349,7 +349,9 @@ classdef LakeShore < handle
             %
             %   Each closed 33x loop has its ramping switched off -- the rate
             %   is kept -- and its setpoint moved to its own bound sensor's
-            %   present temperature.  A software loop has its output frozen
+            %   present temperature.  A software loop is DISENGAGED -- it
+            %   stops writing to the heater entirely, and the heater keeps
+            %   the value it has
             %   and stops regulating.
             %
             %   TWO HONEST THINGS.  Hold is not a synonym for less power: a

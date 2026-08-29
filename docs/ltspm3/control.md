@@ -17,10 +17,23 @@ disposes. Nothing else may write to the analog output.
 That includes the file interface. `lschart`'s `hold`, `heaters_off`, `arm` and
 `ack` commands reach this loop through `panic_hold()`, `panic_off()`, `arm()`
 and `acknowledge()` — **called duck-typed, by name**, so `lschart` still never
-imports `ltspm3` (invariant 1). Going through the supervisor rather than around
-it is the point: a panic hold is `abort_ramp()` + `set_mode(MANUAL)`, and the
-clamp and the rate limiter still apply to everything that leaves. See
+imports `ltspm3` (invariant 1). See
 [running](running.md#stopping-the-loop-deliberately-from-a-file).
+
+**Both panic actions disengage the loop** — `abort_ramp()` then `set_mode(OFF)`,
+which writes nothing at all, ever. A person reaching for either has decided the
+loop should stop deciding. `MANUAL` is not good enough and was the bug: it still
+clamps to the authority band and still rate limits, so a hold taken while the
+heater sat outside the band moved it on the next cycle.
+
+**The band caps heat; it does not compel it.** The ceiling is hard and immediate
+— less heat is never the dangerous direction. The floor bounds what the PID may
+*ask* for (`_apply_band_to_pid` sets `out_min`), not what the DAC must carry.
+Enforcing it on the output too meant `clamp` ran after the rate limiter and
+undid it: arming with the heater at 0 % wrote 62.076 % in one step, past
+`max_step_pct`, which exists for exactly that. It also meant the loop could not
+hold any temperature whose steady-state output lay below the band — at base
+temperature it would command operating-point power and then fault.
 
 **"Owns the output" is a claim about this program, not about the world.** A
 front panel, another process, or `lschart`'s own `analog` command can all move

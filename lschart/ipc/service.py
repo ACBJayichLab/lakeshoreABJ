@@ -702,9 +702,11 @@ class IpcService:
         `ltspm3`'s supervisor held its own idea of where the heater was, and
         four minutes after this command it began a fault ramp-down *from that
         remembered value* -- putting 63% back onto a heater an operator had
-        just cut. Holding it is not enough either: a held loop is still clamped
-        to its authority band, so it would climb back to the bottom of that
-        band instead. Only "not driving" is off.
+        just cut. Only "not driving" is off.
+
+        `hold` disengages the loop as well -- both panic actions do. The two
+        differ in what becomes of the heater afterwards, not in whether the
+        loop keeps a say in it.
         """
         done: list[str] = []
         skipped: list[str] = []

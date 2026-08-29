@@ -13,9 +13,13 @@ The layers, outermost first -- a proposal must survive all of them:
    error exceeds ``max_error_k``, or the PID suddenly wants ``anomaly_demand_pct``
    more output than it currently has, the premise is broken -- something is wrong
    with the cryostat, not with the control -- so hold, and ramp down if it persists.
-4. **Authority band.**  A hard clamp to ``operating_point +/- authority_pct``,
-   intersected with an absolute never-exceed range.  However wrong everything
-   else goes, the heater cannot leave this window.
+4. **Authority band.**  ``operating_point +/- authority_pct``, intersected with
+   an absolute never-exceed range.  The **ceiling** is hard and immediate:
+   however wrong everything else goes, the heater cannot go above this window.
+   The **floor** bounds what the PID may *ask* for, not what the DAC must
+   carry -- enforcing it on the output too meant the clamp ran after the rate
+   limiter and undid it, so a loop told to freeze at 20% wrote 62% on the next
+   cycle.  Below the band is less heat, which is never the dangerous direction.
 5. **Rate limit.**  Per-update step and per-minute rate caps.
 6. **Dither.**  Sub-code resolution, since one 0.01% code is ~76 mK here.
 7. **Readback verification.**  ``AOUT?`` must agree with what we sent.
@@ -233,6 +237,10 @@ class HeaterSupervisor:
         #: `output_pct` may be trusted as "where the heater is" -- see
         #: :meth:`_where_the_heater_is`.
         self._wrote_last_cycle = False
+        #: Which panic action stopped this loop, until it is armed again.
+        #: `off`/`idle` is also where a never-armed loop sits, and those
+        #: are different things to read on a screen.
+        self._disengaged_by = ""
 
     # -- authority band ----------------------------------------------------
 
@@ -313,6 +321,7 @@ class HeaterSupervisor:
             # and starting from the stale target reopens the loop with exactly
             # the error the ramp exists to avoid.
             self._pending_approach = True
+            self._disengaged_by = ""
             self.state = SupervisorState.TRACKING
         elif mode is LoopMode.MANUAL:
             # Adopt where the heater actually is, not where we last left it.
@@ -382,23 +391,53 @@ class HeaterSupervisor:
         log.warning("ramp aborted, holding %.4f K", held)
         return held
 
+    def _disengage(self, why: str) -> None:
+        """Stop the loop acting on the heater at all, preserving any lockout.
+
+        ``why`` is remembered and reported until the loop is armed again.  Both
+        panic actions land in ``off``/``idle``, which is also where a loop that
+        was never armed sits -- and "nobody has started this" and "somebody
+        stopped this" are not the same thing to read on a screen.  The mode used
+        to carry that distinction, badly (``manual`` meant held); saying which
+        action was taken carries it properly.
+
+        Both panic actions go through here, and that is the point: a person
+        pressing either has decided the loop should stop deciding, and ``OFF``
+        is the only mode that writes nothing whatever.  ``MANUAL`` is not good
+        enough -- it still clamps to the authority band and still rate limits,
+        which is the software overriding the person one cycle later.
+
+        A lockout survives.  Stopping the heater is not the same as having
+        looked at the cryostat, and a panic action is taken precisely when
+        nobody has diagnosed anything yet; :meth:`acknowledge` clears a
+        lockout and nothing else does.
+        """
+        was_locked = self.state is SupervisorState.LOCKED_OUT
+        self.abort_ramp()
+        self.set_mode(LoopMode.OFF)
+        if was_locked:
+            self.state = SupervisorState.LOCKED_OUT
+        self._disengaged_by = why
+
     def panic_hold(self) -> float:
         """Stop regulating and leave the heater exactly where it is.
 
-        The controller half of ``lschart``'s ``hold`` command, and the one seam
-        the file interface reaches into this package by -- called duck-typed by
-        name, so ``lschart`` still never imports ``ltspm3``.
+        The controller half of ``lschart``'s ``hold`` command, called
+        duck-typed by name so ``lschart`` still never imports ``ltspm3``.
 
-        Composed rather than invented: :meth:`abort_ramp` stops any sweep where
-        it stands, and ``set_mode(MANUAL)`` adopts the output the heater is
-        currently at.  Both already existed; what did not was a single name for
-        the pair, and a panic action assembled from three calls at the call
-        site is one that can be assembled wrong.
+        **This disengages the loop -- it does not switch it to manual.**  It
+        used to, and manual was not a hold: a manual output is still clamped to
+        the authority band, so a `hold` taken while the heater sat outside that
+        band moved it *on the next cycle*.  Measured: told to freeze at 20% it
+        reported "holding 20.000%" and wrote 62.080%; told to freeze at 68% it
+        wrote 64.070%.  It only ever really held when the heater happened
+        already to be inside the band.  A freeze that freezes only sometimes,
+        and reports a number it is about to leave, is worse than no freeze.
 
-        **The clamp and the rate limiter still apply.**  Manual mode is not raw
-        access to the DAC -- every value still passes ``clamp`` and
-        ``_rate_limit`` on the way out, which is exactly why this goes through
-        the supervisor rather than around it.
+        So: ``abort_ramp()`` to stop any sweep where it stands, then ``OFF``,
+        which writes nothing at all, ever.  The heater keeps the value it has.
+        The loop's own idea of that value is refreshed from the instrument
+        first, because the number this returns is the one the operator is told.
 
         Note this holds a *power*, not a temperature.  Nothing regulates the
         sample afterwards, so it will drift with the cryostat -- which is the
@@ -407,10 +446,16 @@ class HeaterSupervisor:
 
         Returns the percentage being held.
         """
-        self.abort_ramp()
-        self.set_mode(LoopMode.MANUAL)
-        held = self.manual_pct
-        log.warning("PANIC HOLD: loop open, heater frozen at %.3f%%", held)
+        held = self._where_the_heater_is(
+            default=self.output_pct if self.output_pct is not None
+            else self.cfg.operating_point_pct
+        )
+        self._disengage("held by an operator; `arm` to close the loop again")
+        # Unlike `panic_off`, the loop still knows where the heater is: nothing
+        # moved it, and it is going to stay there.  Keeping `output_pct` is
+        # what keeps `heater_pct` in the log truthful through a hold.
+        self.output_pct = held
+        log.warning("PANIC HOLD: loop disengaged, heater left at %.3f%%", held)
         return held
 
     def panic_off(self) -> float | None:
@@ -420,16 +465,13 @@ class HeaterSupervisor:
         seam that package reaches into this one by -- called duck-typed by
         name, exactly like :meth:`panic_hold`.
 
-        **Deliberately not** :meth:`panic_hold`.  A hold keeps the loop alive
-        in ``MANUAL``, and a manual output is still clamped to the authority
-        band: a loop merely held and then zeroed would be rate-limited straight
-        back up to ``operating_point_pct - authority_pct``, which on this
-        cryostat is about 62%.  There is no "manual zero" on this loop, because
-        the band is an unconditional statement about where the heater lives.
-        ``MANUAL`` is for freezing the heater where it is; ``OFF`` is for
-        letting go of it, and only ``OFF`` writes nothing at all, ever.
+        Both panic actions disengage the loop; they differ only in what happens
+        to the heater afterwards and therefore in what this object may still
+        claim to know.  :meth:`panic_hold` leaves the output alone and goes on
+        reporting it.  Here the caller zeroes it immediately after, so this
+        stops reporting one at all.
 
-        So the caller's order matters and is the caller's job: disarm first,
+        The caller's order matters and is the caller's job: disengage first,
         *then* zero the output.  Nothing may be driving that output at the
         moment the zero lands.
 
@@ -437,16 +479,9 @@ class HeaterSupervisor:
         this loop never commanded one.  :meth:`arm` is the way back, and it is
         not a panic action -- it applies power.
         """
-        # A lockout survives this.  Stopping the heater is not the same as
-        # having looked at the cryostat, and the panic button is pressed
-        # precisely when nobody has diagnosed anything yet.  `acknowledge()`
-        # clears a lockout; nothing else does.
-        was_locked = self.state is SupervisorState.LOCKED_OUT
-        self.abort_ramp()
-        self.set_mode(LoopMode.OFF)
-        if was_locked:
-            self.state = SupervisorState.LOCKED_OUT
         abandoned = self.output_pct
+        self._disengage(
+            "heaters off by an operator; `arm` to close the loop again")
         # And stop claiming to know where the heater is.  The caller zeroes the
         # output immediately after this, so `output_pct` would otherwise go on
         # reporting the abandoned value -- into `status.json`'s `control` block
@@ -586,6 +621,13 @@ class HeaterSupervisor:
             setpoint_k=self.pid.cfg.setpoint,
             setpoint_target_k=self.ramp.target,
             ramping=self.ramp.ramping or not self.smoother.settled,
+            # The gains are a property of the controller, not of this cycle's
+            # decision, so they are reported on every cycle -- including the
+            # ones that return early.  Set only in the PID branch they read 0.0
+            # whenever the loop was off or holding, and a zero gain on screen
+            # says "tuned to nothing" rather than "not being used right now".
+            kp=self.pid.cfg.kp,
+            ti=self.pid.cfg.ti,
         )
         s.raw_k = reading.kelvin if reading is not None else None
 
@@ -635,6 +677,8 @@ class HeaterSupervisor:
             )
             s.state = self.state
             s.output_pct = self.output_pct
+            if self._disengaged_by:
+                s.reason = self._disengaged_by
             self._wrote_last_cycle = False
             self.status = s
             return s
@@ -667,7 +711,23 @@ class HeaterSupervisor:
             target = max(self.cfg.hard_min_pct, min(self.cfg.hard_max_pct, target))
         else:
             target = self._rate_limit(current, target, dt)
-            target = self.clamp(target)
+            # The band caps heat.  It does not COMPEL heat, and applying it as
+            # if it did is what undid the rate limiter completely: `clamp` used
+            # to run here and raise anything below the floor straight to it, so
+            # a `hold` at 20% wrote 62.08% on the next cycle and an `arm` at 0%
+            # went to 62.076% in a single step -- past `max_step_pct`, which
+            # exists for exactly that.
+            #
+            # Down to the ceiling is still instant: less heat is never the
+            # dangerous direction, and the post-quantise re-application below
+            # already works this way.  Up to the floor is not, and does not
+            # need to be -- the floor still bounds what the PID may *ask* for
+            # (`_apply_band_to_pid` sets `out_min`), so the band keeps its
+            # meaning as the window this loop operates in.  What it no longer
+            # does is force the output into that window in one write.
+            _, band_hi = self.band
+            target = min(target, band_hi)
+            target = max(target, self.cfg.hard_min_pct)
         s.target_pct = target
 
         # -- quantise and write ----------------------------------------------

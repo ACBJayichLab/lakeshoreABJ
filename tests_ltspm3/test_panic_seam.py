@@ -245,12 +245,19 @@ def test_the_next_move_is_computed_from_where_the_heater_is(armed_service):
 
 
 def test_a_hold_freezes_where_the_heater_is_not_where_it_was(armed_service):
-    """`panic_hold` adopts the present output.  It has to read it to know it."""
+    """`panic_hold` adopts the present output.  It has to read it to know it.
+
+    And the number in the reply is the number the heater keeps: the message an
+    operator is shown used to be one the loop was about to overwrite.
+    """
     svc, h = armed_service
     h.inst.set_analog_percent(62.2)          # moved by something else
 
-    apply(svc, h, "hold")
-    assert h.sup.manual_pct == pytest.approx(62.2, abs=0.02)
+    message = apply(svc, h, "hold")["message"]
+    assert "62.200" in message
+
+    h.step(100)
+    assert h.inst.get_analog_percent() == pytest.approx(62.2, abs=1e-9)
 
 
 # -- ack ---------------------------------------------------------------------

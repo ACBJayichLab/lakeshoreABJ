@@ -370,6 +370,11 @@ class Application:
         it was handed whether it has a ``panic_hold`` and says so plainly when
         it does not.
 
+        This **disengages** the loop rather than putting it in manual: a person
+        pressing freeze is not asking for the loop's opinion, and manual still
+        clamped and rate limited, which moved the heater one cycle later
+        whenever it sat outside the authority band.  See ``panic_hold``.
+
         Raises RuntimeError on a recorder with no software loop, which is a
         thing to report by name rather than a silent success.
         """
@@ -380,7 +385,8 @@ class Application:
                 "there is nothing here whose output could be frozen"
             )
         held = panic()
-        return f"software loop OPEN, heater frozen at {float(held):.3f}%"
+        return (f"software loop DISENGAGED, heater frozen at {float(held):.3f}% "
+                f"(nothing is regulating the sample now)")
 
     def disarm(self) -> str:
         """Stop the software loop driving at all, so the heater can be zeroed.

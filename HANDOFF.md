@@ -5,14 +5,15 @@ Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goe
 **An audit of the software PID found that `heaters_off` did not stop an armed
 `ltspm3` loop — it put 63% back on the heater four minutes later.** Fixed on
 both sides, pinned by a new `tests_ltspm3/test_panic_seam.py`, and verified
-against a live armed sim recorder. **710 tests passing (from 696), ruff clean.**
-No hardware was touched.
+against a live armed sim recorder. **716 passing, ruff clean** — plus one
+pre-existing viewer failure this session did not touch, see [Still
+open](#still-open). No hardware was touched.
 
-One pre-existing defect was *surfaced* rather than fixed, and it needs a
-decision: **[the authority band's lower rail overrides the rate
-limiter](#the-band-floor-overrides-the-rate-limiter-undecided)**, so a loop
-armed while its heater is at 0 goes to 62% in a single cycle. That is reachable
-today by the documented post-fault recovery, and was not introduced here.
+A second, pre-existing defect surfaced with it and is fixed too, on Jeff's call:
+**[the authority band's lower rail overrode the rate
+limiter](#the-band-caps-heat-it-does-not-compel-it)**, so a loop armed while its
+heater was at 0 went to 62 % in a single cycle. Fixed on Jeff's call, together
+with the `hold` defect that shares its root cause.
 
 ## What landed this session
 
@@ -48,16 +49,41 @@ Two fixes, and they are not alternatives:
   cycle that wrote nothing, so a tracking loop pays no extra transaction —
   `_write_output` has just verified the value by readback anyway.
 
-**`disarm`, not `hold`, and that distinction is the interesting part.** A held
-loop is still a driving loop: a manual output is **still clamped to the
-authority band**, so a loop merely held and then zeroed would be rate-limited
-back up to ~62% over the following hour. There is no manual zero on this loop.
-`MANUAL` freezes the heater where it is; only `OFF` writes nothing at all. Hence
-a second seam, `panic_off()`, alongside `panic_hold()`.
+### `hold` did not hold either — Jeff's call, and he was right
 
-A lockout **survives** `panic_off`. Stopping the heater is not the same as
-having looked at the cryostat, and the panic button is pressed precisely when
-nobody has diagnosed anything yet.
+Chasing the above surfaced the same fault in the other panic action, and this
+one is the more likely human intervention: `hold` is what you reach for to stop
+a runaway. It switched the loop to `MANUAL`, and **manual was not a hold.** A
+manual output is still clamped to the authority band and still rate limited, so
+a hold taken while the heater sat outside that band moved it on the very next
+cycle. Measured:
+
+| heater at | `hold` reported | heater one cycle later |
+|---|---|---|
+| 20 % | "holding 20.000%" | **62.080 %** |
+| 63.08 % | "holding 63.080%" | 63.080 % |
+| 68 % | "holding 68.000%" | **64.070 %** |
+
+It only ever really held when the heater happened already to be inside the band,
+and either way the number in the reply was one it was about to leave. A freeze
+that freezes only sometimes is worse than none, because it will be believed.
+
+**Both panic actions now disengage the loop** — `abort_ramp()` then
+`set_mode(OFF)`, which writes nothing at all, ever. A person reaching for either
+has decided the loop should stop deciding, and the software does not get a vote.
+They differ only in what becomes of the heater afterwards, and therefore in what
+the loop may still claim to know: `hold` leaves the output alone and goes on
+reporting it, `heaters_off` zeroes it and reports `null`.
+
+A lockout **survives** both. Stopping the heater is not the same as having
+looked at the cryostat, and a panic action is taken precisely when nobody has
+diagnosed anything yet.
+
+**One thing that had to be replaced.** `off`/`idle` is also where a loop that was
+never armed sits, and the mode used to carry that distinction badly (`manual`
+meant held). The status `reason` now carries it properly and says *which* action
+was taken — "held by an operator" or "heaters off by an operator" — cleared on
+`arm`.
 
 ### The status file disagreed with itself — caught on the live recorder
 
@@ -100,9 +126,10 @@ has". Worth more than a 33x's fixed pair, because these are *scheduled* — the
 tuner re-solves them at the present temperature, so they move as the cryostat
 does.
 
-### The band floor overrides the rate limiter (undecided)
+### The band caps heat; it does not compel it
 
-**Found by the live run, pre-existing, and not fixed here.** In `step()`:
+**Found by the live run, pre-existing, and now fixed** — it is the same root
+cause as the hold above, and one line explains both. In `step()`:
 
 ```python
 target = self._rate_limit(current, target, dt)
@@ -115,25 +142,37 @@ authority_pct`. So a loop armed while its heater is at 0 is rate-limited to
 recorder going 0 → 62.08 in a single row. `max_step_pct: 0.02` exists precisely
 to prevent that.
 
-This is reachable **today**, before any change here, by the recovery
+This was reachable before any change here, by the recovery
 [running.md](docs/ltspm3/running.md) documents: fault ramp-down to
 `safe_output_pct: 0.0`, then `ack`, then `arm`. `set_mode(PID)` has always
 re-read the output, so `output_pct` was already 0 on that path. This session's
-change adds one more route to it (`heaters_off` then `arm`), it did not create
-it.
+change added one more route to it (`heaters_off` then `arm`); it did not create
+it. It is also exactly what made `hold` fail to hold, which is why the two are
+one fix.
 
-Three answers, and it is Jeff's call which — it is a change to the envelope, and
-the limit belongs in `SupervisorConfig` either way (invariant 7):
+**The fix is asymmetric, because the two rails are not the same kind of thing.**
+The *ceiling* is the safety limit and stays hard and immediate — less heat is
+never the dangerous direction, and the post-quantise re-application below it
+already worked this way. The *floor* is not a safety limit at all; it is an
+artifact of writing the band as `operating_point ± authority`. It still bounds
+what the PID may **ask** for (`_apply_band_to_pid` sets `out_min`), so the band
+keeps its meaning as the window this loop operates in. What it no longer does is
+force the output into that window in one write. `hard_min_pct` is the real
+lower bound and is unchanged.
 
-1. **Clamp before rate-limiting**, so the rails are approached at the limited
-   rate. Honest, but at 0.20%/min a loop below its band takes five hours to
-   reach it, which may make arming from cold useless.
-2. **Leave it.** The band is where this loop lives and entering it is what
-   arming *means*; the band itself is the cap on heat, and 62% is inside it.
-3. **A separate approach rate** toward the band — a third number, faster than
-   the trim limiter and slower than instant.
+**No new config knob, and the numbers say why.** A rate-limited climb from 0 %
+to the band floor takes **5.2 h**, against the **6.1 h** the existing
+`approach_rate_k_per_min` already takes to walk a setpoint from base to 96 K.
+The design already assumed a traverse of that order; the output ramp and the
+setpoint ramp are matched, so a third rate would be a number with nothing to
+justify it (invariant 7).
 
-Nothing was changed pending that decision.
+**The second-order consequence is the more important one.** The floor did not
+just make arming jerky — it meant this loop could not hold *any* temperature
+whose steady-state output lay below the band. Armed at base temperature it would
+command operating-point power (62 %, which settles near 99.6 K) and then fault.
+Verified in sim: from a settled 4 K start it now ramps smoothly to ~24 % and
+holds 4.81 K, largest single-cycle move 0.04 %.
 
 ### Smaller
 
