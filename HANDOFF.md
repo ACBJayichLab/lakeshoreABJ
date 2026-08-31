@@ -5,9 +5,13 @@ Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goe
 **An audit of the software PID found that `heaters_off` did not stop an armed
 `ltspm3` loop — it put 63% back on the heater four minutes later.** Fixed on
 both sides, pinned by a new `tests_ltspm3/test_panic_seam.py`, and verified
-against a live armed sim recorder. **716 passing, ruff clean** — plus one
-pre-existing viewer failure this session did not touch, see [Still
-open](#still-open). No hardware was touched.
+against a live armed sim recorder. **731 passing, ruff clean** — the whole
+suite green for the first time since `9e1bf76`. No hardware was touched.
+
+Also merged in: `claude/pid-intended-behavior`'s commissioning path and its
+measured **τ = 709 s** and **K ≈ 13.8 K/%**. The two lines of work were
+independent and agree; where they touch, see [Two passes, one
+loop](#two-passes-one-loop).
 
 A second, pre-existing defect surfaced with it and is fixed too, on Jeff's call:
 **[the authority band's lower rail overrode the rate
@@ -116,6 +120,36 @@ source policy exactly as `arm` does. It leaves the loop **disarmed**: recovery
 stays two acts, which is the whole point of a latch that exists to make somebody
 look at the cryostat.
 
+### The viewer hid five of its nine columns on this machine
+
+`splitter.setSizes([560, 900])` had the arithmetic written out beside it: "the
+eight fixed columns want 426 px between them and 'Rad Shield' wants 86 more".
+Both halves of that sum are properties of a **font**, and they were stored as a
+constant. On the cryostat's own machine those columns want 658 px and the name
+wants 270 — and the table sets `ScrollBarAlwaysOff`, so the surplus is not
+scrolled to, it is not drawn. `Out`, `Rng`, `State` and **both warning marks**
+were simply absent, with nothing to say so. That is what
+`test_the_loop_table_never_scrolls_sideways` had been failing on all along; it
+was a real defect, not a flaky test.
+
+`_fit_panel_to_table` measures instead. Three things it learned the hard way,
+all from measurement rather than reasoning:
+
+- **it must wait for `isVisible()`** — fitting before layout sized the panel to
+  a nominal splitter width, squeezed the name column to 36 px and shrank the
+  font to its floor, solving a problem the window did not have yet and keeping
+  the solution. A *width* threshold in that guard is wrong too: it skips exactly
+  the small windows that need this most;
+- **the name column asks for an ordinary name, never the longest one present** —
+  sizing the whole panel to a 40-character label lets one sensor rearrange the
+  window, which inverts the rule that the sensor is the column that gives;
+- **when nine columns will not fit at any readable font, the scrollbar comes
+  back** and the name column stops stretching. Scrolling is a poor answer and
+  this panel is built never to need one — but nothing may be *quietly* missing.
+
+1920/1500 px: panel 845, 12 pt, no scrollbar, nothing lost. 1100/900 px: panel
+560, 9 pt, scrollbar on, nothing lost.
+
 ### The software loop's gains reach the status file
 
 `kp`/`ti` are published as `p`/`i`, under the same names an instrument loop uses,
@@ -182,12 +216,40 @@ holds 4.81 K, largest single-cycle move 0.04 %.
   `ipc.allow_analog_output` for `analog` *above 0*. `ada3413` made zero gated
   like any other value nine commits earlier.
 
+## Two passes, one loop
+
+`claude/pid-intended-behavior` audited the same loop from the documents while
+this branch audited it from the code, and the two agree in a way worth
+recording. Its `commissioning.md` §0.3 states the defect this branch fixed —
+*"MANUAL does not save you … and neither does `hold`. Only mode `OFF` stops
+writes"* — and two of its sentences describe behaviour `main` did **not** have
+and this branch now does: `panic_hold()` freezing where it is from any state,
+and arming below the band being a rate-limited march rather than a step. Its
+staged procedure also needs the `ack` command from this branch, `acknowledge()`
+having had no route from the file interface.
+
+Its measured τ = 709 s (R² = 0.9973) corroborates the config's 620 s. Its
+K ≈ 13.8 K/% at 66.6 % against 10.0 K/% at 63 % is new, and is the argument for
+the gain scheduling that is already there.
+
+**One correction went the other way**, and it is in `c3a36cc`: `running.md` and
+`control.md` both showed a worked `check` line reading `58.076 % .. 68.076 %`,
+five times too wide, pre-existing on `main`. `commissioning.md` §0.3 took it at
+face value and concluded the present 66.598 % sits inside the band with 1.48 %
+of room. Against the real band it is **2.52 % above the ceiling** — ~35 K at
+their own measured gain. Simulated, arming there cuts the output to the ceiling
+on the first cycle, holds, ramps down, and reaches ~13 K about two hours later,
+locked out. Its stage-4 gate catches this; only the worked example inverts it.
+**§0.3's rule needs its other half: "never arm while the present output is
+below the band" should also say "or above it."** That is the one thing left for
+whoever owns that document.
+
 ## Still open
 
-- **`tests/test_gui_window.py::test_the_loop_table_never_scrolls_sideways`
-  fails on this machine** — 928 px of columns against a 542 px viewport. It
-  survived the viewer session's integration, so it is not stale WIP. Untouched
-  here: it is the viewer's, and this session was the control loop's.
+- Nothing failing. The three items under [Before the first armed
+  run](docs/ltspm3/running.md#before-the-first-armed-run) remain, `verify_readback`
+  on the 218 over GPIB most of all — and the closed loop has still never run on
+  this cryostat.
 - The three items under [Before the first armed
   run](docs/ltspm3/running.md#before-the-first-armed-run) are all still open,
   `verify_readback` on the 218 over GPIB most of all.
