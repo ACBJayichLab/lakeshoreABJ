@@ -221,6 +221,26 @@ holds 4.81 K, largest single-cycle move 0.04 %.
   `ipc.allow_analog_output` for `analog` *above 0*. `ada3413` made zero gated
   like any other value nine commits earlier.
 
+## The tree, as left
+
+One worktree (the main checkout), one branch (`main`), and one tag. All five
+`.claude/worktrees/` sessions were merged and removed; three leave an **empty**
+directory behind only because another session's shell still has it as its
+working directory, and those disappear on their own.
+
+`archive/frosty-banach-status-wip` (`a4f17c6`) is the one thing not on `main`:
+a week of uncommitted status-write work found in that worktree, committed and
+tagged so removing the branch could not destroy it. It is superseded by
+`961bf96` on every axis but one, and that one — the viewer surfacing the
+count — has since been ported. Kept as a record, not as pending work.
+
+**A recorder is live in `data/`** (pid 6708, `config-ltspm3-heater.yaml`,
+~129k cycles, 0 dropped, sample ~149 K). Nothing here touched that directory.
+That config carries **no `control:` section**, so none of this session's
+supervisor changes are running in it — it is a plain recorder with the heater
+under manual control. They take effect the next time a config *with* a
+`control:` section is armed, which has still never happened on this cryostat.
+
 ## Two passes, one loop
 
 `claude/pid-intended-behavior` audited the same loop from the documents while
