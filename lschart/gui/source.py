@@ -1096,10 +1096,22 @@ class StatusSource:
                 f"status is {age:.0f} s old (limit {self.stale_limit_s:.0f} s): "
                 "the recorder has hung or been killed"
             )
-        return "ok", (
+        sentence = (
             f"cycle {self.status.get('cycle', 0)}, "
             f"{self.status.get('dropped_cycles', 0)} with errors"
         )
+        # A recorder that cannot write status.json still reads "ok" here, and
+        # correctly so: everything visible is current.  It is just not the
+        # newest there is.  Without this the file silently lags with nothing
+        # anywhere saying why -- which is the same "a gap in the feed looks
+        # exactly like a hung recorder" problem the counter exists for, seen
+        # from the viewer instead of from the CLI.  `lschart status` has said
+        # this since 961bf96; the viewer had not.
+        failures = int((self.status.get("status_file") or {}).get("failures") or 0)
+        if failures:
+            sentence += (f", {failures} failed status write(s) -- this file "
+                         f"may be behind the recorder")
+        return "ok", sentence
 
     # -- convenience projections ------------------------------------------
 

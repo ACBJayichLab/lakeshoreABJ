@@ -145,36 +145,69 @@ only thing that clears the latch back to a re-armable state.
 Not a change — a trap to understand before stage 4, because it bites hardest on
 exactly the first armed run.
 
-**The band is a two-sided clamp, not a ceiling.** `clamp()` is
-`max(lo, min(hi, pct))`, and it is applied to the PID output, to a MANUAL
-setting, and to the value the PID primes from. Below-band is reachable *only*
-as a fault ramp-down.
+**The band caps heat; it does not compel it.** The **ceiling** is hard and
+immediate — `min(target, band_hi)` after the rate limiter, so coming down onto
+it is never rate limited, because less heat is never the dangerous direction.
+The **floor** bounds what the PID may *ask* for (`_apply_band_to_pid` sets
+`out_min`), not what the DAC must carry.
+
+> Both halves of that changed on 2026-08-31 and this section described the old
+> behaviour. `clamp()` used to run on the output *after* the rate limiter and
+> so undid it from below: arming at 0% wrote 62.076% in a single step, past
+> `max_step_pct`. It also meant this loop could not hold any temperature whose
+> steady-state output lay below the band — at base temperature it commanded
+> operating-point power and then faulted.
 
 Two consequences, and the second is the one that applies today.
 
-**If the present output is *below* the band, arming drives it up.** MANUAL does
-not save you — a manual setting is clamped too — and neither does `hold`. Only
-mode `OFF` stops writes. This is what would happen arming from a cold start at
-0.0%: the loop would climb toward the band floor, rate-limited to a slow march
-rather than a step, but climbing.
+**If the present output is *below* the band, arming still drives it up** — the
+PID may not ask for less than the floor — but as a genuinely rate-limited march
+now rather than a step. From a cold start at 0.0% that is about five hours to
+the floor, which is the same order as the `approach_rate_k_per_min` the
+setpoint would take to cross the same range.
 
-**If the band is centred somewhere else, the authority is lopsided.** The
+**`hold` does now save you.** `panic_hold()` is `abort_ramp()` + `set_mode(OFF)`,
+and `OFF` writes nothing at all, ever — the heater keeps exactly the value it
+has, wherever that is. It used to switch to `MANUAL`, and a manual setting is
+clamped, so a hold taken outside the band moved the heater on the next cycle:
+told to freeze at 20% it reported "holding 20.000%" and wrote 62.080%. Both
+panic actions disengage the loop now. A **MANUAL** setting is still clamped,
+which is why the panic path no longer uses it.
+
+**If the band is centred somewhere else, you may be outside it entirely.** The
 cryostat is at 148.75 K on 66.598% (see the state block above). The shipped band
-is 58.076–68.076%, centred for a ~99.6 K hold. From 66.598% that leaves:
+is **62.076–64.076%** — `authority_pct` is 1.0, centred for a ~99.6 K hold.
 
-| Direction | Room | ≈ at ~13 K/% here |
+This section first said 58.076–68.076%, copied from a worked `check` example in
+`running.md` that was five times too wide, and concluded from it that 66.598%
+sat inside the band with 1.48% of room upward. **It does not. It is 2.52% above
+the ceiling**, which at the 13.8 K/% measured up here is about 35 K of heat the
+loop would take out on its first cycle. Simulated from that state, arming today:
+
+| cycle | | |
 |---|---|---|
-| up | 1.48% | ~19 K |
-| down | 8.52% | far below anything you would hold |
+| 1 | heater 66.600 → **64.070%** | the ceiling, applied at once |
+| 5 | `holding` | the loop cannot reach 148.75 K from 64.076% |
+| 300 | `ramping_down` | the anomaly hold expired |
+| 2000 | heater 1.14%, sample ~13 K | ~2.2 h later, then locked out |
 
-The loop is not in danger of running away — the ceiling is doing its job — but
-it has a very short leash upward and an enormous one downward, which is not an
-envelope anybody designed. It is a band commissioned for a different operating
-point, still in the config.
+The ceiling is doing its job. The point is that doing its job, from here, is a
+35 K step down followed by a fault — so this is not a lopsided envelope to work
+within, it is one to leave before arming.
 
 > **Re-centre `operating_point_pct` on the output that actually holds the
 > temperature you intend to hold, be at that temperature before arming, and
-> never arm while the present output is below the band.**
+> never arm while the present output is outside the band — in *either*
+> direction.**
+
+Above the ceiling is the worse of the two, and the asymmetry is deliberate:
+clamping **down** is instant, because less heat is never the dangerous
+direction, while climbing **up** to the floor is rate limited. Being below the
+band costs you a slow march; being above it costs you a step.
+
+**Read the band from `check`, never from a page** — including this one. That is
+what the number above being wrong for a week cost, and a test now pins every
+worked band in `docs/ltspm3/` against what `SupervisorConfig` actually produces.
 
 Note the gain is not the 10.0 K/% quoted for the 63% operating point. The
 settled ladder in the live data measures **K ≈ 13.8 K/%** between 66.235% and

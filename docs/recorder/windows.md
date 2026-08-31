@@ -109,7 +109,11 @@ of the `movefile` question. What is left is `os.replace` under a real reader.
    `status_file.last_error` — a write that fails cannot report itself in the
    file it failed to write, so the signal is a gap in the feed followed by a
    counter that jumped. `lschart status` prints that line whenever the count
-   is non-zero.
+   is non-zero, and **the viewer's banner says it too** — it still reads `ok`,
+   because everything on screen is current, with "N failed status write(s) —
+   this file may be behind the recorder" after it. Somebody watching the chart
+   is the person most likely to notice the lag and least likely to be reading
+   the log.
 
    This used to be silent: the failure was logged at `DEBUG` and counted only
    in memory, so a gap in the feed was indistinguishable from a hung recorder.

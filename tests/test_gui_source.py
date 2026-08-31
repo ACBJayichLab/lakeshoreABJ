@@ -1374,3 +1374,41 @@ def test_every_row_carries_every_key():
         [link_with_loops(a_loop(sensor="Driven"))])
     assert set(bare) == set(bound)
     assert bare["loop"] == 0 and bare["setpoint_k"] is None
+
+
+def test_a_recorder_that_cannot_write_its_status_file_says_so_in_the_banner(
+        tmp_path):
+    """"ok" is right, and on its own it is not the whole truth.
+
+    Everything the viewer can see is current; it is simply not the newest there
+    is. Left unsaid, the file lags with nothing anywhere explaining why — the
+    same "a gap in the feed looks exactly like a hung recorder" problem the
+    counter was added for, seen from the viewer rather than from the CLI, and
+    the failure mode `windows.md` names as the likely one on this platform.
+    """
+    src = StatusSource(status_file(tmp_path, status_file={
+        "writes": 900, "failures": 12, "last_error": "sharing violation",
+        "last_failure_t": time.time(),
+    }))
+    src.poll()
+    state, message = src.health()
+    assert state == "ok"
+    assert "12 failed status write(s)" in message
+    assert "behind the recorder" in message
+
+
+def test_a_healthy_recorder_does_not_mention_status_writes(tmp_path):
+    """A line that is always there is a line nobody reads."""
+    src = StatusSource(status_file(tmp_path, status_file={
+        "writes": 900, "failures": 0, "last_error": "", "last_failure_t": 0.0,
+    }))
+    src.poll()
+    assert "failed status write" not in src.health()[1]
+
+
+def test_a_recorder_too_old_to_report_status_writes_is_not_an_error(tmp_path):
+    """Schema 1 has no `status_file` block at all, and must degrade quietly."""
+    src = StatusSource(status_file(tmp_path))
+    src.poll()
+    state, message = src.health()
+    assert state == "ok" and "failed status write" not in message
