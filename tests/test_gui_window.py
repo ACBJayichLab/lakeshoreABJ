@@ -366,6 +366,90 @@ def test_a_view_button_undoes_the_zoom_buttons_too(viewer):
     assert viewer.k_plot.getViewBox().autoRangeEnabled() == [True, True]
 
 
+# -- what a redraw costs, and what it admits to ------------------------------
+#
+# The chart redraws on a timer that fires every second, so a redraw that takes
+# longer than that never finishes before the next is due and every gesture
+# queues behind one already in flight.  Measured on the cryostat's own machine
+# with 14 traces over a day of 1 Hz samples: 1247 ms as it was, 127 ms now.
+
+
+def test_a_burst_of_view_changes_costs_one_redraw(viewer, qt_app):
+    """A wheel zoom emits a range change per notch; each used to redraw.
+
+    Drawing inline meant the gesture finished long before the picture caught
+    up with it, which is what a zoom lagging behind the pointer is.  The
+    redraw is deferred to the next turn of the event loop instead, so the
+    notches collapse into one and the last one wins.
+    """
+    draws = []
+    real = viewer.tail.between
+    viewer.tail.between = lambda *a, **k: (draws.append(a[0]), real(*a, **k))[1]
+    newest = viewer.tail.newest()
+    for i in range(6):
+        viewer._span = (newest - 600.0 - i, newest)
+        viewer._span_changed()
+    assert draws == []                      # nothing drawn during the gesture
+    qt_app.processEvents()
+    once = len(draws)
+    assert once == len(viewer.curves)       # exactly one pass over the traces
+    qt_app.processEvents()
+    assert len(draws) == once               # and it does not keep redrawing
+
+
+def test_the_status_bar_says_when_the_chart_is_showing_every_sample(viewer, qt_app):
+    """Full resolution and a decimated picture look identical on screen.
+
+    Which one is up depends on the width of the span and on how long the
+    viewer has been running, neither of which is visible in the trace -- so
+    the chart says so rather than leaving it to be inferred.
+    """
+    newest = viewer.tail.newest()
+    span = (newest - 600.0, newest)
+    viewer._span = span
+    viewer.tail.prepare_span(*span)
+    viewer._redraw()
+    viewer._update_statusbar()
+    assert "full resolution" in viewer.statusBar().currentMessage()
+
+
+def test_the_status_bar_owns_up_to_drawing_an_overview(viewer, qt_app):
+    """A span too wide to re-read is drawn from the overview, and says so."""
+    newest = viewer.tail.newest()
+    span = (newest - 3000.0, newest)
+    viewer.tail.SPAN_READ_BUDGET_BYTES = 10     # narrower than any real log
+    viewer._span = span
+    viewer.tail.prepare_span(*span)
+    viewer._redraw()
+    viewer._update_statusbar()
+    message = viewer.statusBar().currentMessage()
+    assert "overview" in message and "full resolution" not in message
+
+
+def test_the_traces_are_drawn_by_a_pen_the_raster_engine_has_a_fast_path_for(
+        viewer):
+    """Width 1 is a performance decision, not a cosmetic one.
+
+    Qt strokes a 1-pixel pen along a fast path and anything wider through the
+    full path stroker, per segment.  Over a day of 1 Hz samples on 14 traces
+    that is the difference between a 127 ms redraw and a 1247 ms one, on a
+    window that redraws every second -- so the width is pinned here rather
+    than left to be widened again by eye.
+    """
+    assert viewer.curves
+    for curve in viewer.curves.values():
+        assert curve.opts["pen"].width() == 1
+
+
+def test_the_chart_draws_what_the_screen_can_show_and_keeps_the_peaks(viewer):
+    """A day at 1 Hz is ~96 samples per pixel; ninety-nine in a hundred are
+    painted over.  `peak` is what keeps a spike from being the one dropped."""
+    for curve in viewer.curves.values():
+        assert curve.opts["autoDownsample"]
+        assert curve.opts["downsampleMethod"] == "peak"
+        assert curve.opts["clipToView"]
+
+
 # -- the live-referenced view buttons ----------------------------------------
 #
 # The last N hours, ending at the newest sample and riding forward with the
@@ -1097,7 +1181,7 @@ def y_limits(plot):
 def test_the_value_axis_stops_where_the_viewer_says(viewer):
     lo, hi = y_limits(viewer.k_plot)
     assert lo <= 0.0
-    assert hi == pytest.approx(450.0)
+    assert hi == pytest.approx(350.0)
     lo, hi = y_limits(viewer.pct_plot)
     assert hi == pytest.approx(100.0)
 

@@ -537,6 +537,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: The newest value drawn for each trace, which is what the legend
         #: shows while no region is picked.
         self._live_values: dict[str, float] = {}
+        #: What the last redraw actually put on screen, for the status bar.
+        self._drawn_points: int = 0
+        self._drawn_spacing: float | None = None
         #: The loop every command in the panel is about, chosen by clicking a
         #: row of the loop table.  There is no second selector.
         self._loop: int = 1
@@ -548,7 +551,26 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(max(200, refresh_ms))
+
+        #: Collapses a burst of view changes into one redraw.
+        #:
+        #: A wheel zoom emits a range change per notch and a drag emits one
+        #: per mouse move, and redrawing inline made the window pay for every
+        #: one of them -- the gesture finished long before the drawing caught
+        #: up with it, which is what a zoom that lags behind the pointer
+        #: actually is.  A zero-length single shot runs on the next turn of
+        #: the event loop, so ten notches arriving together cost one redraw
+        #: and the last one wins.
+        self._redraw_pending = QtCore.QTimer(self)
+        self._redraw_pending.setSingleShot(True)
+        self._redraw_pending.setInterval(0)
+        self._redraw_pending.timeout.connect(self._redraw)
+
         self.refresh()
+
+    def _schedule_redraw(self) -> None:
+        """Redraw once the current burst of view changes has finished."""
+        self._redraw_pending.start()
 
     # -- construction ------------------------------------------------------
 
@@ -2285,12 +2307,33 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 f"window {stamp(int(t0)).toString('HH:mm:ss')}–"
                 f"{stamp(int(t1)).toString('HH:mm:ss')} "
                 f"({_duration(t1 - t0)}) · not following")
+            bits.append(self._resolution_note(t0, t1))
         else:
             bits.append(f"last {_duration(self._follow_span_s)} · live")
         for unit, fixed in self._ylim.items():
             if fixed is not None:
                 bits.append(f"y {fixed[0]:g}–{fixed[1]:g} {unit} fixed")
         self.statusBar().showMessage("   ".join(bits))
+
+    def _resolution_note(self, t0: float, t1: float) -> str:
+        """Whether the picked span is drawn from every sample, or from some.
+
+        The chart has two honest answers for a hand-picked window and they
+        look identical: every sample the log holds, or a decimated picture of
+        them.  Which one is on screen depends on how wide the span is and on
+        how long this viewer has been running, neither of which is visible in
+        the trace -- so it is said here instead of left to be inferred.
+
+        The distinction is about the *drawing* only.  Cursor statistics and
+        the region export re-read the log at full resolution whatever this
+        says, which is why a decimated chart is a presentational compromise
+        and never a measurement one.
+        """
+        if self.tail.overlay_is_full_resolution(t0, t1):
+            return "full resolution"
+        if self._drawn_spacing:
+            return f"overview · 1 pt / {_duration(self._drawn_spacing)}"
+        return "overview"
 
     # -- plotting ----------------------------------------------------------
 
@@ -2307,7 +2350,24 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 continue
             plot = self.k_plot if kind == "kelvin" else self.pct_plot
             colour = CURVE_COLORS[len(self.curves) % len(CURVE_COLORS)]
-            curve = plot.plot([], [], pen=pg.mkPen(colour, width=2), name=name)
+            # Width 1, and not for looks.  Qt's raster engine strokes a
+            # 1-pixel pen along a fast path and anything wider through the
+            # full path stroker, per segment -- which on a day of 1 Hz
+            # samples is the difference between a 127 ms redraw and a
+            # 1247 ms one, on a window that redraws every second.  The
+            # antialiasing is kept: measured against downsampling it costs
+            # 2 ms, and it is what stops a dense trace looking like a comb.
+            curve = plot.plot([], [], pen=pg.mkPen(colour, width=1), name=name)
+            # Draw what the screen can show, not what the log holds.  A day
+            # at 1 Hz is 86 400 samples across roughly 900 pixels, so ninety
+            # nine of every hundred points land on a pixel that is already
+            # painted.  `peak` keeps each pixel's minimum and maximum rather
+            # than sampling one of them, so a spike survives the reduction --
+            # which matters, because a spike is exactly what somebody is
+            # looking for.  Statistics and exports never come through here;
+            # they read the log at full resolution via `samples_in`.
+            curve.setDownsampling(auto=True, method="peak")
+            curve.setClipToView(True)
             self.curves[name] = curve
             self.curve_units[name] = "K" if kind == "kelvin" else "%"
 
@@ -2323,7 +2383,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             check.setStyleSheet(
                 f"QCheckBox {{ border-left: 4px solid {colour};"
                 " padding-left: 6px; font-weight:600; }")
-            check.stateChanged.connect(self._redraw)
+            check.stateChanged.connect(self._schedule_redraw)
             self.toggles[name] = check
             self.traces_layout.insertWidget(self.traces_layout.count() - 1, check)
 
@@ -2333,6 +2393,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         extents: dict[str, tuple[float, float] | None] = {
             unit: None for unit in self._panels
         }
+        #: The spacing of the longest trace actually drawn, which is what the
+        #: status bar reports.  Measured from the samples rather than assumed
+        #: from the span: decimation is what changes it, and the whole point
+        #: of saying it out loud is that the operator should not have to
+        #: work out which regime the chart is in.
+        self._drawn_points = 0
+        self._drawn_spacing = None
         for name, curve in self.curves.items():
             if not self.toggles[name].isChecked():
                 curve.setData([], [])
@@ -2356,6 +2423,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
             # straight line across an outage the cryostat did not spend at
             # some convenient interpolated temperature.
             curve.setData(t, v, connect=connect_flags(t, factor=self.gap_factor))
+            if len(t) > self._drawn_points:
+                self._drawn_points = len(t)
+                if len(t) > 1:
+                    self._drawn_spacing = (t[-1] - t[0]) / (len(t) - 1)
             if v:
                 self._live_values[name] = float(v[-1])
                 unit = self.curve_units[name]
@@ -2767,7 +2838,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _span_changed(self) -> None:
         self._sync_view_buttons()
-        self._redraw()
+        self._schedule_redraw()
         self._update_statusbar()
 
     # -- commanding --------------------------------------------------------

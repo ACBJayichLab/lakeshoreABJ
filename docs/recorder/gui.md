@@ -18,7 +18,7 @@ pip install -e ".[gui]"      # pyqtgraph + PySide6
 | `--refresh S` | redraw cadence, default 1.0 |
 | `--max-points N` | default 200,000 |
 | `--gap-factor N` | how many sample intervals a hole must exceed to be drawn as a gap, default 4 |
-| `--max-kelvin N` | where the temperature panel stops panning and zooming outward, default 450 |
+| `--max-kelvin N` | where the temperature panel stops panning and zooming outward, default 350 |
 | `--max-percent N` | the same stop for the output panel, default 100 |
 | `--read-only` | open with no command spool at all, so the whole control panel is dead |
 | `--log-level` | |
@@ -487,7 +487,7 @@ it is just as fixed as one dragged out, and the status bar says so.
 
 ### The value axis has a comfort stop
 
-Zoom and pan on a value axis stop at **0–450 K** and **0–100 %** — *unless the
+Zoom and pan on a value axis stop at **0–350 K** and **0–100 %** — *unless the
 data goes outside them*, in which case the stop widens to the data. A 300 K
 axis panned out to 10 000 K is a chart nobody can read; a sensor that has come
 loose and reads 1400 K is a chart somebody has to be able to read, and an axis
@@ -513,6 +513,32 @@ it in. Zooming out and back in shows real samples again, at whatever cadence
 the recorder wrote. The overview you see for that first tick is thinned; the
 disk read costs nothing during a gesture because it waits for the span to
 stop moving.
+
+**The status bar says which of the two you are looking at** — `full
+resolution`, or `overview · 1 pt / N s` with the spacing actually drawn. The
+two look identical on screen, and which one is up depends on the width of the
+span and on how long this viewer has been running, so it is stated rather than
+left to be worked out.
+
+Only the *drawing* is ever thinned. Cursor statistics and the region export
+re-read the log at full resolution whichever the status bar reports, so a
+decimated chart is never a decimated measurement.
+
+### A zoom costs the span, not the archive
+
+The re-read skips any log whose own first and last rows fall outside the
+span — read from the rows, not from the filename, which is the same evidence
+a full parse would have produced and two lines of it instead of a day's.
+Without that skip the cost was the whole archive: on the LTSPM3 machine a
+one-hour zoom took 0.9 s against a week of logs and 10.2 s against three
+months, for the same 1950 rows recovered. It is now flat at about 135 ms.
+
+A span so wide that re-reading it would exceed
+`CsvTail.SPAN_READ_BUDGET_BYTES` (32 MiB, a bit over three days of 1 Hz
+logging, about 1.8 s of parsing) is drawn from the overview instead and the
+status bar says `overview`. Reading it is the right complexity and still a
+minute of parsing when the span is the whole experiment; full resolution is
+least useful at exactly the widths where it costs most.
 
 ## Measuring a region: the cursors
 
