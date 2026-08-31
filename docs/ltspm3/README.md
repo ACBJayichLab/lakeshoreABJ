@@ -32,6 +32,8 @@ ltspm3     LTSPM3 only          IS the loop, on the 218's analog output
    1,510 hours of logs.
 4. **[control.md](control.md)** — how the loop is built out of those numbers.
 5. **[running.md](running.md)** — `check`, `run --arm`, replay, step test.
+6. **[commissioning.md](commissioning.md)** — the staged procedure for getting
+   this onto the real cryostat, and the calibration campaign that follows.
 
 ## Status
 

@@ -38,6 +38,7 @@ to that cryostat and does not transfer to another one.
 | [control.md](ltspm3/control.md) | The loop: supervisor, PID, feedforward, ramp, dither |
 | [safety.md](ltspm3/safety.md) | The eight design rules, and the sensor glitch that shaped them |
 | [running.md](ltspm3/running.md) | `check`, `run --arm`, replay, and the step test |
+| [commissioning.md](ltspm3/commissioning.md) | the staged path onto the real cryostat, and the calibration campaign |
 
 **If you are not working on LTSPM3, you do not need any of it.** `lschart` runs
 without `ltspm3` installed, configured, or read.
