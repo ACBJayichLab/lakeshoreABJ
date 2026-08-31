@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import datetime as _dt
 import json
+import os as _os
 import time
 
 import pytest
@@ -477,6 +478,154 @@ def test_a_window_narrower_than_the_sample_interval_still_draws_the_line(tmp_pat
     tail.follow(str(log(tmp_path, rows=10, t0=t0)))
     tail.poll()
     assert tail.between("Sample", t0 + 4.2, t0 + 4.8)[1] == [96.0 + 4, 96.0 + 5]
+
+
+# -- what a re-read is allowed to cost ---------------------------------------
+#
+# A cryostat that runs for months logs for months, and the viewer's answer to
+# "show me this hour" used to be to parse every byte it had ever written.  The
+# cost of a zoom belongs to the span, not to the age of the experiment.
+
+
+def week(tmp_path, days=7, rows=20, t0=1_700_000_000.0, step=86400.0):
+    """A directory of one-day logs, oldest first.  Returns their paths."""
+    made = []
+    for d in range(days):
+        start = t0 + d * step
+        stamp = _dt.date.fromtimestamp(start).isoformat()
+        p = tmp_path / f"lschart_{stamp}.csv"
+        p.write_text(HEADER + "".join(
+            row(start + i, 96.0 + i) for i in range(rows)))
+        made.append(p)
+    return made
+
+
+def reads_for_span(tail, t0, t1, monkeypatch):
+    """Which logs a re-read of ``[t0, t1]`` actually opens."""
+    opened = []
+    original = tail._read_prefix
+
+    def spy(path, upto):
+        opened.append(_os.path.basename(path))
+        return original(path, upto)
+
+    monkeypatch.setattr(tail, "_read_prefix", spy)
+    tail.prepare_span(t0, t1)
+    return opened
+
+
+def test_a_zoom_does_not_read_logs_that_cannot_hold_the_span(tmp_path, monkeypatch):
+    """The cost of a zoom is the span, not every day ever recorded.
+
+    Reading all of them was O(everything logged): measured on this machine, a
+    one-hour zoom cost 0.9 s against a week of logs and 10.2 s against three
+    months, for the same 1950 rows recovered.  A log whose own first and last
+    rows fall outside the span cannot contribute a sample to it.
+    """
+    days = week(tmp_path, days=7)
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    # A span inside the fourth day only.
+    start = 1_700_000_000.0 + 3 * 86400.0
+    opened = reads_for_span(tail, start + 2.0, start + 5.0, monkeypatch)
+    assert opened == [days[3].name]
+
+
+def test_skipping_a_log_never_costs_a_sample_that_was_in_the_span(tmp_path):
+    """The skip is decided from the rows, so it cannot drop one of them."""
+    days = week(tmp_path, days=7, rows=20)
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    # A span straddling the boundary between two days: both must be read.
+    start = 1_700_000_000.0 + 3 * 86400.0
+    tail.prepare_span(start + 10.0, start + 86400.0 + 5.0)
+    got = tail.between("Sample", start + 10.0, start + 86400.0 + 5.0)[1]
+    assert 96.0 + 10 in got and 96.0 + 5 in got
+
+
+def test_a_narrow_span_comes_back_whole_however_many_logs_there_are(tmp_path):
+    """Full resolution is the promise; the budget must not quietly thin it.
+
+    Bounding the overlay by *points* as well as by bytes looked prudent and
+    was not -- decimation drops samples inside the span as readily as
+    outside, so a four-second window came back thinned.  The byte budget
+    bounds the work without ever degrading an answer that is given at all.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    tail = CsvTail(max_points=8)          # a cap the overview will hit at once
+    tail.follow(str(days[-1]))
+    tail.poll()
+    assert tail.thinned
+    start = 1_700_000_000.0 + 3 * 86400.0
+    tail.prepare_span(start + 4.0, start + 9.0)
+    assert tail.overlay_is_full_resolution(start + 4.0, start + 9.0)
+    assert tail.between("Sample", start + 4.0, start + 9.0)[1] == [
+        96.0 + i for i in range(3, 11)]
+
+
+def test_a_span_too_wide_to_read_draws_the_overview_and_says_so(tmp_path):
+    """A span covering months is answered with a picture, not with a freeze.
+
+    Reading it is O(the span), which is the right complexity and still a
+    minute of parsing when the span is the whole experiment.  Past the budget
+    the overview is drawn -- the same bargain it already makes -- and
+    `overlay_is_full_resolution` is what lets the window say which is on
+    screen instead of leaving it to be inferred from the trace.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    t0 = 1_700_000_000.0
+    monkeyed = tail.SPAN_READ_BUDGET_BYTES
+    try:
+        tail.SPAN_READ_BUDGET_BYTES = 10      # smaller than any of these logs
+        assert tail.prepare_span(t0, t0 + 7 * 86400.0) == 0
+        assert not tail.overlay_is_full_resolution(t0, t0 + 7 * 86400.0)
+    finally:
+        tail.SPAN_READ_BUDGET_BYTES = monkeyed
+
+
+def test_a_refused_span_does_not_leave_the_previous_overlay_on_screen(tmp_path):
+    """Detail from a narrower window must not float in a view it is not of."""
+    days = week(tmp_path, days=7, rows=20)
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    start = 1_700_000_000.0 + 3 * 86400.0
+    tail.prepare_span(start + 2.0, start + 5.0)
+    assert tail.overlay_is_full_resolution(start + 2.0, start + 5.0)
+    tail.SPAN_READ_BUDGET_BYTES = 10
+    tail.prepare_span(1_700_000_000.0, start + 86400.0)
+    assert not tail.overlay_is_full_resolution(start + 2.0, start + 5.0)
+
+
+def test_a_log_still_being_written_is_re_probed_as_it_grows(tmp_path):
+    """The extent cache must not freeze the current file at the size it had.
+
+    Deciding what to skip from a file's first and last rows is only sound if
+    "last" keeps up with a file being appended to.  A cached extent would
+    have the recorder's own log fall permanently outside every span past the
+    moment the viewer first looked at it -- the newest samples skipped, on
+    the file most likely to hold the ones somebody wants.
+    """
+    t0 = 1_700_000_000.0
+    path = log(tmp_path, rows=5, t0=t0)
+    tail = CsvTail()
+    tail.follow(str(path))
+    tail.poll()
+    # A span well past everything the file held when it was first probed.
+    later = t0 + 2000.0
+    tail.prepare_span(later, later + 4.0)
+    assert tail.between("Sample", later, later + 4.0) == ([], [])
+    with open(path, "a") as fh:
+        fh.write("".join(row(later + i, 200.0 + i) for i in range(5)))
+    tail.poll()
+    tail.prepare_span(later, later + 4.0)
+    assert tail.between("Sample", later, later + 4.0)[1] == [
+        200.0 + i for i in range(5)]
 
 
 # -- watching status.json ----------------------------------------------------

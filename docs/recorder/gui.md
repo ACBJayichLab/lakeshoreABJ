@@ -513,6 +513,32 @@ the recorder wrote. The overview you see for that first tick is thinned; the
 disk read costs nothing during a gesture because it waits for the span to
 stop moving.
 
+**The status bar says which of the two you are looking at** — `full
+resolution`, or `overview · 1 pt / N s` with the spacing actually drawn. The
+two look identical on screen, and which one is up depends on the width of the
+span and on how long this viewer has been running, so it is stated rather than
+left to be worked out.
+
+Only the *drawing* is ever thinned. Cursor statistics and the region export
+re-read the log at full resolution whichever the status bar reports, so a
+decimated chart is never a decimated measurement.
+
+### A zoom costs the span, not the archive
+
+The re-read skips any log whose own first and last rows fall outside the
+span — read from the rows, not from the filename, which is the same evidence
+a full parse would have produced and two lines of it instead of a day's.
+Without that skip the cost was the whole archive: on the LTSPM3 machine a
+one-hour zoom took 0.9 s against a week of logs and 10.2 s against three
+months, for the same 1950 rows recovered. It is now flat at about 135 ms.
+
+A span so wide that re-reading it would exceed
+`CsvTail.SPAN_READ_BUDGET_BYTES` (32 MiB, a bit over three days of 1 Hz
+logging, about 1.8 s of parsing) is drawn from the overview instead and the
+status bar says `overview`. Reading it is the right complexity and still a
+minute of parsing when the span is the whole experiment; full resolution is
+least useful at exactly the widths where it costs most.
+
 ## Measuring a region: the cursors
 
 `Cursors` puts two vertical lines on both panels, at the thirds of the window.

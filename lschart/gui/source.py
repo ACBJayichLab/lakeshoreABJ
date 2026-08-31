@@ -30,6 +30,17 @@ hand-picked span is **re-read from the logs themselves**
 first draws the thinned overview so the view responds instantly, then swaps in
 the real samples a moment later.
 
+That re-read is bounded twice over, because a cryostat logs for months and
+both bounds were learned the hard way.  It **skips any log whose own first and
+last rows lie outside the span** -- without that the cost was every byte ever
+recorded, and a one-hour zoom went from under a second to over ten as the
+archive grew.  And it **declines outright past
+``CsvTail.SPAN_READ_BUDGET_BYTES``**, drawing the overview and saying so,
+because a span covering the whole experiment covers the whole archive however
+cleverly the files are chosen.  What it does *not* do is cap the result by
+points: decimating an overlay drops samples inside the span as readily as
+outside, which quietly broke the one promise this path exists to keep.
+
 Measuring a region
 ------------------
 
@@ -271,6 +282,12 @@ class CsvTail:
         #: next prepare; bounded by the span, not by the age of the log.
         self._overlay: dict[str, Series] = {}
         self._overlay_span: tuple[float, float] | None = None
+        #: ``(path, bytes) -> (first, last)`` timestamps, so deciding whether a
+        #: log can hold any of a span costs two short reads per file once
+        #: rather than a parse per zoom.  Keyed by the byte extent read, which
+        #: is what makes it self-invalidating: a finished file's entry stands
+        #: for good, and the file still being appended to re-probes as it grows.
+        self._span_cache: dict[tuple[str, int | None], tuple[float, float] | None] = {}
         #: True once any series has been decimated.  Until it is, what is held
         #: in memory *is* the full resolution of the logs read so far, and a
         #: question that needs every sample -- cursor statistics, an export --
@@ -375,6 +392,64 @@ class CsvTail:
             return None
         return _parse_time(first.split(",", 1)[0])
 
+    #: How much of a log's tail to read looking for its last complete row.
+    #: A row of this recorder is a few hundred bytes; 64 KiB is hundreds of
+    #: them, and the read is one seek rather than a scan of the file.
+    _TAIL_PROBE_BYTES = 65536
+
+    def _file_span(self, path: str, upto: int | None = None
+                   ) -> tuple[float, float] | None:
+        """The first and last timestamps in ``path``, without parsing it.
+
+        Two short reads -- the head for the first data row, the tail for the
+        last -- which is what lets :meth:`_read_span` skip a log entirely
+        instead of reading every byte of every day ever recorded to find the
+        hour somebody zoomed into.  That scan is O(everything logged) and a
+        cryostat that runs for months logs a great deal.
+
+        This reads the *rows*, not the filename.  The distinction matters:
+        the reason the scan trusted nothing was that filenames lie -- a lesson
+        the legacy .xls logs taught, and `tools/import_xls.py` still carries.
+        A timestamp read out of the file is evidence of the same kind the
+        parse would have produced, just two lines of it instead of a day's.
+
+        ``None`` when the extent cannot be established, and the caller then
+        reads the file: refusing to guess is what keeps a skip from ever
+        losing a sample that was really there.
+        """
+        key = (path, upto)
+        if key in self._span_cache:
+            return self._span_cache[key]
+        span = self._probe_span(path, upto)
+        self._span_cache[key] = span
+        return span
+
+    @classmethod
+    def _probe_span(cls, path: str, upto: int | None
+                    ) -> tuple[float, float] | None:
+        first = cls._file_start(path)
+        if first is None:
+            return None
+        try:
+            with open(path, "rb") as fh:
+                end = os.fstat(fh.fileno()).st_size
+                if upto is not None:
+                    end = min(upto, end)
+                start = max(0, end - cls._TAIL_PROBE_BYTES)
+                fh.seek(start)
+                blob = fh.read(end - start)
+        except OSError:
+            return None
+        # From the end backwards: the final line may be a half-flushed row
+        # and, when the probe window began mid-file, the first may be a
+        # fragment.  The first line that yields a timestamp is the answer.
+        for raw in reversed(blob.split(b"\n")):
+            stamp = raw.split(b",", 1)[0].decode("utf-8", "replace").strip()
+            last = _parse_time(stamp)
+            if last is not None:
+                return (first, last) if last >= first else (last, first)
+        return None
+
     @classmethod
     def _older_logs(cls, path: str) -> list[str]:
         """Finished logs in the same directory that predate ``path``, ordered."""
@@ -438,6 +513,9 @@ class CsvTail:
             # clean one.
             self._overlay = {}
             self._overlay_span = None
+            # The file was rewritten under us, so what was probed about its
+            # extent describes bytes that are gone.
+            self._span_cache = {}
         if size == self._offset:
             return 0
 
@@ -599,6 +677,32 @@ class CsvTail:
     #: sample interval; the exact bracketing sample is found by bisect later.
     SPAN_MARGIN_S = 300.0
 
+    #: How many bytes of log a single full-resolution re-read may parse.
+    #:
+    #: Skipping logs that cannot hold any of the span made a zoom cost the
+    #: span rather than the whole history, which is the right complexity but
+    #: not a bound: a span that genuinely covers three months genuinely covers
+    #: every byte of them, and parsing those on the GUI thread is a minute the
+    #: viewer spends not responding.  Past this budget the overview is drawn
+    #: instead and the status bar says so, which is the same bargain the
+    #: overview already makes -- a picture of the log rather than the log --
+    #: only now it is stated rather than merely slow.
+    #:
+    #: This is the *only* bound on a re-read, deliberately.  Capping the
+    #: overlay by points as well looked reasonable and was not: decimating it
+    #: throws away samples inside the span as readily as outside, so a narrow
+    #: window came back thinned and the promise this method exists to keep --
+    #: that a picked span is answered from the log, whole -- quietly stopped
+    #: holding.  Bounding the bytes read bounds the work without ever
+    #: degrading an answer that is given at all.
+    #:
+    #: 32 MiB is a bit over three days of this recorder's 1 Hz logging, and
+    #: about 1.8 s at the measured rate of roughly 55 ms/MB for rows that
+    #: land inside the span.  Rows outside one are four times cheaper -- they
+    #: are parsed and dropped rather than appended to two dozen columns --
+    #: which is why the budget counts bytes offered rather than bytes kept.
+    SPAN_READ_BUDGET_BYTES = 32 * 1024 * 1024
+
     def prepare_span(self, t0: float, t1: float) -> int:
         """Re-read ``[t0, t1]`` from the logs on disk, at full resolution.
 
@@ -611,11 +715,71 @@ class CsvTail:
         by their timestamps as they parse.  Returns the number of rows
         recovered.
         """
-        overlay, rows = self._read_span(
-            t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S)
+        lo, hi = t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S
+        budget = self._span_read_bytes(lo, hi)
+        if budget > self.SPAN_READ_BUDGET_BYTES:
+            # Too much log to parse without stalling the window.  Drop any
+            # overlay a narrower span left behind -- drawing that one over
+            # this span would show a slice of detail floating in a view it
+            # does not belong to -- and let `between` answer from the
+            # overview, which is what the status bar will report.
+            log.info("viewer: span covers %.0f MB of log; drawing the overview",
+                     budget / 1e6)
+            self._overlay = {}
+            self._overlay_span = None
+            return 0
+        overlay, rows = self._read_span(lo, hi)
         self._overlay = overlay
         self._overlay_span = (t0, t1)
         return rows
+
+    def _span_sources(self) -> dict[str, int | None]:
+        """Every log a span could be answered from, as ``path -> bytes-read``.
+
+        Every log this run has produced, whether or not this viewer has read
+        it yet -- a picked span may reach back past the backfill cap, and the
+        disk is where the full-resolution answer lives either way.  The
+        history entries carry precise byte offsets for files already tailed;
+        discovered ones are read whole.  Current file last.
+        """
+        sources: dict[str, int | None] = {}
+        if self.path:
+            for p in self._older_logs(self.path):
+                sources[p] = None
+        for p, upto in self._history:
+            sources[p] = upto
+        if self.path:
+            sources[self.path] = self._offset
+        return sources
+
+    def _span_read_bytes(self, lo: float, hi: float) -> int:
+        """How many bytes a full-resolution read of ``[lo, hi]`` would parse."""
+        total = 0
+        for path, upto in self._span_sources().items():
+            extent = self._file_span(path, upto)
+            if extent is not None and (extent[1] < lo or extent[0] > hi):
+                continue
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            total += size if upto is None else min(upto, size)
+        return total
+
+    def overlay_is_full_resolution(self, t0: float, t1: float) -> bool:
+        """Is the drawing of ``[t0, t1]`` every sample, or a thinned picture?
+
+        A span can be picked that no screen could draw whole -- three months
+        at 1 Hz is eight million samples per trace -- and the honest answer
+        there is a decimated one, because the alternative is not a better
+        picture but no picture for the better part of a minute.  What must
+        not happen is the decimated one passing for the log, so the window
+        asks this and says which it is showing.
+
+        Only ever about the *drawing*.  Cursor statistics and the region
+        export go through :meth:`samples_in`, which is never capped.
+        """
+        return self._overlay_span == (t0, t1)
 
     def _read_span(self, lo: float, hi: float) -> tuple[dict[str, Series], int]:
         """Every sample between ``lo`` and ``hi`` that the logs on disk hold.
@@ -631,22 +795,18 @@ class CsvTail:
         Returns ``(series by column, rows recovered)``.  The live state is
         borrowed and put back: the parser keeps its tallies on ``self``.
         """
-        # Every log this run has produced, whether or not this viewer has
-        # read it yet -- a picked span may reach back past the backfill cap,
-        # and the disk is where the full-resolution answer lives either way.
-        # The history entries carry precise byte offsets for files already
-        # tailed; discovered ones are read whole.  Current file last.
-        sources: dict[str, int | None] = {}
-        if self.path:
-            for p in self._older_logs(self.path):
-                sources[p] = None
-        for p, upto in self._history:
-            sources[p] = upto
-        if self.path:
-            sources[self.path] = self._offset
+        sources = self._span_sources()
         out: dict[str, Series] = {}
         rows = 0
         for path, upto in sources.items():
+            # A log whose own first and last rows fall wholly outside the span
+            # cannot contribute a sample to it, and reading it costs the same
+            # as reading one that can.  Skipping it here is what keeps the
+            # cost of a zoom proportional to the span rather than to every
+            # byte the cryostat has ever logged.
+            extent = self._file_span(path, upto)
+            if extent is not None and (extent[1] < lo or extent[0] > hi):
+                continue
             text = self._read_prefix(path, upto)
             if not text:
                 continue
