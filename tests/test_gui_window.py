@@ -33,6 +33,12 @@ from lschart.gui.window import (  # noqa: E402
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
 
 
+def _row_text(t: float) -> str:
+    """One row of the fixture's log, at ``t``."""
+    stamp = _dt.datetime.fromtimestamp(t).isoformat(timespec="milliseconds")
+    return f"{stamp},0.0,96.0,77.0,12.5,,,\n"
+
+
 @pytest.fixture(scope="module")
 def qt_app():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -398,7 +404,7 @@ def test_a_burst_of_view_changes_costs_one_redraw(viewer, qt_app):
 
 
 def test_the_status_bar_says_when_the_chart_is_showing_every_sample(viewer, qt_app):
-    """Full resolution and a decimated picture look identical on screen.
+    """Full resolution and a coarser picture look identical on screen.
 
     Which one is up depends on the width of the span and on how long the
     viewer has been running, neither of which is visible in the trace -- so
@@ -407,23 +413,74 @@ def test_the_status_bar_says_when_the_chart_is_showing_every_sample(viewer, qt_a
     newest = viewer.tail.newest()
     span = (newest - 600.0, newest)
     viewer._span = span
-    viewer.tail.prepare_span(*span)
-    viewer._redraw()
+    viewer._load_span()
     viewer._update_statusbar()
     assert "full resolution" in viewer.statusBar().currentMessage()
 
 
-def test_the_status_bar_owns_up_to_drawing_an_overview(viewer, qt_app):
-    """A span too wide to re-read is drawn from the overview, and says so."""
+def test_the_status_bar_owns_up_to_a_span_it_could_not_read_whole(viewer, qt_app):
+    """A span too wide to re-read is read coarsely, and says which it is."""
     newest = viewer.tail.newest()
     span = (newest - 3000.0, newest)
     viewer.tail.SPAN_READ_BUDGET_BYTES = 10     # narrower than any real log
     viewer._span = span
-    viewer.tail.prepare_span(*span)
-    viewer._redraw()
+    viewer._load_span()
     viewer._update_statusbar()
     message = viewer.statusBar().currentMessage()
-    assert "overview" in message and "full resolution" not in message
+    assert "too wide to read whole" in message
+    assert "full resolution" not in message
+
+
+def test_the_status_bar_says_it_is_still_reading_rather_than_describing_nothing(
+        viewer, qt_app):
+    """Between the gesture and the samples there is a third state to name.
+
+    A span is picked, and for as long as the read takes the chart holds
+    whatever the overview has for that window -- which past the backfill cap
+    is nothing.  Calling that "overview" described a picture that was not on
+    screen; the honest answer while the disk is being read is that it is
+    being read.
+    """
+    newest = viewer.tail.newest()
+    viewer._span = (newest - 600.0, newest)
+    viewer._span_changed()                      # as a drag or a wheel would
+    viewer._update_statusbar()
+    assert "reading the log" in viewer.statusBar().currentMessage()
+
+
+def test_a_window_wider_than_a_day_says_which_days_it_covers(viewer, qt_app):
+    """`03:00:00-03:00:00` is what a five-day window used to read as.
+
+    The same string a zero-width window would produce, on the one view where
+    knowing which days are on screen is the whole question being asked.
+    """
+    newest = viewer.tail.newest()
+    viewer._span = (newest - 5 * 86400.0, newest)
+    viewer._load_span()
+    viewer._update_statusbar()
+    message = viewer.statusBar().currentMessage()
+    assert "120.0 h" in message
+    assert message.count(":") > 0 and "00:00:00–" not in message
+
+
+def test_a_static_picked_window_is_not_redrawn_for_rows_beyond_its_edge(
+        viewer, qt_app, tmp_path):
+    """New rows cannot change a window that ended before they were written.
+
+    Redrawing anyway re-sliced and re-stroked every trace once a second to
+    put back the picture already on screen, which is most of what made a
+    picked window feel heavy.
+    """
+    newest = viewer.tail.newest()
+    viewer._span = (newest - 600.0, newest - 300.0)
+    viewer._load_span()
+    draws = []
+    viewer._redraw = lambda *a, **k: draws.append(1)   # type: ignore[method-assign]
+    with open(viewer.tail.path, "a") as fh:
+        for i in range(5):
+            fh.write(_row_text(newest + 1.0 + i))
+    viewer.refresh()
+    assert draws == []
 
 
 def test_the_traces_are_drawn_by_a_pen_the_raster_engine_has_a_fast_path_for(

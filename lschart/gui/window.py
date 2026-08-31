@@ -93,7 +93,19 @@ DEFAULT_VIEW_WINDOW_S = 24 * 3600.0
 
 #: How far back a fresh start reads by default: the widest view button, plus
 #: an hour so the edge of a full window has samples to bracket it.
+#:
+#: This is a bound on the *overview* only.  Anything older is still drawn,
+#: and drawn from the log rather than from memory, because `prepare_span`
+#: goes back to disk for whatever window is picked -- which is why nothing
+#: here may be allowed to fall back to "let the overview answer" for a span
+#: that reaches further back than this.  It has nothing to answer with.
 BACKFILL_COVERAGE_S = VIEW_WINDOWS[-1][1] + 3600.0
+
+#: How long a view gesture must be still before the span behind it is read
+#: off disk.  Long enough that a wheel or a drag is one read rather than
+#: thirty; short enough that letting go of the mouse and seeing the trace
+#: appear feel like one event.
+SPAN_SETTLE_MS = 250
 
 #: How this viewer labels itself in every command it writes.  A recorder's
 #: `ipc.sources` policy is keyed on exactly this string, so it is a constant
@@ -505,14 +517,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: per panel and not one shared: a kelvin axis and a percent axis have
         #: nothing to say to each other, which is why there are two panels.
         self._ylim: dict[str, tuple[float, float] | None] = {"K": None, "%": None}
-        #: The span whose full-resolution samples have been loaded (and the one
-        #: seen on the previous tick, for debouncing).  Until they agree with
-        #: ``_span`` the chart draws the thinned overview for that span; once a
-        #: span survives one tick unchanged it is worth a disk read to draw
-        #: properly.  A wheel gesture crosses dozens of spans a second and
-        #: none of them should each cost a file scan.
+        #: The span whose samples have been loaded from disk.  Until it agrees
+        #: with ``_span`` the chart draws whatever the overview holds for that
+        #: span, which past the backfill cap is nothing at all -- so the gap
+        #: between the two is a gap the operator can see, and closing it fast
+        #: is the whole job of ``_span_load`` below.  A wheel gesture crosses
+        #: dozens of spans a second and none of them should each cost a scan.
         self._loaded_span: tuple[float, float] | None = None
-        self._armed_span: tuple[float, float] | None = None
         #: The live-referenced window currently shown, in seconds.  Always a
         #: number: every live view is the last N hours of something, and there
         #: is no "everything held" state for it to be absent for.  While the
@@ -565,6 +576,20 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._redraw_pending.setSingleShot(True)
         self._redraw_pending.setInterval(0)
         self._redraw_pending.timeout.connect(self._redraw)
+
+        #: Waits for a view gesture to settle, then reads the span off disk.
+        #:
+        #: This used to ride the 1 s refresh timer, arming on one tick and
+        #: loading on the next -- which cost up to two seconds before the
+        #: read even started, and every one of them was a second spent
+        #: looking at a window the overview could not fill.  Its own timer
+        #: costs the same nothing between gestures and answers in a quarter
+        #: of a second, and it also decouples the two: a long read no longer
+        #: has to fit inside a refresh tick to keep the chart current.
+        self._span_load = QtCore.QTimer(self)
+        self._span_load.setSingleShot(True)
+        self._span_load.setInterval(SPAN_SETTLE_MS)
+        self._span_load.timeout.connect(self._load_span)
 
         self.refresh()
 
@@ -1459,25 +1484,55 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._sync_command_values()
             if self.tail.follow(self.source.log_path()):
                 self._first_load_done = False
+            # What the newest sample was before this poll, so a picked window
+            # can tell whether the rows that just arrived are inside it.
+            was_newest = self.tail.newest()
             if self.tail.poll() or not self._first_load_done:
                 self._first_load_done = True
                 self._sync_traces()
-                self._redraw()
-            if self._span is not None and self._span != self._loaded_span:
-                if self._span != self._armed_span:
-                    # First tick on this span: wait one quiet tick before the
-                    # disk work, so a gesture in motion costs nothing.
-                    self._armed_span = self._span
-                else:
-                    # Settled: swap the thinned overview for the real samples.
-                    self._armed_span = None
-                    self.tail.prepare_span(*self._span)
-                    self._loaded_span = self._span
+                # A hand-picked window is a question about the past, and rows
+                # appended beyond its right edge cannot change the answer.
+                # Redrawing anyway meant a hundred thousand points per trace
+                # re-sliced, re-scanned for gaps and re-stroked every second
+                # to put back exactly the picture already on screen -- which
+                # is most of what made a picked window feel heavy to drag.
+                if (self._span is None or was_newest is None
+                        or self._span[1] >= was_newest):
                     self._redraw()
+            if self._span is not None and self._span != self._loaded_span:
+                # Normally `_span_changed` has already started this; here for
+                # a span that arrived by some other route, and as the retry
+                # after a load that could not be completed.
+                if not self._span_load.isActive():
+                    self._span_load.start()
             self._update_region_stats()
             self._update_statusbar()
         except Exception:  # noqa: BLE001 - a drawing bug must not stop the viewer
             log.exception("refresh failed; the viewer continues")
+
+    def _load_span(self) -> None:
+        """The picked window has settled: read it off the logs and draw it.
+
+        Runs on the GUI thread, and takes about a second on a week of this
+        recorder's logs, which is why nothing gets here until the gesture has
+        stopped moving.  It must never raise: it is on a timer, and a viewer
+        that stops drawing because one span could not be read is worse than
+        one showing a coarse picture of it.
+        """
+        if self._span is None or self._span == self._loaded_span:
+            return
+        span = self._span
+        try:
+            self.tail.prepare_span(*span)
+        except Exception:  # noqa: BLE001 - a bad span must not stop the viewer
+            log.exception("could not read the span; leaving what is drawn")
+            return
+        # Against `span` and not `self._span`: a gesture during the read
+        # moved the window, and claiming the new one is loaded would leave
+        # the old one's samples on screen with nothing to correct them.
+        self._loaded_span = span
+        self._redraw()
+        self._update_statusbar()
 
     def _update_banner(self) -> None:
         state, message = self.source.health()
@@ -2313,9 +2368,15 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if self._span is not None:
             t0, t1 = self._span
             stamp = QtCore.QDateTime.fromSecsSinceEpoch
+            # The date, once a window is wider than a day.  Without it a five
+            # day window reads "03:00:00-03:00:00", which is the same string
+            # a zero-width one would produce and says nothing about which
+            # days are on screen -- exactly what somebody hunting for last
+            # Friday needs to be told.
+            fmt = 'HH:mm:ss' if t1 - t0 < 86400.0 else 'MMM d HH:mm'
             bits.append(
-                f"window {stamp(int(t0)).toString('HH:mm:ss')}–"
-                f"{stamp(int(t1)).toString('HH:mm:ss')} "
+                f"window {stamp(int(t0)).toString(fmt)}–"
+                f"{stamp(int(t1)).toString(fmt)} "
                 f"({_duration(t1 - t0)}) · not following")
             bits.append(self._resolution_note(t0, t1))
         else:
@@ -2328,22 +2389,34 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _resolution_note(self, t0: float, t1: float) -> str:
         """Whether the picked span is drawn from every sample, or from some.
 
-        The chart has two honest answers for a hand-picked window and they
-        look identical: every sample the log holds, or a decimated picture of
-        them.  Which one is on screen depends on how wide the span is and on
-        how long this viewer has been running, neither of which is visible in
-        the trace -- so it is said here instead of left to be inferred.
+        The chart has three honest answers for a hand-picked window and two
+        of them look identical: every sample the log holds, a coarser reading
+        of it, or -- for the quarter second after a gesture -- neither yet.
+        Which one is on screen depends on how wide the span is and on how
+        long this viewer has been running, neither of which is visible in the
+        trace, so it is said here instead of left to be inferred.
+
+        Saying it is not decoration.  The version of this that only knew two
+        answers reported "overview" for a span the overview did not reach,
+        while the chart underneath it was blank -- the note agreed with a
+        picture that was not being drawn, which is worse than no note.  What
+        it reports now is measured from the samples that were drawn.
 
         The distinction is about the *drawing* only.  Cursor statistics and
         the region export re-read the log at full resolution whatever this
-        says, which is why a decimated chart is a presentational compromise
-        and never a measurement one.
+        says, which is why a coarse chart is a presentational compromise and
+        never a measurement one.
         """
+        if self._span_load.isActive() or self._span != self._loaded_span:
+            return "reading the log…"
         if self.tail.overlay_is_full_resolution(t0, t1):
             return "full resolution"
+        stride = self.tail.overlay_stride()
         if self._drawn_spacing:
-            return f"overview · 1 pt / {_duration(self._drawn_spacing)}"
-        return "overview"
+            note = f"1 pt / {_duration(self._drawn_spacing)}"
+        else:
+            note = "coarse"
+        return f"too wide to read whole · {note}" if stride > 1 else f"overview · {note}"
 
     # -- plotting ----------------------------------------------------------
 
@@ -2783,7 +2856,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _set_follow(self, seconds: float) -> None:
         """Enter a live-referenced view and drop every hand-picked axis."""
         self._span = None
-        self._armed_span = None
+        self._span_load.stop()
         # The overlay the tail holds belongs to whatever span was picked last;
         # coming back here must not assume it still matches a future pick.
         self._loaded_span = None
@@ -2849,6 +2922,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _span_changed(self) -> None:
         self._sync_view_buttons()
         self._schedule_redraw()
+        # Restarting the timer is what debounces: a gesture still in motion
+        # keeps pushing the read out, and it happens once the gesture stops.
+        if self._span is not None and self._span != self._loaded_span:
+            self._span_load.start()
         self._update_statusbar()
 
     # -- commanding --------------------------------------------------------

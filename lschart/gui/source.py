@@ -34,12 +34,27 @@ That re-read is bounded twice over, because a cryostat logs for months and
 both bounds were learned the hard way.  It **skips any log whose own first and
 last rows lie outside the span** -- without that the cost was every byte ever
 recorded, and a one-hour zoom went from under a second to over ten as the
-archive grew.  And it **declines outright past
-``CsvTail.SPAN_READ_BUDGET_BYTES``**, drawing the overview and saying so,
-because a span covering the whole experiment covers the whole archive however
-cleverly the files are chosen.  What it does *not* do is cap the result by
-points: decimating an overlay drops samples inside the span as readily as
-outside, which quietly broke the one promise this path exists to keep.
+archive grew.  And past ``CsvTail.SPAN_READ_BUDGET_BYTES`` it **reads the span
+at a stride** -- one row in n, chosen so the parse stays bounded -- because a
+span covering the whole experiment covers the whole archive however cleverly
+the files are chosen.
+
+The second bound must never turn into *not reading the span at all*, and the
+first version of it did exactly that: it refused, on the understanding that
+the overview would answer instead.  The overview is not a thinned picture of
+every log.  It is the last ``backfill_s`` of them, two days by default, and a
+span reaching further back fell between the two bounds and was drawn as
+nothing at all -- a Friday that was sitting on the disk, missing from a chart
+whose status bar said it was showing an overview.  A stride costs resolution,
+which is visible and is said out loud.  Refusing cost the day.
+
+What the budget still does *not* do is cap a span that fits.  Decimating an
+overlay drops samples inside the span as readily as outside, so a narrow
+window came back thinned and the one promise this path exists to keep -- a
+picked span is answered from the log, whole -- quietly stopped holding.  A
+span that fits the budget comes back whole; only a span that cannot be read
+whole is strided, and :meth:`CsvTail.overlay_is_full_resolution` says which
+happened.
 
 Measuring a region
 ------------------
@@ -86,6 +101,7 @@ import csv
 import datetime as _dt
 import io
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -233,6 +249,33 @@ class Series:
         return len(self.t)
 
 
+class _StrideCounter:
+    """Keeps one row in ``stride`` across a whole scan of several logs.
+
+    A counter rather than a slice because the rows arrive file by file and
+    the spacing has to be even across the joins: restarting the count at each
+    midnight rollover would put two kept rows next to each other there and
+    nowhere else, which draws as a kink in a trace that has none.
+
+    ``stride`` of 1 keeps everything and is the ordinary case; the object
+    still exists then so the caller has one code path.
+    """
+
+    __slots__ = ("stride", "_n")
+
+    def __init__(self, stride: int = 1) -> None:
+        self.stride = max(1, int(stride))
+        self._n = 0
+
+    def take(self) -> bool:
+        """True if the next row is one of the ones being kept."""
+        if self.stride == 1:
+            return True
+        keep = self._n % self.stride == 0
+        self._n += 1
+        return keep
+
+
 class CsvTail:
     """Incremental reader for the recorder's CSV.
 
@@ -282,6 +325,18 @@ class CsvTail:
         #: next prepare; bounded by the span, not by the age of the log.
         self._overlay: dict[str, Series] = {}
         self._overlay_span: tuple[float, float] | None = None
+        #: Rows kept per row read when the overlay was built: 1 when the span
+        #: was read whole, higher when it was too wide to be and had to be
+        #: strided.  What tells a full-resolution overlay from a thinned one,
+        #: since both are simply "the overlay" to everything that draws.
+        self._overlay_stride: int = 1
+        #: Mean bytes per data row, measured from whatever has been read.
+        #: A row is one number per channel, so a 218 with eight inputs and a
+        #: 336 with four write rows of very different lengths and no constant
+        #: here could be right for both.  Only ever used to turn a byte
+        #: budget into a row count, so a rough figure is a good one; the
+        #: default stands in until the first chunk has been consumed.
+        self._row_bytes: float = 200.0
         #: ``(path, bytes) -> (first, last)`` timestamps, so deciding whether a
         #: log can hold any of a span costs two short reads per file once
         #: rather than a parse per zoom.  Keyed by the byte extent read, which
@@ -376,6 +431,7 @@ class CsvTail:
             self.header = []             # each file states its own columns
             added = self._consume(text)
             if added:
+                self._row_bytes = len(text) / added
                 self._history.append((p, None))
                 log.info("viewer: backfilled %d rows from %s", added, p)
 
@@ -513,6 +569,7 @@ class CsvTail:
             # clean one.
             self._overlay = {}
             self._overlay_span = None
+            self._overlay_stride = 1
             # The file was rewritten under us, so what was probed about its
             # extent describes bytes that are gone.
             self._span_cache = {}
@@ -538,6 +595,7 @@ class CsvTail:
             return 0
         added = self._consume(text)
         if added:
+            self._row_bytes = len(text) / added
             self._extend_overlay(text)
         return added
 
@@ -576,7 +634,8 @@ class CsvTail:
         finally:
             (self.rows, self.errors) = saved
 
-    def _consume(self, text: str, *, sink=None, t_range=None) -> int:
+    def _consume(self, text: str, *, sink=None, t_range=None,
+                 stride: "_StrideCounter | None" = None) -> int:
         added = 0
         for row in csv.reader(io.StringIO(text)):
             if not row:
@@ -591,6 +650,14 @@ class CsvTail:
                 log.warning("viewer: %s has no header row; ignoring it", self.path)
                 self.header = []
                 return 0
+            # The skip goes here rather than inside `_row`, and the rows are
+            # still walked by the csv reader rather than by a line split: a
+            # Notes cell carrying a driver's error message can hold a quoted
+            # newline, and a split would turn that one row into two malformed
+            # ones.  What a skipped row saves is the part that actually costs
+            # -- a float() per channel and an append into two dozen columns.
+            if stride is not None and not stride.take():
+                continue
             added += self._row(row, sink=sink, t_range=t_range)
         return added
 
@@ -696,15 +763,36 @@ class CsvTail:
     #: holding.  Bounding the bytes read bounds the work without ever
     #: degrading an answer that is given at all.
     #:
-    #: 32 MiB is a bit over three days of this recorder's 1 Hz logging, and
+    #: 32 MiB is a bit over three days of this recorder's 2 s logging, and
     #: about 1.8 s at the measured rate of roughly 55 ms/MB for rows that
     #: land inside the span.  Rows outside one are four times cheaper -- they
     #: are parsed and dropped rather than appended to two dozen columns --
     #: which is why the budget counts bytes offered rather than bytes kept.
     SPAN_READ_BUDGET_BYTES = 32 * 1024 * 1024
 
+    #: Rows a span read at a stride aims to come back with, per column.
+    #:
+    #: The byte budget alone picks a stride far too gentle to matter.  Most
+    #: of the cost of a scan is walking the csv, which a stride cannot avoid,
+    #: so doubling the stride does not halve the time -- measured over the
+    #: whole archive, stride 1 to 16 went 2.74 s -> 1.91 -> 1.16 -> 0.87 ->
+    #: 0.73, an asymptote at about a quarter.  What a bigger stride does buy
+    #: is everything downstream: a tenth of the samples to hold, to slice on
+    #: every redraw, to scan for gaps and to stroke.
+    #:
+    #: 20 000 is roughly a dozen points per pixel on a wide window, which is
+    #: past the point where any more can be seen -- and the trace is drawn
+    #: with peak downsampling on top of it, so a spike inside one of those
+    #: intervals still reaches the screen.
+    #:
+    #: Applied **only** to a span already past the byte budget.  A span that
+    #: fits still comes back whole however few or many points that is; the
+    #: version of this that capped every span by points is what thinned a
+    #: four-second window, and that lesson stands.
+    SPAN_POINT_BUDGET = 20_000
+
     def prepare_span(self, t0: float, t1: float) -> int:
-        """Re-read ``[t0, t1]`` from the logs on disk, at full resolution.
+        """Re-read ``[t0, t1]`` from the logs on disk, as fully as it can.
 
         The overview decimates as it goes, which keeps months of history
         affordable and close reading impossible in equal measure -- so a
@@ -714,23 +802,40 @@ class CsvTail:
         the legacy .xls logs taught -- and rows outside the span are dropped
         by their timestamps as they parse.  Returns the number of rows
         recovered.
+
+        Past ``SPAN_READ_BUDGET_BYTES`` the span is read at a **stride**
+        instead: every n-th row, chosen so the parse stays inside the budget.
+        It is not read at full resolution and it is not refused, and the
+        difference matters more than it sounds.  Refusing was the first
+        attempt and it was wrong in a way that only showed up on a real
+        archive: the fallback was "let the overview answer", and the overview
+        is not a thinned picture of every log -- it is what ``backfill_s``
+        chose to hold, two days of it.  A span reaching further back than
+        that fell between the two and was drawn as **nothing at all**, while
+        the status bar said it was showing an overview.  Blank is the one
+        answer a chart must never give for a day that is sitting on the disk.
+
+        A stride keeps the promise the budget exists to keep -- bounded work
+        on the GUI thread -- without ever emptying the window, and
+        :meth:`overlay_is_full_resolution` says which of the two happened.
+        The earlier lesson still holds and is why the stride is computed from
+        the budget rather than from a point count: a span that fits comes
+        back whole, every time, and only a span that cannot be read whole is
+        thinned.  Statistics and exports never come through here.
         """
         lo, hi = t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S
         budget = self._span_read_bytes(lo, hi)
+        stride = 1
         if budget > self.SPAN_READ_BUDGET_BYTES:
-            # Too much log to parse without stalling the window.  Drop any
-            # overlay a narrower span left behind -- drawing that one over
-            # this span would show a slice of detail floating in a view it
-            # does not belong to -- and let `between` answer from the
-            # overview, which is what the status bar will report.
-            log.info("viewer: span covers %.0f MB of log; drawing the overview",
-                     budget / 1e6)
-            self._overlay = {}
-            self._overlay_span = None
-            return 0
-        overlay, rows = self._read_span(lo, hi)
+            rows_offered = budget / max(1.0, self._row_bytes)
+            stride = max(math.ceil(budget / self.SPAN_READ_BUDGET_BYTES),
+                         math.ceil(rows_offered / self.SPAN_POINT_BUDGET))
+            log.info("viewer: span covers %.0f MB of log; reading 1 row in %d",
+                     budget / 1e6, stride)
+        overlay, rows = self._read_span(lo, hi, stride=stride)
         self._overlay = overlay
         self._overlay_span = (t0, t1)
+        self._overlay_stride = stride
         return rows
 
     def _span_sources(self) -> dict[str, int | None]:
@@ -779,10 +884,20 @@ class CsvTail:
         Only ever about the *drawing*.  Cursor statistics and the region
         export go through :meth:`samples_in`, which is never capped.
         """
-        return self._overlay_span == (t0, t1)
+        return self._overlay_span == (t0, t1) and self._overlay_stride == 1
 
-    def _read_span(self, lo: float, hi: float) -> tuple[dict[str, Series], int]:
+    def overlay_stride(self) -> int:
+        """Rows kept per row read in the overlay now loaded.  1 when whole."""
+        return self._overlay_stride
+
+    def _read_span(self, lo: float, hi: float, *, stride: int = 1
+                   ) -> tuple[dict[str, Series], int]:
         """Every sample between ``lo`` and ``hi`` that the logs on disk hold.
+
+        ``stride`` above 1 keeps one row in n instead, which is how
+        :meth:`prepare_span` answers a span too wide to parse whole.  The
+        count runs across the whole scan rather than restarting per file, so
+        the spacing does not jump at a midnight rollover.
 
         The scan itself, without the opinion about what it is for: whether the
         result becomes the drawing overlay (:meth:`prepare_span`) or answers a
@@ -798,6 +913,7 @@ class CsvTail:
         sources = self._span_sources()
         out: dict[str, Series] = {}
         rows = 0
+        counter = _StrideCounter(stride)
         for path, upto in sources.items():
             # A log whose own first and last rows fall wholly outside the span
             # cannot contribute a sample to it, and reading it costs the same
@@ -815,7 +931,7 @@ class CsvTail:
             saved = (self.header, self.series, self.rows, self.errors)
             self.header, self.series, self.rows, self.errors = [], {}, 0, 0
             try:
-                self._consume(text, sink=out, t_range=(lo, hi))
+                self._consume(text, sink=out, t_range=(lo, hi), stride=counter)
                 rows += self.rows
             finally:
                 (self.header, self.series, self.rows, self.errors) = saved

@@ -565,30 +565,84 @@ def test_a_narrow_span_comes_back_whole_however_many_logs_there_are(tmp_path):
         96.0 + i for i in range(3, 11)]
 
 
-def test_a_span_too_wide_to_read_draws_the_overview_and_says_so(tmp_path):
+def test_a_span_too_wide_to_read_whole_is_read_coarsely_and_says_so(tmp_path):
     """A span covering months is answered with a picture, not with a freeze.
 
-    Reading it is O(the span), which is the right complexity and still a
-    minute of parsing when the span is the whole experiment.  Past the budget
-    the overview is drawn -- the same bargain it already makes -- and
-    `overlay_is_full_resolution` is what lets the window say which is on
-    screen instead of leaving it to be inferred from the trace.
+    Reading it whole is O(the span), which is the right complexity and still
+    a minute of parsing when the span is the whole experiment.  Past the
+    budget it is read at a stride instead -- bounded work, the whole window
+    covered -- and `overlay_is_full_resolution` is what lets the chart say
+    which of the two is on screen rather than leaving it to be inferred.
     """
     days = week(tmp_path, days=7, rows=20)
     tail = CsvTail()
     tail.follow(str(days[-1]))
     tail.poll()
     t0 = 1_700_000_000.0
+    span = (t0, t0 + 7 * 86400.0)
     monkeyed = tail.SPAN_READ_BUDGET_BYTES
     try:
         tail.SPAN_READ_BUDGET_BYTES = 10      # smaller than any of these logs
-        assert tail.prepare_span(t0, t0 + 7 * 86400.0) == 0
-        assert not tail.overlay_is_full_resolution(t0, t0 + 7 * 86400.0)
+        assert tail.prepare_span(*span) > 0
+        assert not tail.overlay_is_full_resolution(*span)
+        assert tail.overlay_stride() > 1
     finally:
         tail.SPAN_READ_BUDGET_BYTES = monkeyed
 
 
-def test_a_refused_span_does_not_leave_the_previous_overlay_on_screen(tmp_path):
+def test_a_span_past_the_budget_still_covers_the_days_it_asked_for(tmp_path):
+    """The budget may cost resolution.  It may never cost a day.
+
+    This is the bug the budget shipped with.  Past it the span was refused
+    outright and the drawing fell back to "whatever the overview holds" --
+    and the overview is not a thinned picture of every log, it is the last
+    `backfill_s` of them.  A span reaching further back than that fell
+    between the two bounds and was drawn as nothing at all, while the status
+    bar reported an overview.  Here the tail holds only the newest day, and
+    the six before it must still reach the chart.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    t0 = 1_700_000_000.0
+    # Only the last day is in memory: no backfill, exactly as a live viewer
+    # sits once a span reaches past its `backfill_s`.
+    tail = CsvTail(backfill_s=0.0)
+    tail.follow(str(days[-1]))
+    tail.poll()
+    assert tail.between("Sample", t0, t0 + 86400.0) == ([], [])   # not in memory
+
+    span = (t0, t0 + 7 * 86400.0)
+    # Half of what the span offers, so it is read at a stride of two rather
+    # than at a stride so absurd only one row survives.
+    tail.SPAN_READ_BUDGET_BYTES = tail._span_read_bytes(*span) // 2
+    tail.prepare_span(*span)
+    assert tail.overlay_stride() > 1
+    t, _v = tail.between("Sample", *span)
+    assert t, "a span past the budget came back empty"
+    # The first day and the last both reach the chart, coarsely or not.
+    assert t[0] < t0 + 86400.0
+    assert t[-1] > t0 + 6 * 86400.0
+
+
+def test_a_stride_counts_across_the_whole_scan_not_per_file(tmp_path):
+    """Restarting the count at each midnight would keep more than it promised.
+
+    Three logs of 21 rows read one-in-two is 32 rows if the count runs
+    through the joins and 33 if it restarts at each of them -- and it is not
+    the extra row that matters but where it lands: a restart puts two kept
+    rows next to each other at every rollover and nowhere else, which draws
+    as a kink in a trace that has none.
+    """
+    days = week(tmp_path, days=3, rows=21)
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    t0 = 1_700_000_000.0
+    out, rows = tail._read_span(t0 - 1.0, t0 + 3 * 86400.0, stride=2)
+    assert rows == 32
+    assert len(out["Sample"].t) == 32
+
+
+def test_a_coarse_span_does_not_leave_the_previous_overlay_on_screen(tmp_path):
     """Detail from a narrower window must not float in a view it is not of."""
     days = week(tmp_path, days=7, rows=20)
     tail = CsvTail()

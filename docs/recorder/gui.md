@@ -51,8 +51,10 @@ viewer down:
   viewer opened mid-day still gets yesterday's cooldown; weeks of samples
   nobody asked for are not dragged into memory;
 - **older spans are fetched on demand.** Picking a span re-reads it from the
-  logs on disk at full resolution — whether or not that day was ever
-  backfilled.
+  logs on disk — whether or not that day was ever backfilled, and at full
+  resolution unless the span is too wide to read whole
+  ([below](#a-zoom-costs-the-span-not-the-archive)). The backfill bounds what
+  is held in *memory*; it never bounds what can be drawn.
 
 The `View` row holds live-referenced windows and nothing else — **6 h, 12 h,
 24 h, 48 h**, opening on 24 h — whose right edge is always the newest sample,
@@ -507,22 +509,27 @@ other panel and for the number of points Qt is asked to draw.
 
 The in-memory history is decimated once it outgrows `--max-points` (every
 other sample dropped, doubling the span the budget covers). A picked span is
-not answered from what survived: one quiet tick after the span settles, the
-viewer re-reads that span from the logs on disk at full resolution and swaps
-it in. Zooming out and back in shows real samples again, at whatever cadence
-the recorder wrote. The overview you see for that first tick is thinned; the
-disk read costs nothing during a gesture because it waits for the span to
-stop moving.
+not answered from what survived: a quarter second after the span settles, the
+viewer re-reads that span from the logs on disk and swaps it in. Zooming out
+and back in shows real samples again, at whatever cadence the recorder wrote.
+The disk read costs nothing during a gesture, because it waits for the span
+to stop moving.
 
-**The status bar says which of the two you are looking at** — `full
-resolution`, or `overview · 1 pt / N s` with the spacing actually drawn. The
-two look identical on screen, and which one is up depends on the width of the
-span and on how long this viewer has been running, so it is stated rather than
-left to be worked out.
+**The status bar says which of three things you are looking at:**
 
-Only the *drawing* is ever thinned. Cursor statistics and the region export
+| It says | You are seeing |
+|---|---|
+| `reading the log…` | the gesture has landed and the disk read is in flight |
+| `full resolution` | every sample the logs hold for this window |
+| `too wide to read whole · 1 pt / N s` | the window read at a stride, at the spacing shown |
+
+They look identical on screen, and which one is up depends on the width of
+the span and on how long this viewer has been running, so it is stated rather
+than left to be worked out.
+
+Only the *drawing* is ever coarsened. Cursor statistics and the region export
 re-read the log at full resolution whichever the status bar reports, so a
-decimated chart is never a decimated measurement.
+coarse chart is never a coarse measurement.
 
 ### A zoom costs the span, not the archive
 
@@ -533,12 +540,23 @@ Without that skip the cost was the whole archive: on the LTSPM3 machine a
 one-hour zoom took 0.9 s against a week of logs and 10.2 s against three
 months, for the same 1950 rows recovered. It is now flat at about 135 ms.
 
-A span so wide that re-reading it would exceed
-`CsvTail.SPAN_READ_BUDGET_BYTES` (32 MiB, a bit over three days of 1 Hz
-logging, about 1.8 s of parsing) is drawn from the overview instead and the
-status bar says `overview`. Reading it is the right complexity and still a
-minute of parsing when the span is the whole experiment; full resolution is
-least useful at exactly the widths where it costs most.
+A span so wide that re-reading it whole would exceed
+`CsvTail.SPAN_READ_BUDGET_BYTES` (32 MiB, a bit over three days of this
+recorder's logging) is read at a **stride** instead — one row in n, chosen so
+the parse stays bounded and so no column comes back with more than
+`SPAN_POINT_BUDGET` points, which is about a dozen per pixel on a wide
+window. The whole span is covered; the resolution is what gives.
+
+**It is a stride and not a refusal, and that distinction is the bug this
+replaced.** The budget originally declined such a span outright, on the
+understanding that the overview would be drawn instead. The overview does not
+hold the archive — it holds the last `BACKFILL_COVERAGE_S` of it, 49 hours by
+default (see [History across midnight](#history-across-midnight)). A window
+reaching further back than that fell between the two bounds and was drawn as
+**nothing at all**, with the status bar reporting an overview that was not on
+screen: on a five-day window over a real archive, three of the five days were
+blank. Losing resolution is visible and is now said out loud. Losing the day
+was not.
 
 ## Measuring a region: the cursors
 
