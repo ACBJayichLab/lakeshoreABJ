@@ -19,6 +19,8 @@ default in `ltspm3/control/`.
 | Thermal response | `T − T_bath = A·P^m`, **m ≈ 3.16** (lumped `pct^6.32`, R² = 0.9962) from **24 settled heater steps** in `cd10 monitor4/5` |
 | Steady state | 43% → 18.2 K; 63.076% → **99.60 K**; 66.95% → 151.05 K |
 | **Local gain at the 63% operating point** | **~10.0 K/%** |
+| **Local gain at 66.6% / ~149 K** | **~13.8 K/%** — measured 2026-08-31 from seven settled points, 66.235% → 66.598%, on the live recorder rather than the legacy logs |
+| Fast pole, re-measured | **709 s, R² = 0.9973** — the +0.500% step of 2026-08-24 17:31. Independently confirms the 620 s below |
 | Time constant | **~620 s** @ 137 K — but from the *one* clean step response in the logs. Provisional |
 | Largest *legitimate* one-sample ΔT | **6.5 K** (−1.63 K/s, `cd8_…_monitor7`, corroborated on all three inputs); ~2.97 K/s just after a heater cut |
 | Normal-operation ΔT, p99 | 0.26 K |

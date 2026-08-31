@@ -18,9 +18,10 @@ inside ``max_error_k`` throughout, and the premise check keeps its full meaning
 for genuine anomalies.  Nothing has to be relaxed.
 
 The default rate is deliberately below what the output rate limiter can
-deliver.  At the measured ~7.6 K/% and ``max_rate_pct_per_min`` of 0.20 %/min
-the heater can chase about 1.5 K/min in steady state, so 0.5 K/min leaves the
-loop with authority to spare for the correction on top of the ramp.
+deliver.  At ~10.0 K/% (the 63% operating point) and ``max_rate_pct_per_min``
+of 0.20 %/min the heater can chase about 2 K/min in steady state, so 0.5 K/min
+leaves the loop with authority to spare for the correction on top of the ramp.
+The margin is wider still at higher outputs, where the gain is steeper.
 """
 
 from __future__ import annotations

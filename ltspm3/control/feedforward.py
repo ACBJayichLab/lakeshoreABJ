@@ -1,7 +1,7 @@
 """Open-loop estimate of the heater setting a temperature needs.
 
 The PID here is deliberately gentle -- ``kp`` of 0.02 %/K against a response of
-several K/% is a loop gain near 0.15, chosen so that a bad reading cannot
+several K/% is a loop gain near 0.2, chosen so that a bad reading cannot
 produce a violent correction.  That is the right trade for holding a
 temperature, but it means feedback alone takes an integral time (900 s) to
 build the output change a new setpoint needs.  A sweep asked the loop to
