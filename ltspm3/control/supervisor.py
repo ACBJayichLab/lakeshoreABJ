@@ -69,9 +69,14 @@ class SupervisorConfig:
     """All limits are in output percent unless the name says kelvin.
 
     The defaults assume the cryostat's measured operating point (~63.1% for ~96 K)
-    and a local gain near 7.6 K/%.  At that gain the 1.0% authority band
-    is about +/-7 K of ultimate authority, and ``max_step_pct`` of 0.02 is about
-    150 mK of movement per 4 s update -- generous for trim, useless for damage.
+    and the local gain of ~10.0 K/% there.  At that gain the 1.0% authority band
+    is about +/-10 K of ultimate authority, and ``max_step_pct`` of 0.02 is about
+    200 mK of movement per 4 s update -- generous for trim, useless for damage.
+
+    These scale with the gain, which is NOT constant: ~13.8 K/% was measured at
+    66.6%, so the same band is worth ~+/-14 K up there.  Re-centre the operating
+    point on the output that actually holds the intended temperature, and
+    consider narrowing ``authority_pct`` with it.
     """
 
     operating_point_pct: float = 63.076

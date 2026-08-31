@@ -76,21 +76,35 @@
 # is for, and that is a different program.
 #
 # ---------------------------------------------------------------------------
-# THE CRYOSTAT, AS MEASURED 2026-08-24 16:10
+# THE CRYOSTAT, read from this recorder's own CSV at 2026-08-31 13:05
 # ---------------------------------------------------------------------------
 #
-#   218  Sample      4.742 K     336  A RAD SHIELD   39.227 K
-#        Coldplate   5.494 K          B THE CHONKE  289.182 K  <- loop 2
-#        Magnet      4.809 K          C 1st Stage    28.279 K
-#                                     D 2nd Stage     3.346 K
+# A DATED BLOCK IS NOT THE PRESENT STATE.  The earlier version of this said
+# 4.742 K and 0.0%, measured 2026-08-24 16:10, and was read four days later as
+# though it still held -- by which time this very file had warmed the sample to
+# 149 K.  Read `data/status.json` or the tail of the CSV first.
 #
-#   218 analog out 1 (SAMPLE HEATER)  0.0%    <- what this file can move
-#   336 loop 1  setpoint 295.0 K, heater 1 at 0.0%, range 0
+#   218  Sample    148.980 K     336  A RAD SHIELD   39.881 K
+#        Coldplate   8.304 K          B THE CHONKE  289.150 K  <- loop 2
+#        Magnet      6.913 K          C 1st Stage    28.534 K
+#                                     D 2nd Stage     4.031 K
+#
+#   218 analog out 1 (SAMPLE HEATER)  66.598%  <- what this file can move
+#   336 loop 1  setpoint 28.5 K,  heater 1 at 0.0%, range 0
 #   336 loop 2  setpoint 289.2 K, heater 2 at 100.0%, RAILED
 #
-# The sample is at 4.7 K and the heater is at 0%.  The curve above was
-# measured from a bath, not from 4.7 K, so treat the first few steps as
-# measurement rather than prediction.
+# The sample was walked from 4.7 K to here in 45 manual steps starting
+# 2026-08-24 17:11, and has been steady at 66.598% since 08-27 -- 148.75 K then,
+# 148.98 K now, 0.003 K/h.  Two numbers came out of that record and they are
+# better than the curve above, because they were measured through this file on
+# this cryostat:
+#
+#   tau = 709 s  (R^2 = 0.9973, the +0.500% step of 08-24 17:31)
+#   K  ~= 13.8 K/%  (seven settled points, 66.235% -> 66.598%)
+#
+# Note K: it is much steeper than the 10.0 K/% quoted at the 63% operating
+# point, so a step that would be a trim down there is not one up here.
+# See docs/ltspm3/commissioning.md.
 
 log_level: INFO
 

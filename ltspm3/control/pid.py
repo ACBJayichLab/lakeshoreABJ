@@ -11,8 +11,11 @@ Two departures from a textbook PID, both driven by this cryostat:
   the authority band, so the integral alone can never demand more than the
   supervisor would allow -- windup cannot survive a long clamp.
 
-Gains are in output percent per kelvin.  With a local gain near 7.6 K/%,
-a Kp of 0.02 %/K is a loop gain of ~0.15 -- gentle on purpose.
+Gains are in output percent per kelvin.  With the local gain of ~10.0 K/% at
+the 63% operating point, a Kp of 0.02 %/K is a loop gain of ~0.2 -- gentle on
+purpose.  (The 7.6 K/% quoted here previously came from the superseded n = 5
+fit.  Up at 66.6% the measured gain is ~13.8 K/%, so the same Kp is a loop gain
+near 0.28 there -- which is why the gains are SCHEDULED and not fixed.)
 """
 
 from __future__ import annotations

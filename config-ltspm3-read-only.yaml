@@ -23,20 +23,29 @@
 # them; turning any interlock off is a deliberate, reviewed act and is not
 # needed for monitoring.
 #
-# THE CRYOSTAT IS COLD.  Measured from the last legacy logs, 2026-08-24 15:54:
+# THE CRYOSTAT, read from this recorder's own CSV at 2026-08-31 13:05.
 #
-#   218  Sample      4.742 K     336  A RAD SHIELD   39.227 K
-#        Coldplate   5.494 K          B THE CHONKE  289.182 K  <- loop 2
-#        Magnet      4.809 K          C 1st Stage    28.279 K
-#                                     D 2nd Stage     3.346 K
+# A DATED BLOCK IS NOT THE PRESENT STATE.  The earlier version of this said
+# 4.742 K and 0.0%, measured 2026-08-24 15:54, and was read four days later as
+# though it still held -- by which time the sample had been warmed to 149 K by
+# hand.  It was honestly labelled and still misled.  Read `data/status.json` or
+# the tail of the CSV before trusting anything below.
 #
-#   loop 1  setpoint 295.0 K, heater 1 at 0.0%    (idle throughout)
-#   loop 2  setpoint 289.2 K, heater 2 at 100.0%  (range 90.8-100% over 3 days)
+#   218  Sample    148.980 K     336  A RAD SHIELD   39.881 K
+#        Coldplate   8.304 K          B THE CHONKE  289.150 K  <- loop 2
+#        Magnet      6.913 K          C 1st Stage    28.534 K
+#                                     D 2nd Stage     4.031 K
 #
-# Note the setpoint that memory had at 290.6 K reads 289.2 K, and heater 2 is
-# RAILED at 100% -- loop 2 has no headroom left, so anything that adds heat to
-# THE CHONKE will simply lose.  That is a reason to watch it, and a reason not
-# to touch it.
+#   218 analog out 1 (SAMPLE HEATER)  66.598%   <- warmed by hand since 08-24
+#   loop 1  setpoint 28.5 K,  heater 1 at 0.0%,   range 0
+#   loop 2  setpoint 289.2 K, heater 2 at 100.0%, range 3
+#
+# Heater 2 is RAILED at 100% -- loop 2 has no headroom left, so anything that
+# adds heat to THE CHONKE will simply lose.  That is a reason to watch it, and a
+# reason not to touch it.  (The setpoint memory had at 290.6 K reads 289.2 K.)
+#
+# The sample has been steady at 66.598% since 08-27: 148.75 K then, 148.98 K
+# now, which is 0.003 K/h.  It is settled.  See docs/ltspm3/commissioning.md.
 
 log_level: INFO
 
