@@ -120,35 +120,40 @@ source policy exactly as `arm` does. It leaves the loop **disarmed**: recovery
 stays two acts, which is the whole point of a latch that exists to make somebody
 look at the cryostat.
 
-### The viewer hid five of its nine columns on this machine
+### The viewer was fine, and I said it was broken — corrected
 
-`splitter.setSizes([560, 900])` had the arithmetic written out beside it: "the
-eight fixed columns want 426 px between them and 'Rad Shield' wants 86 more".
-Both halves of that sum are properties of a **font**, and they were stored as a
-constant. On the cryostat's own machine those columns want 658 px and the name
-wants 270 — and the table sets `ScrollBarAlwaysOff`, so the surplus is not
-scrolled to, it is not drawn. `Out`, `Rng`, `State` and **both warning marks**
-were simply absent, with nothing to say so. That is what
-`test_the_loop_table_never_scrolls_sideways` had been failing on all along; it
-was a real defect, not a flaky test.
+`test_the_loop_table_never_scrolls_sideways` fails under
+`QT_QPA_PLATFORM=offscreen` with `assert 928 <= 542`, and I diagnosed that as a
+real clipping regression: the reading table hiding `Out`, `Rng`, `State` and
+both marks on the cryostat's own machine. **It is not.** The offscreen platform
+resolves no font at all, so every width there is roughly doubled. Measured with
+`QT_QPA_PLATFORM=windows` on this machine, Segoe UI 9 pt:
 
-`_fit_panel_to_table` measures instead. Three things it learned the hard way,
-all from measurement rather than reasoning:
+| | offscreen | real |
+|---|---|---|
+| `Rad Shield` | 144 px | **74 px** |
+| `Off SP` | 100 px | **44 px** |
+| the nine columns | 928 px | **542 px**, in a 542 px viewport |
 
-- **it must wait for `isVisible()`** — fitting before layout sized the panel to
-  a nominal splitter width, squeezed the name column to 36 px and shrank the
-  font to its floor, solving a problem the window did not have yet and keeping
-  the solution. A *width* threshold in that guard is wrong too: it skips exactly
-  the small windows that need this most;
-- **the name column asks for an ordinary name, never the longest one present** —
-  sizing the whole panel to a 40-character label lets one sensor rearrange the
-  window, which inverts the rule that the sensor is the column that gives;
-- **when nine columns will not fit at any readable font, the scrollbar comes
-  back** and the name column stops stretching. Scrolling is a poor answer and
-  this panel is built never to need one — but nothing may be *quietly* missing.
+The 560 px panel is correct and tight, and its comment ("'Rad Shield' wants
+86") is right for the real font. `memory/gui-pixel-tests-lie-offscreen` had
+already established this, from a real-platform measurement and from Jeff
+observing the viewer was fine; I did not read it before diagnosing, and
+reproduced the same mistake it exists to prevent.
 
-1920/1500 px: panel 845, 12 pt, no scrollbar, nothing lost. 1100/900 px: panel
-560, 9 pt, scrollbar on, nothing lost.
+**What was kept, and on what grounds.** `_fit_panel_to_table` stays — but not
+as a bug fix, because there was no bug here. It asks the table how wide it
+needs to be instead of assuming one desktop's font, which is worth having in a
+program that ships to other machines. On this machine it is a **verified
+no-op**: it measures 465 against a 560 floor and leaves the panel exactly where
+it was, font 12 pt, no scrollbar, columns 542 in 542.
+
+**One of my own tests was only true on the lying platform** — it asserted the
+panel had grown past 560, which happens offscreen and never here. It now
+asserts the invariant (the panel is at least what the table asked for; nothing
+is clipped without a scrollbar), which holds on both. The whole GUI suite now
+passes under `offscreen` *and* under `windows`, which is the check that would
+have caught this on the first day.
 
 ### The software loop's gains reach the status file
 

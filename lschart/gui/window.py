@@ -1565,14 +1565,24 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         It used to start at a written-down 560 px, with the arithmetic beside
         it: "the eight fixed columns want 426 px between them and 'Rad Shield'
-        wants 86 more".  Both halves of that sum are properties of a font.  On
-        a desktop whose base font is larger the same columns want 658 px and
-        the name wants 270 -- and this table sets ``ScrollBarAlwaysOff``, so
-        the surplus is not scrolled to, it is **not drawn**.
+        wants 86 more".  **That arithmetic is correct** for Segoe UI 9 pt, this
+        desktop's font, and on this machine the panel is right and tight: the
+        columns come to 542 in a 542 px viewport and nothing is clipped.  This
+        method changes nothing here -- it measures 465, below the 560 floor,
+        and leaves the panel exactly where it was.
 
-        Measured on the cryostat's own machine, that hid `Out`, `Rng`, `State`
-        and *both marks*: five of nine columns, including the two the table
-        exists to show, with no scrollbar to suggest anything was missing.
+        What it buys is the other desktops.  Both halves of that sum are
+        properties of a *font*, and this program ships to machines whose font
+        is not this one; the table sets ``ScrollBarAlwaysOff``, so on a desktop
+        that needs more the surplus is not scrolled to, it is **not drawn**.
+        Rather than a constant that happens to suit one machine, the panel asks
+        the table.
+
+        Do not diagnose this from the test suite.  ``QT_QPA_PLATFORM=offscreen``
+        resolves no font at all, so every width there is roughly doubled and
+        the same columns "want" 928 px -- which is how a healthy viewer came to
+        look like a clipping regression.  Re-measure with
+        ``QT_QPA_PLATFORM=windows`` before believing any pixel number.
 
         So measure rather than remember.  Once, on the first refresh that puts
         rows in the table -- before an operator can have dragged the splitter,

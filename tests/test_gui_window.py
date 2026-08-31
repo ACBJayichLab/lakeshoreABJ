@@ -27,7 +27,7 @@ from lschart.gui import theme  # noqa: E402
 from lschart.gui.window import GUI_SOURCE as GUI_SOURCE_NAME  # noqa: E402
 from lschart.gui.window import (  # noqa: E402
     COL_CHANNEL, COL_SATURATED, DEFAULT_VIEW_WINDOW_S, ViewerWindow, _stats_html,
-    warn_colour,
+    _MIN_CHART_PX, _MIN_PANEL_PX, warn_colour,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -2372,14 +2372,23 @@ def test_the_selector_is_anchored_to_the_group_stack_not_to_one_group(
     w.close()
 
 
-def test_the_panel_is_measured_and_not_a_written_down_number(tmp_path, qt_app):
-    """560 px was arithmetic done once, at one machine's font metrics.
+def test_the_panel_is_measured_rather_than_assumed(tmp_path, qt_app):
+    """The panel asks the table how wide it needs to be.
 
-    "The eight fixed columns want 426 px between them and 'Rad Shield' wants 86
-    more" — both halves of that are properties of a font. On a desktop whose
-    base font is larger the same columns want 658 and the name wants 270, and
-    with `ScrollBarAlwaysOff` the surplus is not scrolled to, it is not drawn:
-    `Out`, `Rng`, `State` and both marks, gone with nothing to say so.
+    **560 px is correct for this desktop**, and the arithmetic written beside
+    it ("the eight fixed columns want 426 px and 'Rad Shield' wants 86 more")
+    is correct too: on the real platform the columns come to 542 in a 542 px
+    viewport with nothing clipped. The constant was never wrong here. It was
+    only ever right *here*, and this program ships to desktops with other
+    fonts, where `ScrollBarAlwaysOff` turns a shortfall into columns that are
+    not drawn rather than columns you can scroll to.
+
+    So the assertion is the invariant, not a pixel count: the panel is at least
+    as wide as the table needs, or as wide as the window will allow. **Do not
+    write a pixel expectation here.** Under `QT_QPA_PLATFORM=offscreen`, which
+    is how this file runs by default, no font resolves and every width is
+    roughly doubled — an earlier version of this test asserted the panel had
+    grown past 560, which is true only on the lying platform.
     """
     w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
         loop_entry(1, "Coldplate"), loop_entry(2, "Stage 2"),
@@ -2389,9 +2398,14 @@ def test_the_panel_is_measured_and_not_a_written_down_number(tmp_path, qt_app):
     for _ in range(3):
         w.refresh()
         qt_app.processEvents()
-    # Wider than the old constant, because this font needs it to be.
-    assert w._splitter.sizes()[0] > 560
-    assert w.readings.font().pointSize() == w.readings.font().pointSize()
+
+    panel = w._splitter.sizes()[0]
+    chrome = w._panel_scroll.width() - w.readings.viewport().width()
+    room = w._splitter.width() - _MIN_CHART_PX
+    assert panel >= _MIN_PANEL_PX
+    assert panel >= min(w._reading_table_wants() + chrome, room), (
+        "the panel did not grow to the width the table asked for")
+
     total = sum(w.readings.columnWidth(c)
                 for c in range(w.readings.columnCount()))
     assert total <= w.readings.viewport().width()
