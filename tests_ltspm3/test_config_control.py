@@ -122,3 +122,34 @@ def test_control_without_the_218_is_rejected():
             inst.enabled = False
     with pytest.raises(ConfigError, match="requires ls218"):
         cfg.validate()
+
+
+def test_the_band_the_docs_quote_is_the_band_the_config_produces():
+    """A stale band in a document is not a cosmetic error.
+
+    `docs/ltspm3/running.md` and `control.md` both show a worked `check` line,
+    and both quoted 58.076-68.076% -- five times too wide -- while
+    `authority_pct` was 1.0.  The band is what decides whether the output you
+    are sitting on is one the loop may keep, so a reader who trusted the page
+    would conclude an output was inside the band when it was above the ceiling.
+    """
+    import re
+    from pathlib import Path
+
+    from ltspm3.control import SupervisorConfig
+
+    c = SupervisorConfig()
+    lo = max(c.hard_min_pct, c.operating_point_pct - c.authority_pct)
+    hi = min(c.hard_max_pct, c.operating_point_pct + c.authority_pct)
+
+    docs = Path(__file__).resolve().parents[1] / "docs" / "ltspm3"
+    pattern = re.compile(r"authority band\s*:\s*([\d.]+)%\s*\.\.\s*([\d.]+)%")
+    seen = 0
+    for page in docs.glob("*.md"):
+        for got_lo, got_hi in pattern.findall(page.read_text(encoding="utf-8")):
+            seen += 1
+            assert (float(got_lo), float(got_hi)) == (lo, hi), (
+                f"{page.name} quotes a band of {got_lo}-{got_hi}%, but the "
+                f"shipped config produces {lo:.3f}-{hi:.3f}%"
+            )
+    assert seen, "no worked `check` band found in docs/ltspm3 -- did they move?"

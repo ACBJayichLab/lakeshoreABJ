@@ -115,8 +115,13 @@ analog output, and config validation says so rather than letting an
 numbers worth reading before arming anything:
 
 ```
-authority band : 58.076% .. 68.076%  (on_exit=hold)
+authority band : 62.076% .. 64.076%  (on_exit=hold)
 ```
+
+**Read that off `check`, never off this page.** It said `58.076% .. 68.076%`
+until 2026-08-31 — five times too wide, because `authority_pct` is 1.0 and not
+5.0. A stale band in a document is not a cosmetic error: the band is what
+decides whether the output you are sitting on is one the loop may keep.
 
 Every limit lives in one of those config classes. **Never hardcode one in
 `control/`.**

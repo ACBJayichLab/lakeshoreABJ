@@ -30,12 +30,22 @@ python -m ltspm3 -c config.yaml check
 
 ```
 control        : enabled
-authority band : 58.076% .. 68.076%  (on_exit=hold)
+authority band : 62.076% .. 64.076%  (on_exit=hold)
 ```
 
-The band is an unconditional cap on heat (rule 5). `on_exit=hold` means the
-heater keeps its last value when the process stops — zeroing a sample heater on
-a live cryostat is its own hazard (rule 6).
+**That is the number `check` actually prints on the shipped config**, and this
+example said `58.076% .. 68.076%` — five times too wide — until 2026-08-31. Read
+the band off `check`, never off a document: `authority_pct` is 1.0, so the band
+is **two percent wide, not ten**, and at ~10 K/% that is ±10 K of authority
+rather than ±50 K.
+
+The band is a cap on heat (rule 5) and it is **two-sided**. The ceiling is hard
+and immediate; the floor bounds what the PID may ask for. Both matter before
+arming: an output *above* the ceiling is cut to it on the first cycle, which is
+a commanded step down of however far above it sat.
+
+`on_exit=hold` means the heater keeps its last value when the process stops —
+zeroing a sample heater on a live cryostat is its own hazard (rule 6).
 
 ## After a fault
 
