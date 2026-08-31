@@ -2286,3 +2286,58 @@ def test_the_selector_is_anchored_to_the_group_stack_not_to_one_group(
     # not the first visible group.
     assert w.setpoint_group.title() == "Setpoint"
     w.close()
+
+
+def test_the_panel_is_measured_and_not_a_written_down_number(tmp_path, qt_app):
+    """560 px was arithmetic done once, at one machine's font metrics.
+
+    "The eight fixed columns want 426 px between them and 'Rad Shield' wants 86
+    more" — both halves of that are properties of a font. On a desktop whose
+    base font is larger the same columns want 658 and the name wants 270, and
+    with `ScrollBarAlwaysOff` the surplus is not scrolled to, it is not drawn:
+    `Out`, `Rng`, `State` and both marks, gone with nothing to say so.
+    """
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
+        loop_entry(1, "Coldplate"), loop_entry(2, "Stage 2"),
+        loop_entry(3, "Rad Shield"), loop_entry(4, "Stage 1")])])
+    w.resize(1500, 949)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    # Wider than the old constant, because this font needs it to be.
+    assert w._splitter.sizes()[0] > 560
+    assert w.readings.font().pointSize() == w.readings.font().pointSize()
+    total = sum(w.readings.columnWidth(c)
+                for c in range(w.readings.columnCount()))
+    assert total <= w.readings.viewport().width()
+    assert not w.readings.horizontalScrollBar().isVisible()
+    w.close()
+
+
+def test_a_window_too_small_for_the_table_scrolls_rather_than_hides(
+        tmp_path, qt_app):
+    """Nothing is allowed to be *quietly* missing.
+
+    On a window too small for nine columns at any font this program will read
+    at, the last resort is a scrollbar. It is a poor answer — the panel is
+    built never to need one — and a far better answer than drawing eight
+    columns and dropping the ninth in silence.
+    """
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, loops=[
+        loop_entry(1, "Coldplate"), loop_entry(2, "Stage 2"),
+        loop_entry(3, "Rad Shield"), loop_entry(4, "Stage 1")])])
+    w.resize(900, 949)
+    w.show()
+    for _ in range(3):
+        w.refresh()
+        qt_app.processEvents()
+    t = w.readings
+    total = sum(t.columnWidth(c) for c in range(t.columnCount()))
+    if total > t.viewport().width():
+        assert t.horizontalScrollBar().isVisible(), (
+            "columns overflow with no scrollbar: the last ones are simply gone")
+    # And the name never collapses to a stub that two thermometers share.
+    metrics = t.fontMetrics()
+    assert t.columnWidth(COL_CHANNEL) >= metrics.horizontalAdvance("Stage 1")
+    w.close()

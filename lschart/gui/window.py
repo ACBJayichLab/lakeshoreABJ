@@ -152,6 +152,24 @@ READING_COLUMNS = ["Channel", "K", "Loop", "SP", "Out", "Rng",
 
 #: Column indices, by name.  Derived rather than written down: the marks moved
 #: when ``State`` was added, and hardcoded 6s and 7s move silently.
+#: The panel never starts narrower than this, and never takes so much that the
+#: chart is left under ``_MIN_CHART_PX``.  Both are floors on a *measured*
+#: width rather than the width itself -- see ``_fit_panel_to_table``, and see
+#: what happened when the width itself was written down.
+_MIN_PANEL_PX = 560
+_MIN_CHART_PX = 520
+
+#: How much channel name the panel is sized to hold, in characters.  The sensor
+#: is the column that gives -- it is repeated in the trace list and in the row's
+#: own tooltip, so a truncated name is still identifiable, while a mark past the
+#: edge is not anywhere.  But it may only give so far: at the old width "Stage 1"
+#: and "Stage 2" both came out "Stag…", two thermometers reading the same.
+#: So the panel is sized for an ordinary name and a pathological one elides.
+_CHANNEL_FIT_CHARS = 14
+
+#: Qt's own left/right margin inside a table cell.
+_CELL_PADDING_PX = 8
+
 COL_CHANNEL, COL_KELVIN, COL_LOOP = 0, 1, 2
 COL_SETPOINT, COL_OUTPUT, COL_RANGE = 3, 4, 5
 COL_STATE = READING_COLUMNS.index("State")
@@ -562,13 +580,14 @@ class ViewerWindow(QtWidgets.QMainWindow):
         splitter.addWidget(self._plots())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        # 560, and the number is arithmetic rather than taste: at the readout
-        # font the reading table's eight fixed columns want 426 px between
-        # them and "Rad Shield" wants 86 more. Below that the channel name
-        # elides, and "Stage 1" and "Stage 2" both become "Stag…" -- two
-        # different thermometers reading the same, which is worse than
-        # useless. It comes out of the chart, which has it to spare.
-        splitter.setSizes([560, 900])
+        # A starting point only. The real width is measured from the table once
+        # it has rows in it -- see `_fit_panel_to_table`. This used to be 560
+        # with the arithmetic written out beside it ("the eight fixed columns
+        # want 426 px and 'Rad Shield' wants 86 more"), and both halves of that
+        # sum are properties of a font rather than of the table.
+        self._splitter = splitter
+        self._panel_fitted = False
+        splitter.setSizes([_MIN_PANEL_PX, 900])
         outer.addWidget(splitter, 1)
         # Across the whole window, under the chart. The plot gives up ~26 px
         # for it, which it does not miss, and the left panel gets three rows
@@ -1475,14 +1494,20 @@ class ViewerWindow(QtWidgets.QMainWindow):
                     and int(row.get("loop") or 0) == self._loop):
                 selected = index
 
-        if grew:
+        # Every refresh, not only the ones that add rows: the fit needs a laid
+        # out window, and the first refresh can land before the window is shown.
+        # It latches itself, so this costs one comparison thereafter.
+        fitted = self._fit_panel_to_table()
+
+        if grew or fitted:
             # Sized *after* the cells are filled.  Measuring an empty table
             # measures the row height of a row with nothing in it, which is
-            # how the last row came to sit behind a scrollbar.
+            # how the last row came to sit behind a scrollbar.  `fitted` counts
+            # because changing the font changes every row height.
             self.readings.resizeRowsToContents()
             height = (self.readings.horizontalHeader().height()
                       + 2 * self.readings.frameWidth())
-            for r in range(len(entries)):
+            for r in range(self.readings.rowCount()):
                 height += self.readings.rowHeight(r)
             self.readings.setFixedHeight(height)
 
@@ -1490,6 +1515,103 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 selected, QtCore.QModelIndex()):
             with _quiet(self.readings):
                 self.readings.selectRow(selected)
+
+    def _reading_table_wants(self) -> int:
+        """Pixels the reading table needs to draw every column in full.
+
+        Per column, the larger of what the *contents* want and what the
+        *heading* wants -- which is what ``ResizeToContents`` itself uses, and
+        the two differ sharply here: "Off SP" holds a single mark or nothing,
+        so its contents want 7 px and its heading wants 100.
+        """
+        header = self.readings.horizontalHeader()
+        want = [
+            max(self.readings.sizeHintForColumn(c), header.sectionSizeHint(c))
+            for c in range(self.readings.columnCount())
+        ]
+        # The channel column asks for an ordinary name, never for whatever the
+        # longest label happens to be.  A 40-character sensor name must elide
+        # rather than push the marks off the edge or summon a scrollbar --
+        # sizing the whole panel to it would let one label rearrange the window.
+        cap = (self.readings.fontMetrics().averageCharWidth()
+               * _CHANNEL_FIT_CHARS) + 2 * _CELL_PADDING_PX
+        want[COL_CHANNEL] = min(want[COL_CHANNEL], cap)
+        return sum(want) + 2 * self.readings.frameWidth()
+
+    def _fit_panel_to_table(self) -> bool:
+        """Give the panel the width the reading table actually needs.
+
+        It used to start at a written-down 560 px, with the arithmetic beside
+        it: "the eight fixed columns want 426 px between them and 'Rad Shield'
+        wants 86 more".  Both halves of that sum are properties of a font.  On
+        a desktop whose base font is larger the same columns want 658 px and
+        the name wants 270 -- and this table sets ``ScrollBarAlwaysOff``, so
+        the surplus is not scrolled to, it is **not drawn**.
+
+        Measured on the cryostat's own machine, that hid `Out`, `Rng`, `State`
+        and *both marks*: five of nine columns, including the two the table
+        exists to show, with no scrollbar to suggest anything was missing.
+
+        So measure rather than remember.  Once, on the first refresh that puts
+        rows in the table -- before an operator can have dragged the splitter,
+        and never taking so much that the chart drops under ``_MIN_CHART_PX``.
+
+        If even that is not enough, on a genuinely small screen, the **font**
+        gives way rather than the columns: a smaller number is still a number,
+        and a column that is not drawn is not anywhere.  It never shrinks below
+        the desktop's own font, which is the size everything else is read at.
+
+        Returns True on the one call that does the fitting, because changing
+        the font changes the row heights the caller has just measured.
+        """
+        if self._panel_fitted:
+            return False
+        total = self._splitter.width()
+        # Wait for a real layout.  Before the window is shown the splitter
+        # reports a nominal width, and fitting to *that* squeezed the channel
+        # column to 36 px and shrank the font to its floor -- solving a problem
+        # the window did not have yet, and keeping the solution afterwards.
+        #
+        # Visibility is the whole test.  A width threshold here would also skip
+        # genuinely small windows, which are exactly the ones that need this.
+        if not self.isVisible() or total <= 0:
+            return False
+        self._panel_fitted = True
+
+        chrome = max(0, self._panel_scroll.width()
+                     - self.readings.viewport().width())
+        target = max(_MIN_PANEL_PX,
+                     min(self._reading_table_wants() + chrome,
+                         total - _MIN_CHART_PX))
+        self._splitter.setSizes([target, max(_MIN_CHART_PX, total - target)])
+
+        available = target - chrome
+        font = self.readings.font()
+        floor = QtWidgets.QApplication.font().pointSize()
+        while (font.pointSize() > floor
+               and self._reading_table_wants() > available):
+            font.setPointSize(font.pointSize() - 1)
+            self.readings.setFont(font)
+
+        if self._reading_table_wants() > available:
+            # Last resort, on a window too small for nine columns at any font
+            # this program is willing to read.  Scrolling is a poor answer and
+            # the panel is built never to need one -- but it is a far better
+            # answer than drawing eight columns and silently dropping the
+            # ninth, which is what `ScrollBarAlwaysOff` does once the
+            # arithmetic runs out.  Nothing here is allowed to be *quietly*
+            # missing.
+            #
+            # The channel column stops stretching with it: stretched into a
+            # space that is already short it collapses to the minimum section
+            # size, and "Stage 1" and "Stage 2" both read "S…" -- two different
+            # thermometers showing the same name, which is the failure this
+            # table's own comments call worse than useless.
+            self.readings.horizontalHeader().setSectionResizeMode(
+                COL_CHANNEL, QtWidgets.QHeaderView.ResizeToContents)
+            self.readings.setHorizontalScrollBarPolicy(
+                QtCore.Qt.ScrollBarAsNeeded)
+        return True
 
     def _fill_reading_row(self, index: int, row: dict) -> None:
         """One row: a thermometer, and the loop bound to it if there is one.
