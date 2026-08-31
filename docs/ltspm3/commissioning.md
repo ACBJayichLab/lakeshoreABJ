@@ -250,7 +250,7 @@ What to get out of it:
 | Comms stability | dropped replies, timeouts, terminator handling (the 218 ends a reply with bare LF, the 336 with CRLF) |
 | Glitch rate on Sample | the reference logs say ~1 event per 7 days on this input. Does that hold at 2 s? |
 | Real sensor noise vs temperature | feeds calibration **C1** below — and this data spans 4.7 K to 149 K, which is most of the working range |
-| Cadence | the run is at ~2 s, not the 1 Hz the config nominally asks for. Find out which is limiting: the bus, both boxes, or `read_status` |
+| Cadence | 2.0 s, which is what the config asks for and what `check` reports — a budget of 26 transactions, ~1.30 s per cycle. [cryostat.md](cryostat.md)'s "1 Hz by config" was stale. Note the headroom is thin: 1 Hz would not fit without trimming the transaction budget |
 | Readback resolution | `AOUT?` flickers between 66.595 and 66.598 with nothing commanded — 0.003%, well inside `readback_tol_pct` of 0.015%, but know it is there before W1 |
 | The 336's loop 2 | heater 2 is **railed at 99.8%**. Watch it; do not touch it. It has no headroom, so anything adding heat to THE CHONKE simply wins |
 | Column names moved mid-run | files up to `2026-08-26` carry `Cold Head` / `Shield`; `2026-08-26_part2` onward carry `Coldplate` / `Magnet`, for the same two physical inputs. Any analysis spanning the rename must accept both spellings or it silently drops five days down to two |

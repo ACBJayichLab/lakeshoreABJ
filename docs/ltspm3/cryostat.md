@@ -7,7 +7,7 @@
 | Lake Shore 336 | `GPIB0::12::INSTR` — 4 inputs: RAD SHIELD, THE CHONKE, 1st Stage, 2nd Stage |
 | Lake Shore 218 | `GPIB0::15::INSTR` — 8 inputs, 3 populated; **input 1 is the sample** |
 | Sample heater | 218 **analog output 1** → op-amp → heater. The 218 has no heater loop; this software *is* the loop |
-| Poll cadence | **1 Hz** by config |
+| Poll cadence | **2.0 s** by config. `check` budgets 26 transactions at ~1.30 s per cycle, so 1 Hz does not fit without trimming that |
 
 Addresses come from the legacy MATLAB in `reference/` (`DAQManager.m`), which is
 kept for reference only and is not part of the build.
@@ -15,9 +15,11 @@ kept for reference only and is not part of the build.
 On cadence: the legacy logs vary 2–20 s, but that was the 65,536-row Excel
 limit forcing slower polling on long runs, not a cryostat constraint.
 
-> **Nothing on this cryostat has been talked to yet.** Every number in these
-> documents comes from the reference logs; the GPIB path has never been
-> exercised against hardware.
+> **The GPIB path is exercised; the software loop is not.** Since 2026-08-24 the
+> recorder has run against both boxes over GPIB, and the 218's analog output has
+> been moved by hand. What has *never* run on this cryostat is the closed loop.
+> Numbers here that predate 08-24 still come from the reference logs — see
+> [commissioning](commissioning.md) for which ones have since been measured.
 
 ## The 336 is read-only, and that matters
 

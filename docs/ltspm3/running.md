@@ -127,9 +127,11 @@ fake applies writes synchronously.
 
 **Check this before the LTSPM3 cryostat runs armed.**
 
-### 2. Nothing on this cryostat has been talked to yet
+### 2. The closed loop has never run on this cryostat
 
-Every number in these documents comes from the reference logs. Start with
+The GPIB path and the write path both have, since 2026-08-24 — but by hand, with
+no controller in the way. Arming is the step nothing has rehearsed on this
+hardware. [commissioning.md](commissioning.md) is the staged way in; start with
 `probe`, which forces every transport read-only regardless of the config:
 
 ```bash
@@ -138,9 +140,17 @@ python -m lschart -c config.yaml probe
 
 ### 3. A deliberate step test at two or three temperatures
 
-The highest-value hardware measurement available. The current τ ≈ 620 s comes
-from the *one* clean step response in the logs and is provisional.
-`ltspm3/tools/steptest.py` holds the protocol.
+Still the highest-value hardware measurement available, but no longer from
+scratch. The live data now gives **τ = 709 s at R² = 0.9973** (the +0.500% step
+of 2026-08-24) and **K ≈ 13.8 K/%** across seven settled points at 66.2–66.6%.
+The first confirms the provisional τ ≈ 620 s; the second is a genuinely new
+number, and much steeper than the 10.0 K/% quoted at the 63% operating point.
+
+What is missing is *other temperatures* — everything on disk sits between 143 K
+and 149 K, which is one schedule point rather than a schedule.
+`ltspm3/tools/steptest.py` holds the protocol; see
+[commissioning.md](commissioning.md) for the two rules the existing hand data
+teaches about step size and doublets.
 
 ## Replay: the only test on genuine data
 

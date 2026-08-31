@@ -43,9 +43,11 @@ the viewer and the MATLAB interface; resist "while I am in here" improvements to
 
 Two things are worth knowing before it runs against the real cryostat:
 
-- **Nothing on this cryostat has been talked to yet.** Every number in these
-  documents comes from the reference logs. The GPIB path has never been
-  exercised against hardware.
+- **The GPIB path is exercised; the closed loop is not.** The recorder has run
+  against both boxes since 2026-08-24 and the 218's analog output has been moved
+  by hand, but the software loop has never driven this cryostat. See
+  [commissioning.md](commissioning.md) for what the live data has since
+  measured, and what still comes from the reference logs.
 - **`verify_readback` on the 218 may be confirming a stale value.** See
   [running.md](running.md#before-the-first-armed-run) — this is the highest-value
   parked item.
