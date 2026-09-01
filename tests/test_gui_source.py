@@ -642,6 +642,254 @@ def test_a_stride_counts_across_the_whole_scan_not_per_file(tmp_path):
     assert len(out["Sample"].t) == 32
 
 
+def test_zooming_inside_a_loaded_span_keeps_drawing_it(tmp_path):
+    """The window a gesture is passing through is inside the one already read.
+
+    This is what put blank stretches on the chart.  The overlay was chosen by
+    span *equality*, so a wheel or a drag -- which crosses dozens of spans a
+    second, none of them the loaded one -- fell back to the overview for the
+    whole gesture, and the overview only reaches back ``backfill_s``.  Every
+    window older than that was drawn with its older half missing until the
+    mouse stopped moving, which is exactly what data failing to load looks
+    like.
+
+    Here the tail holds only the newest day, as a live viewer does once a
+    span reaches past its backfill, and every window inside the loaded one
+    must still be answered from it.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    t0 = 1_700_000_000.0
+    tail = CsvTail(backfill_s=0.0)
+    tail.follow(str(days[-1]))
+    tail.poll()
+    tail.prepare_span(t0, t0 + 7 * 86400.0)
+    # Six spans in, as a wheel would visit them.  None equals the loaded one.
+    for step in range(6):
+        span = (t0 + step * 3600.0, t0 + 7 * 86400.0 - step * 3600.0)
+        t, _v = tail.between("Sample", *span)
+        assert t, f"a window inside the loaded span came back empty: {span}"
+        assert t[0] < t0 + 86400.0, "the oldest day stopped being drawn"
+
+
+def test_a_pan_keeps_the_part_of_the_window_already_read(tmp_path):
+    """A window dragged sideways overlaps the one before it almost entirely.
+
+    Only the sliver newly uncovered has never been read; falling back to the
+    overview for the whole window throws away the rest, and on a span older
+    than ``backfill_s`` there is nothing behind it.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    t0 = 1_700_000_000.0
+    tail = CsvTail(backfill_s=0.0)
+    tail.follow(str(days[-1]))
+    tail.poll()
+    tail.prepare_span(t0 + 2 * 86400.0, t0 + 5 * 86400.0)
+    # Dragged half a day older: still three days of overlap with what is held.
+    t, _v = tail.between("Sample", t0 + 1.5 * 86400.0, t0 + 4.5 * 86400.0)
+    assert t, "a panned window came back empty"
+    assert t[-1] > t0 + 4 * 86400.0
+
+
+def test_the_backdrop_covers_the_whole_archive_without_a_read(tmp_path):
+    """The floor under the drawing: a window nothing else reaches still draws.
+
+    The overview reaches back ``backfill_s`` and the overlay covers one picked
+    span, so between them there was a hole the size of the archive -- and a
+    gesture is what falls into it.  A flick of the wheel crosses a window a
+    notch and none of them is read until the last one settles; measured on the
+    logs in `data/`, the frame at the end of a twelve-notch flick had **38.7 %
+    of its window drawn** without a backdrop and all of it with one.
+
+    Here the tail holds only the newest day, as a live viewer does, and a
+    window over the whole week must still come back with something on it
+    before anything is read.
+    """
+    days = week(tmp_path, days=7, rows=200)
+    t0 = 1_700_000_000.0
+    whole = (t0 - 3600.0, t0 + 7 * 86400.0)
+    tail = CsvTail(backfill_s=0.0)
+    # A budget this corpus can exceed, so the backdrop is really a thinned
+    # reading of it and not an accidentally complete one.
+    tail.ATLAS_POINT_BUDGET = 100
+    tail.follow(str(days[-1]))
+    tail.poll()
+    # The backfill always keeps one finished log whatever the cap, so what is
+    # in memory is the last day or two -- and nothing like the oldest.
+    assert tail.between("Sample", *whole)[0][0] > t0 + 86400.0, \
+        "the overview reached further back than this test assumes"
+
+    assert tail.prepare_atlas() > 0
+    assert tail.atlas_stride() > 1, "a backdrop of every sample is not a backdrop"
+    t, _v = tail.between("Sample", *whole)
+    assert t[0] < t0 + 86400.0, "the oldest day is not on the chart"
+    assert t[-1] > t0 + 6 * 86400.0, "nor is the newest"
+
+
+def test_the_backdrop_gives_way_to_anything_that_holds_more(tmp_path):
+    """It is a floor, not a ceiling: coarsest, so it is drawn from last."""
+    days = week(tmp_path, days=7, rows=200)
+    t0 = 1_700_000_000.0
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    tail.prepare_atlas()
+    # A window the tailed history holds every sample of.
+    newest = t0 + 6 * 86400.0
+    window = (newest, newest + 199.0)
+    assert tail._draw_source("Sample", *window) is tail.series
+    # And one a picked span was read for.
+    span = (t0 + 2 * 86400.0, t0 + 2 * 86400.0 + 199.0)
+    tail.prepare_span(*span)
+    assert tail._draw_source("Sample", *span) is tail._overlay
+
+
+def test_the_backdrop_keeps_up_with_the_recorder(tmp_path):
+    """It is built once and then tailed, so its right edge must not freeze.
+
+    A backdrop that stopped at the moment it was read would leave a widening
+    strip at the live edge that only the overview covers -- which is fine
+    until the window is wider than the overview, which is exactly when the
+    backdrop is the thing being drawn.
+    """
+    t0 = 1_700_000_000.0
+    path = log(tmp_path, rows=400, t0=t0)
+    tail = CsvTail()
+    # A budget a test corpus can exceed; the real one is a few thousand points
+    # over months, which no fixture here is going to reach.
+    tail.ATLAS_POINT_BUDGET = 40
+    tail.follow(str(path))
+    tail.poll()
+    tail.prepare_atlas()
+    stride = tail.atlas_stride()
+    assert stride > 1
+    before = len(tail._atlas["Sample"].t)
+    with open(path, "a") as fh:
+        fh.write("".join(row(t0 + 400 + i, 200.0 + i) for i in range(400)))
+    tail.poll()
+    after = len(tail._atlas["Sample"].t)
+    assert after > before, "the backdrop stopped at the moment it was read"
+    # At its own spacing, not at the log's: the phase of the thinning carries
+    # on rather than restarting and bunching samples at the live edge.
+    assert after - before == pytest.approx(400 / stride, abs=2)
+    assert tail._atlas["Sample"].t[-1] > t0 + 700
+
+
+def test_a_read_takes_in_more_than_the_window_it_was_asked_for(tmp_path):
+    """A pan is continuous; answering it one screenful at a time is not.
+
+    ``SPAN_MARGIN_S`` is five minutes and is a margin, not a preload -- it
+    exists so a trace crossing the edge is drawn leaving it.  On a window of
+    days five minutes is nothing, so a drag of any size walked straight off
+    the end of what had been read and the newly uncovered strip was blank
+    until the next read landed.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    t0 = 1_700_000_000.0
+    tail = CsvTail(backfill_s=0.0)              # nothing but today in memory
+    tail.follow(str(days[-1]))
+    tail.poll()
+    span = (t0 + 2 * 86400.0, t0 + 5 * 86400.0)
+    tail.prepare_span(*span)
+    width = span[1] - span[0]
+    # A tenth of a screen either way is inside the preload, so it is answered
+    # from what is in hand rather than from the overview -- which here holds
+    # only the newest day and could not answer it at all.
+    for shift in (-0.1 * width, 0.1 * width):
+        moved = (span[0] + shift, span[1] + shift)
+        assert tail.overlay_serves(*moved), f"a small pan fell off the read: {shift}"
+        t, _v = tail.between("Sample", *moved)
+        assert t, "a window inside the preload came back empty"
+
+
+def test_a_pan_inside_the_preload_does_not_go_back_to_disk(tmp_path, monkeypatch):
+    """Preloading only stops the blank.  Not re-reading is what makes it free.
+
+    Without this the read still happened once per settle -- a second of the
+    GUI thread to produce the picture already on screen.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    t0 = 1_700_000_000.0
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    span = (t0 + 2 * 86400.0, t0 + 5 * 86400.0)
+    tail.prepare_span(*span)
+    opened = []
+    monkeypatch.setattr(tail, "_read_prefix",
+                        lambda path, upto: opened.append(path))
+    width = span[1] - span[0]
+    assert tail.overlay_serves(span[0] + 0.05 * width, span[1] + 0.05 * width)
+    assert opened == [], "a pan inside the preload read the logs again"
+
+
+def test_being_preloaded_never_costs_a_window_its_resolution(tmp_path):
+    """Both ceilings are promises about what reaches the screen.
+
+    Size the stride on the preloaded read instead of on the window and a
+    window comes back coarser for having been preloaded -- measured on the
+    logs in `data/`, a 72 h span fell from every sample to one in seven,
+    purely because something was read either side of it that nobody had asked
+    to see.  The preload rides on whatever stride the window chose: it costs
+    bytes and time, and never resolution.
+    """
+    days = week(tmp_path, days=7, rows=200)
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    t0 = 1_700_000_000.0
+    # Four days wide, so the preload is a day either side and reaches a log
+    # the window itself does not: the read grows, the window does not.
+    span = (t0 + 2 * 86400.0, t0 + 6 * 86400.0)
+    margin = tail.SPAN_MARGIN_S
+    window_bytes = tail._span_read_bytes(span[0] - margin, span[1] + margin)
+    p0, p1 = tail._padded_span(*span)
+    padded_bytes = tail._span_read_bytes(p0 - margin, p1 + margin)
+    assert padded_bytes > window_bytes, "the corpus cannot make the point"
+    # A budget the window fits inside and the preloaded read does not.
+    tail.SPAN_READ_BUDGET_BYTES = (window_bytes + padded_bytes) // 2
+    tail.prepare_span(*span)
+    assert tail.overlay_stride() == 1, "the preload thinned the window"
+    assert tail.overlay_is_full_resolution(*span)
+
+
+def test_zooming_in_on_a_coarse_span_still_goes_back_to_the_log(tmp_path):
+    """The preload may save a read.  It may not save the wrong one.
+
+    Close reading is the whole reason `prepare_span` exists, so a window
+    zoomed inside a strided overlay -- where a fresh read would come back
+    finer -- must not be told the samples in hand will do.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    t0 = 1_700_000_000.0
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    span = (t0, t0 + 7 * 86400.0)
+    tail.SPAN_READ_BUDGET_BYTES = tail._span_read_bytes(*span) // 4
+    tail.prepare_span(*span)
+    assert tail.overlay_stride() > 1
+    # Inside the span that was read, and far narrower: worth reading again.
+    assert not tail.overlay_serves(t0 + 3 * 86400.0, t0 + 3 * 86400.0 + 20.0)
+
+
+def test_a_window_the_overview_covers_better_is_drawn_from_the_overview(tmp_path):
+    """The overlay is not preferred for its own sake -- only where it has more.
+
+    A span picked in the past leaves an overlay behind it; coming back to the
+    live edge must not draw the newest window from that stale, possibly
+    strided, snapshot when the tailed history holds every sample of it.
+    """
+    days = week(tmp_path, days=7, rows=20)
+    t0 = 1_700_000_000.0
+    tail = CsvTail()
+    tail.follow(str(days[-1]))
+    tail.poll()
+    tail.prepare_span(t0, t0 + 10.0)              # a window on the oldest day
+    newest = t0 + 6 * 86400.0
+    t, _v = tail.between("Sample", newest, newest + 19.0)
+    assert t and t[-1] >= newest + 19.0, "the live edge was drawn from a stale span"
+
+
 def test_a_coarse_span_does_not_leave_the_previous_overlay_on_screen(tmp_path):
     """Detail from a narrower window must not float in a view it is not of."""
     days = week(tmp_path, days=7, rows=20)

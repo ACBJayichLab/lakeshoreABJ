@@ -127,6 +127,146 @@ def drag(viewbox, from_frac: float, to_frac: float,
             (min(v0.y(), v1.y()), max(v0.y(), v1.y())))
 
 
+class FakeWheel:
+    """Just enough of a QGraphicsSceneWheelEvent for ViewBox.wheelEvent."""
+
+    def __init__(self, pos, notches: int) -> None:
+        self._pos = pos
+        self._delta = notches * 120         # one notch is 120, as Qt reports it
+
+    def pos(self):
+        return self._pos
+
+    def delta(self):
+        return self._delta
+
+    def accept(self):
+        pass
+
+    def ignore(self):
+        pass
+
+
+def _width(rng) -> float:
+    return float(rng[1]) - float(rng[0])
+
+
+def wheel(viewbox, notches: int, at=(0.75, 0.35)):
+    """Scroll ``notches`` (negative is out) with the pointer parked at ``at``,
+    given as fractions of the panel.  Goes through the real wheelEvent."""
+    rect = viewbox.boundingRect()
+    pos = QtCore.QPointF(rect.x() + rect.width() * at[0],
+                         rect.y() + rect.height() * at[1])
+    viewbox.wheelEvent(FakeWheel(pos, notches))
+
+
+def test_a_wheel_zoom_out_of_a_live_view_becomes_a_picked_window(viewer):
+    """Scrolling is a decision about the window, exactly as a drag is.
+
+    The x-range signal used to be ignored whenever no span had been picked,
+    because it also fires on every autoscale while the view follows the
+    recorder.  So the wheel moved the axis and nothing else: the view widened
+    to days and the viewer went on drawing the last N hours of it, never
+    reading the span, with the rest of the screen blank however long you
+    waited.  Dragging a rectangle over the same view then filled it in --
+    which is what made it read as data that failed to load.
+    """
+    viewer.span_buttons[24 * 3600.0].click()
+    assert viewer._span is None
+    box = viewer.k_plot.getViewBox()
+    wheel(box, -3)                          # three notches out
+    assert viewer._span is not None, "the wheel did not pick a window"
+    assert viewer._span == pytest.approx(tuple(box.viewRange()[0]))
+    # And it is a window, so it is read and no view button claims to be live.
+    assert not any(b.isChecked() for b in viewer.span_buttons.values())
+    assert viewer._span_load.isActive() or viewer._loaded_span == viewer._span
+
+
+def test_the_backdrop_is_read_once_the_first_samples_are_up(viewer):
+    """It has to be there before the first gesture, and not before the window.
+
+    A second of reading ahead of the first frame is a second of nothing to
+    look at, and the backdrop answers a gesture -- which nobody has made yet
+    while the window is still opening.  So it is armed by the first refresh
+    that put samples on the chart, and read a moment later.
+    """
+    assert viewer._atlas_load.isActive(), "nothing armed the backdrop"
+    assert viewer.tail.atlas_stride() == 0, "it was read on the startup path"
+    viewer._atlas_load.timeout.emit()
+    assert viewer.tail.atlas_stride() >= 1
+    assert viewer.tail._atlas_span is not None
+
+
+def test_a_wheel_scales_both_axes(viewer):
+    """Scroll is the whole view, not half of it."""
+    viewer.span_buttons[24 * 3600.0].click()
+    box = viewer.k_plot.getViewBox()
+    x_before, y_before = box.viewRange()
+    wheel(box, -1)
+    assert _width(box.viewRange()[0]) > _width(x_before)
+    assert _width(box.viewRange()[1]) > _width(y_before)
+
+
+def test_a_wheel_out_and_back_in_returns_the_value_axis(viewer):
+    """A gesture that ends where it began has to leave the view where it was.
+
+    It did not, and the comfort stop is why: scrolling out, the value axis
+    stops at the stop while the time axis keeps going, so the notches the
+    value axis could not follow are still undone on the way back in.  Four out
+    and four back in -- the pointer parked in one place throughout -- left a
+    289 K trace on an axis running 186 K to 242 K, off the top of a panel that
+    had been fitted to it a moment earlier.  An empty screen from a gesture
+    that ended where it started.
+
+    Enough notches here that the stop certainly binds, which is the whole
+    point: a run that never reaches it would pass either way.
+    """
+    viewer.span_buttons[24 * 3600.0].click()
+    box = viewer.k_plot.getViewBox()
+    x_before, y_before = box.viewRange()
+    widths = []
+    for _ in range(10):
+        wheel(box, -1)
+        widths.append(_width(box.viewRange()[1]))
+    assert widths[-1] == pytest.approx(widths[-2]), (
+        "the value axis never reached the stop, so this proves nothing")
+    assert widths[-1] < widths[0] * 1.346 ** 8, "nor did it stop growing"
+    for _ in range(10):
+        wheel(box, +1)
+    assert box.viewRange()[0] == pytest.approx(x_before, rel=1e-6)
+    assert box.viewRange()[1] == pytest.approx(y_before, rel=1e-6)
+
+
+def test_the_wheel_forgets_its_overscroll_when_the_axis_moves_otherwise(viewer):
+    """The remembered range is this gesture's own; anything else invalidates it.
+
+    Otherwise a drag that fixes the value axis would be dragged back to where
+    the wheel had been on the very next notch.
+    """
+    viewer.span_buttons[24 * 3600.0].click()
+    box = viewer.k_plot.getViewBox()
+    for _ in range(6):
+        wheel(box, -1)              # bank a good deal of overscroll
+    drag(box, 0.4, 0.6)             # somebody else moves both axes
+    picked = box.viewRange()[1]
+    wheel(box, +1)
+    after = box.viewRange()[1]
+    assert _width(after) < _width(picked), "the notch did nothing"
+    # Zoomed in about the pointer from the dragged range, not from the
+    # wheel's remembered one: the middle has not jumped back out.
+    assert min(picked) <= (after[0] + after[1]) / 2 <= max(picked)
+
+
+def test_a_wheel_over_the_value_axis_itself_still_scales_it(viewer):
+    """Nothing is taken away -- the gesture is only moved off the canvas."""
+    box = viewer.k_plot.getViewBox()
+    y_before = box.viewRange()[1]
+    rect = box.boundingRect()
+    box.wheelEvent(FakeWheel(QtCore.QPointF(rect.x(), rect.center().y()), -2),
+                   axis=1)
+    assert box.viewRange()[1] != pytest.approx(y_before)
+
+
 def test_a_drag_makes_that_span_the_window(viewer):
     box = viewer.k_plot.getViewBox()
     (x0, x1), _ = drag(box, 0.4, 0.6)
@@ -416,6 +556,33 @@ def test_the_status_bar_says_when_the_chart_is_showing_every_sample(viewer, qt_a
     viewer._load_span()
     viewer._update_statusbar()
     assert "full resolution" in viewer.statusBar().currentMessage()
+
+
+def test_a_pan_inside_the_preload_settles_without_reading_anything(viewer, qt_app):
+    """A slow drag must not cost a disk read per settle.
+
+    ``prepare_span`` reads a quarter of a screen either side of the window, so
+    a gesture that stays inside that has its samples in hand.  Reading them
+    again would spend a second of the GUI thread putting back the picture that
+    is already on screen -- and while it did, the status bar said the log was
+    being read, which is the thing the operator was told to distrust.
+    """
+    newest = viewer.tail.newest()
+    span = (newest - 3000.0, newest)
+    viewer._span = span
+    viewer._load_span()
+    assert viewer._loaded_span == span
+
+    reads = []
+    viewer.tail.prepare_span = lambda *a: reads.append(a)
+    # More than SPAN_MARGIN_S, so only the preload can be answering this.
+    moved = (span[0] - 400.0, span[1] - 400.0)    # 13% of a screen
+    viewer._span = moved
+    viewer._load_span()
+    assert reads == [], "a pan inside the preload went back to the log"
+    assert viewer._loaded_span == moved, "the window was left claiming to be unread"
+    viewer._update_statusbar()
+    assert "reading the log" not in viewer.statusBar().currentMessage()
 
 
 def test_the_status_bar_owns_up_to_a_span_it_could_not_read_whole(viewer, qt_app):

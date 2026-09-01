@@ -56,6 +56,34 @@ span that fits the budget comes back whole; only a span that cannot be read
 whole is strided, and :meth:`CsvTail.overlay_is_full_resolution` says which
 happened.
 
+The same trap has a second door, and :meth:`CsvTail._draw_source` is what
+shuts it.  A span that *has* been read is of no use if the drawing will not
+look at it: the overlay used to be chosen by span equality, and a wheel or a
+drag crosses dozens of spans a second without ever equalling the loaded one.
+So for the whole of every gesture -- and the settle and the read after it --
+the chart fell back on the overview again, and again the part of the window
+older than ``backfill_s`` was drawn as nothing.  A window is now drawn from
+the overlay whenever it lies inside the span that was read, and otherwise
+from whichever of the two holds more of it.
+
+Under both of them sits a third thing, and it is the floor:
+:meth:`CsvTail.prepare_atlas` reads **every log on disk** at a big stride, and
+the drawing falls back to it wherever the other two do not reach.  Between an
+overview bounded by ``backfill_s`` and an overlay covering one span there was
+a hole the size of the archive, and a gesture is what falls into it -- a flick
+of the wheel crosses a window a notch and none of them is read until the last
+one settles.  Measured on a real archive, the frame at the end of a twelve
+notch flick had 38.7 % of its window drawn without a backdrop and all of it
+with one.  It is coarse on purpose and it is never a measurement.
+
+And the read reaches a quarter of a screen either side of the window
+(``SPAN_PRELOAD_FRACTION``), so a pan has somewhere to go before anything has
+to come off the disk -- :meth:`CsvTail.overlay_serves` is what turns that into
+no read at all rather than a read whose result is already on screen.  The
+stride is measured on the window and never on the preload: both ceilings are
+promises about what gets drawn, and the preload rides on whatever stride the
+window chose so that it costs bytes and never resolution.
+
 Measuring a region
 ------------------
 
@@ -330,6 +358,30 @@ class CsvTail:
         #: strided.  What tells a full-resolution overlay from a thinned one,
         #: since both are simply "the overlay" to everything that draws.
         self._overlay_stride: int = 1
+        #: A deliberately coarse picture of **every log on disk**, and the
+        #: floor under the drawing: whatever window is asked for, however
+        #: suddenly, there is something to put on the screen.
+        #:
+        #: The overview reaches back ``backfill_s`` and the overlay covers one
+        #: picked span, so between them there was a hole the size of the
+        #: archive -- and a gesture is what falls into it.  A fast scroll out
+        #: crosses a window a second, none of them read, and until the last
+        #: one settles the screen has nothing older than the backfill on it.
+        #: Waiting for the read is not an answer at that speed; having
+        #: something already loaded is.
+        #:
+        #: Coarse enough that it costs one read to build and nothing to keep:
+        #: ATLAS_POINT_BUDGET points per column over however many months the
+        #: cryostat has run.  It is never a measurement -- statistics and
+        #: exports go to :meth:`samples_in` -- and it is only ever drawn where
+        #: neither of the other two reaches.
+        self._atlas: dict[str, Series] = {}
+        self._atlas_span: tuple[float, float] | None = None
+        self._atlas_stride: int = 1
+        #: Kept alive across polls so the phase of the thinning carries on
+        #: through the rows tailed after it was built, rather than restarting
+        #: and bunching samples at the live edge.
+        self._atlas_counter: "_StrideCounter | None" = None
         #: Mean bytes per data row, measured from whatever has been read.
         #: A row is one number per channel, so a 218 with eight inputs and a
         #: 336 with four write rows of very different lengths and no constant
@@ -570,6 +622,13 @@ class CsvTail:
             self._overlay = {}
             self._overlay_span = None
             self._overlay_stride = 1
+            # And so does the backdrop, for the same reason.  It is rebuilt
+            # on the next tick rather than left describing a file that no
+            # longer says what it said.
+            self._atlas = {}
+            self._atlas_span = None
+            self._atlas_stride = 1
+            self._atlas_counter = None
             # The file was rewritten under us, so what was probed about its
             # extent describes bytes that are gone.
             self._span_cache = {}
@@ -597,6 +656,7 @@ class CsvTail:
         if added:
             self._row_bytes = len(text) / added
             self._extend_overlay(text)
+            self._extend_atlas(text)
         return added
 
     def _extend_overlay(self, text: str) -> None:
@@ -791,6 +851,83 @@ class CsvTail:
     #: four-second window, and that lesson stands.
     SPAN_POINT_BUDGET = 20_000
 
+    #: How far either side of the picked window a re-read reaches, as a
+    #: fraction of the window's own width.
+    #:
+    #: ``SPAN_MARGIN_S`` alone is five minutes, which is a margin and not a
+    #: preload: it is there so a trace crossing the edge is drawn leaving it.
+    #: On a five-day window five minutes is nothing, so a pan of any size at
+    #: all walked straight off the end of what had been read and the newly
+    #: uncovered strip was blank until the next read landed.  Panning is a
+    #: continuous gesture and it was answered discontinuously.
+    #:
+    #: A quarter of the window each side means a pan can travel a quarter of a
+    #: screen -- 30 hours on a five-day window, a quarter hour on an hour --
+    #: before anything has to be read at all, and :meth:`overlay_serves` is
+    #: what turns that into *no read*, rather than a read whose result is
+    #: already on screen.  It is the fraction and not a duration because the
+    #: gesture scales with the window: a pan is a swipe across the panel
+    #: whatever the panel is showing.
+    #:
+    #: It costs 1.5x the bytes of the read it widens, and buys back more than
+    #: that on any gesture that is more than one jump -- which is what a hand
+    #: on a mouse produces.
+    SPAN_PRELOAD_FRACTION = 0.25
+
+    def _padded_span(self, t0: float, t1: float) -> tuple[float, float]:
+        """``[t0, t1]`` widened by the preload, which is what actually gets read."""
+        pad = max(self.SPAN_MARGIN_S, (t1 - t0) * self.SPAN_PRELOAD_FRACTION)
+        return t0 - pad, t1 + pad
+
+    def _stride_for(self, t0: float, t1: float) -> int:
+        """One row in n, so drawing the window ``[t0, t1]`` stays bounded.
+
+        Measured on the **window**, never on the preload around it.  Both
+        ceilings are promises about what reaches the screen, and letting the
+        preload count against them would mean a window came back a quarter
+        coarser for having been preloaded -- a 72 h span on this recorder's
+        logs went from every sample to one in seven, purely because
+        something was read either side of it that nobody had asked to see.
+        The preload then rides on whatever stride the window chose, so it
+        costs bytes and time and never resolution: at most half as much
+        again of both, which is the bound by construction.
+        """
+        lo, hi = t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S
+        budget = self._span_read_bytes(lo, hi)
+        if budget <= self.SPAN_READ_BUDGET_BYTES:
+            return 1
+        rows_offered = budget / max(1.0, self._row_bytes)
+        return max(math.ceil(budget / self.SPAN_READ_BUDGET_BYTES),
+                   math.ceil(rows_offered / self.SPAN_POINT_BUDGET))
+
+    def overlay_serves(self, t0: float, t1: float) -> bool:
+        """Is ``[t0, t1]`` already answered as well as a fresh read would?
+
+        Two conditions.  The samples have to be *there* -- the window inside
+        the span that was read, preload included -- and reading again has to
+        have nothing to add, which means either the overlay is whole or the
+        new window is still wide enough to be strided just as hard.
+
+        This is what makes a slow pan free.  Without it the preload would
+        only stop the chart going blank during the read; the read would still
+        happen, once per settle, a second of the GUI thread each time to
+        produce the picture already on screen.  With it, a gesture that stays
+        inside the preload does no disk work at all.
+
+        It must stay conservative in the one direction that matters: zooming
+        *in* on a strided overlay has to re-read, because there the fresh
+        read is a better answer and the whole point of ``prepare_span`` is
+        that close reading is answered from the log.
+        """
+        if self._overlay_span is None:
+            return False
+        o0, o1 = self._overlay_span
+        if not (o0 <= t0 and t1 <= o1):
+            return False
+        if self._overlay_stride == 1:
+            return True
+        return self._stride_for(t0, t1) >= self._overlay_stride
+
     def prepare_span(self, t0: float, t1: float) -> int:
         """Re-read ``[t0, t1]`` from the logs on disk, as fully as it can.
 
@@ -822,19 +959,29 @@ class CsvTail:
         the budget rather than from a point count: a span that fits comes
         back whole, every time, and only a span that cannot be read whole is
         thinned.  Statistics and exports never come through here.
+
+        What is read is ``[t0, t1]`` widened by ``SPAN_PRELOAD_FRACTION``
+        either side, and that widened span is what ``_overlay_span`` records:
+        a pan is a continuous gesture and answering it one screenful at a
+        time made it discontinuous.  :meth:`overlay_serves` is the other half
+        of it -- a window that lands inside the preload does no disk work at
+        all rather than doing it again for the same picture.
         """
-        lo, hi = t0 - self.SPAN_MARGIN_S, t1 + self.SPAN_MARGIN_S
-        budget = self._span_read_bytes(lo, hi)
-        stride = 1
-        if budget > self.SPAN_READ_BUDGET_BYTES:
-            rows_offered = budget / max(1.0, self._row_bytes)
-            stride = max(math.ceil(budget / self.SPAN_READ_BUDGET_BYTES),
-                         math.ceil(rows_offered / self.SPAN_POINT_BUDGET))
+        # The stride is what the *window* needs; the preload then rides on it,
+        # so being preloaded never costs a window its resolution.
+        stride = self._stride_for(t0, t1)
+        p0, p1 = self._padded_span(t0, t1)
+        lo, hi = p0 - self.SPAN_MARGIN_S, p1 + self.SPAN_MARGIN_S
+        if stride > 1:
             log.info("viewer: span covers %.0f MB of log; reading 1 row in %d",
-                     budget / 1e6, stride)
+                     self._span_read_bytes(lo, hi) / 1e6, stride)
         overlay, rows = self._read_span(lo, hi, stride=stride)
         self._overlay = overlay
-        self._overlay_span = (t0, t1)
+        # The *padded* span, because that is what was read and therefore what
+        # can be drawn without going back to disk.  `between` and
+        # `overlay_serves` both test a window against it, and a pan inside
+        # the preload is answered from what is already in hand.
+        self._overlay_span = (p0, p1)
         self._overlay_stride = stride
         return rows
 
@@ -883,14 +1030,104 @@ class CsvTail:
 
         Only ever about the *drawing*.  Cursor statistics and the region
         export go through :meth:`samples_in`, which is never capped.
+
+        Containment and not equality, for the same reason :meth:`between`
+        draws from a containing overlay: a window zoomed inside one that was
+        read whole is itself read whole, and answering "no" there would have
+        the status bar disown samples that did come off the log.
         """
-        return self._overlay_span == (t0, t1) and self._overlay_stride == 1
+        if self._overlay_span is None or self._overlay_stride != 1:
+            return False
+        return self._overlay_span[0] <= t0 and t1 <= self._overlay_span[1]
 
     def overlay_stride(self) -> int:
         """Rows kept per row read in the overlay now loaded.  1 when whole."""
         return self._overlay_stride
 
-    def _read_span(self, lo: float, hi: float, *, stride: int = 1
+    #: Points per column the whole-archive backdrop aims for.
+    #:
+    #: Small on purpose.  It is a floor under the drawing and not a reading of
+    #: it: a few thousand points across every month the cryostat has run is
+    #: one sample every few minutes, which is the right shape of the cooldown
+    #: and nothing finer -- and anything finer would cost memory that has to
+    #: be held for the life of the viewer, to be replaced by a real read a
+    #: quarter second later. Whatever window it is drawn under, `prepare_span`
+    #: is already on its way to answering properly.
+    ATLAS_POINT_BUDGET = 4_000
+
+    def archive_extent(self) -> tuple[float, float] | None:
+        """First and last timestamps across every log this recorder wrote.
+
+        From the probed extents, so it costs two short reads per file once
+        rather than a parse.  ``None`` when nothing can be established.
+        """
+        lo = hi = None
+        for path, upto in self._span_sources().items():
+            extent = self._file_span(path, upto)
+            if extent is None:
+                continue
+            lo = extent[0] if lo is None else min(lo, extent[0])
+            hi = extent[1] if hi is None else max(hi, extent[1])
+        return None if lo is None else (lo, hi)
+
+    def prepare_atlas(self) -> int:
+        """Build the coarse backdrop: every log on disk, at a big stride.
+
+        One read, and then it is kept current by :meth:`_extend_atlas` off the
+        rows the tail is reading anyway.  Worth rebuilding when the recorder
+        rolls over -- a day is a lot of new archive for a fixed point budget
+        to still be evenly spread across -- and not otherwise.
+
+        Costs about a second on 55 MB, which is why it is not on the startup
+        path: the viewer opens on the live view, which needs none of this, and
+        this is built a moment later, before any gesture has had a chance to
+        ask for it.
+        """
+        extent = self.archive_extent()
+        if extent is None:
+            return 0
+        lo, hi = extent
+        offered = self._span_read_bytes(lo, hi) / max(1.0, self._row_bytes)
+        stride = max(1, math.ceil(offered / self.ATLAS_POINT_BUDGET))
+        counter = _StrideCounter(stride)
+        out, rows = self._read_span(lo, hi, stride=stride, counter=counter)
+        if not rows:
+            return 0
+        self._atlas = out
+        self._atlas_span = (lo, hi)
+        self._atlas_stride = stride
+        self._atlas_counter = counter
+        log.info("viewer: backdrop covers %s to %s, 1 row in %d (%d rows)",
+                 _dt.datetime.fromtimestamp(lo).isoformat(timespec="seconds"),
+                 _dt.datetime.fromtimestamp(hi).isoformat(timespec="seconds"),
+                 stride, rows)
+        return rows
+
+    def atlas_stride(self) -> int:
+        """Rows kept per row read in the backdrop.  0 when it is not built."""
+        return self._atlas_stride if self._atlas_span else 0
+
+    def _extend_atlas(self, text: str) -> None:
+        """Fold newly-tailed rows into the backdrop, at its own spacing.
+
+        The counter carries on from where the build left it, so the thinning
+        keeps its phase and the newest samples are spaced like the rest
+        instead of bunching at the live edge -- the same reason the stride
+        counter runs across a whole scan rather than restarting per file.
+        """
+        if self._atlas_span is None or self._atlas_counter is None:
+            return
+        saved = (self.rows, self.errors)
+        try:
+            self._consume(text, sink=self._atlas, stride=self._atlas_counter)
+        finally:
+            (self.rows, self.errors) = saved
+        newest = self.newest()
+        if newest is not None and newest > self._atlas_span[1]:
+            self._atlas_span = (self._atlas_span[0], newest)
+
+    def _read_span(self, lo: float, hi: float, *, stride: int = 1,
+                   counter: "_StrideCounter | None" = None
                    ) -> tuple[dict[str, Series], int]:
         """Every sample between ``lo`` and ``hi`` that the logs on disk hold.
 
@@ -913,7 +1150,11 @@ class CsvTail:
         sources = self._span_sources()
         out: dict[str, Series] = {}
         rows = 0
-        counter = _StrideCounter(stride)
+        # A caller may hand in its own counter to keep the phase of the
+        # thinning past the end of this scan -- the backdrop does, so the rows
+        # tailed after it was built land where the next ones would have.
+        if counter is None:
+            counter = _StrideCounter(stride)
         for path, upto in sources.items():
             # A log whose own first and last rows fall wholly outside the span
             # cannot contribute a sample to it, and reading it costs the same
@@ -977,25 +1218,100 @@ class CsvTail:
             log.warning("viewer: cannot re-read %s: %s", path, exc)
             return None
 
+    @staticmethod
+    def _covered_s(sink: dict[str, Series], name: str,
+                   t0: float, t1: float) -> float:
+        """Seconds of ``[t0, t1]`` that ``sink`` holds any samples of ``name``
+        for.  The extent of the column, not a count: what is being compared is
+        how much of the window a source can draw at all, and a coarse trace
+        across the whole of it beats a dense one across a third."""
+        s = sink.get(name)
+        if s is None or not s.t:
+            return 0.0
+        return max(0.0, min(t1, s.t[-1]) - max(t0, s.t[0]))
+
+    def _draw_source(self, name: str, t0: float,
+                     t1: float) -> dict[str, Series]:
+        """Which of the two histories ``between`` should draw ``[t0, t1]`` from.
+
+        There are only ever two: the overview, which is what has been tailed
+        into memory and reaches back ``backfill_s``, and the overlay, which is
+        whatever span was last read off the logs.  Neither is a superset of
+        the other, and picking between them by span equality -- which is what
+        this did -- meant the overlay was discarded the instant the window
+        moved by one pixel.
+
+        That is what put blank stretches on the chart.  A wheel or a drag
+        crosses dozens of spans a second and none of them equals the loaded
+        one, so for the whole gesture (and the settle and the read after it)
+        every window fell back to the overview -- and the overview is *not* a
+        thinned picture of every log, it is the last two days of them.  A
+        window reaching further back than that was drawn with its older half
+        missing, measured here at 47 % of a 20 h window on 08-28, for as long
+        as the operator kept moving the mouse.  It came back when they let go,
+        which is exactly what makes it read as data failing to load.
+
+        Two rules, in order:
+
+        * **The overlay when it contains the window.**  Zooming in is the
+          common gesture and every span it visits is inside the one already
+          read, so the samples for it are in hand and there is nothing to
+          wait for.  Full resolution stays full resolution all the way down.
+        * **Otherwise whichever holds more of the window.**  A pan leaves the
+          overlay covering most of the new span and the overview covering
+          none of it; a live-referenced window is the other way round.  The
+          comparison is on the extent each one actually has, so it answers
+          both without knowing which gesture it was.
+
+        Under both sits the **backdrop** (:meth:`prepare_atlas`), a coarse
+        reading of every log on disk.  It is what the two above cannot be:
+        always loaded, and covering everything.  A fast scroll out crosses a
+        window a second and none of them is read until the last one settles,
+        so without a floor the screen is empty for the whole gesture -- and
+        the wider the window gets, the less of it the other two reach.  It is
+        last because it is coarsest, and it is only drawn where they do not
+        reach at all.
+
+        Deliberately not spliced together.  The three are at different
+        resolutions -- the overview decimates, the overlay may be strided --
+        and joining them would hand :func:`connect_flags` a series with two
+        spacings in it, whose median belongs to neither.  Every interval of
+        the coarser half would then be over the gap threshold and the pen
+        would lift across all of it: blank, drawn from samples we have, which
+        is worse than the blank this is fixing.
+        """
+        if self._overlay_span is not None:
+            o0, o1 = self._overlay_span
+            if o0 <= t0 and t1 <= o1:
+                return self._overlay
+        best, cover = self.series, self._covered_s(self.series, name, t0, t1)
+        # Finest first, and strictly greater, so a source only displaces one
+        # that can draw as much of the window as it can.
+        for sink in (self._overlay, self._atlas):
+            reach = self._covered_s(sink, name, t0, t1)
+            if reach > cover:
+                best, cover = sink, reach
+        return best
+
     def between(self, name: str, t0: float, t1: float) -> tuple[list[float], list[float]]:
         """One column between two absolute times, for a hand-picked window.
 
-        Full resolution when :meth:`prepare_span` has loaded this exact span,
-        thinned overview otherwise (the window swaps one for the other a tick
-        after the span settles).  Either way one sample beyond each edge is
-        included on purpose: a trace that crosses the edge of the window
-        should be drawn leaving it, not stop short of the axis with a gap the
-        data does not have.  That is also why a window narrower than the
-        sample interval still returns the two samples that bracket it -- the
-        line does cross the screen.
+        Drawn from whichever history holds more of the window -- see
+        :meth:`_draw_source`, which is where the choice and the reasoning
+        live.  Full resolution once :meth:`prepare_span` has read this span
+        (or one containing it); the overview, or the previous span's overlay,
+        in the quarter second before that.  Either way one sample beyond each
+        edge is included on purpose: a trace that crosses the edge of the
+        window should be drawn leaving it, not stop short of the axis with a
+        gap the data does not have.  That is also why a window narrower than
+        the sample interval still returns the two samples that bracket it --
+        the line does cross the screen.
 
         A window that lies wholly before or after the log is empty, though:
         there the honest drawing is nothing at all, not the nearest sample
         dragged in from an hour away.
         """
-        source = self.series
-        if self._overlay_span == (t0, t1):
-            source = self._overlay
+        source = self._draw_source(name, t0, t1)
         s = source.get(name)
         if s is None or not s.t:
             return [], []

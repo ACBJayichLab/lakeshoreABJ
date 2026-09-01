@@ -465,7 +465,8 @@ steps without redrawing a rectangle to do it.
 |---|---|
 | **left-drag** | zoom to exactly that rectangle — *or* place a cursor, while the cursors are up |
 | **X+ X− Y+ Y−** | zoom one axis at a time about its middle |
-| **wheel** | zoom about the cursor |
+| **wheel** | zoom both axes about the cursor |
+| **wheel over a value axis** | zoom that value axis alone |
 | **shift-drag**, or middle-drag | pan |
 | **double-click** | follow the recorder again |
 | right-drag, right-click | pyqtgraph's own scaling and menu, untouched |
@@ -486,6 +487,74 @@ at once.
 
 A value axis moved by the **wheel** or a shift-drag counts as hand-picked too;
 it is just as fixed as one dragged out, and the status bar says so.
+
+### The wheel is the time axis
+
+Scrolling over the chart picks a window exactly as a drag does — the view
+stops following, the span is read off the logs, and the status bar names it.
+**It used to move the axis and nothing else.** The x-range signal was ignored
+whenever no span had been picked, on the grounds that it also fires on every
+autoscale while the view follows the recorder; so the wheel widened the view
+to days while the viewer went on drawing the last N hours of it. Nothing was
+read, and the rest of the screen stayed blank however long you waited — until
+you dragged a rectangle over the same view, which *did* set the span and made
+the data appear. What separates a deliberate move from an autoscale is whether
+the axis is still autoscaling, not whether a span happens to have been picked
+already.
+
+It scales **both axes**, and it comes back. The second half of that is what
+the comfort stop used to take away: scrolling out, the value axis stops at the
+stop while the time axis keeps going, so the notches the value axis could not
+follow were still undone on the way back in. Four out and four in — the
+pointer parked in one place throughout — left a 289 K trace on an axis running
+186 K to 242 K, off the top of a panel that had been fitted to it a moment
+earlier. An empty screen from a gesture that ended where it began.
+
+So what the wheel scales is the *unclamped* value range, and the stop clamps
+only what is shown. Scroll out past the stop and the axis sits at the stop;
+scroll back in and it retraces its own steps exactly, because the range being
+scaled never stopped moving. The factor comes off the time axis, which has no
+limits on it and therefore got what the gesture actually asked for. Held out
+far past any use, the overscroll stops banking at
+`ZoomViewBox.Y_OVERSCROLL_LIMIT` — about four notches' worth — so scrolling
+back in moves the axis on the first notch rather than the tenth. Anything else
+that moves the value axis (a drag, a `Y±` button, an autoscale) drops the
+remembered range.
+
+Measured against the archive in `data/`, from the 48 h view, one flick of four
+notches out to a 171 h window: **1.16 s to a full window** at 1 pt / 26 s —
+the 250 ms settle plus the read.
+
+### The backdrop: every log, always loaded, very coarse
+
+Under the overview and the overlay sits a third thing, and it is the floor:
+`CsvTail.prepare_atlas` reads **every log on disk** at a big stride —
+`ATLAS_POINT_BUDGET` points per column over however many months the cryostat
+has run — and the drawing falls back to it wherever the other two do not
+reach.
+
+Without it there was a hole between the two the size of the archive, and a
+gesture is what falls into it. A flick of the wheel crosses a window a notch,
+and none of those windows is read until the last one settles; the overview
+reaches back `BACKFILL_COVERAGE_S` and the overlay covers one span, so the
+faster the flick the less of where it lands either can draw. Measured on
+`data/` — click 48 h, then twelve notches with no gap between them:
+
+| the frame the instant the flick ends | window drawn |
+|---|---|
+| without the backdrop | **38.7 %** |
+| with it | **100 %** |
+
+It costs about a second on 55 MB, read once, on its own timer
+`ATLAS_SETTLE_MS` after the first samples reach the chart — not on the startup
+path, because opening the window needs none of it and nobody has made a
+gesture yet. After that it is kept current off the rows the tail is reading
+anyway, at its own spacing, and rebuilt when the recorder rolls over.
+
+It is never a measurement. Cursor statistics and the region export go to
+`samples_in` at full resolution, as they do whatever is on screen, and
+`prepare_span` is already on its way to answering the window properly by the
+time the backdrop has been drawn under it.
 
 ### The value axis has a comfort stop
 
@@ -530,6 +599,82 @@ than left to be worked out.
 Only the *drawing* is ever coarsened. Cursor statistics and the region export
 re-read the log at full resolution whichever the status bar reports, so a
 coarse chart is never a coarse measurement.
+
+### What is drawn while the read is in flight
+
+The span already read is not thrown away the moment the window moves. While
+`reading the log…` is up the chart keeps drawing from whichever it has more
+of — the span read last, or the tailed history — so a gesture coarsens the
+picture rather than emptying it.
+
+**This is the second way a window came out blank, and it was the one you saw
+while the mouse was moving.** The loaded span used to be matched by
+*equality*, and a wheel or a drag crosses dozens of spans a second, none of
+which is the loaded one. Every window in the gesture therefore fell back to
+the tailed history — which reaches back `BACKFILL_COVERAGE_S` and no further —
+and any part of the window older than that had nothing behind it. Measured
+against a real archive: a 20 h window on 08-28, dragged, was **47 % blank for
+as long as the gesture lasted**, and filled itself in when the mouse stopped.
+Zooming *in* is the worst case of it, because every span a zoom-in visits is
+inside the one already in memory, and every one of them was answered from
+somewhere else.
+
+A window is now drawn from the loaded span whenever it lies inside it —
+zooming in never waits for anything — and from whichever source holds more of
+it otherwise. The two are never spliced: they are at different resolutions,
+and a series carrying two spacings has a median interval belonging to neither,
+which would put the pen up across the whole coarser half. That would be blank
+drawn from samples we hold, which is worse than the blank it was fixing.
+
+### A read takes in more than the window
+
+Each re-read reaches a **quarter of a screen either side** of the window it
+was asked for (`CsvTail.SPAN_PRELOAD_FRACTION`), and it is that wider span the
+chart may draw from. A pan can travel a quarter of a window — 30 hours on a
+five-day view, a quarter hour on an hour — before anything has to come off the
+disk at all.
+
+It is a fraction rather than a duration because the gesture scales with the
+window: a pan is a swipe across the panel whatever the panel is showing. The
+fixed five-minute `SPAN_MARGIN_S` that preceded it is a *margin*, there so a
+trace crossing the edge is drawn leaving it, and on a window of days five
+minutes is nothing.
+
+The other half of it is that a window landing inside the preload does **no
+disk work at all** — `CsvTail.overlay_serves` says so and the viewer skips the
+read. Preloading alone would only stop the chart going blank; the read would
+still happen once per settle, a second of the GUI thread each time to put back
+the picture already on screen. Measured against the archive in `data/`, a
+window dragged back a quarter of a screen in 25 nudges:
+
+| | reads | coverage during the drag |
+|---|---|---|
+| 20 h window | 1 → **0** | 100 % throughout |
+| 120 h window | 1 → **0** | 100 % throughout |
+
+`overlay_serves` says no while a fresh read would be a better answer, so
+zooming *in* on a span that was read at a stride still goes back to the log —
+close reading is what `prepare_span` is for, and the preload may save a read
+but not that one.
+
+**The stride is measured on the window and never on the preload.** Both
+ceilings are promises about what reaches the screen, so counting the preload
+against them would mean a window came back coarser for having been preloaded:
+sized the other way, a 72 h span over the logs in `data/` fell from every
+sample to one in seven, purely because something was read either side of it
+that nobody had asked to see. The preload rides on whatever stride the window
+chose, so it costs bytes and time and never resolution — at most half as much
+again of both, and once rather than once per settle:
+
+| first read | before | with the preload |
+|---|---|---|
+| 30 h (full resolution) | 0.60 s | 0.69 s |
+| 72 h (full resolution) | 1.39 s | 1.75 s |
+| 120 h (1 row in 10) | 0.66 s | 0.88 s |
+
+What still goes blank, briefly, is a strip that has genuinely never been read:
+drag left past the preload as well and the newly uncovered edge is empty until
+the read lands. That is honest, and it is a sliver rather than a window.
 
 ### A zoom costs the span, not the archive
 

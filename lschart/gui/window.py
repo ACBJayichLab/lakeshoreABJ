@@ -107,6 +107,12 @@ BACKFILL_COVERAGE_S = VIEW_WINDOWS[-1][1] + 3600.0
 #: appear feel like one event.
 SPAN_SETTLE_MS = 250
 
+#: How long after the first samples reach the chart the coarse whole-archive
+#: backdrop is read.  Long enough that opening the window is not held up by
+#: it; far shorter than it takes to reach for the mouse, which is the only
+#: thing that needs it.
+ATLAS_SETTLE_MS = 1200
+
 #: How this viewer labels itself in every command it writes.  A recorder's
 #: `ipc.sources` policy is keyed on exactly this string, so it is a constant
 #: and not a literal repeated at each call site.
@@ -355,6 +361,24 @@ def _stats_html(header: str, rows: list[tuple[str, str, str, str, str]]) -> str:
             f"<tr>{head}</tr>{body}</table>")
 
 
+def _extent(rng) -> float:
+    """The width of an ``(lo, hi)`` range."""
+    return float(rng[1]) - float(rng[0])
+
+
+def _at_fraction(rng, frac: float) -> float:
+    """The value ``frac`` of the way up an ``(lo, hi)`` range."""
+    return float(rng[0]) + frac * _extent(rng)
+
+
+def _close(a, b, *, tol: float = 1e-9) -> bool:
+    """Are two ranges the same range?  Scaled tolerance, because these are
+    kelvin and percent and the numbers are what the axis happens to hold."""
+    scale = max(1.0, abs(float(a[0])), abs(float(a[1])))
+    return (abs(float(a[0]) - float(b[0])) <= tol * scale
+            and abs(float(a[1]) - float(b[1])) <= tol * scale)
+
+
 def _duration(seconds: float) -> str:
     """A span in whatever unit keeps it to a couple of digits."""
     if seconds < 90:
@@ -407,6 +431,12 @@ class ZoomViewBox(pg.ViewBox):
         #: wheel, Shift-drag and the X/Y buttons still zoom throughout, so no
         #: view is unreachable with the cursors up.
         self.cursor_mode = False
+        #: The value range the wheel has actually been asked for, before the
+        #: comfort stop clamps it for display, and the clamped range that came
+        #: back.  ``None`` until a wheel gesture starts, and again whenever
+        #: anything else moves the axis.  See :meth:`wheelEvent`.
+        self._y_virtual: tuple[float, float] | None = None
+        self._y_shown: tuple[float, float] | None = None
         self._band = QtWidgets.QGraphicsRectItem()
         # Width 0 keeps the pen cosmetic: the item lives in data coordinates,
         # where one x unit is a second and a scaled pen would be a smear.
@@ -415,6 +445,88 @@ class ZoomViewBox(pg.ViewBox):
         self._band.setZValue(1e9)
         self._band.hide()
         self.addItem(self._band, ignoreBounds=True)
+
+    #: How far past the comfort stop the wheel may go on wanting to zoom out,
+    #: as a multiple of the stop's own width.  Without a cap, holding the
+    #: wheel out for a few seconds would have to be undone notch for notch
+    #: before the value axis moved again, which reads as a dead control.
+    #: Sixteen is four notches at the default step: far enough that no
+    #: ordinary gesture reaches it, near enough to scroll back out of.
+    Y_OVERSCROLL_LIMIT = 16.0
+
+    def _pointer_fraction(self, ev) -> float:
+        """How far up the panel the pointer is, 0 at the bottom, 1 at the top.
+
+        A fraction and not a value, because the value depends on which range
+        is being asked -- the one on screen or the one the wheel has been
+        accumulating -- and the pixel is the thing the two have in common.
+        """
+        rect = self.boundingRect()
+        if rect.height() <= 0:
+            return 0.5
+        down = (float(ev.pos().y()) - rect.y()) / rect.height()
+        return down if self.yInverted() else 1.0 - down
+
+    def wheelEvent(self, ev, axis=None) -> None:  # noqa: N802 - Qt/pyqtgraph name
+        """Scroll scales both axes about the pointer, and comes back.
+
+        pyqtgraph's own wheel does the first half.  The second half is what
+        the comfort stop takes away: scrolling out, the value axis stops at
+        the stop while the time axis keeps going, so the notches the value
+        axis could not follow are still undone on the way back in.  Measured
+        with the pointer parked in one place, four notches out and four back:
+        the value axis left at 186 K to 242 K under a 289 K trace, off the top
+        of a panel that had been fitted to it a moment earlier.  An empty
+        screen from a gesture that ended where it began.
+
+        So what the wheel scales is the *unclamped* value range, and the stop
+        clamps only what is shown.  Scroll out past the stop and the axis sits
+        at the stop; scroll back in and it retraces its own steps exactly,
+        because the range being scaled never stopped moving.
+
+        The factor is read off the **time** axis rather than recomputed from
+        the event, because the time axis has no limits on it and therefore
+        got what the gesture actually asked for -- pyqtgraph applies one
+        factor to both.  That keeps the arithmetic of a wheel notch in
+        pyqtgraph, where it belongs, instead of copied here to drift.
+
+        The virtual range is dropped the moment the value axis is moved by
+        anything else -- a drag, a Y button, an autoscale -- because then the
+        axis is somewhere this gesture did not put it, and scaling from a
+        remembered range would drag it back on the next notch.
+        """
+        if axis is not None:
+            # Over an axis item, pyqtgraph scales that one axis, and there is
+            # no second axis for the stop to desynchronise it from.
+            self._y_virtual = self._y_shown = None
+            super().wheelEvent(ev, axis=axis)
+            return
+        shown = tuple(self.viewRange()[1])
+        if (self._y_virtual is None or self._y_shown is None
+                or not _close(shown, self._y_shown)):
+            self._y_virtual = shown
+        # Where the pointer is *on the virtual range*, which is not where it
+        # is on the clamped one -- an axis sitting at the stop shows a
+        # different value under the same pixel.  Taking `mapToView` here
+        # would zoom about that different value, and the axis would walk up
+        # the screen a notch at a time instead of coming back.
+        centre = _at_fraction(self._y_virtual, self._pointer_fraction(ev))
+        was = _extent(self.viewRange()[0])
+        super().wheelEvent(ev, axis=axis)
+        factor = (_extent(self.viewRange()[0]) / was) if was else 1.0
+        lo, hi = self._y_virtual
+        lo, hi = centre + (lo - centre) * factor, centre + (hi - centre) * factor
+        room = self.Y_OVERSCROLL_LIMIT * max(_extent(shown), 1e-12)
+        if hi - lo > room and hi > lo:
+            # Held out past any use: stop banking the excess, so scrolling
+            # back in moves the axis on the first notch rather than the tenth.
+            middle, half = (lo + hi) / 2.0, room / 2.0
+            lo, hi = middle - half, middle + half
+        self._y_virtual = (lo, hi)
+        self.setYRange(lo, hi, padding=0)
+        # What the stop actually allowed, so the next notch can tell this
+        # gesture's own doing from somebody else's.
+        self._y_shown = tuple(self.viewRange()[1])
 
     def mouseDragEvent(self, ev, axis=None) -> None:  # noqa: N802 - Qt/pyqtgraph name
         pan = ev.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier
@@ -590,6 +702,17 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._span_load.setSingleShot(True)
         self._span_load.setInterval(SPAN_SETTLE_MS)
         self._span_load.timeout.connect(self._load_span)
+
+        #: Builds the coarse whole-archive backdrop, once the live view is up.
+        #:
+        #: Not on the startup path: opening the window needs none of it, and a
+        #: second of reading before the first frame is a second of nothing.
+        #: A moment afterwards is early enough -- the backdrop exists to
+        #: answer a *gesture*, and nobody has made one yet.
+        self._atlas_load = QtCore.QTimer(self)
+        self._atlas_load.setSingleShot(True)
+        self._atlas_load.setInterval(ATLAS_SETTLE_MS)
+        self._atlas_load.timeout.connect(self._load_atlas)
 
         self.refresh()
 
@@ -1484,11 +1607,20 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._sync_command_values()
             if self.tail.follow(self.source.log_path()):
                 self._first_load_done = False
+                # A rollover is a day of new archive, and the backdrop's point
+                # budget was spread across the archive as it stood.  Rebuild
+                # it; a day apart is rare enough to cost nothing.
+                self._atlas_load.start()
             # What the newest sample was before this poll, so a picked window
             # can tell whether the rows that just arrived are inside it.
             was_newest = self.tail.newest()
             if self.tail.poll() or not self._first_load_done:
+                first = not self._first_load_done
                 self._first_load_done = True
+                if first and not self._atlas_load.isActive():
+                    # There are samples on the chart now, so the window is
+                    # worth looking at; the backdrop follows a moment later.
+                    self._atlas_load.start()
                 self._sync_traces()
                 # A hand-picked window is a question about the past, and rows
                 # appended beyond its right edge cannot change the answer.
@@ -1510,6 +1642,28 @@ class ViewerWindow(QtWidgets.QMainWindow):
         except Exception:  # noqa: BLE001 - a drawing bug must not stop the viewer
             log.exception("refresh failed; the viewer continues")
 
+    def _load_atlas(self) -> None:
+        """Read the coarse backdrop -- every log on disk, heavily thinned.
+
+        The floor under the drawing.  A scroll out crosses a window a second
+        and none of them is read until the last one settles, so without
+        something already loaded and already covering the archive the screen
+        is empty for the length of the gesture -- and the faster the gesture,
+        the wider the window it ends on and the less of it anything else
+        reaches.
+
+        On the GUI thread and about a second on 55 MB, which is why it is on
+        its own timer and happens once.  Like every other timer here it must
+        never raise: a viewer without a backdrop draws less, and one that
+        stopped drawing draws nothing.
+        """
+        try:
+            self.tail.prepare_atlas()
+        except Exception:  # noqa: BLE001 - the backdrop is a nicety, not a duty
+            log.exception("could not read the backdrop; the viewer continues")
+            return
+        self._schedule_redraw()
+
     def _load_span(self) -> None:
         """The picked window has settled: read it off the logs and draw it.
 
@@ -1518,10 +1672,25 @@ class ViewerWindow(QtWidgets.QMainWindow):
         stopped moving.  It must never raise: it is on a timer, and a viewer
         that stops drawing because one span could not be read is worse than
         one showing a coarse picture of it.
+
+        Often there is nothing to do.  ``prepare_span`` reads a quarter of a
+        screen either side of the window it is given, so a pan or a zoom that
+        stays inside that has its samples in hand already -- and re-reading
+        them would spend a second of this thread producing the picture that
+        is on screen.  ``overlay_serves`` is the tail's own answer to whether
+        that is the case; it says no while a fresh read would be a better
+        one, which is what keeps zooming in on a coarse span honest.
         """
         if self._span is None or self._span == self._loaded_span:
             return
         span = self._span
+        if self.tail.overlay_serves(*span):
+            # Already drawn from the overlay by the redraw the gesture
+            # scheduled.  All that is left is to stop calling it unloaded,
+            # so the status bar stops saying the log is being read.
+            self._loaded_span = span
+            self._update_statusbar()
+            return
         try:
             self.tail.prepare_span(*span)
         except Exception:  # noqa: BLE001 - a bad span must not stop the viewer
@@ -2802,14 +2971,28 @@ class ViewerWindow(QtWidgets.QMainWindow):
         if unit is not None:
             self._panels[unit].enableAutoRange(y=False)
 
-    def _x_range_changed(self, _vb, rng) -> None:
-        """The time axis moved by any other route -- wheel, Shift-drag, link.
+    def _x_range_changed(self, vb, rng) -> None:
+        """The time axis moved by any route other than the drag -- wheel,
+        Shift-drag, middle-drag, a linked view.
 
-        Only meaningful once a window has been picked by hand: while the view
-        is following the recorder this fires on every autoscale, and the combo
-        is what decides the window then.
+        A deliberate move **is** a picked window, whether or not one had been
+        picked before.  This used to give up while ``_span`` was None, on the
+        grounds that the signal fires on every autoscale while the view is
+        following the recorder.  That much is true, and it also meant the
+        *wheel* was never noticed: scrolling out from a live view moved the
+        axis to five days and left the viewer drawing the last 48 hours,
+        because nothing had told it the window had changed.  No span, no read,
+        and four fifths of the screen blank however long you waited -- and
+        then dragging a rectangle over the same view filled it in, because a
+        drag does set the span.  That is what made it look like data failing
+        to load rather than data never asked for.
+
+        What separates the two is autoscaling, not ``_span``: an axis merely
+        following its data has not been moved by anybody, and an axis that
+        has stopped following it has.  ``_y_range_changed`` has always made
+        the distinction that way for the value axes.
         """
-        if self._span is None:
+        if self._span is None and vb.autoRangeEnabled()[0]:
             return
         span = (float(rng[0]), float(rng[1]))
         if span == self._span:
