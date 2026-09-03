@@ -65,19 +65,35 @@ instruments:
 # ---------------------------------------------------------------- acquisition
 
 acquisition:
-  # 1 Hz.  The measured noise is strongly correlated (lag-1 autocorrelation
-  # 0.51), so it does NOT average down as 1/sqrt(N): 10 Hz would hammer the bus
-  # for almost no gain, while 1 Hz still gives the median and reversal tests
-  # four times the samples they had at the old 4 s cadence.
-  interval_s: 1.0
+  # 2 s, which is what the live recorder has actually run at for six days on
+  # this GPIB board.  This said 1.0 and reasoned about correlated noise, which
+  # is sound as far as it goes -- but `check` on the real driver reports a
+  # budget of ~26 transactions and ~1.30 s per cycle, so 1 Hz does not fit
+  # without trimming that budget first, and a cadence the bus cannot hold is
+  # not a faster cadence, it is dropped cycles.  Measure before lowering it.
+  interval_s: 2.0
   log_every_n: 1            # 1 = record every sample.  CSV has no row limit.
-  ringbuffer_size: 43200    # 12 h at 1 Hz, for plotting only -- never the log
+  ringbuffer_size: 43200    # 24 h at 2 s, for plotting only -- never the log
 
 recorder:
   enabled: true
   directory: data
-  filename_prefix: lschart
+  # A DIFFERENT prefix from both the read-only and the manual-heater configs,
+  # for the reason given in config-ltspm3-heater.yaml: a run in which a
+  # SOFTWARE LOOP could move the heater is a third kind of record, and in six
+  # months the filename is the only thing that will still say which one this is.
+  filename_prefix: ltspm3-pid
   flush_every_sample: true  # a power cut should cost one sample, not an hour
+
+runtime:
+  # THE SAME LOCK the two recorder configs take.  This is not tidiness: one GPIB
+  # board has exactly one holder (invariant 2), and this config writes to the
+  # same `data/status.json` they do.  Left on the default `data/lschart.lock`,
+  # nothing stopped this running alongside the live recorder -- two processes
+  # interleaving transactions on one bus and overwriting each other's status
+  # file, which is the failure the lock exists to prevent.
+  lock_path: data/ltspm3.lock
+  single_instance: true
 
 # -------------------------------------------------------------------- control
 #
@@ -88,8 +104,19 @@ control:
   enabled: false
 
   supervisor:
+    # RE-CENTRE THIS BEFORE ARMING, and read the band from `check`, not here.
+    # The band is operating_point_pct +/- authority_pct, and arming while the
+    # present output sits outside it is the trap in commissioning.md 0.3: above
+    # the ceiling the clamp is instant, so the first cycle takes out
+    # (present - ceiling) * K kelvin of heat in one write.  These two numbers
+    # are centred for a ~99.6 K hold; on 2026-09-03 the cryostat sat at 69.027%
+    # and 180.6 K, which is 4.95% above this ceiling and about 64 K of heat at
+    # the measured gain up there.
+    #
+    # The gain is NOT constant: ~10 K/% at 63%, ~13 K/% at 66-69%.  So
+    # re-centring is not only moving the band -- narrow it as you go up.
     operating_point_pct: 63.076   # measured: 63.076% settles at 99.60 K
-    authority_pct: 1.0            # +/-1% ~= +/-10 K of ultimate authority
+    authority_pct: 1.0            # +/-1% ~= +/-10 K at 63%, ~14 K at 69%
     hard_min_pct: 0.0
     hard_max_pct: 70.0
     max_step_pct: 0.02            # ~200 mK per update: ample for trim
@@ -108,8 +135,23 @@ control:
     approach_rate_k_per_min: 0.25
 
     # Fault response.  Nothing here ever raises the heater.
-    rampdown_pct_per_min: 0.50
+    #
+    # Two rates with a knee between them.  A single 0.50 %/min took 126 minutes
+    # to get from the operating point to zero, which stops being a fault
+    # response and starts being a shrug.  Power goes as pct**2, so below the
+    # knee the thermal shock per percent is much smaller: 63.076% -> 40% takes
+    # 23 min, 40% -> 0% takes 20 min, ~43 minutes end to end.
+    #
+    # Still not an emergency stop.  A fault here is not an emergency, and a
+    # fast change remains the larger risk (invariant 6).
+    rampdown_pct_per_min: 1.0             # above the knee
+    rampdown_knee_pct: 40.0
+    rampdown_below_knee_pct_per_min: 2.0  # at or below it
     safe_output_pct: 0.0
+    # Once a ramp-down starts, AUTOMATION may not undo it -- a recovering sensor
+    # does not resume the loop.  An operator still can: `send hold` freezes the
+    # heater where it is from any state.  `send ack` is the only way out of a
+    # completed one, and it leaves the loop disarmed.
     require_ack_after_fault: true
 
     dac_step_pct: 0.01
