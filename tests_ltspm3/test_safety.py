@@ -54,8 +54,10 @@ def test_sustained_dropout_ramps_down_slowly(armed):
     h.step(150)                                  # 10 more minutes
     dropped = start - h.sup.output_pct
     assert dropped > 0, "must actually be reducing heat"
-    # rampdown_pct_per_min=0.5 over the ~10 min actually spent ramping.
-    assert dropped <= 0.5 * 11.5, f"ramped too fast: {dropped:.3f}%"
+    # rampdown_pct_per_min=1.0 above the knee, over the ~10 min actually spent
+    # ramping.  It was 0.5, which from the 63.076% operating point took 126
+    # minutes to reach zero -- long enough to stop being a fault response.
+    assert dropped <= 1.0 * 11.5, f"ramped too fast: {dropped:.3f}%"
     outs = [s.output_pct for s in h.history if s.output_pct is not None]
     assert all(b <= a + 1e-9 for a, b in zip(outs, outs[1:])), "ramp must be monotonic down"
 

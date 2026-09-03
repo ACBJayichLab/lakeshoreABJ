@@ -57,6 +57,18 @@ def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) ->
             f"safe_output_pct {s.safe_output_pct}% is above the operating point "
             f"{s.operating_point_pct}% -- a fault ramp would *raise* the heater"
         )
+    for name in ("rampdown_pct_per_min", "rampdown_below_knee_pct_per_min"):
+        if getattr(s, name) <= 0:
+            problems.append(
+                f"control.supervisor.{name} must be positive -- a non-positive "
+                "rate is a ramp-down that never reaches safe_output_pct"
+            )
+    if not s.hard_min_pct <= s.rampdown_knee_pct <= s.hard_max_pct:
+        problems.append(
+            f"rampdown_knee_pct {s.rampdown_knee_pct}% is outside the hard limits "
+            f"[{s.hard_min_pct}, {s.hard_max_pct}] -- one of the two rates could "
+            "never apply"
+        )
     if s.on_exit not in ("hold", "zero"):
         problems.append(
             f"control.supervisor.on_exit must be 'hold' or 'zero', got {s.on_exit!r}"

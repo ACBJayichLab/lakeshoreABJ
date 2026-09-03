@@ -134,8 +134,20 @@ class SupervisorConfig:
     #: grows for a while before it closes.  Approach more gently than a sweep.
     approach_rate_k_per_min: float = 0.25
 
-    # Fault response.
-    rampdown_pct_per_min: float = 0.50
+    # Fault response.  Two rates, because a single slow one stops being a fault
+    # response and starts being a shrug: from the 63.076% operating point at
+    # 0.50 %/min, reaching zero took 126 minutes.  Power goes as pct**2, so at
+    # 40% the heater delivers about 40% of the power it had at the operating
+    # point -- the thermal shock per percent is much smaller down there and
+    # there is less reason to crawl.  63.076% -> 40% now takes 23 min and
+    # 40% -> 0% takes 20 min: ~43 minutes end to end.
+    #
+    # Still nothing like an emergency stop.  A fault on this cryostat is not an
+    # emergency, and the risk of a fast change remains larger than the risk of a
+    # slow one (invariant 6).
+    rampdown_pct_per_min: float = 1.0             # above the knee
+    rampdown_knee_pct: float = 40.0
+    rampdown_below_knee_pct_per_min: float = 2.0  # at or below it
     safe_output_pct: float = 0.0
     require_ack_after_fault: bool = True
 
@@ -284,6 +296,16 @@ class HeaterSupervisor:
         self.set_mode(LoopMode.PID)
 
     def set_mode(self, mode: LoopMode) -> None:
+        if self.state is SupervisorState.RAMPING_DOWN and mode is not LoopMode.OFF:
+            # Same shape as the lockout refusal below, and for the same reason:
+            # automation may not call off a ramp-down that is already running.
+            # `OFF` stays open so an operator's `hold` or `heaters_off` still
+            # wins -- those are the human path, and they are meant to.
+            raise PermissionError(
+                f"supervisor is ramping the heater down ({self._locked_reason}). "
+                "Let it finish and clear the latch with `send ack`, or stop it "
+                "now with `send hold` (which freezes the heater where it is)"
+            )
         if self.state is SupervisorState.LOCKED_OUT and mode is not LoopMode.OFF:
             # Name the way out, the way every other refusal in this system
             # does.  This used to say "acknowledge() first", which is a Python
@@ -776,6 +798,22 @@ class HeaterSupervisor:
         """Return the desired output, or ``None`` meaning 'hold, change nothing'."""
         health = s.health
 
+        # A ramp-down LATCHES, and this check comes before the health check on
+        # purpose.  It used to come after, so once the guard returned to OK the
+        # loop fell straight through to normal tracking and quietly abandoned a
+        # ramp-down that was started for a reason nobody had looked at yet --
+        # only a ramp that ran all the way to safe_output_pct ever locked out.
+        #
+        # The latch excludes AUTOMATION, and only automation.  A recovering
+        # sensor may not resume the loop; an operator still may stop the ramp,
+        # because `panic_hold`/`panic_off` disengage through `set_mode(OFF)`,
+        # which is the one transition still permitted from here.  A human
+        # emergency measure is the final authority (Jeff, 2026-08-28).
+        if self.state is SupervisorState.RAMPING_DOWN:
+            return self._rampdown_target(
+                t, s, self._locked_reason or "ramp-down latched", dt
+            )
+
         if health is HealthState.FAULT:
             return self._rampdown_target(t, s, "sensor fault", dt)
 
@@ -964,8 +1002,12 @@ class HeaterSupervisor:
         current = self._where_the_heater_is(default=self.cfg.safe_output_pct)
 
         # Deliberately slow.  A fault is not an emergency on this cryostat; the risk
-        # of a fast change is greater than the risk of a slow one.
-        step = self.cfg.rampdown_pct_per_min * (max(dt, 0.0) / 60.0)
+        # of a fast change is greater than the risk of a slow one.  The rate is
+        # chosen on where the heater is NOW, so a long ramp changes slope as it
+        # crosses the knee rather than being fixed when the fault began.
+        rate = (self.cfg.rampdown_pct_per_min if current > self.cfg.rampdown_knee_pct
+                else self.cfg.rampdown_below_knee_pct_per_min)
+        step = rate * (max(dt, 0.0) / 60.0)
         safe = self.cfg.safe_output_pct
         if abs(current - safe) <= step:
             # Reached the safe value: hand it back this cycle and lock out on the

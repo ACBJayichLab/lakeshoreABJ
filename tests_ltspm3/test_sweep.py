@@ -212,11 +212,18 @@ def test_the_band_caps_heat_without_compelling_it(armed):
     h.step(2)
     h.sup.arm(h.sup.filter.value)
 
+    # Only the ARMING march is rate limited.  Armed at 0% the loop cannot reach
+    # the setpoint, so it holds, escalates, and ends this loop in a fault
+    # ramp-down -- and a ramp-down deliberately bypasses the trim limiter (it
+    # has to, or it could never reach safe_output_pct).  Measuring its steps
+    # here would assert something false about ramp-downs; this used to pass only
+    # because the old single 0.5 %/min rate happened to fall under max_step_pct.
     biggest, prev = 0.0, h.inst.get_analog_percent()
     for _ in range(300):
         h.step(1)
         now = h.inst.get_analog_percent()
-        biggest = max(biggest, abs(now - prev))
+        if h.sup.state is not SupervisorState.RAMPING_DOWN:
+            biggest = max(biggest, abs(now - prev))
         prev = now
 
     # Two DAC codes of headroom: the dither legitimately moves a code either

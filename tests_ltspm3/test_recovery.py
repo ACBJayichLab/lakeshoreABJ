@@ -43,8 +43,11 @@ def test_filter_reseeds_rather_than_rejecting_forever(armed):
     assert not h.sup.filter.is_stale(h.clock.t)
     # The reseeded filter must describe the cryostat *now*, not the pre-fault value.
     # It still lags a falling cryostat, which is what a low pass is for -- what
-    # matters is that it is nowhere near the stale 100 K it froze at.
-    assert h.sup.filter.value == pytest.approx(h.sup.status.raw_k, abs=2.0)
+    # matters is that it is nowhere near the stale 100 K it froze at.  The
+    # tolerance is 3 K rather than 2 K because the ramp-down now runs at
+    # 1.0 %/min above the knee instead of 0.5, so the cryostat it is chasing is
+    # falling twice as fast and a first-order lag is correspondingly larger.
+    assert h.sup.filter.value == pytest.approx(h.sup.status.raw_k, abs=3.0)
     assert abs(h.sup.filter.value - h.equilibrium_k) > 1.0
 
 
