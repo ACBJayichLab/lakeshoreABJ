@@ -330,9 +330,42 @@ What to get out of it:
 | Glitch rate on Sample | the reference logs say ~1 event per 7 days on this input. Does that hold at 2 s? |
 | Real sensor noise vs temperature | feeds calibration **C1** below — and this data spans 4.7 K to 149 K, which is most of the working range |
 | Cadence | 2.0 s, which is what the config asks for and what `check` reports — a budget of 26 transactions, ~1.30 s per cycle. [cryostat.md](cryostat.md)'s "1 Hz by config" was stale. Note the headroom is thin: 1 Hz would not fit without trimming the transaction budget |
-| Readback resolution | `AOUT?` flickers between 66.595 and 66.598 with nothing commanded — 0.003%, well inside `readback_tol_pct` of 0.015%, but know it is there before W1 |
+| Readback resolution | `AOUT?` flickers by 0.003% with nothing commanded — but **only at some commanded values**. See below |
 | The 336's loop 2 | heater 2 is **railed at 99.8%**. Watch it; do not touch it. It has no headroom, so anything adding heat to THE CHONKE simply wins |
 | Column names moved mid-run | files up to `2026-08-26` carry `Cold Head` / `Shield`; `2026-08-26_part2` onward carry `Coldplate` / `Magnet`, for the same two physical inputs. Any analysis spanning the rename must accept both spellings or it silently drops five days down to two |
+
+#### The `AOUT?` flicker, characterised
+
+Worth its own note, because the one-line version above was true and misleading.
+
+| held at | samples | flicker |
+|---|---|---|
+| 66.598% | 117,000 over 65 h | reads **66.595 on 3.2%** of samples — 3,372 excursions, ~104/h, almost all exactly one sample long |
+| 69.027% | 46,050 over 25.6 h | **none at all.** 46,050 identical readings |
+
+So it is **not a general property of the box** — it is specific to certain
+commanded values. At 0.003% it is smaller than one DAC code (0.01%), which puts
+it in the instrument's own formatting of that code rather than in the output.
+
+**Nothing is done about it, and nothing needs to be**, but know where it lands:
+
+- **Write verification is unaffected.** `readback_tol_pct` is 0.02% here and
+  0.015% in `SupervisorConfig`; both are far larger, so `_confirm` accepts it.
+- **`_where_the_heater_is()` sees it**, and that is the only live-loop exposure.
+  It re-reads `AOUT?` after any cycle that wrote nothing — which is exactly the
+  steady holding regime where the flicker occurs — and that value is the base
+  for the rate limiter's step, the fault ramp-down's step, and the value a
+  manual hold adopts. Against `max_step_pct` of 0.02% a 0.003% error is 15% of
+  one cycle's step; it is zero-mean and one sample long, so it does not
+  accumulate, and it can only shift the quantised code when the target already
+  sits within 0.003% of a code boundary. Bounded at one code, ~0.13 K.
+- **Analysis of the CSV must allow for it.** `steptest` has a
+  0.005% deadband for exactly this; anything else reading `ls218.aout1` and
+  looking for steps needs its own. Without one, the 08-24 → 09-03 data shows
+  14,509 apparent output changes instead of 99.
+
+The recorder logs the flicker faithfully, and that is correct — it should
+record what the instrument said, not what we think it meant.
 
 ### Exit gate — **MET 2026-09-03**
 

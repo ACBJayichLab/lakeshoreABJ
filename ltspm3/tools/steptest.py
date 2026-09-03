@@ -197,13 +197,22 @@ def _read_rows(paths, channel: str, heater_column: str | None):
 
 
 #: Output changes smaller than this are readback noise, not a step.  Half a DAC
-#: code.  ``AOUT?`` on the 218 flickers ~0.003% with nothing commanded (measured,
-#: stage 2), and without a deadband every one of those flickers is a "step": on
-#: five days of settled hold it manufactures ~40 spurious moves, and because
-#: they fall inside the coalescing window they extend the *real* move until the
-#: whole thermal transient has already happened before the hold is judged to
-#: begin.  The fit then sees only the flat tail and reports tau in the tens of
-#: thousands of seconds at R^2 ~ 0.05.
+#: code.
+#:
+#: ``AOUT?`` on the 218 flickers by 0.003% with nothing commanded, and it does so
+#: at SOME commanded values and not others -- at 66.598% it read 66.595 on 3.2%
+#: of samples (3,372 excursions over 65 h, almost all one sample long), while at
+#: 69.027% it did not flicker once in 46,050 samples over 25.6 h.  0.003% is
+#: below one DAC code, so this is the instrument's own formatting sitting on a
+#: rounding boundary rather than the output moving.
+#:
+#: Without a deadband every flicker is a "step".  Over the 2026-08-24 -> 09-03
+#: data that is 14,509 apparent changes instead of 99, and 119 of the 134 moves
+#: it finds are spurious.  Worse than the noise is where it puts them: they fall
+#: inside the coalescing window, so they extend the *real* move until the whole
+#: thermal transient has already happened before the hold is judged to begin.
+#: The fit then sees only the flat tail and reports tau in the tens of thousands
+#: of seconds at R^2 ~ 0.05.
 DEADBAND_PCT = 0.005
 
 
