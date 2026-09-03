@@ -20,12 +20,27 @@ default in `ltspm3/control/`.
 | Steady state | 43% → 18.2 K; 63.076% → **99.60 K**; 66.95% → 151.05 K |
 | **Local gain at the 63% operating point** | **~10.0 K/%** |
 | **Local gain at 66.6% / ~149 K** | **~13.8 K/%** — measured 2026-08-31 from seven settled points, 66.235% → 66.598%, on the live recorder rather than the legacy logs |
-| Fast pole, re-measured | **709 s, R² = 0.9973** — the +0.500% step of 2026-08-24 17:31. Independently confirms the 620 s below |
+| **Local gain at 67–69% / 155–181 K** | **~13.0 K/%** — measured 2026-09-03 from four settled points, 66.998% → 69.027%, holds of 10.7–25.7 h. Easing gently with temperature: 13.3 → 12.7 K/% across the span |
+| Fast pole, re-measured | **709 s, R² = 0.9973** — the +0.500% step of 2026-08-24 17:31. Independently confirms the 620 s below. **Fit window not recorded** — see the caveat below |
 | Time constant | **~620 s** @ 137 K — but from the *one* clean step response in the logs. Provisional |
 | Largest *legitimate* one-sample ΔT | **6.5 K** (−1.63 K/s, `cd8_…_monitor7`, corroborated on all three inputs); ~2.97 K/s just after a heater cut |
 | Normal-operation ΔT, p99 | 0.26 K |
 | Practical stability floor | ~2.5–4 mK near 96 K; **~100 mK near 290 K** |
 | Sensor noise character | **correlated, not white** — lag-1 autocorrelation **+0.51** |
+
+> **Every τ in this table is a fitted number, and a fitted τ is only as good as
+> the window it was fitted over.** Simulated against the calibrated two-pole
+> response, a 5-minute window returns τ five times too small and K three times
+> too small *at R² = 0.947* — a fit that reads as healthy and is not. The
+> reliable region starts around 20 minutes and the working rule is to hold
+> about 3τ. The full table is in
+> [commissioning.md](commissioning.md#how-long-to-hold--and-why-r-will-not-tell-you).
+> Record the fit window with any τ added here.
+
+**Noise, confirmed at the top of the range (2026-09-03).** Over a settled 25.7 h
+hold at 180.56 K the sample's rms is **44.1 mK** against the model's predicted
+**44.3 mK**. That is the quadratic fit confirmed independently of the data it
+was fitted to.
 
 A linear noise fit from 96 K understates room temperature by ~4×. Millikelvin
 control is a **low-temperature capability, not a global one**.

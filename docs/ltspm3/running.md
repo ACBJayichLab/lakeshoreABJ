@@ -217,8 +217,17 @@ of 2026-08-24) and **K ≈ 13.8 K/%** across seven settled points at 66.2–66.6
 The first confirms the provisional τ ≈ 620 s; the second is a genuinely new
 number, and much steeper than the 10.0 K/% quoted at the 63% operating point.
 
-What is missing is *other temperatures* — everything on disk sits between 143 K
-and 149 K, which is one schedule point rather than a schedule.
+What is missing is *other temperatures*. As of 2026-09-03 the settled ladder
+reaches 181 K and gives **K ≈ 13.0 K/% across 155–181 K**, so the *gain* now has
+a shape; τ still rests on that single 2026-08-24 step, because every heater move
+since has been an up-down doublet thrashed within minutes rather than a step
+held. The descending staircase in
+[commissioning.md](commissioning.md#the-descending-staircase--the-campaign-to-actually-run)
+is the campaign that fixes it.
+
+**Hold each point about 3τ — roughly 30 minutes up here, and do not fit
+anything held under 20 minutes.** A short window does not give a noisy answer,
+it gives a confident wrong one, and R² will not warn you.
 `ltspm3/tools/steptest.py` holds the protocol; see
 [commissioning.md](commissioning.md) for the two rules the existing hand data
 teaches about step size and doublets.

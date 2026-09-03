@@ -13,21 +13,22 @@ the staging is that each one bounds the damage the next one can do.
 **Everything up to and including stage 4 is attended.** Somebody is in the room,
 watching the viewer, with a hand on the panic path.
 
-## Where this stands, 2026-08-28 14:25
+## Where this stands, 2026-09-03 14:25
 
-**Stages 2 and 3 are largely already done, by hand, over the past week.** Anyone
-reading the older documents will find "nothing on this cryostat has been talked
-to yet" — that stopped being true on 2026-08-24 at 17:11.
+**Stage 0 is done. Stages 2 and 3 are largely done, by hand.** Anyone reading
+the older documents will find "nothing on this cryostat has been talked to yet"
+— that stopped being true on 2026-08-24 at 17:11.
 
 | | |
 |---|---|
-| Recorder | live on `config-ltspm3-heater.yaml`, cadence **~2 s** |
-| Sample | **148.75 K** |
-| `ls218.aout1` | **66.598 %** |
-| Coldplate / Magnet | 8.31 K / 6.91 K |
-| 336 loop 2 (THE CHONKE) | 289.198 K, heater 2 at **99.8 %, still railed** |
-| Data on disk | 163,627 rows, 2026-08-24 → now |
-| Manual heater steps | **45**, from the first 0 → 2.0% at 2026-08-24 17:11 |
+| Recorder | live on `config-ltspm3-heater.yaml`, cadence **2.0 s**, **6.0 days uptime, 0 dropped cycles** |
+| Sample | **180.57 K**, settled — 69.027% held **25.7 h**, +0.019 K/h |
+| `ls218.aout1` | **69.027 %** — and the ceiling is 70.0%, so **0.97% of headroom** |
+| Coldplate / Magnet | 8.47 K / 7.04 K |
+| RAD SHIELD / 1st / 2nd Stage | 40.02 K / 28.61 K / 4.08 K |
+| 336 loop 2 (THE CHONKE) | 289.06 K, heater 2 at **100 %, still railed** |
+| Data on disk | 422,852 rows over 237 h, 2026-08-24 → now |
+| Commands applied | 39, **0 refused** — no ceiling has ever actually been exercised |
 
 So the GPIB path is exercised, the write path is exercised, and there is real
 data. What that does *not* give you is anything about the closed loop, and it
@@ -65,6 +66,21 @@ between 66.235% / 143.75 K and 66.598% / 148.80 K give
 `authority_pct` rests on, and it is a real measurement rather than an
 extrapolation.
 
+**Extended on 2026-09-03, and it holds.** Four more settled points, now
+spanning 155–181 K:
+
+| Held at | For | Settled T | Local K |
+|---|---|---|---|
+| 66.998% | 11.5 h | 154.28 K | — |
+| 67.517% | 10.7 h | 161.16 K | 13.3 K/% |
+| 68.359% | — | 172.10 K | 13.0 K/% |
+| 69.027% | 25.7 h | 180.63 K | 12.7 K/% |
+
+**K ≈ 13.0 K/% across 155–181 K**, easing gently as it climbs. The simulator,
+asked the same question, says 12.2–12.6 K/% — agreement to about 5%, which is
+the first independent check the calibrated response model has had at this
+temperature.
+
 ---
 
 ## Stage 0 — three changes before anything is armed
@@ -72,13 +88,13 @@ extrapolation.
 None of this is hardware work. All of it is code and config that the stages
 below assume, so it comes first.
 
-### 0.1 The fault ramp-down is too slow
+### 0.1 The fault ramp-down is too slow — **LANDED 2026-09-03**
 
-Current: a single `rampdown_pct_per_min: 0.50`. From the 63.076% operating point
+Was: a single `rampdown_pct_per_min: 0.50`. From the 63.076% operating point
 to zero that is **126 minutes** — long enough that "slowly reduce heat" stops
 being a fault response and starts being a shrug.
 
-Intended (Jeff, 2026-08-28), piecewise on the present output:
+Now, piecewise on the present output (Jeff, 2026-08-28):
 
 | Output | Rate |
 |---|---|
@@ -95,7 +111,9 @@ about 40% of the power it was at the operating point, so the thermal shock per
 percent is much smaller down there and there is less reason to crawl.
 
 Invariant 7 applies — all three numbers are `SupervisorConfig` fields, not
-constants in `control/`:
+constants in `control/`. The rate is chosen on where the heater is *now*, so a
+long ramp changes slope as it crosses the knee rather than being fixed when the
+fault began:
 
 ```yaml
 rampdown_pct_per_min: 1.0             # above the knee
@@ -103,21 +121,29 @@ rampdown_knee_pct: 40.0
 rampdown_below_knee_pct_per_min: 2.0  # at or below it
 ```
 
-`validate_control` should reject a non-positive rate and a knee outside
+`validate_control` rejects a non-positive rate and a knee outside
 `[hard_min_pct, hard_max_pct]`.
 
 The trim rate limiter already does not apply during a ramp-down (only the hard
 limits do), so raising these rates needs no change to `max_rate_pct_per_min`.
 
-### 0.2 A ramp-down must latch
+> One test had quietly depended on that not being true.
+> `test_the_band_caps_heat_without_compelling_it` bounded *every* single-cycle
+> output change by `max_step_pct`, and passed only because the old 0.5 %/min
+> over one cycle happened to fall under that bound. Its loop ends in a fault
+> ramp-down, where the limiter is bypassed by design; at 2.0 %/min the step is
+> 0.14% and the assertion fired. It now measures only the arming march, which
+> is what it was always about.
 
-**This is a behaviour change, not a tuning change.** Today, if the condition
-that started a ramp-down clears before the ramp completes, the loop quietly
-abandons it: `_pid_target` checks sensor health first and, once health is back
-to `OK`, falls straight through to normal tracking and sets `TRACKING`. Only a
-ramp-down that runs all the way to `safe_output_pct` locks out.
+### 0.2 A ramp-down must latch — **LANDED 2026-09-03**
 
-Intended: **once a ramp-down begins, automation may not undo it.** A human is
+**This is a behaviour change, not a tuning change.** Before it, if the condition
+that started a ramp-down cleared before the ramp completed, the loop quietly
+abandoned it: `_pid_target` checked sensor health first and, once health was back
+to `OK`, fell straight through to normal tracking and set `TRACKING`. Only a
+ramp-down that ran all the way to `safe_output_pct` locked out.
+
+Now: **once a ramp-down begins, automation may not undo it.** A human is
 involved, or it continues. Concretely:
 
 - `RAMPING_DOWN` is left only by `acknowledge()`.
@@ -138,7 +164,12 @@ ramp-down is uninterruptible" — write the test for the human path as well as t
 automatic one.
 
 `acknowledge()` remains the way out of a *completed* ramp-down, and remains the
-only thing that clears the latch back to a re-armable state.
+only thing that clears the latch back to a re-armable state — reachable as
+`send ack`, the CLI verb, MATLAB's `ack()`, or the viewer's **Clear lockout**.
+
+Pinned by `tests_ltspm3/test_rampdown_latch.py`, which covers both halves: a
+recovered sensor does not resume tracking, and `panic_hold()` still stops the
+ramp dead and freezes the heater where it stands.
 
 ### 0.3 Know what the authority band does at both ends
 
@@ -175,14 +206,16 @@ panic actions disengage the loop now. A **MANUAL** setting is still clamped,
 which is why the panic path no longer uses it.
 
 **If the band is centred somewhere else, you may be outside it entirely.** The
-cryostat is at 148.75 K on 66.598% (see the state block above). The shipped band
+cryostat is at 180.57 K on 69.027% (see the state block above). The shipped band
 is **62.076–64.076%** — `authority_pct` is 1.0, centred for a ~99.6 K hold.
 
 This section first said 58.076–68.076%, copied from a worked `check` example in
-`running.md` that was five times too wide, and concluded from it that 66.598%
-sat inside the band with 1.48% of room upward. **It does not. It is 2.52% above
-the ceiling**, which at the 13.8 K/% measured up here is about 35 K of heat the
-loop would take out on its first cycle. Simulated from that state, arming today:
+`running.md` that was five times too wide, and concluded that the output sat
+inside the band. **It does not, and the gap has since grown.** At 69.027% the
+output is now **4.95% above the ceiling**, which at the measured 13.0 K/% is
+about **64 K** of heat the loop would take out on its first cycle. Simulated
+from the older 66.598% state, arming looked like this — and every line of it is
+worse from where the cryostat sits today:
 
 | cycle | | |
 |---|---|---|
@@ -190,6 +223,13 @@ loop would take out on its first cycle. Simulated from that state, arming today:
 | 5 | `holding` | the loop cannot reach 148.75 K from 64.076% |
 | 300 | `ramping_down` | the anomaly hold expired |
 | 2000 | heater 1.14%, sample ~13 K | ~2.2 h later, then locked out |
+
+**And there is a second trap up here that did not exist at 63%: headroom.**
+`hard_max_pct` is 70.0 and the output is 69.027%, so the band has **0.97%**
+of room above it — about 12.6 K. Any band centred on the present output is
+clipped by the ceiling on one side, so it is lopsided by construction and the
+loop has far less authority to *add* heat than to remove it. That is the safe
+asymmetry, but know it is there before you read a `holding` as a fault.
 
 The ceiling is doing its job. The point is that doing its job, from here, is a
 35 K step down followed by a fault — so this is not a lopsided envelope to work
@@ -211,18 +251,24 @@ worked band in `docs/ltspm3/` against what `SupervisorConfig` actually produces.
 
 Note the gain is not the 10.0 K/% quoted for the 63% operating point. The
 settled ladder in the live data measures **K ≈ 13.8 K/%** between 66.235% and
-66.598%. **`authority_pct` of 1.0 therefore buys close to 14 K of authority up
-here, against about 10 K at 96 K**, so re-centring the band is not only a matter
-of moving it — narrow it too.
+66.598%, and **≈ 13.0 K/%** over the wider 155–181 K span added on 09-03.
+**`authority_pct` of 1.0 therefore buys close to 13–14 K of authority up here,
+against about 10 K at 96 K**, so re-centring the band is not only a matter of
+moving it — narrow it too.
 
 `check` prints the band. Read it every time the config changes.
 
-### Exit gate for stage 0
+### Exit gate for stage 0 — **MET 2026-09-03**
 
-- `pytest -q` and `ruff check .` clean.
+- `pytest -q` and `ruff check .` clean. **768 passing.**
 - A test that a recovered sensor does **not** resume tracking mid-ramp-down.
+  **`test_a_recovered_sensor_does_not_resume_tracking_mid_ramp_down`.**
 - A test that the two-rate ramp-down crosses the knee and changes slope.
-- `check` prints the band and the ramp-down rates.
+  **`test_the_ramp_down_crosses_the_knee_and_changes_slope`.**
+- `check` prints the band and the ramp-down rates. **Only when
+  `control.enabled` is true** — with control disabled it says `control:
+  disabled` and prints neither, which is worth knowing before you go looking
+  for a band that is not there.
 
 ---
 
@@ -288,12 +334,25 @@ What to get out of it:
 | The 336's loop 2 | heater 2 is **railed at 99.8%**. Watch it; do not touch it. It has no headroom, so anything adding heat to THE CHONKE simply wins |
 | Column names moved mid-run | files up to `2026-08-26` carry `Cold Head` / `Shield`; `2026-08-26_part2` onward carry `Coldplate` / `Magnet`, for the same two physical inputs. Any analysis spanning the rename must accept both spellings or it silently drops five days down to two |
 
-### Exit gate
+### Exit gate — **MET 2026-09-03**
 
-- ≥72 h recorded with no unexplained comms fault. **Met.**
-- `replay` over the *new* CSV shows no sample reaching FAULT. **Not yet run.**
+- ≥72 h recorded with no unexplained comms fault. **Met.** 422,852 rows over
+  237 h, **zero** non-empty `Validity` cells, and no cadence gap over 6 s since
+  the 08-28 restart.
+- `replay` over the *new* CSV shows no sample reaching FAULT. **Met.** 237.3 h,
+  189 rejections, **0 reaching FAULT**; every one `suspect` and self-healing.
 - The glitch rate is consistent with the logs, or you understand why it is not.
-  **Not yet checked.**
+  **Understood.** 19.1 rejections/day against ~12.8 in the legacy logs — but
+  that is the wrong comparison, because these 237 h contain a 4.7 K → 180 K
+  warm-up with 45+ manual heater moves and the legacy figure is mostly quiet
+  holds. **Over the settled 25.7 h hold at 69.027% the rate is zero.** All 189
+  fell in the dynamic stretch, in bursts of 14–15 samples right after a
+  commanded step, which is the filter re-priming rather than the sensor
+  misbehaving.
+
+`replay.py` takes `.xls`; to run it over a recorder CSV, build a `ChartLog`
+from the CSV and call `replay()` directly — the pipeline under test is the same
+either way.
 
 ---
 
@@ -315,7 +374,7 @@ prove the write lands eventually; they say nothing about whether the readback
 that confirmed it was fresh.
 
 Do it as a tight cluster around the present output, **not** by dropping to zero —
-the sample is at 148.75 K on 66.598% and was walked there in steps. Values
+the sample is at 180.57 K on 69.027% and was walked there in steps. Values
 0.01–0.08% apart are distinct on the DAC grid, and the whole test runs in
 seconds against a 620 s fast pole, so the thermal excursion is nil. It is a far
 smaller disturbance than the ±0.4% steps already done by hand on 08-26.
@@ -327,7 +386,19 @@ smaller disturbance than the ±0.4% steps already done by hand on 08-26.
    has not answered this.
 3. Find the delay at which the readback matches the value **just written**, for
    twenty consecutive writes.
-4. Set `write_settle_s` above it, with margin. Return the output to 66.598%.
+4. Set `write_settle_s` above it, with margin. Return the output to 69.027%.
+
+**`write_settle_s` is a `Transport` field (default 100 ms), not an instrument
+one** — `lschart/transport.py`, applied to every write on that link. Nothing
+under `instruments:` accepts it; put it in the `transport:` block.
+
+**And the retry loop already covers most of this.** `_confirm` re-reads `AOUT?`
+up to five times, 100 ms apart, comparing against the value *just* commanded —
+so a stale readback shows the **old** value, fails the comparison, and is
+retried rather than accepted. The one case that could still slip through is a
+step smaller than `readback_tol_pct` (0.02%), where old and new are
+indistinguishable. That is why step 2 above insists on values far enough apart,
+and it is why a cluster of ±0.4% hand steps never answered this.
 
 Watch for the 0.003% readback flicker noted in stage 2: it is smaller than one
 DAC code, so it cannot be confused with a stale value, but it means "readback
@@ -350,8 +421,13 @@ boxes — bus contention is part of what you are measuring.
 - A measured `write_settle_s` for the 218 on GPIB, written into the config, with
   the twenty-write evidence recorded.
 - Every ceiling above refused what it should refuse.
-- The heater is back at the value it started the stage on, and the sample is
-  back on the trend it was on.
+- The heater is back at the value it started the stage on (**69.027%**), and the
+  sample is back on the trend it was on.
+- **`max_output_pct` has actually refused something.** As of 2026-09-03 the
+  spool has applied 39 commands and refused **0**, so no ceiling in this system
+  has ever been exercised against the real hardware. `send analog 70.5` is the
+  cheapest possible test: the driver *raises* rather than clamping, so no bytes
+  reach the 218 and nothing moves.
 
 ---
 
@@ -465,6 +541,14 @@ recording the 218 under quiet conditions is the clean resolution.
 filter's noise model, and whether millikelvin control really is a
 low-temperature-only capability.
 
+**Done at one point, 2026-09-03, and the model is right.** Over the settled
+25.7 h hold at 180.56 K the sample's rms is **44.1 mK**; `1.36e-6·T²` predicts
+**44.3 mK**. That is the quadratic model confirmed near the top of the working
+range, and it settles the parked question in favour of the quadratic fit rather
+than the linear one. Still outstanding: the same check at low temperature,
+where the 1.8 mK floor is what is being claimed and where the campaign below
+will pass through anyway.
+
 ### C2 — step tests: local gain and time constant
 
 **The highest-value hardware measurement available**, and the one the tuning
@@ -492,8 +576,26 @@ missing is *other temperatures*: everything on disk sits between 143 K and
 149 K, which is one point on a schedule, not a schedule.
 
 ```bash
-python -m ltspm3.tools.steptest --from-csv data/ltspm3-heater_2026-08-27.csv
+python -m ltspm3.tools.steptest --from-csv data/ltspm3-heater_2026-09-0*.csv
 ```
+
+Several files may be given at once and are stitched in time order — necessary,
+because `Time` restarts at midnight in each file and the holds worth
+identifying routinely run past it. The heater column is auto-detected
+(`heater_pct` when a software loop was running, else `ls218.aout1`).
+
+> **This command did not work until 2026-09-03**, and the version printed here
+> before was `--from-csv data/ltspm3-heater_2026-08-27.csv`. It defaulted to a
+> `heater_pct` column that only exists when a `control:` section is running, so
+> against every file this cryostat has ever produced it silently dropped every
+> row and then reported the file as too short. Three further defects behind it,
+> all of which produced numbers rather than errors: each hold was paired with
+> the step that *ended* it rather than the one that caused it (gain wrong by
+> the ratio of the two steps, with R² = 0.9999 attached); the final and usually
+> best-settled segment was never analysed at all; and the 0.003% `AOUT?`
+> flicker noted in stage 2 was read as a heater step, which pushed the start of
+> each hold past the whole transient. Pinned now by
+> `tests_ltspm3/test_steptest_from_csv.py`.
 
 **Read the R², every time, before you believe a τ.** A 0.061% step held for
 21 hours in this dataset "identifies" τ = 137,345 s — 38 hours — at **R² =
@@ -514,6 +616,132 @@ Two practical rules follow:
   identification with "the temperature moved against the step" — the segment
   begins after a *down* step while the cryostat is still rising from the
   preceding *up* step. Doublets test hysteresis only after each leg has settled.
+
+#### How long to hold — and why R² will not tell you
+
+**A short hold does not give you a noisy answer. It gives you a confident wrong
+one.** Fitting a single exponential over a window much shorter than τ cannot
+separate "slow rise, large amplitude" from "fast rise, small amplitude" — the
+early part of both is a straight line — so the fit trades τ against K and lands
+somewhere plausible. Simulated against the calibrated two-pole response
+(τ_fast = 620 s carrying 90% of the step, τ_slow = 14400 s the rest), stepping
+1.0% at 65% output, where the true steady-state K is 13.38 K/%:
+
+| hold | K (K/%) | τ (s) | R² | K vs truth | τ/K |
+|---|---|---|---|---|---|
+| 5 min | 4.53 | 126 | **0.947** | 34% | 27.7 |
+| 10 min | 7.38 | 234 | **0.968** | 55% | 31.7 |
+| 15 min | 9.15 | 328 | **0.981** | 68% | 35.9 |
+| 20 min | 10.26 | 406 | 0.989 | 77% | 39.6 |
+| **30 min** | **11.42** | **520** | 0.997 | **85%** | **45.5** |
+| 45 min | 12.03 | 606 | 1.000 | 90% | 50.4 |
+| 60 min | 12.23 | 642 | 1.000 | 91% | 52.5 |
+| 90 min | 12.39 | 674 | 0.999 | 93% | 54.4 |
+| *truth* | *13.38* | *620* | | | *46.3* |
+
+At five minutes the fit reports τ five times too small and K three times too
+small, **at R² = 0.95** — which reads as a good fit and is not one. R² measures
+how well an exponential describes the window you gave it, and a rising line is
+described beautifully by the early part of any exponential you like.
+
+Two things follow, and they pull in opposite directions:
+
+- **Do not fit anything held for under ~20 minutes** at these temperatures, no
+  matter what R² says. Below that the numbers are not merely imprecise, they are
+  wrong by factors.
+- **90 minutes is not necessary either.** IMC tuning uses `Kp = τ/(K·τ_cl)`, and
+  the two biases are in the same direction, so they largely cancel in the ratio:
+  τ/K passes through its true value at **around 30 minutes**, and drifts *away*
+  again by 45–90 min as the slow pole leaks in. A 30-minute hold gives a better
+  `Kp` than a 90-minute one, while the individual K and τ it prints are each
+  about 15% low.
+
+**So: hold ≈ 3τ, and record the window with every number.** Thirty minutes is
+right where τ ≈ 620 s. Where τ is genuinely shorter the window shrinks with it —
+which matters below, because the model assumes τ is temperature-independent on
+the evidence of a single step at 137 K, and that is exactly the assumption a
+campaign spanning 4–200 K is in a position to break. In practice: watch the
+viewer, find the time to reach about two thirds of the move, and hold three
+times that.
+
+**Any τ in these documents without a stated fit window should be read with
+this table in hand**, including the τ = 709 s above.
+
+#### The descending staircase — the campaign to actually run
+
+Every tread **is** a step test, so nothing is spent settling twice. Start at the
+top, where the cryostat already is, and walk down; each step is one command,
+then hands off for the hold.
+
+| # | output % | expected T | step down | expected ΔT | local K | noise |
+|---|---|---|---|---|---|---|
+| 1 | **69.0** | 178 K | *(start)* | — | 13.9 K/% | 43 mK |
+| 2 | **68.0** | 165 K | −1.0 | −13.4 K | 13.0 | 37 mK |
+| 3 | **67.0** | 152 K | −1.0 | −12.9 K | 12.9 | 31 mK |
+| 4 | **66.0** | 139 K | −1.0 | −13.1 K | 13.2 | 26 mK |
+| 5 | **65.0** | 125 K | −1.0 | −13.4 K | 13.3 | 21 mK |
+| 6 | **63.5** | 105 K | −1.5 | −20.2 K | 13.1 | 15 mK |
+| 7 | **62.0** | 92 K | −1.5 | −13.3 K | 7.0 | 11 mK |
+| 8 | **60.0** | 78 K | −2.0 | −13.2 K | 6.2 | 8 mK |
+| 9 | **58.0** | 67 K | −2.0 | −11.6 K | 5.4 | 6 mK |
+| 10 | **55.0** | 52 K | −3.0 | −14.6 K | 4.4 | 4 mK |
+| 11 | **52.0** | 41 K | −3.0 | −11.8 K | 3.5 | 2 mK |
+| 12 | **49.0** | 31 K | −3.0 | −9.4 K | 2.8 | 1.8 mK |
+| 13 | **45.0** | 22 K | −4.0 | −9.4 K | 2.0 | 1.8 mK |
+| 14 | **41.0** | 15 K | −4.0 | −6.6 K | 1.4 | 1.8 mK |
+| 15 | **37.0** | 11 K | −4.0 | −4.5 K | 0.9 | 1.8 mK |
+| 16 | **32.0** | 7.3 K | −5.0 | −3.5 K | 0.5 | 1.8 mK |
+| 17 | **28.0** | 5.7 K | −4.0 | −1.6 K | 0.3 | 1.8 mK |
+
+Temperatures are `SteadyStateCurve.kelvin_for()`, and **most of this ladder is
+predicted rather than measured.** The curve's measured knots are:
+
+```
+43.00% -> 18.2 K      65.34% -> 129.7 K
+63.08% -> 99.6 K      65.90% -> 137.3 K
+64.34% -> 116.5 K     66.48% -> 144.9 K
+64.97% -> 124.9 K     66.95% -> 151.1 K
+                      67.78% -> 161.8 K
+                      68.46% -> 170.7 K
+```
+
+Nine of the ten sit between 63% and 68.5%. **Between 43% and 63.08% — that is,
+between about 18 K and 100 K — there is not a single measured point**, so the
+whole middle of this ladder is a two-point power law being asked to cover 20
+percentage points of output and 80 K of temperature. It shows: local gain runs
+7.3 K/% at 62.5%, 9.3 K/% at 63.0% and 13.1 K/% at 63.5%, and that jump is the
+interpolation changing character at the 63.08% knot, not the cryostat doing
+anything.
+
+So read the table as: **trustworthy near the top (±2 K), a guess from rows 7–17**,
+and worse than a guess above 68.46%, which is the highest output ever measured —
+at 69.027% the curve predicts 178.4 K against 180.6 K observed.
+
+**Filling that hole is the most valuable thing this campaign does.** Rows 7–17
+are not confirming a curve, they are measuring one where none exists.
+
+Three things this layout is doing:
+
+- **The step grows as the gain falls.** Local K spans 13.9 K/% at the top and
+  0.3 K/% at the bottom, a factor of 46. A constant percentage step would give
+  13 K of signal up top and 30 mK at the bottom, and the bottom half of the
+  schedule would be unfittable. Sizing each step for ≳1.5 K keeps the
+  signal-to-noise above 37:1 everywhere and over 1000:1 below 30 K.
+- **Below ~28% there is nothing to measure.** 25% → 4.96 K, 20% → 4.31 K,
+  10% → 4.01 K: the heater has no authority against the cooler down there, so K
+  and τ are not merely small but undefined. The ladder stops at 28%.
+- **200 K is not reachable.** 70% — the ceiling, and `hard_max_pct` — predicts
+  192 K, and the curve reads about 2 K low up there, so the real top is ~195 K.
+  Going higher means raising `max_output_pct` above the point where anything has
+  ever been measured.
+
+**The interesting result is τ(T), and the model has no opinion worth trusting.**
+`ResponseParams.tau_fast` is a constant 620 s at every temperature, inferred
+from one step at 137 K. Heat capacity falls steeply as the cryostat cools, so τ
+almost certainly does too — and if it does, the lower half of this ladder holds
+far faster than 30 minutes and the whole campaign shortens. Watch the first
+couple of low-temperature treads and set the hold from what they do, not from
+this page.
 
 **Updates:** `TuningConfig.schedule` — paste the literal `steptest` prints —
 and `SupervisorConfig.response_lag_s`. Both `K` and `τ` vary with temperature
