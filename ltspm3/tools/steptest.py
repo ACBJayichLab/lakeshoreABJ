@@ -42,14 +42,15 @@ Usage::
     # against the simulator, right now
     python -m ltspm3.tools.steptest --points 63.0,64.0,65.0
 
-    # against a recorded run
-    python -m ltspm3.tools.steptest --from-csv data/lschart_2026-08-23.csv
+    # against a recorded run (the heater column is auto-detected)
+    python -m ltspm3.tools.steptest --from-csv data/ltspm3-heater_2026-09-02.csv
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import datetime as _dt
 import sys
 
 from ..control.tuning import OperatingPoint, identify_first_order
@@ -128,35 +129,143 @@ def run_simulated(points: list[float], *, step_pct: float = 0.5,
     return out
 
 
-def from_csv(path: str, *, channel: str = "Sample",
-             heater_column: str = "heater_pct") -> list[OperatingPoint]:
-    """Find heater steps in a recorder CSV and identify each one."""
-    rows = []
-    with open(path, newline="") as fh:
-        for row in csv.DictReader(fh):
-            try:
-                t = float(row["Time"])
-                k = float(row[channel])
-                h = float(row[heater_column])
-            except (KeyError, TypeError, ValueError):
-                continue
-            rows.append((t, k, h))
+#: Heater-output columns a recorder CSV may carry, best first.  ``heater_pct``
+#: is what the SOFTWARE loop commanded and exists only when a ``control:``
+#: section was running.  ``ls218.aout1`` is the instrument's own readback and is
+#: the only heater column a manual stage-3 log has -- which is every
+#: ``ltspm3-heater_*.csv`` on this cryostat.  Defaulting to ``heater_pct`` alone
+#: meant the documented invocation dropped every row and then blamed the file
+#: for being too short.
+HEATER_COLUMNS = ("heater_pct", "ls218.aout1")
+
+
+def _pick_heater_column(fieldnames, requested: str | None, path: str) -> str:
+    """Name the heater column, and say what was there when we cannot."""
+    have = list(fieldnames or ())
+    if requested is not None:
+        if requested not in have:
+            raise ValueError(
+                f"{path}: no column {requested!r}; has {have}"
+            )
+        return requested
+    for candidate in HEATER_COLUMNS:
+        if candidate in have:
+            return candidate
+    raise ValueError(
+        f"{path}: no heater column (looked for {list(HEATER_COLUMNS)}); "
+        f"has {have} -- pass --heater-column"
+    )
+
+
+def _read_rows(paths, channel: str, heater_column: str | None):
+    """``(t_s, kelvin, pct)`` across one or more recorder CSVs, in time order.
+
+    ``Time`` restarts at midnight in every file, so a multi-file read has to go
+    by ``Timestamp``; the holds worth identifying on this cryostat routinely run
+    past midnight, and stitching on ``Time`` would fold them onto each other.
+    """
+    if isinstance(paths, str):
+        paths = [paths]
+    rows: list[tuple[float, float, float]] = []
+    for path in paths:
+        with open(path, newline="") as fh:
+            reader = csv.DictReader(fh)
+            have = list(reader.fieldnames or ())
+            column = _pick_heater_column(have, heater_column, path)
+            if channel not in have:
+                raise ValueError(f"{path}: no channel {channel!r}; has {have}")
+            for row in reader:
+                try:
+                    k = float(row[channel])
+                    h = float(row[column])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                stamp = row.get("Timestamp")
+                if stamp:
+                    try:
+                        t = _dt.datetime.fromisoformat(stamp).timestamp()
+                    except ValueError:
+                        continue
+                else:
+                    try:
+                        t = float(row["Time"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                rows.append((t, k, h))
+    rows.sort(key=lambda r: r[0])
+    return rows
+
+
+#: Output changes smaller than this are readback noise, not a step.  Half a DAC
+#: code.  ``AOUT?`` on the 218 flickers ~0.003% with nothing commanded (measured,
+#: stage 2), and without a deadband every one of those flickers is a "step": on
+#: five days of settled hold it manufactures ~40 spurious moves, and because
+#: they fall inside the coalescing window they extend the *real* move until the
+#: whole thermal transient has already happened before the hold is judged to
+#: begin.  The fit then sees only the flat tail and reports tau in the tens of
+#: thousands of seconds at R^2 ~ 0.05.
+DEADBAND_PCT = 0.005
+
+
+def from_csv(paths, *, channel: str = "Sample",
+             heater_column: str | None = None,
+             min_hold_s: float = 600.0,
+             deadband_pct: float = DEADBAND_PCT) -> list[OperatingPoint]:
+    """Find heater steps in recorder CSVs and identify each one.
+
+    ``paths`` is one path or several; several are stitched in time order, which
+    is what it takes to see a hold that ran past midnight.
+
+    A step here is a *move* -- every output change separated from the next by
+    less than ``min_hold_s`` is coalesced into one.  That is not a nicety: the
+    heater on this cryostat is walked up in a burst of small increments over a
+    few minutes and then held for hours, so treating each increment as its own
+    step attributes the whole subsequent rise to the last increment alone and
+    reports a gain several times too small, with a healthy-looking R^2 on a fit
+    that began partway through the walk.
+    """
+    rows = _read_rows(paths, channel, heater_column)
     if len(rows) < 50:
-        raise ValueError(f"{path}: not enough usable rows")
+        raise ValueError(f"{paths}: not enough usable rows")
+
+    # Compare against the last ACCEPTED level, not against the previous sample:
+    # hysteresis, so a readback that dithers either side of a boundary does not
+    # emit a change on every crossing.
+    changed: list[int] = []
+    level = rows[0][2]
+    for i in range(1, len(rows)):
+        if abs(rows[i][2] - level) > deadband_pct:
+            changed.append(i)
+            level = rows[i][2]
+    if not changed:
+        return []
+
+    # Group the change indices into moves, then pair each move with the hold
+    # that FOLLOWS it.  Pairing a hold with the step that *ended* it -- which is
+    # what this did -- attributes a segment's whole rise to the next step and
+    # gets the gain wrong by the ratio of the two step sizes, while still
+    # reporting a near-perfect R^2.  It also never analysed the final segment,
+    # which on a manual log is usually the longest and best settled.
+    moves: list[tuple[int, int]] = []          # (first change, first hold index)
+    run_start = changed[0]
+    for a, b in zip(changed, changed[1:]):
+        if rows[b][0] - rows[a][0] >= min_hold_s:
+            moves.append((run_start, a + 1))
+            run_start = b
+    moves.append((run_start, changed[-1] + 1))
 
     out: list[OperatingPoint] = []
-    start = 0
-    for i in range(1, len(rows)):
-        if abs(rows[i][2] - rows[i - 1][2]) < 1e-9:
+    for n, (first, hold) in enumerate(moves):
+        step = rows[hold - 1][2] - rows[first - 1][2]
+        if abs(step) <= deadband_pct:
             continue
-        step = rows[i][2] - rows[start][2] if start else rows[i][2] - rows[i - 1][2]
-        segment = [(t, k) for t, k, _ in rows[start:i]]
-        if start and len(segment) > 50 and abs(step) > 0.05:
+        end = moves[n + 1][0] if n + 1 < len(moves) else len(rows)
+        segment = [(t, k) for t, k, _ in rows[hold:end]]
+        if len(segment) > 50 and abs(step) > 0.05:
             try:
                 out.append(analyse_step(segment, step))
             except ValueError:
                 pass
-        start = i
     return out
 
 
@@ -179,13 +288,25 @@ def main(argv: list[str] | None = None) -> int:
                     help="comma-separated heater percents to test (simulated)")
     ap.add_argument("--step-pct", type=float, default=0.5)
     ap.add_argument("--settle-s", type=float, default=4000.0)
-    ap.add_argument("--from-csv", default=None, help="analyse a recorded run instead")
+    ap.add_argument("--from-csv", default=None, nargs="+",
+                    help="analyse recorded run(s) instead; several are stitched in "
+                         "time order")
     ap.add_argument("--channel", default="Sample")
+    ap.add_argument("--deadband-pct", type=float, default=DEADBAND_PCT,
+                    help="output changes smaller than this are readback noise")
+    ap.add_argument("--min-hold-s", type=float, default=600.0,
+                    help="output changes closer together than this are one step")
+    ap.add_argument("--heater-column", default=None,
+                    help=f"heater output column (default: first of {list(HEATER_COLUMNS)} "
+                         "present in the file)")
     args = ap.parse_args(argv)
 
     if args.from_csv:
-        points = from_csv(args.from_csv, channel=args.channel)
-        source = args.from_csv
+        points = from_csv(args.from_csv, channel=args.channel,
+                          heater_column=args.heater_column,
+                          min_hold_s=args.min_hold_s,
+                          deadband_pct=args.deadband_pct)
+        source = ', '.join(args.from_csv)
     else:
         points = run_simulated([float(p) for p in args.points.split(",")],
                                step_pct=args.step_pct, settle_s=args.settle_s)
