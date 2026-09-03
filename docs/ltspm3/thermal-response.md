@@ -51,6 +51,28 @@ energy-balance form `C(T)·dT/dt = Q(u) − G(T)·(T − T_bath)` is ever fitted
 physical `C` and `G`, R sets their absolute scale — the shapes and the ratio
 `τ = C/G` do not care, the magnitudes do.
 
+**What CD10 actually contains (converted to recorder CSV, 2026-09-03).**
+`python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls" -o data/cd10`
+reproduces this; `data/` is gitignored, so the CSVs are derived, not stored.
+
+| log | span | heater cmds | 336? | what it is |
+|---|---|---|---|---|
+| `sample_cold` | 07-15 → 07-17 | 31 | yes | **mid-cooldown, not valid** for calibration |
+| `sample_monitor1` | 07-17 → 07-20, 72 h | 1 | yes | stages **at base** (1st 28.49 K @ +0.56 mK/h, 2nd 3.94 K @ +0.12 mK/h). A 72 h *constant-heater* hold at 63.07% / 96 K — a drift and noise dataset, **not** a step dataset |
+| `sample_monitor3`, `st2_monitor3` | 07-23 → 07-31 | 0 | no | constant 63.072%, ~98–100 K |
+| **`sample_monitor4`+`5`** | **08-08 → 08-20, 287 h** | **200** | **no** | the ladder: 60–70%, 99.6–170.8 K, 120 steps, **21 dwells > 3 h totalling 279 h** |
+
+**The 336 stopped logging on 2026-07-23**, so the two files carrying 200 of the
+232 heater commands have no `RAD SHIELD` / `THE CHONKE` / stage data at all.
+The converter reports the match rate per file rather than leaving a blank to be
+mistaken for a cold shield. This is why the room-temperature covariate that
+works on the 2026-08/09 recorder data cannot be applied to monitor4/5.
+
+Every large step in monitor4/5 is preceded by a *brief* excursion, so the
+pre-step state is unsettled and the net ΔT across a step is small — a −4.500%
+step at 08-08 16:45 held 30 h shows ΔT of only +3.94 K. **Per-segment fitting
+cannot use these; a whole-record fit that propagates state through can.**
+
 **Noise, confirmed at the top of the range (2026-09-03).** Over a settled 25.7 h
 hold at 180.56 K the sample's rms is **44.1 mK** against the model's predicted
 **44.3 mK**. That is the quadratic fit confirmed independently of the data it

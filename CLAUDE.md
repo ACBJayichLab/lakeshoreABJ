@@ -150,6 +150,12 @@ lschart/                    GENERIC -- any Lake Shore cryostat
                      flushed per sample), ringbuffer (plotting only).
   tools/import_xls.py  Reads the legacy .xls logs. Sniffs the header:
                      filenames lie (cd10_..._st2_monitor3.xls is a 218 log).
+  tools/xls_to_csv.py  Legacy .xls -> the recorder's OWN CSV, so a year-old
+                     cooldown reads like today's. Merges the 336 by wall clock
+                     (two programs, two files, no shared row index) and
+                     reconstructs ls218.aout1 as a zero-order hold on the
+                     Notes column's ANALOG commands -- the 218 never logged
+                     its own output.
 
 ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
   thermal_response.py The one measured P(pct)/T(P) curve. Shared by the
