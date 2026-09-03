@@ -1,6 +1,6 @@
 """The response model: an exact quadratic actuator and a fitted thermal curve.
 
-The 218's analog output is a voltage into a stable 50 ohm heater, so power goes
+The 218's analog output is a voltage into a stable 75.5 ohm heater, so power goes
 as pct**2 exactly and temperature-independently.  Everything uncertain lives in
 T(P), where heat capacity and conductance both vary with temperature.  Keeping
 those separate is the point of `ltspm3/thermal_response.py`; these tests hold the line.

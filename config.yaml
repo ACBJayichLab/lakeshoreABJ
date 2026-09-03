@@ -191,7 +191,7 @@ control:
     t_bath_k: 4.0
     ref_pct: 63.076
     ref_rise_k: 95.6
-    # The output is a VOLTAGE into a stable 50 ohm heater, so P ~ pct**2
+    # The output is a VOLTAGE into a stable 75.5 ohm heater, so P ~ pct**2
     # exactly.  Only the thermal part is fitted: dT ~ P**thermal_exponent.
     # Measured 3.16 (lumped n = 6.32, R^2 = 0.996) over 24 settled heater
     # steps in cd10 monitor4/5.  Supersedes the old two-point n = 5.0.

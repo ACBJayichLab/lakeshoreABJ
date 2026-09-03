@@ -15,7 +15,7 @@ default in `ltspm3/control/`.
 | Sensor noise, sample channel | **quadratic in T**: `rms ≈ 1.36e-6 · T² K`, floored ~1.8 mK. Measured 1.8 mK @ 18 K, 13.6 mK @ 96 K, 45 mK @ 190 K, **109 mK @ 290 K** |
 | Fast thermal time constant | ~5–10 min |
 | Slow thermal tail | hours (3–12 h; poorly constrained) |
-| Actuator | the analog output is a **voltage** into a stable 50 Ω heater, so **`P ∝ pct²` exactly** and temperature-independently |
+| Actuator | the analog output is a **voltage** into a stable 75.5 Ω heater, so **`P ∝ pct²` exactly** and temperature-independently |
 | Thermal response | `T − T_bath = A·P^m`, **m ≈ 3.16** (lumped `pct^6.32`, R² = 0.9962) from **24 settled heater steps** in `cd10 monitor4/5` |
 | Steady state | 43% → 18.2 K; 63.076% → **99.60 K**; 66.95% → 151.05 K |
 | **Local gain at the 63% operating point** | **~10.0 K/%** |
@@ -36,6 +36,20 @@ default in `ltspm3/control/`.
 > about 3τ. The full table is in
 > [commissioning.md](commissioning.md#how-long-to-hold--and-why-r-will-not-tell-you).
 > Record the fit window with any τ added here.
+
+**Heater resistance: 75.5 Ω, measured (2026-09-03).** This supersedes the 50 Ω
+that the prose carried in seven places since the model was written. **No fitted
+number in this document changes**, and that is worth understanding rather than
+just noting: R never enters any calculation here. Every fit is against
+*percent*, and `dT = A·P^m` with `P = V²/R` absorbs the whole of R into the
+coefficient `A`. So `P ∝ pct²` is untouched, `m = 3.16` is untouched, the local
+gains are untouched, and so is the simulator.
+
+R matters at exactly one boundary: **converting to absolute watts.** Anything
+quoted in W against the old value is high by 75.5/50 = **1.51×**. If the
+energy-balance form `C(T)·dT/dt = Q(u) − G(T)·(T − T_bath)` is ever fitted for
+physical `C` and `G`, R sets their absolute scale — the shapes and the ratio
+`τ = C/G` do not care, the magnitudes do.
 
 **Noise, confirmed at the top of the range (2026-09-03).** Over a settled 25.7 h
 hold at 180.56 K the sample's rms is **44.1 mK** against the model's predicted

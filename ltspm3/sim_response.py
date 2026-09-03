@@ -6,7 +6,7 @@ is *not* an attempt at cryostat physics; it reproduces the four things the
 control software actually has to cope with:
 
 1. a steeply nonlinear steady state.  The output is a voltage into a fixed
-   50 ohm heater, so ``P ~ pct**2`` exactly; the rest is thermal, measured as
+   75.5 ohm heater, so ``P ~ pct**2`` exactly; the rest is thermal, measured as
    ``dT ~ P**3.16`` over 24 settled heater steps.  Together that is a lumped
    ``pct**6.32`` and a local gain near 10 K/% at 63%;
 2. two very different time constants -- the one clean step response in the logs
@@ -34,7 +34,7 @@ class ResponseParams:
     """Calibrated against the 2026-07 cooldown; see module docstring."""
 
     t_bath: float = 4.0
-    #: The analog output is a VOLTAGE into a stable 50 ohm heater, so power goes
+    #: The analog output is a VOLTAGE into a stable 75.5 ohm heater, so power goes
     #: as pct**2 exactly.  The remaining nonlinearity is thermal -- changing
     #: heat capacity and conductance -- and is carried by ``thermal_exponent``:
     #:

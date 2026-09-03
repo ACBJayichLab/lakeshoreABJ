@@ -53,7 +53,7 @@ choice in any regime this curve was not measured in.
 The actuator half is exact
 --------------------------
 
-The 218's analog output is a **voltage**, and it drives a stable 50 ohm
+The 218's analog output is a **voltage**, and it drives a stable 75.5 ohm
 heater, so::
 
     P = V**2 / R      ->      P is proportional to pct**2

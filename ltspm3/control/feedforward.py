@@ -11,7 +11,7 @@ still crawling.  Feedforward fixes that without touching the gains.
 The model, in two stages
 ------------------------
 
-The 218's analog output is a **voltage**, driving a stable 50 ohm heater, so::
+The 218's analog output is a **voltage**, driving a stable 75.5 ohm heater, so::
 
     P = V**2 / R        i.e.   P is proportional to pct**2
 
