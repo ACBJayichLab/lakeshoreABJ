@@ -30,3 +30,7 @@ data/
 # NOTE: reference/logs/*.xls ARE tracked on purpose.  They are the only
 # empirical record of the plant and every default in control/ is derived
 # from them.  ~110 MB total; see CLAUDE.md.
+
+# Derived analysis outputs -- regenerate with analysis/steady.py + plot_steady.py
+analysis/*.png
+analysis/steady_points.csv
