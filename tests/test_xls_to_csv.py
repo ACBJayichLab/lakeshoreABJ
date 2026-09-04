@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import datetime as _dt
+import os
 
 from lschart.tools.import_xls import ChartLog, LogNote
 from lschart.tools.xls_to_csv import (
@@ -51,7 +52,10 @@ def _rows(path):
 
 
 def _run(tmp_path, logs, monkeypatch, **kw):
+    """The join tests use ``per_source`` so they can name the file they read;
+    the daily layout is the default and has its own tests below."""
     monkeypatch.setattr("lschart.tools.xls_to_csv.load_dir", lambda _p: logs)
+    kw.setdefault("per_source", True)
     return convert("ignored", str(tmp_path),
                    channel_map={1: "Sample"}, **kw)
 
@@ -171,3 +175,49 @@ def test_time_column_restarts_at_zero_per_file(tmp_path, monkeypatch):
     rows = _rows(tmp_path / "a.csv")
     assert [r["Time"] for r in rows] == ["0.000", "10.000"]
     assert rows[0]["Timestamp"].startswith("2026-07-15T12:16:40")
+
+
+# -- the daily layout, which is what makes the output viewer-native ---------
+
+
+def test_output_is_one_file_per_date_named_like_a_recorder_log(
+        tmp_path, monkeypatch):
+    """``CsvTail`` finds the rest of a run by matching {prefix}_{date}.csv.  A
+    file named anything else draws only itself and loses the history either
+    side of it, which looks like a short experiment rather than a bug."""
+    log = _log218("whatever.xls", START, [0.0, 10.0], [100.0, 101.0])
+    written = _run(tmp_path, [log], monkeypatch, per_source=False, prefix="cd10")
+    assert [os.path.basename(p) for p in written] == ["cd10_2026-07-15.csv"]
+
+
+def test_a_run_crossing_midnight_rolls_like_the_recorder(tmp_path, monkeypatch):
+    log = _log218("a.xls", _dt.datetime(2026, 7, 15, 23, 59, 50),
+                  [0.0, 10.0, 20.0], [100.0, 101.0, 102.0])
+    written = _run(tmp_path, [log], monkeypatch, per_source=False)
+    assert [os.path.basename(p) for p in written] == [
+        "cd10_2026-07-15.csv", "cd10_2026-07-16.csv"]
+    # Time restarts in the new file; Timestamp is what stitches them
+    rolled = _rows(tmp_path / "cd10_2026-07-16.csv")
+    assert [r["Time"] for r in rolled] == ["0.000", "10.000"]
+
+
+def test_two_logs_sharing_a_date_append_rather_than_truncate(
+        tmp_path, monkeypatch):
+    """A run arrives as several .xls whose boundary falls mid-day.  Opening
+    the date's file with "w" for the second one would silently discard the
+    first one's rows."""
+    a = _log218("a.xls", _dt.datetime(2026, 7, 15, 8, 0, 0), [0.0], [100.0])
+    b = _log218("b.xls", _dt.datetime(2026, 7, 15, 9, 0, 0), [0.0], [200.0])
+    _run(tmp_path, [a, b], monkeypatch, per_source=False)
+    rows = _rows(tmp_path / "cd10_2026-07-15.csv")
+    assert [r["Sample"] for r in rows] == ["100.0000", "200.0000"]
+
+
+def test_the_heater_hold_survives_the_daily_roll(tmp_path, monkeypatch):
+    """The command was given yesterday; today's file must still know it."""
+    log = _log218("a.xls", _dt.datetime(2026, 7, 15, 23, 59, 50),
+                  [0.0, 10.0], [100.0, 101.0],
+                  notes=[(0.0, _analog(63.076))])
+    _run(tmp_path, [log], monkeypatch, per_source=False)
+    rows = _rows(tmp_path / "cd10_2026-07-16.csv")
+    assert [r["ls218.aout1"] for r in rows] == ["63.0760"]

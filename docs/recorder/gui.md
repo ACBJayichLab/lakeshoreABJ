@@ -15,6 +15,7 @@ pip install -e ".[gui]"      # pyqtgraph + PySide6
 |---|---|
 | `-c CONFIG` | the **recorder's** config — the viewer reads it only to find the data directory |
 | `--status PATH` | point at a `status.json` directly instead |
+| `--csv PATH` | **open a finished log instead of following a recorder.** No recorder need be running; the banner will say the status file is absent, which it is. The chart opens framed on the data's own extent rather than on the live edge, and the thermometers are recognised from the header |
 | `--refresh S` | redraw cadence, default 1.0 |
 | `--max-points N` | default 200,000 |
 | `--gap-factor N` | how many sample intervals a hole must exceed to be drawn as a gap, default 4 |
@@ -22,6 +23,34 @@ pip install -e ".[gui]"      # pyqtgraph + PySide6
 | `--max-percent N` | the same stop for the output panel, default 100 |
 | `--read-only` | open with no command spool at all, so the whole control panel is dead |
 | `--log-level` | |
+
+## Looking at a finished run
+
+The viewer normally follows a running recorder: `status.json` says which log is
+being written, and the chart rides the newest sample. `--csv` opens a log
+directly instead, which is how an archived cooldown gets read -- including a
+legacy `.xls` put through
+[`xls_to_csv`](../../lschart/tools/xls_to_csv.py):
+
+```bash
+python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls" -o data/cd10
+python -m lschart.gui -c config.yaml --csv data/cd10/cd10_2026-08-20.csv
+```
+
+Point it at **any one file of a run** and the rest comes with it: the backfill
+matches `{prefix}_{date}.csv`, so naming a run's last day recovers the whole
+run. That is also why the converter writes daily files rather than one file per
+source `.xls` -- a differently-named log draws only itself, and looks like a
+short experiment rather than a truncated one.
+
+Two things behave differently from the live case, both deliberately:
+
+- **The banner says the status file is absent.** It is. Nothing is writing this
+  log, and saying so is more honest than a blank.
+- **The chart opens on the data's extent**, not on the last hour. A run that
+  finished a fortnight ago is nowhere near the live window, and following it
+  would draw an empty chart over a file that loaded perfectly.
+
 
 ## It is a separate process, not a thread
 

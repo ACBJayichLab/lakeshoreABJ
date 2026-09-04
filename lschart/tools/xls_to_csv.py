@@ -32,9 +32,17 @@ every step survives into the output.
 **The filename lies about the instrument.**  ``cd10_..._st2_monitor3.xls`` is a
 218 log.  The model is sniffed from row 0, never from the name.
 
+**The output is laid out the way the recorder lays it out**, one file per
+local date named ``{prefix}_{date}.csv``, because that is what makes the
+viewer able to open it: ``CsvTail`` finds the rest of a run by matching that
+name, so a differently-named file draws only itself and silently loses the
+history either side of it.  ``--per-source`` keeps one file per ``.xls``
+instead, which is easier to trace back and is not viewer-native.
+
 Usage::
 
     python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls" -o data/cd10
+    python -m lschart.gui -c config.yaml --csv data/cd10/cd10_2026-08-08.csv
 """
 
 from __future__ import annotations
@@ -107,9 +115,54 @@ def heater_timeline(logs) -> list[tuple[float, float]]:
     return out
 
 
+class _Writer:
+    """Emits rows into recorder-shaped files, rolling on the local date.
+
+    A run reaches here as several ``.xls`` that may share a date at their
+    boundary, so a date already written is appended to rather than truncated.
+    ``Time`` restarts at zero in each file, which is the recorder's own
+    convention: ``Timestamp`` is what stitches files together.
+    """
+
+    def __init__(self, outdir: str, prefix: str, header: list[str]) -> None:
+        self.outdir, self.prefix, self.header = outdir, prefix, header
+        self._fh = None
+        self._writer = None
+        self._day = None
+        self._t0 = None
+        self.paths: list[str] = []
+        self.rows = 0
+
+    def write(self, abs_t: float, fields: list[str]) -> None:
+        stamp = _dt.datetime.fromtimestamp(abs_t)
+        day = "fixed" if self._day == "fixed" else stamp.date()
+        if day != self._day:
+            self.close()
+            path = os.path.join(self.outdir, f"{self.prefix}_{day.isoformat()}.csv")
+            fresh = not os.path.exists(path)
+            self._fh = open(path, "a", newline="", encoding="utf-8")
+            self._writer = csv.writer(self._fh)
+            if fresh:
+                self._writer.writerow(self.header)
+                self.paths.append(path)
+            self._day = day
+            self._t0 = abs_t
+        self._writer.writerow(
+            [stamp.isoformat(timespec="milliseconds"), f"{abs_t - self._t0:.3f}"]
+            + fields
+        )
+        self.rows += 1
+
+    def close(self) -> None:
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None
+
+
 def convert(pattern: str, outdir: str, *, channel_map: dict[int, str],
             tolerance: float = 30.0, channels=DEFAULT_CHANNELS,
-            aux=DEFAULT_AUX) -> list[str]:
+            aux=DEFAULT_AUX, per_source: bool = False,
+            prefix: str = "cd10") -> list[str]:
     logs = load_dir(pattern)
     times336, recs336 = build_336_index(logs)
     heater = heater_timeline(logs)
@@ -123,6 +176,10 @@ def convert(pattern: str, outdir: str, *, channel_map: dict[int, str],
     print(f"336 index: {len(times336)} samples;  "
           f"heater: {len(heater)} ANALOG commands\n")
 
+    header = (["Timestamp", "Time"] + list(channels) + list(aux)
+              + ["Validity", "State", "Notes"])
+    rolling = None if per_source else _Writer(outdir, prefix, header)
+
     for g in logs:
         if g.model != "218":
             continue
@@ -130,57 +187,67 @@ def convert(pattern: str, outdir: str, *, channel_map: dict[int, str],
             print(f"  SKIP {g.name}: no parseable start time")
             continue
         base = g.started.timestamp()
-        stem = os.path.splitext(g.name)[0]
-        path = os.path.join(outdir, f"{stem}.csv")
         matched = 0
         notes_by_t = {round(n.t_s, 3): n.text for n in g.notes}
 
-        with open(path, "w", newline="", encoding="utf-8") as fh:
-            w = csv.writer(fh)
-            w.writerow(["Timestamp", "Time"] + list(channels) + list(aux)
-                       + ["Validity", "State", "Notes"])
-            for i, t in enumerate(g.t_s):
-                abs_t = base + t
-                stamp = _dt.datetime.fromtimestamp(abs_t)
-                row = [stamp.isoformat(timespec="milliseconds"),
-                       f"{t - g.t_s[0]:.3f}"]
+        writer = rolling
+        fh = None
+        if writer is None:
+            path = os.path.join(outdir, f"{os.path.splitext(g.name)[0]}.csv")
+            fh = open(path, "w", newline="", encoding="utf-8")
+            writer = _Writer(outdir, "", header)
+            writer._fh, writer._writer = fh, csv.writer(fh)
+            writer._writer.writerow(header)
+            writer._day, writer._t0 = "fixed", base + g.t_s[0]
+            writer.paths.append(path)
 
-                vals: dict[str, float | None] = {}
-                for num, name in channel_map.items():
-                    col = f"Input {num}"
-                    vals[name] = g.channels[col][i] if col in g.channels else None
+        for i, t in enumerate(g.t_s):
+            abs_t = base + t
 
-                rec: dict = {}
-                if times336:
-                    j = bisect.bisect_left(times336, abs_t)
-                    cand = [k for k in (j - 1, j) if 0 <= k < len(times336)]
-                    if cand:
-                        k = min(cand, key=lambda k: abs(times336[k] - abs_t))
-                        if abs(times336[k] - abs_t) <= tolerance:
-                            rec = recs336[k]
-                            matched += 1
-                for name in TEMPS_336:
-                    vals[name] = rec.get(name)
+            vals: dict[str, float | None] = {}
+            for num, name in channel_map.items():
+                col = f"Input {num}"
+                vals[name] = g.channels[col][i] if col in g.channels else None
 
-                row += [_fmt(vals.get(c)) for c in channels]
+            rec: dict = {}
+            if times336:
+                j = bisect.bisect_left(times336, abs_t)
+                cand = [k for k in (j - 1, j) if 0 <= k < len(times336)]
+                if cand:
+                    k = min(cand, key=lambda k: abs(times336[k] - abs_t))
+                    if abs(times336[k] - abs_t) <= tolerance:
+                        rec = recs336[k]
+                        matched += 1
+            for name in TEMPS_336:
+                vals[name] = rec.get(name)
 
-                pct = None
-                if htimes:
-                    j = bisect.bisect_right(htimes, abs_t) - 1
-                    if j >= 0:
-                        pct = heater[j][1]
-                for key in aux:
-                    row.append(_fmt(pct) if key == "ls218.aout1"
-                               else _fmt(rec.get(key)))
+            pct = None
+            if htimes:
+                j = bisect.bisect_right(htimes, abs_t) - 1
+                if j >= 0:
+                    pct = heater[j][1]
 
-                row += ["", "", notes_by_t.get(round(t, 3), "")]
-                w.writerow(row)
+            fields = [_fmt(vals.get(c)) for c in channels]
+            fields += [_fmt(pct) if key == "ls218.aout1" else _fmt(rec.get(key))
+                       for key in aux]
+            fields += ["", "", notes_by_t.get(round(t, 3), "")]
+            writer.write(abs_t, fields)
+
+        if fh is not None:
+            writer.close()
+            written.extend(writer.paths)
 
         pctm = 100.0 * matched / max(len(g.t_s), 1)
-        print(f"  {os.path.basename(path):<40} {len(g.t_s):>6} rows  "
+        print(f"  {g.name:<38} {len(g.t_s):>6} rows  "
               f"336 match {pctm:>5.1f}%  cmds={len(g.heater_commands()):>4}  "
               f"{str(g.started)[:16]}")
-        written.append(path)
+
+    if rolling is not None:
+        rolling.close()
+        written = rolling.paths
+        print("")
+        print(f"  -> {len(written)} daily files, {rolling.rows} rows, "
+              f"prefix {prefix!r}")
     return written
 
 
@@ -194,6 +261,11 @@ def main(argv=None) -> int:
                     help="seconds; how near a 336 sample must be to a 218 row")
     ap.add_argument("--header-from", default=None,
                     help="copy the exact column list from a recorder CSV")
+    ap.add_argument("--prefix", default="cd10",
+                    help="log-name prefix; files are {prefix}_{date}.csv")
+    ap.add_argument("--per-source", action="store_true",
+                    help="one CSV per .xls instead of one per date; easier to "
+                         "trace, but the viewer will not stitch them")
     a = ap.parse_args(argv)
 
     cmap = {}
@@ -210,7 +282,8 @@ def main(argv=None) -> int:
         aux = [c for c in body if "." in c]
 
     convert(a.pattern, a.outdir, channel_map=cmap,
-            tolerance=a.merge_tolerance, channels=channels, aux=aux)
+            tolerance=a.merge_tolerance, channels=channels, aux=aux,
+            per_source=a.per_source, prefix=a.prefix)
     return 0
 
 

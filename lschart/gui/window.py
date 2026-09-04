@@ -589,9 +589,17 @@ class ViewerWindow(QtWidgets.QMainWindow):
         max_kelvin: float = COMFORT_STOP_K[1],
         max_percent: float = COMFORT_STOP_PCT[1],
         config_label: str = "",
+        csv_path: str | None = None,
     ) -> None:
         super().__init__()
         self.source = StatusSource(status_path)
+        #: A log to read instead of whatever ``status.json`` names.  This is
+        #: how a finished run is opened -- an archived cooldown, or a legacy
+        #: log put through `lschart.tools.xls_to_csv` -- with no recorder
+        #: running at all.  The status half still polls and still reports
+        #: itself absent, which is the honest banner for a file nobody is
+        #: writing; the chart does not depend on it.
+        self._csv_path = csv_path
         self.tail = CsvTail(max_points=max_points,
                             backfill_s=BACKFILL_COVERAGE_S)
         self.spool = spool
@@ -1605,7 +1613,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._update_links()
             self._update_commands()
             self._sync_command_values()
-            if self.tail.follow(self.source.log_path()):
+            if self.tail.follow(self._csv_path or self.source.log_path()):
                 self._first_load_done = False
                 # A rollover is a day of new archive, and the backdrop's point
                 # budget was spread across the archive as it stood.  Rebuild
@@ -1621,6 +1629,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
                     # There are samples on the chart now, so the window is
                     # worth looking at; the backdrop follows a moment later.
                     self._atlas_load.start()
+                if first and self._csv_path is not None:
+                    # An archived log has no "live" edge to follow.  The
+                    # default window is the last N seconds *of now*, and a run
+                    # that finished a fortnight ago falls entirely outside it
+                    # -- which draws an empty chart over a file that loaded
+                    # perfectly.  Open on the data's own extent instead.
+                    self._span_to_all()
                 self._sync_traces()
                 # A hand-picked window is a question about the past, and rows
                 # appended beyond its right edge cannot change the answer.
@@ -2592,6 +2607,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _sync_traces(self) -> None:
         """Create a curve and a checkbox for any column the log has grown."""
         channel_names = {str(c.get("name")) for c in self.source.channels()}
+        if not channel_names:
+            # No status file -- an archived log opened with --csv, or a
+            # recorder whose status went unreadable before the first sync.
+            # The header still says which columns are thermometers.
+            channel_names = set(self.tail.channel_columns())
         for name in self.tail.columns():
             if name in self.curves:
                 continue
@@ -3035,6 +3055,23 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _follow_window(self, seconds: float) -> None:
         """A live-referenced window button: the last ``seconds``, riding."""
         self._set_follow(seconds)
+
+    def _span_to_all(self) -> None:
+        """Frame everything the tail holds.  Used when a finished log is
+        opened directly, where following the live edge shows nothing."""
+        oldest = newest = None
+        for series in self.tail.series.values():
+            if not series.t:
+                continue
+            if oldest is None or series.t[0] < oldest:
+                oldest = series.t[0]
+            if newest is None or series.t[-1] > newest:
+                newest = series.t[-1]
+        if oldest is None or newest is None or newest <= oldest:
+            return
+        pad = (newest - oldest) * 0.02
+        self._span = (oldest - pad, newest + pad)
+        self._span_load.start()
 
     def _set_follow(self, seconds: float) -> None:
         """Enter a live-referenced view and drop every hand-picked axis."""

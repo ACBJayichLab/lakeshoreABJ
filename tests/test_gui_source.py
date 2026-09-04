@@ -1714,3 +1714,15 @@ def test_a_recorder_too_old_to_report_status_writes_is_not_an_error(tmp_path):
     src.poll()
     state, message = src.health()
     assert state == "ok" and "failed status write" not in message
+
+
+def test_channel_columns_separates_measurements_from_instrument_readbacks():
+    """A dot is what tells them apart: the recorder writes one column per
+    channel, then aux columns that are always ``instrument.key``.  This is how
+    a log opened with no status.json beside it still knows its thermometers."""
+    tail = CsvTail()
+    tail.header = ["Timestamp", "Time", "Sample", "RAD SHIELD",
+                   "ls218.aout1", "ls336.setpoint1", "Validity", "State", "Notes"]
+    assert tail.channel_columns() == ["Sample", "RAD SHIELD"]
+    assert tail.columns() == ["Sample", "RAD SHIELD",
+                              "ls218.aout1", "ls336.setpoint1"]

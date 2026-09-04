@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from .source import COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR
@@ -26,6 +27,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-c", "--config", default=None, help="the recorder's config.yaml")
     ap.add_argument("--status", default=None,
                     help="status.json to read, overriding the config")
+    ap.add_argument("--csv", default=None,
+                    help="open this log instead of following a recorder -- a "
+                         "finished run, or a legacy log converted by "
+                         "lschart.tools.xls_to_csv.  No recorder need be "
+                         "running; the banner will say the status file is "
+                         "absent, which it is")
     ap.add_argument("--refresh", type=float, default=1.0,
                     help="seconds between redraws (default 1)")
     ap.add_argument("--max-points", type=int, default=200_000,
@@ -69,6 +76,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     status_path = args.status or cfg.ipc.status_path()
+    if args.csv and not os.path.exists(args.csv):
+        print(f"no such log: {args.csv}", file=sys.stderr)
+        return 1
 
     spool = None
     if not args.read_only:
@@ -99,9 +109,10 @@ def main(argv: list[str] | None = None) -> int:
         max_kelvin=args.max_kelvin,
         max_percent=args.max_percent,
         config_label=cfg.source_path or "",
+        csv_path=args.csv,
     )
     window.show()
-    log.info("viewing %s", status_path)
+    log.info("viewing %s", args.csv or status_path)
     return app.exec()
 
 

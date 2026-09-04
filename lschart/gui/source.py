@@ -1324,6 +1324,22 @@ class CsvTail:
     def columns(self) -> list[str]:
         return [c for c in self.header[1:] if c not in NON_SERIES_COLUMNS]
 
+    def channel_columns(self) -> list[str]:
+        """The measurement channels, recovered from the header alone.
+
+        Normally the viewer learns which columns are thermometers from
+        ``status.json``.  A finished log opened directly has no status file
+        beside it, and without this every temperature would classify as
+        "other" and be silently dropped -- a chart that draws the heater and
+        nothing else, over a file that loaded perfectly.
+
+        The header is enough: the recorder writes ``Timestamp``, ``Time``,
+        one column per channel, then the aux columns, which are always
+        ``instrument.key``.  A dot is what separates a measurement from an
+        instrument readback.
+        """
+        return [c for c in self.columns() if "." not in c]
+
 
 @dataclass(frozen=True)
 class RegionStats:

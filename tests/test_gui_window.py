@@ -2663,3 +2663,76 @@ def test_a_window_too_small_for_the_table_scrolls_rather_than_hides(
     metrics = t.fontMetrics()
     assert t.columnWidth(COL_CHANNEL) >= metrics.horizontalAdvance("Stage 1")
     w.close()
+
+
+# -- opening a finished log directly (--csv) --------------------------------
+
+
+ARCHIVE_HEADER = (
+    "Timestamp,Time,Sample,Coldplate,ls218.aout1,ls336.range1,"
+    "Validity,State,Notes\n"
+)
+
+
+def _archive(tmp_path, *, days_ago: float = 14.0, n: int = 400):
+    """A finished log, old enough that the live window cannot reach it, and
+    with no status.json anywhere near it."""
+    t0 = time.time() - days_ago * 86400
+    csv = tmp_path / "cd10_2026-08-20.csv"
+    with csv.open("w") as fh:
+        fh.write(ARCHIVE_HEADER)
+        for i in range(n):
+            stamp = _dt.datetime.fromtimestamp(t0 + i * 10).isoformat(
+                timespec="milliseconds")
+            fh.write(f"{stamp},{i * 10}.0,{100.0 + i * 0.1:.4f},"
+                     f"{8.0:.4f},{63.0:.4f},0.0000,,,\n")
+    return csv
+
+
+def _opened(tmp_path, qt_app, csv):
+    window = ViewerWindow(str(tmp_path / "no-such-status.json"),
+                          refresh_ms=10_000_000, csv_path=str(csv))
+    window.resize(1280, 800)
+    window.show()
+    for _ in range(3):
+        window.refresh()
+        qt_app.processEvents()
+    return window
+
+
+def test_an_archived_log_classifies_its_thermometers_without_a_status_file(
+        tmp_path, qt_app):
+    """The channel list normally comes from status.json.  Without this the
+    temperatures all classify as "other" and are dropped, and the chart draws
+    the heater alone over a file that loaded perfectly."""
+    window = _opened(tmp_path, qt_app, _archive(tmp_path))
+    try:
+        assert window.curve_units["Sample"] == "K"
+        assert window.curve_units["Coldplate"] == "K"
+        assert window.curve_units["ls218.aout1"] == "%"
+        # `range1` is an enumeration, not a measurement, and is still excluded
+        assert "ls336.range1" not in window.curves
+    finally:
+        window.close()
+
+
+def test_opening_a_finished_log_frames_the_data_not_the_live_edge(
+        tmp_path, qt_app):
+    """The default window is the last N seconds *of now*.  A run that finished
+    a fortnight ago falls entirely outside it, so the chart comes up empty."""
+    csv = _archive(tmp_path, days_ago=14.0)
+    window = _opened(tmp_path, qt_app, csv)
+    try:
+        assert window._span is not None
+        t, _v = window.tail.between("Sample", *window._span)
+        assert len(t) > 0
+        # and the span really is the data's, not a window ending at now
+        assert window._span[1] < time.time() - 13 * 86400
+    finally:
+        window.close()
+
+
+def test_a_live_viewer_still_follows_the_recorder(viewer):
+    """The framing above must not leak into the live case: with no csv_path
+    the viewer keeps riding the newest sample."""
+    assert viewer._span is None
