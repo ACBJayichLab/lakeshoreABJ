@@ -133,6 +133,52 @@ A software loop writing this output every cycle should set `verify_writes:
 false` and confirm for itself (`SupervisorConfig.verify_readback`), rather than
 paying for a second transaction and a settle in every control cycle.
 
+## How a 218 actually reads a thermometer
+
+Worth knowing before anyone proposes to change what arrives at its terminals.
+From the [Model 218 user's manual][218man] and its specification table:
+
+| | |
+|---|---|
+| Inputs | 8, in **two groups of four**; every input in a group must be the same sensor type |
+| Measurement | **four-lead differential** — one twisted pair carries the excitation, the other carries the sense voltage |
+| Excitation | **eight dedicated constant-current sources, one per input, always on**. Diode inputs get 10 µA ±0.05% |
+| A/D | two converters, one per group of four |
+| Update rate | **16 readings/s total → 2 readings/s per input** |
+| Diode, 0–2.5 V range | measurement resolution **20 µV**; electronic accuracy ±160 µV ±0.01% of reading |
+| Diode, 0–7.5 V range | measurement resolution 100 µV; accuracy ±160 µV ±0.02% of reading |
+| Digital filter | `FILTER <input>,<off/on>,<points>,<window>` — a running average of **2 to 64 readings**, with a window percentage that discards the average on a step so the filter does not smear a real transient |
+
+Two consequences matter, and they pull in opposite directions.
+
+**The excitation is never switched, which makes the input forgiving.** Most
+scanning monitors multiplex one current source across their channels; the
+manual makes a point of the 218 not doing that, because not waiting for a
+current source to settle is how it gets to 16 rdg/s. So a capacitor at a 218
+input sits across a sensor that is being driven continuously, and the
+multiplexer only moves the voltmeter. On a switched-excitation instrument the
+same capacitor would be a serious bug — it could not settle inside a channel
+dwell, and every reading would carry the previous channel's charge.
+
+**Two readings per second per input is the ceiling on everything downstream.**
+The 218's own output stream is band-limited to 1 Hz per input no matter how
+often you poll it. Anything faster than that has already aliased inside the
+218's A/D before the recorder ever sees a number, and no amount of polling,
+averaging or filtering *after* the GPIB cable separates it out again. An
+anti-alias filter for this box therefore needs a corner well below 1 Hz — a
+time constant of seconds, not milliseconds.
+
+`FILTER` is not implemented in `ls218.py`. It is a per-input instrument setting
+rather than something the recorder needs each cycle, and the same averaging is
+better done in software where the raw data survives — but it is worth querying
+by hand before trusting a noise measurement, because a record taken with it on
+and a record taken with it off do not describe the same instrument.
+
+`docs/ltspm3/noise.md` works through what all this meant for one cryostat that
+had 10–15 mK of jitter and a proposal to fix it with an RC network.
+
+[218man]: https://www.lakeshore.com/docs/default-source/product-downloads/manuals/218_manual.pdf
+
 ## The interlocks, in the order they apply
 
 A command that applies power needs four gates: the three common ones plus

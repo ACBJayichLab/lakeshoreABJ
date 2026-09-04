@@ -15,7 +15,7 @@ the code is, and it is the detail that goes stale — edit it there, not here.
 | | |
 |---|---|
 | [`docs/recorder/`](docs/recorder/) | **Generic, any cryostat.** [install](docs/recorder/install.md) · [quickstart](docs/recorder/quickstart.md) · [cli](docs/recorder/cli.md) · [configuration](docs/recorder/configuration.md) · [instruments](docs/recorder/instruments.md) · [file-interface](docs/recorder/file-interface.md) · [gui](docs/recorder/gui.md) · [windows](docs/recorder/windows.md) · [troubleshooting](docs/recorder/troubleshooting.md) |
-| [`docs/ltspm3/`](docs/ltspm3/) | **LTSPM3 only.** [cryostat](docs/ltspm3/cryostat.md) · [safety](docs/ltspm3/safety.md) · [thermal response](docs/ltspm3/thermal-response.md) · [control](docs/ltspm3/control.md) · [running](docs/ltspm3/running.md) · [commissioning](docs/ltspm3/commissioning.md) |
+| [`docs/ltspm3/`](docs/ltspm3/) | **LTSPM3 only.** [cryostat](docs/ltspm3/cryostat.md) · [safety](docs/ltspm3/safety.md) · [thermal response](docs/ltspm3/thermal-response.md) · [control](docs/ltspm3/control.md) · [running](docs/ltspm3/running.md) · [commissioning](docs/ltspm3/commissioning.md) · [noise](docs/ltspm3/noise.md) |
 | [`matlab/README.md`](matlab/README.md) | MATLAB's half of the file protocol |
 | [`README.md`](README.md) | The front door, for a new user |
 | [`HANDOFF.md`](HANDOFF.md) | Point-in-time status. Goes stale by design |
@@ -150,6 +150,13 @@ lschart/                    GENERIC -- any Lake Shore cryostat
                      flushed per sample), ringbuffer (plotting only).
   tools/import_xls.py  Reads the legacy .xls logs. Sniffs the header:
                      filenames lie (cd10_..._st2_monitor3.xls is a 218 log).
+  tools/noisespec.py   WHERE a channel's noise lives, and therefore whether a
+                     filter can touch it.  Bands, a decimate-vs-average test,
+                     and the attenuation a single-pole tau actually achieves
+                     MEASURED against the sqrt(dt/2tau) a white-noise model
+                     promises.  The gap between those two columns is the whole
+                     point: 14 mK of hash and 14 mK of slow wander are the same
+                     rms and opposite problems.  -> docs/ltspm3/noise.md
   tools/xls_to_csv.py  Legacy .xls -> the recorder's OWN CSV, so a year-old
                      cooldown reads like today's. Merges the 336 by wall clock
                      (two programs, two files, no shared row index) and

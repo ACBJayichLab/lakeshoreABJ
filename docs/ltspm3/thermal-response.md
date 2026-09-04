@@ -103,6 +103,12 @@ Allan deviation: 6.1 mK @ 4 s, 4.1 mK @ 60 s, 2.5 mK @ 600 s — about 2× worse
 than 1/√N. **The measurement, not the DAC, is what limits mK stability**, and
 it is why sampling faster than 1 Hz buys much less than it looks like it should.
 
+Worse than 1/√N means the noise is correlated, and [noise.md](noise.md) takes
+that apart: which bands it lives in, how much of it is common-mode with another
+218 input (r = 0.55, reproducibly), and why the recurring proposal to fix it
+with an RC filter on the sensor leads does not survive contact with the 218's
+2 readings/s per input.
+
 ## The consequence that shapes the whole design
 
 At ~10.0 K/%, one 0.01% DAC code is **~100 mK** — roughly forty times the sensor
