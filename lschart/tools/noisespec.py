@@ -172,6 +172,33 @@ def quietest_window(v: np.ndarray, dt: float, hours: float = 6.0) -> np.ndarray:
     return detrend(best)
 
 
+def sample_jitter(v: np.ndarray) -> tuple[float, float, float]:
+    """``(jitter, robust_jitter, lag1_rho)`` -- the sample-to-sample part.
+
+    This is the number an operator actually points at: the reading changes by
+    *this much* between consecutive samples when nothing has any business
+    moving.  ``std(diff)/sqrt(2)`` isolates it without modelling the slow part
+    at all, because a smooth signal contributes almost nothing to a first
+    difference -- which is exactly why it beats a band-limited rms here, where
+    the slow part is real thermal response rather than noise.
+
+    The robust version uses the median absolute deviation of the differences,
+    so one genuine step or one dropped sample does not inflate it.  They should
+    agree; a robust value well below the plain one means the record contains
+    real transients, not a higher noise floor.
+
+    **A jitter that does not change when the polling rate changes is the
+    signature of noise whose bandwidth exceeds the Nyquist of both rates** --
+    i.e. of aliasing.  Band-limited noise would show consecutive samples
+    growing *less* correlated, and the jitter rising, as the interval opens up.
+    """
+    d = np.diff(v)
+    plain = float(np.std(d, ddof=1) / np.sqrt(2.0))
+    mad = float(1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2.0))
+    rho = float(np.corrcoef(v[:-1], v[1:])[0, 1]) if len(v) > 2 else float("nan")
+    return plain, mad, rho
+
+
 def _moving_average(v: np.ndarray, dt: float, period: float):
     """``(smoothed, window_points)``, or ``None`` if the window does not fit.
 
@@ -341,6 +368,12 @@ def report(t: np.ndarray, cols: dict[str, np.ndarray], channel: str,
     p(f"  display quantum {np.median(step) * 1e3:.2f} mK"
       if len(step) else "  display quantum: unresolved")
     p(f"  quietest {hours:g} h window, detrended: rms {w.std(ddof=1) * 1e3:.2f} mK")
+    jit, mad, rho = sample_jitter(w)
+    p(f"  SAMPLE-TO-SAMPLE JITTER {jit * 1e3:.2f} mK "
+      f"(robust {mad * 1e3:.2f}, lag-1 rho {rho:+.2f})")
+    p(f"    -- the 218 makes ~{max(1, round(2.0 * dt)):d} readings per logged sample "
+      f"at 2 rdg/s per input; averaging them would divide this by "
+      f"~{max(1.0, (2.0 * dt) ** 0.5):.1f}x if it is white at the instrument's rate")
 
     p("\n  WHERE THE NOISE LIVES (rms by band)")
     for label, _lo, _hi, sd in band_rms(w, dt):

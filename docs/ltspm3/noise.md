@@ -76,6 +76,67 @@ in the chain, not by intuition about "fast":
 τ = 100 ms is between ten and sixty times too fast to do the job it is being
 proposed for.
 
+## The jitter, which is the thing actually being complained about
+
+Band-integrated rms is the wrong summary here, because on this cryostat the slow
+part is *real thermal response* — signal, not noise. The number an operator
+points at is the **sample-to-sample jitter**: how much the reading moves between
+consecutive samples when nothing has any business moving.
+`std(diff)/sqrt(2)` isolates it and ignores the slow part entirely.
+
+| record / dwell | sample temperature | cadence | jitter | hour rms | jitter / rms |
+|---|---|---|---|---|---|
+| `monitor1` | 96.1 K | 4 s | **10.4 mK** | 35.3 mK | 0.29 |
+| `monitor3` | 99.4 K | 8 s | **11.8 mK** | 14.6 mK | 0.81 |
+| `monitor4/5` | 118.6 K | 10 s | **21.0 mK** | 23.9 mK | 0.88 |
+| `monitor4/5` | 134.2 K | 10 s | **21.0 mK** | 24.9 mK | 0.84 |
+| `monitor4/5` | 146.4 K | 10 s | **21.0 mK** | 29.3 mK | 0.72 |
+| `monitor4/5` | 166.2 K | 10 s | **31.5 mK** | 40.2 mK | 0.78 |
+
+Two things fall straight out.
+
+**The jitter barely moves with polling rate** — 10.4 mK at 4 s, 11.8 mK at 8 s.
+Band-limited noise would do the opposite: open the interval up and consecutive
+samples decorrelate, so the jitter *rises*. Flat jitter is the signature of
+noise whose bandwidth exceeds the Nyquist of both rates, which is to say it is
+being aliased. **The original instinct was right about the character of the
+noise, and this document's first version undersold it.**
+
+**The jitter grows as roughly T^1.9** across 96→166 K. For a Cernox, whose
+`|dR/dT|` falls as something like `T^-1.5` to `T^-1.9` over that span, that is
+what a *constant* disturbance in ohms looks like once converted to kelvin. So
+the jitter is consistent with a fixed noise floor at the 218's input rather than
+with real temperature — a silicon diode, with its nearly flat sensitivity, could
+not produce this scaling from a fixed floor at all.
+
+### The cheap fix that comes before any hardware
+
+At an 8 s cadence the 218 makes **16 readings per logged sample** (2 rdg/s per
+input) and the recorder keeps one instantaneous value, throwing 15 away.
+Averaging them instead divides white jitter by 4. The instrument will do it
+without any help:
+
+```
+FILTER 1,1,64,10      # 64-point running average = 32 s at 2 rdg/s
+FILTER? 1
+```
+
+64 points is 8× on white noise — 11.8 mK becomes ~1.5 mK — at a cost of ~32 s of
+lag against a 620 s thermal pole, which is 5% and irrelevant to the loop.
+**This is strictly better than averaging the recorder's samples over the same
+32 s**, which only gets 4 samples and 2×, because the instrument averages
+*before* the recorder's decimation throws the information away.
+
+It is also the test worth running first, because it is one command and it
+brackets the answer: if the jitter divides by ~8, it is white at the
+instrument's reading rate and averaging has solved the problem with no hardware
+at all. If it does not, the noise is correlated inside the 218's own stream and
+something stranger is happening.
+
+What `FILTER` cannot tell you is *where* the noise entered — averaging removes
+aliased and in-band white noise identically. Only an instrument across the leads
+separates those. But for fixing the jitter, that distinction may not matter.
+
 ## Most of the noise is nowhere a filter can reach
 
 Where the noise actually lives, by band:

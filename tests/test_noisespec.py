@@ -20,6 +20,7 @@ from lschart.tools.noisespec import (
     filter_sweep,
     quietest_window,
     report,
+    sample_jitter,
     shared_matrix,
     single_pole,
 )
@@ -146,3 +147,42 @@ def test_report_refuses_an_unknown_channel_and_says_what_it_has():
     t = np.arange(512) * DT
     with pytest.raises(SystemExit, match="Input 1"):
         report(t, {"Input 1": _white(512)}, "nope", hours=1.0, out=io.StringIO())
+
+
+# -- sample-to-sample jitter -------------------------------------------------
+
+
+def test_jitter_recovers_the_white_amplitude_under_a_large_slow_signal():
+    """The slow part is real thermal response, not noise, so the jitter
+    estimator has to ignore it entirely -- that is the whole reason it is a
+    first difference rather than a band-limited rms."""
+    n = 8192
+    slow = 0.4 * np.sin(np.arange(n) * 2 * np.pi / 3000.0)   # 400 mK of signal
+    white = _white(n, sigma=1e-2)
+    jit, mad, _rho = sample_jitter(slow + white)
+    assert jit == pytest.approx(1e-2, rel=0.1)
+    assert mad == pytest.approx(1e-2, rel=0.15)
+
+
+def test_jitter_is_flat_versus_sample_rate_for_broadband_noise():
+    """Decimating white noise does not change the jitter -- the signature of
+    noise whose bandwidth exceeds both Nyquists, i.e. of aliasing."""
+    v = _white(16384)
+    full = sample_jitter(v)[0]
+    half = sample_jitter(v[::2])[0]
+    assert half == pytest.approx(full, rel=0.1)
+
+
+def test_jitter_rises_with_interval_for_band_limited_noise():
+    """Correlated noise is the contrasting case: open the interval up and
+    consecutive samples decorrelate, so the jitter grows."""
+    v = _red(16384, tau=200.0)
+    assert sample_jitter(v[::8])[0] > 2.0 * sample_jitter(v)[0]
+
+
+def test_robust_jitter_ignores_a_real_step():
+    v = _white(4096, sigma=1e-3)
+    v[2000:] += 0.5                      # a genuine 500 mK step
+    jit, mad, _rho = sample_jitter(v)
+    assert mad == pytest.approx(1e-3, rel=0.2)
+    assert jit > 3 * mad
