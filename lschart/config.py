@@ -139,6 +139,12 @@ class LS218Config(InstrumentConfig):
     #: Which input carries the sample.  This is the channel a software loop
     #: controls; leave it 0 on a box that is only being logged.
     control_input: int = 1
+    #: Also log ``SRDG? 0`` -- each input in the sensor's own units (volts on a
+    #: diode range, ohms on an RTD).  One extra transaction per cycle.  Off by
+    #: default so the stock config keeps its 1 Hz headroom; turn it on when a
+    #: noise question is open, because kelvin is the wrong domain to ask one in
+    #: -- see ``docs/ltspm3/noise.md``.
+    read_sensor_units: bool = False
     analog_output: int = 1
     analog_decimals: int = 3
     #: Permit ANALOG writes at all.  Off by default; see the class docstring.
@@ -619,6 +625,8 @@ class AppConfig:
                 n += 2                                    # KRDG? 0, AOUT?
                 if inst.read_status:
                     n += len(inst.channels)               # RDGST? per input
+                if inst.read_sensor_units:
+                    n += 1                                # SRDG? 0, all inputs
             else:
                 caps = _caps_for(inst.model)
                 n += 1                                    # KRDG? 0

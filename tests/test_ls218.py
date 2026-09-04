@@ -234,3 +234,49 @@ def test_analog_off_commands_zero():
     inst.set_analog_percent(20.0)
     inst.analog_off()
     assert sim.analog_pct == 0.0
+
+
+# -- sensor units -----------------------------------------------------------
+
+def test_sensor_units_are_off_by_default():
+    """One transaction is one transaction.  The stock config's 1 Hz headroom is
+    not something a diagnostic gets to spend without being asked."""
+    inst, _ = build()
+    _readings, aux = inst.read_frame()
+    assert not [k for k in aux if "sensor" in k]
+    assert inst.aux_keys() == ["ls218.aout1"]
+
+
+def test_sensor_units_are_logged_when_asked_for():
+    inst, _ = build(read_sensor_units=True)
+    _readings, aux = inst.read_frame()
+    assert [k for k in aux if ".sensor" in k] == [
+        "ls218.sensor1", "ls218.sensor2", "ls218.sensor3"
+    ]
+
+
+def test_aux_keys_match_the_keys_read_frame_actually_produces():
+    """The CSV header is written before the first frame, from aux_keys() alone.
+    If the two ever disagree the recorder writes a column it never fills, or
+    fills one the header never named."""
+    for kw in ({}, {"read_sensor_units": True}):
+        inst, _ = build(**kw)
+        _readings, aux = inst.read_frame()
+        assert inst.aux_keys() == list(aux)
+
+
+def test_a_failed_srdg_does_not_discard_good_temperatures():
+    """Same rule as AOUT?: a diagnostic column is never worth a frame."""
+    inst, sim = build(read_sensor_units=True)
+
+    def refuse(cmd):
+        if cmd.startswith("SRDG?"):
+            raise TransportError("no")
+        return original(cmd)
+
+    original = sim.handle_query
+    sim.handle_query = refuse
+    readings, aux = inst.read_frame()
+    assert set(readings) == {"Sample", "Cold Head", "Shield"}
+    assert not [k for k in aux if ".sensor" in k]
+    assert "ls218.aout1" in aux

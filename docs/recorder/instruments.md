@@ -168,6 +168,24 @@ averaging or filtering *after* the GPIB cable separates it out again. An
 anti-alias filter for this box therefore needs a corner well below 1 Hz — a
 time constant of seconds, not milliseconds.
 
+### Ask it in the sensor's own units, not in kelvin
+
+`read_sensor_units: true` adds one `SRDG? 0` per cycle and logs every input in
+the units the sensor actually works in — volts on a diode range, ohms on an RTD
+— as `{name}.sensor{n}` columns beside the kelvin ones.
+
+It is off by default because it costs a transaction, and on for exactly one
+reason: **kelvin is the wrong domain to ask a noise question in.** A sensor's
+sensitivity varies by orders of magnitude across its range, so a noise floor
+that is *constant in ohms* — which is what an instrument or a wiring fault
+produces — appears in kelvin as a figure that grows with temperature and looks
+convincingly like physics. Logging both columns settles that by subtraction
+rather than by datasheet, which matters because sensitivity tables are the
+thing nobody has to hand at the moment they need them.
+
+It also identifies the sensor by inspection, which is why there is no
+`INTYPE?` here: ~1 V is a diode, tens to thousands of ohms is an RTD.
+
 `FILTER` is not implemented in `ls218.py`. It is a per-input instrument setting
 rather than something the recorder needs each cycle, and the same averaging is
 better done in software where the raw data survives — but it is worth querying

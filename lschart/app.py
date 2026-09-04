@@ -167,6 +167,7 @@ class Application:
                 name=c.resolved_name(),
                 channels=dict(c.channels),
                 read_status=c.read_status,
+                read_sensor_units=c.read_sensor_units,
                 analog=AnalogOutputConfig(
                     output=c.analog_output, decimals=c.analog_decimals
                 ),
@@ -220,10 +221,7 @@ class Application:
         # ask once.
         cols = ["heater_pct"] if self.supervisor is not None else []
         for inst, c in zip(self.instruments, self.cfg.enabled_instruments):
-            if c.model == "218":
-                cols.append(f"{inst.name}.aout{c.analog_output}")
-            else:
-                cols += inst.aux_keys()
+            cols += inst.aux_keys()
         return cols
 
     def _build(self) -> None:
