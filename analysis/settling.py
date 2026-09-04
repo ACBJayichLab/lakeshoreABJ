@@ -39,6 +39,7 @@ A 5 K move in one minute at 180 K needs about 4% of extra output.  At
 """
 from __future__ import annotations
 
+import math
 import sys
 
 import matplotlib
@@ -60,6 +61,70 @@ MAX_VFF_PCT = 1.00
 RAMP_K_PER_MIN = 0.5
 #: Output ceilings worth considering for the overdrive.
 U_CEILINGS = ((72.0, "#2c7a7b"), (75.0, "#c05621"), (80.0, "#805ad5"))
+
+#: Jeff's ceiling on the sweep rate (2026-09-04).  The cryostat cannot deliver
+#: it everywhere -- above about 160 K the heater runs out of headroom first --
+#: so the schedule is the smaller of this and what the hardware can do.
+RAMP_CAP_K_PER_MIN = 10.0
+#: Measurement filter lengths worth comparing.  The filter lags the ramp by
+#: rate * tau, and that lag is an APPARENT tracking error the supervisor sees
+#: and the velocity feedforward cannot remove -- vff makes the sample follow
+#: the setpoint, it does not make the thermometer report faster.
+FILTER_TAUS = ((60.0, "#c53030"), (30.0, "#c05621"), (10.0, "#2c7a7b"),
+               (5.0, "#2b6cb0"))
+#: SupervisorConfig: max_error_k plus the cap on the ramp allowance.
+ERROR_BUDGET_K = 1.0 + 6.0
+
+
+def ramp_plan(T, u, Q, C, dQdu, g_v, out):
+    """What a 10 K/min sweep needs, and where the cryostat cannot give it."""
+    fig, ax = plt.subplots(1, 3, figsize=(16.5, 5.0))
+    fig.suptitle(f"LTSPM3 sweep plan for a {RAMP_CAP_K_PER_MIN:.0f} K/min cap — "
+                 "what the hardware allows, what it costs in output, and the "
+                 "filter that decides whether the check survives", fontsize=12.5)
+
+    a = ax[0]
+    for u_max, c in U_CEILINGS:
+        rate = 60.0 * (F.power_w(np.full_like(T, u_max)) - Q) / C
+        a.semilogx(T, np.minimum(rate, RAMP_CAP_K_PER_MIN), color=c, lw=2.0,
+                   label=f"schedule with a {u_max:.0f}% ceiling")
+    a.axhline(RAMP_CAP_K_PER_MIN, color="#1a202c", lw=1.4, ls="--",
+              label=f"{RAMP_CAP_K_PER_MIN:.0f} K/min cap")
+    a.axhline(RAMP_K_PER_MIN, color="#742a2a", lw=1.4, ls=":",
+              label=f"today  {RAMP_K_PER_MIN} K/min")
+    a.set_ylim(0, 12)
+    a.set_xlabel("T  [K]"); a.set_ylabel("usable sweep rate  [K/min]")
+    a.set_title("(a) the rate schedule — heating is the limit up top")
+    a.grid(alpha=.3, which="both"); a.legend(fontsize=8, loc="lower left")
+
+    a = ax[1]
+    for u_max, c in U_CEILINGS:
+        rate = np.minimum(60.0 * (F.power_w(np.full_like(T, u_max)) - Q) / C,
+                          RAMP_CAP_K_PER_MIN)
+        a.semilogx(T, g_v * rate / 60.0, color=c, lw=2.0,
+                   label=f"{u_max:.0f}% ceiling")
+    a.axhline(MAX_VFF_PCT, color="#742a2a", lw=1.5, ls=":",
+              label=f"max_velocity_ff_pct today  {MAX_VFF_PCT:.0f}%")
+    a.set_xlabel("T  [K]"); a.set_ylabel("velocity feedforward  [%]")
+    a.set_title("(b) the vff the schedule demands")
+    a.grid(alpha=.3, which="both"); a.legend(fontsize=8, loc="upper left")
+
+    a = ax[2]
+    rates = np.linspace(0.1, RAMP_CAP_K_PER_MIN, 200)
+    for tau_f, c in FILTER_TAUS:
+        a.semilogy(rates, rates / 60.0 * tau_f, color=c, lw=2.0,
+                   label=f"filter τ = {tau_f:.0f} s")
+    a.axhline(ERROR_BUDGET_K, color="#1a202c", lw=1.6, ls="--",
+              label=f"max_error_k + ramp allowance = {ERROR_BUDGET_K:.0f} K")
+    a.axvline(RAMP_CAP_K_PER_MIN, color="#a0aec0", lw=1.0)
+    a.set_xlabel("sweep rate  [K/min]")
+    a.set_ylabel("apparent tracking error from the filter  [K]")
+    a.set_title("(c) the filter lag the premise check has to swallow")
+    a.grid(alpha=.3, which="both"); a.legend(fontsize=8, loc="upper left")
+
+    fig.tight_layout()
+    fig.savefig(out, dpi=130)
+    print("wrote", out)
 
 
 def main():
@@ -150,6 +215,8 @@ def main():
     fig.savefig(OUT, dpi=130)
     print("wrote", OUT)
 
+    ramp_plan(T, u, Q, C, dQdu, g_v, OUT.replace(".png", "_ramp.png"))
+
     print(f"\n{'T K':>7}{'u %':>7}{'C J/K':>8}{'tau_p s':>9}{'3tau min':>10}"
           f"{'g_v %s/K':>10}{'dU 1min':>9}{'dU 2min':>9}"
           f"{'up K/min':>10}{'down K/min':>11}")
@@ -164,6 +231,33 @@ def main():
               f"{C[i] * STEP_K / 120 / dQdu[i]:>9.2f}"
               f"{60 * max(p75 - Q[i], 0) / C[i]:>10.1f}"
               f"{60 * Q[i] / C[i]:>11.1f}")
+
+    print(f"\nsweep plan, capped at {RAMP_CAP_K_PER_MIN:.0f} K/min")
+    print(f"{'T K':>7}{'rate 75%':>10}{'rate 80%':>10}{'u peak 75%':>12}"
+          f"{'u peak 80%':>12}{'vff 75%':>9}{'vff 80%':>9}")
+    for Tq in (10, 20, 30, 50, 77, 100, 137, 160, 180):
+        if Tq < T.min() or Tq > T.max():
+            continue
+        i = int(np.argmin(np.abs(T - Tq)))
+        cells = [f"{T[i]:>7.1f}"]
+        peaks, vffs = [], []
+        for u_max in (75.0, 80.0):
+            rate = min(60.0 * (F.power_w(u_max) - Q[i]) / C[i],
+                       RAMP_CAP_K_PER_MIN)
+            p_pk = Q[i] + C[i] * rate / 60.0
+            peaks.append(100.0 * math.sqrt(p_pk * F.R_OHM) / (F.GAIN * F.V_FS))
+            vffs.append(g_v[i] * rate / 60.0)
+            cells.append(f"{rate:>10.1f}")
+        cells += [f"{peaks[0]:>12.1f}", f"{peaks[1]:>12.1f}",
+                  f"{vffs[0]:>9.2f}", f"{vffs[1]:>9.2f}"]
+        print("".join(cells))
+
+    print(f"\nfilter lag at {RAMP_CAP_K_PER_MIN:.0f} K/min, against a "
+          f"{ERROR_BUDGET_K:.0f} K budget:")
+    for tau_f, _ in FILTER_TAUS:
+        lag = RAMP_CAP_K_PER_MIN / 60.0 * tau_f
+        print(f"  tau = {tau_f:>4.0f} s  ->  {lag:>6.2f} K"
+              f"   {'OK' if lag < ERROR_BUDGET_K else 'TRIPS THE CHECK'}")
 
 
 if __name__ == "__main__":
