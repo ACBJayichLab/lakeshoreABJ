@@ -21,8 +21,15 @@ import math
 import numpy as np
 from scipy.optimize import least_squares
 
-SRC = "analysis/steady_points.csv"
+SRC = "analysis/steps.csv"
 SIGMA = 5.670e-8
+#: Above this the only dwells are CD10's 07-16 ones, taken mid-cooldown with
+#: the cryostat still falling.  They relax cleanly, so steps.py grades them
+#: usable and it is right to -- what disqualifies them is not the dwell but the
+#: REGIME: a cooling cryostat has a different Lambda from a settled one, and no
+#: temperature log records the difference.  Left in, they drag the fit to a
+#: negative conductance, which is the model saying so.
+T_MAX_K = 190.0
 
 
 def f(r, k):
@@ -33,15 +40,14 @@ def f(r, k):
 
 
 def settled(rows):
-    return [r for r in rows
-            if abs(f(r, "drift_K_per_h")) < 0.15 and f(r, "hold_h") > 1.0]
+    return [r for r in rows if r.get("grade") and f(r, "T_inf") <= T_MAX_K]
 
 
 def load(src):
     rows = settled(list(csv.DictReader(open(SRC, newline="", encoding="utf-8"))))
     g = sorted((r for r in rows if r["source"].startswith(src)),
-               key=lambda r: f(r, "T_K"))
-    return (np.array([f(r, "T_K") for r in g]),
+               key=lambda r: f(r, "T_inf"))
+    return (np.array([f(r, "T_inf") for r in g]),
             np.array([f(r, "Coldplate") for r in g]),
             np.array([f(r, "P_W") for r in g]),
             np.array([f(r, "u_pct") for r in g]))
