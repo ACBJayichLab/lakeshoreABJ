@@ -21,7 +21,7 @@ sys.path.insert(0, "analysis")
 import fit_ode as F  # noqa: E402
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/ode_fit.png"
-LEVELS = ((4, 3), (6, 3), (8, 4))
+LEVELS = ((7, 4), (8, 4), (9, 4))
 COLORS = ("#2b6cb0", "#c05621", "#2c7a7b")
 
 #: The two independent step-response measurements in the record, for scale.
@@ -81,9 +81,12 @@ def trajectory_figure(fits, data, grid, best):
                label=f"Λ {r['n_lam']} knots")
     a.axhline(0, color="#718096", lw=.7)
     a.set_xlabel("time  [h]"); a.set_ylabel("model − data  [K]")
-    a.set_ylim(-6, 6)
-    a.set_title("(b) residual — clipped to ±6 K; the excursions past it are "
-                "single samples in the fastest slews")
+    a.axvspan(8.20, 8.35, color="#f6e05e", alpha=.25, lw=0)
+    a.text(8.13, 1.9, "recovery ramp\n4 K/s", fontsize=8, ha="right",
+           color="#975a16")
+    a.set_ylim(-2.5, 2.5)
+    a.set_title("(b) residual — outside the shaded ramp the whole record is "
+                "within 2.1 K")
     a.grid(alpha=.3); a.legend(fontsize=8, ncol=3)
 
     a = fig.add_subplot(gs[2, 0])
@@ -187,14 +190,27 @@ def diagnostics_figure(fits, data, grid):
         cap_rows = [r for r in rows if r["axis"] == "C"]
         a.semilogy([int(r["n_lam"]) for r in lam_rows],
                    [float(r["rms_k"]) for r in lam_rows], "o-", color="#c05621",
-                   label="knots in Λ  (C fixed at 3)")
+                   label="knots in Λ  (C fixed at 4)")
         a.semilogy([int(r["n_cap"]) for r in cap_rows],
                    [float(r["rms_k"]) for r in cap_rows], "s-", color="#2b6cb0",
-                   label="knots in C  (Λ fixed at 6)")
+                   label="knots in C  (Λ fixed at 9)")
+        a.semilogy([int(r["n_lam"]) for r in lam_rows],
+                   [float(r["hold_max_k"]) for r in lam_rows], "o--",
+                   color="#c53030", mfc="none",
+                   label="worst error on the opening hold")
+        a.axhline(0.5, color="#c53030", lw=.8, ls=":")
+        bad = [int(r["n_lam"]) for r in lam_rows
+               if float(r["hold_max_k"]) > 0.5]
+        if bad:
+            a.axvspan(min(bad) - .4, max(bad) + .4, color="#fed7d7", alpha=.45,
+                      lw=0, zorder=0)
+            a.text((min(bad) + max(bad)) / 2, 0.55, "rejected: drifts during\n"
+                   "a hold that did not move", fontsize=7.5, ha="center",
+                   va="bottom", color="#742a2a")
         a.set_xlabel("knots in the curve being freed")
-        a.set_ylabel("rms residual over the sweep  [K]")
-        a.set_title("(h) which curve the data actually constrains")
-        a.grid(alpha=.3, which="both"); a.legend(fontsize=8)
+        a.set_ylabel("residual  [K]")
+        a.set_title("(h) which curve the data constrains, and what it rejects")
+        a.grid(alpha=.3, which="both"); a.legend(fontsize=7.5, loc="lower left")
     else:
         a.text(.5, .5, "run analysis/fit_ode.py first", ha="center",
                va="center", transform=a.transAxes, color="#718096")

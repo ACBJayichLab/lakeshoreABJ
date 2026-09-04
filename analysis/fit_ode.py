@@ -54,9 +54,13 @@ TAU_SHARE = 0.10
 SWEEP_SIGMA_REL = 0.01
 #: The anchors together carry this share of the sweep's weight.
 ANCHOR_SHARE = 0.10
-#: Sub-sample the sweep to this cadence.  The fastest pole of interest is
-#: minutes; 4 s is already far finer.
-STEP_S = 4.0
+#: Integration step, and the cadence the residual is evaluated on.  The log's
+#: own cadence is 2 s, and that is what this should be: at 25 K tau is about
+#: 4 s, so a 4 s step is one time constant and the recovery ramp -- where the
+#: sample slews at 4 K/s -- picks up an error that looks exactly like model
+#: mismatch and is not.  Coarsening to 4 s costs 0.06 K of rms and triples the
+#: worst residual, from 10.7 K to 14.4 K, all of it in one nine-minute window.
+STEP_S = 2.0
 
 #: How far C(T) may depart from a Debye SHAPE, as a factor either way.
 #:
@@ -252,6 +256,50 @@ def integrate(lam, cap, pl, pc, t, Tc, u, T0):
     return out
 
 
+def integrate2(lam, cap, pl, pc, split, mass_ratio, t, Tc, u, T0):
+    """Two nodes: the sample, and the copper between it and the coldplate.
+
+    Built so the STEADY STATE IS UNCHANGED.  Take the two halves of the link to
+    share a conductivity shape and differ only in geometry; then in series
+
+        Lambda_1 = Lambda / f        Lambda_2 = Lambda / (1 - f)
+
+    reproduces the fitted total for any f, because f/A + (1-f)/A = 1/A.  Set
+    dT/dt = 0 in both nodes and the middle temperature drops out, leaving
+    Lambda(T_s) - Lambda(T_c) = Q exactly as before.  So f and the mass ratio
+    g = C_m / C_s buy dynamics and nothing else, which is the only honest way
+    to ask whether a second node is what the transients are missing -- if the
+    split could also move the steady state it would just be more freedom.
+
+    Two extra parameters, both physical: where the thermal resistance sits
+    between sample and copper, and how much copper there is.
+    """
+    Q = power_w(u)
+    lam_c = lam(pl, np.maximum(Tc, 1e-3))
+    lam_at, cap_at = lam.scalar(pl), cap.scalar(pc)
+    inv_f, inv_g = 1.0 / split, 1.0 / (1.0 - split)
+    out = np.empty_like(t)
+    Ts = Tm = float(T0)
+    exp = math.exp
+    for k in range(len(t) - 1):
+        out[k] = Ts
+        dt = t[k + 1] - t[k]
+        ls, gs = lam_at(Ts)
+        lm, gm = lam_at(Tm)
+        cs = cap_at(Ts)[0]
+        cm = mass_ratio * cap_at(Tm)[0]
+        q1 = (ls - lm) * inv_f
+        q2 = (lm - lam_c[k]) * inv_g
+        tau_s = cs / max(gs * inv_f, 1e-12)
+        tau_m = cm / max(gm * (inv_f + inv_g), 1e-12)
+        Ts += ((Q[k] - q1) / cs) * tau_s * (1.0 - exp(-dt / tau_s))
+        Tm += ((q1 - q2) / cm) * tau_m * (1.0 - exp(-dt / tau_m))
+        Ts = 1.0 if Ts < 1.0 else (1000.0 if Ts > 1000.0 else Ts)
+        Tm = 1.0 if Tm < 1.0 else (1000.0 if Tm > 1000.0 else Tm)
+    out[-1] = Ts
+    return out
+
+
 def _seed(knots, fn):
     ly = np.log(fn(knots))
     return np.concatenate(([ly[0]], np.log(np.maximum(np.diff(ly), 1e-6))))
@@ -275,7 +323,31 @@ def build(n_lam, n_cap, T_lo, T_hi):
             _seed(kc, lambda T: 1.00 * mix_c(T) / c_ref))
 
 
-def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300):
+def opening_hold(t, u):
+    """Mask of the settled stretch the sweep opens on.
+
+    The sweep begins with 2.2 h at a constant heater on a cryostat that had
+    been there for 26 h, so the truth over that stretch is known exactly: it
+    does not move.  A model that drifts there has the steady state wrong at
+    the one temperature the data pins hardest, and no amount of transient
+    agreement elsewhere redeems it -- so this is reported separately from the
+    overall rms, which a long flat stretch would otherwise flatter.
+    """
+    same = np.abs(u - u[0]) <= 0.02
+    end = int(np.argmin(same)) if not same.all() else len(t)
+    m = np.zeros(len(t), bool)
+    m[:end] = True
+    return m
+
+
+#: Starting split and mass ratio for a tier-2 fit: half the resistance on
+#: each side, and a middle mass equal to the sample's.  Both are held in
+#: logit/log space so the optimiser cannot walk f out of (0, 1) or g negative.
+TIER2_SEED = (0.0, 0.0)
+
+
+def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
+        tier2=False):
     t, T, Tc, u = data if data is not None else load_sweep()
     aT, aTc, aQ, aS = anchors if anchors is not None else load_anchors()
     tauT, tauV = taus if taus is not None else load_taus()
@@ -293,9 +365,19 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300):
              / math.log(TAU_SIGMA_FACTOR))
     log_tau = np.log(tauV)
 
+    def unpack2(p):
+        f = 1.0 / (1.0 + math.exp(-p[-2]))
+        return min(max(f, 1e-3), 1 - 1e-3), math.exp(p[-1])
+
+    def run(p):
+        if not tier2:
+            return integrate(lam, cap, p[:n], p[n:], t, Tc, u, T[0])
+        f, g = unpack2(p)
+        return integrate2(lam, cap, p[:n], p[n:-2], f, g, t, Tc, u, T[0])
+
     def resid(p):
-        pl, pc = p[:n], p[n:]
-        model = integrate(lam, cap, pl, pc, t, Tc, u, T[0])
+        pl, pc = p[:n], (p[n:-2] if tier2 else p[n:])
+        model = run(p)
         r_sweep = (np.log(model) - logT) / SWEEP_SIGMA_REL
         dQ = lam(pl, aT) - lam(pl, aTc) - aQ
         r_anchor = w_anchor * dQ / lam.slope(pl, aT) / aS
@@ -304,12 +386,22 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300):
         r_tau = w_tau * (np.log(cap(pc, tauT) / lam.slope(pl, tauT)) - log_tau)
         return np.concatenate([r_sweep, r_anchor, r_shape, r_tau])
 
-    s = least_squares(resid, np.concatenate([pl0, pc0]),
-                      method="trf", x_scale="jac", max_nfev=max_nfev)
-    pl, pc = s.x[:n], s.x[n:]
-    model = integrate(lam, cap, pl, pc, t, Tc, u, T[0])
+    p0 = np.concatenate([pl0, pc0] + ([np.array(TIER2_SEED)] if tier2 else []))
+    s = least_squares(resid, p0, method="trf", x_scale="jac", max_nfev=max_nfev)
+    pl, pc = s.x[:n], (s.x[n:-2] if tier2 else s.x[n:])
+    split, mass_ratio = unpack2(s.x) if tier2 else (float("nan"),) * 2
+    model = run(s.x)
     err = model - T
+    hold = opening_hold(t, u)
+    moving = np.abs(np.gradient(T, t)) > 2e-3          # > 7.2 K/h
     return {
+        "tier2": tier2, "split": split, "mass_ratio": mass_ratio,
+        "rms_moving_k": float(np.sqrt(np.mean(err[moving] ** 2))),
+        "rms_still_k": float(np.sqrt(np.mean(err[~moving] ** 2))),
+        "frac_moving": float(np.mean(moving)),
+        "hold_k": float(np.sqrt(np.mean(err[hold] ** 2))),
+        "hold_max_k": float(np.max(np.abs(err[hold]))),
+        "hold_h": float((t[hold][-1] - t[hold][0]) / 3600.0),
         "n_lam": n_lam, "n_cap": n_cap, "npar": len(s.x), "nfev": s.nfev,
         "lam": lam, "cap": cap, "pl": pl, "pc": pc,
         "t": t, "T": T, "Tc": Tc, "u": u, "model": model,
@@ -329,29 +421,34 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300):
 
 #: Vary one curve's freedom at a time.  A joint grid confounds the two and
 #: hides the answer, which is that they are not equally constrained.
-LADDER_LAMBDA = [(n, 3) for n in range(2, 10)]
-LADDER_CAP = [(6, n) for n in range(2, 8)]
+#: C is held at 4 knots while Lambda is freed, and Lambda at 9 while C is,
+#: so each ladder frees one curve against the other's best available shape
+#: rather than against a deliberately crippled one.
+LADDER_LAMBDA = [(n, 4) for n in range(3, 11)]
+LADDER_CAP = [(9, n) for n in range(2, 8)]
 
 
 def ladder(rows, data, anchors, title, out=None, taus=None):
     import time
     print(f"\n{title}")
     print(f"{'knots L':>8}{'knots C':>8}{'par':>5}{'rms K':>9}{'max K':>9}"
-          f"{'rms %':>8}{'anchor K':>10}{'tau res':>9}{'mass g':>8}"
-          f"{'tau137':>9}{'nfev':>6}{'s':>7}")
+          f"{'rms %':>8}{'hold K':>8}{'anchor K':>10}{'tau res':>9}"
+          f"{'mass g':>8}{'tau137':>9}{'nfev':>6}{'s':>7}")
     got = []
     for n_lam, n_cap in rows:
         t0 = time.time()
         r = fit(n_lam, n_cap, data, anchors, taus)
         print(f"{n_lam:>8}{n_cap:>8}{r['npar']:>5}{r['rms_k']:>9.3f}"
-              f"{r['max_k']:>9.3f}{r['rms_pct']:>8.2f}{r['anchor_k']:>10.2f}"
+              f"{r['max_k']:>9.3f}{r['rms_pct']:>8.2f}{r['hold_max_k']:>8.2f}"
+              f"{r['anchor_k']:>10.2f}"
               f"{r['tau_resid']:>9.3f}{r['mass_g']:>8.2f}{r['tau_137_s']:>9.0f}"
               f"{r['nfev']:>6}{time.time() - t0:>7.1f}", flush=True)
         got.append({"axis": title.split()[2].rstrip(","), "n_lam": n_lam,
                     "n_cap": n_cap, "npar": r["npar"], "rms_k": r["rms_k"],
                     "max_k": r["max_k"], "rms_pct": r["rms_pct"],
                     "anchor_k": r["anchor_k"], "mass_g": r["mass_g"],
-                    "tau_137_s": r["tau_137_s"], "tau_resid": r["tau_resid"]})
+                    "tau_137_s": r["tau_137_s"], "tau_resid": r["tau_resid"],
+                    "hold_k": r["hold_k"], "hold_max_k": r["hold_max_k"]})
     if out is not None:
         out.extend(got)
     return got
@@ -372,9 +469,9 @@ if __name__ == "__main__":
           f"{taus[0].min():.1f}-{taus[0].max():.1f} K")
     rows = []
     ladder(LADDER_LAMBDA, data, anchors,
-           "freedom in Lambda, C held at 3 knots", rows, taus)
+           "freedom in Lambda, C held at 4 knots", rows, taus)
     ladder(LADDER_CAP, data, anchors,
-           "freedom in C, Lambda held at 6 knots", rows, taus)
+           "freedom in C, Lambda held at 9 knots", rows, taus)
     with open(LADDER_CSV, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()

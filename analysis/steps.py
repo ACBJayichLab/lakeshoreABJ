@@ -186,9 +186,21 @@ def analyse(path, label=None):
     return rows
 
 
+#: A dwell that barely moved is settled whatever its reach says -- reach is
+#: meaningless when there is no transient to time, because tau is then fitted
+#: to noise.  Above this the 3-tau rule applies to T_inf exactly as it does to
+#: tau: a dwell cut off two time constants into a large relaxation returns a
+#: T_inf that is short by more than the extrapolation admits.  Both outliers
+#: this caught had reach ~2 and transients of 5 K and 18 K, and sat 12 K and
+#: 15 K off a curve every settled neighbour agrees with.
+QUIET_AMPLITUDE_K = 0.5
+
+
 def grade(r):
     """'tau' if the time constant may be believed, 'steady' if only T_inf, else ''."""
-    if r["reach"] < 1.0 or abs(r["settle_K"]) > MAX_SETTLE_K:
+    if abs(r["settle_K"]) > MAX_SETTLE_K:
+        return ""
+    if r["reach"] < MIN_REACH and r["amp_K"] >= QUIET_AMPLITUDE_K:
         return ""
     if (r["reach"] >= MIN_REACH and r["amp_sigma"] >= MIN_AMPLITUDE_SIGMA
             and r["rms_sigma"] < 8.0):
