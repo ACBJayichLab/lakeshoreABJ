@@ -34,3 +34,4 @@ data/
 # Derived analysis outputs -- regenerate with analysis/steady.py + plot_steady.py
 analysis/*.png
 analysis/steady_points.csv
+analysis/ladder.csv
