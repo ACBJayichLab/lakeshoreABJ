@@ -15,9 +15,16 @@ import math
 R_HEATER_OHM = 75.5
 V_FULL_SCALE = 10.0          # 218 analog output full scale, volts
 
+#: VOLTAGE gain between the commanded percent and what reaches the heater, so
+#: the delivered power carries G**2 = 1.232.  It is a constant multiplier on
+#: Q, which means it rescales Lambda and C by 1.232 and leaves every exponent,
+#: every ratio and tau = C / Lambda' untouched.  It matters only where absolute
+#: watts do.
+ACTUATOR_GAIN = 1.11
+
 
 def power_w(pct: float) -> float:
-    v = V_FULL_SCALE * pct / 100.0
+    v = ACTUATOR_GAIN * V_FULL_SCALE * pct / 100.0
     return v * v / R_HEATER_OHM
 
 

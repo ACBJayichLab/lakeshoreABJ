@@ -15,12 +15,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-R_OHM, V_FS = 75.5, 10.0
+R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
 SRC = "analysis/steady_points.csv"
 SWEEP = "data/heater calibration steps/region_20260903-123832_complete_sweep.csv"
 OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/steady.png"
 
-power = lambda u: (V_FS * u / 100.0) ** 2 / R_OHM
+power = lambda u: (GAIN * V_FS * u / 100.0) ** 2 / R_OHM
 
 
 def f(r, k):
@@ -75,15 +75,20 @@ P = np.array([f(r, "P_W") for r in settled])
 dT = np.array([f(r, "T_K") - f(r, "Coldplate") for r in settled])
 hi = P > 0.5
 m_hi = np.polyfit(np.log(P[hi]), np.log(dT[hi]), 1)[0]
-lo = np.array([power(43.0), 0.5269]), np.array([11.57, 88.59])
+# the 18 K anchor and the coldest of the 63% holds, straight out of the table,
+# so the secant cannot drift when the actuator constants move
+_c = sorted(settled, key=lambda r: f(r, "T_K"))
+_a, _b = _c[0], min((r for r in _c if f(r, "T_K") > 50), key=lambda r: f(r, "T_K"))
+lo = (np.array([f(_a, "P_W"), f(_b, "P_W")]),
+      np.array([f(_a, "T_K") - f(_a, "Coldplate"), f(_b, "T_K") - f(_b, "Coldplate")]))
 m_lo = np.log(lo[1][1] / lo[1][0]) / np.log(lo[0][1] / lo[0][0])
 a.loglog(P[hi], np.exp(np.polyval(np.polyfit(np.log(P[hi]), np.log(dT[hi]), 1),
                                   np.log(P[hi]))), "--", color="#2b6cb0", lw=1.4,
          label=f"local slope 96–181 K:  m = {m_hi:.2f}")
 a.loglog(*lo, "--", color="#38a169", lw=1.4,
-         label=f"18 K → 96 K secant:  m = {m_lo:.2f}")
-a.set_xlim(0.2, 0.7); a.set_ylim(8, 250)
-a.set_xlabel("heater power  P = (u/100 · 10 V)² / 75.5 Ω   [W]")
+         label=f"{lo[1][0]+f(_a, 'Coldplate'):.0f} K → {lo[1][1]+f(_b, 'Coldplate'):.0f} K secant:  m = {m_lo:.2f}")
+a.set_xlim(0.25, 0.85); a.set_ylim(8, 250)
+a.set_xlabel("heater power  P = (1.11 · 10 V · u/100)² / 75.5 Ω   [W]")
 a.set_ylabel("ΔT = T$_{sample}$ − T$_{coldplate}$  [K]")
 a.set_title(f"(b) ΔT ∝ P$^m$ — m runs {m_lo:.1f} → {m_hi:.1f}, no single exponent")
 a.grid(alpha=.3, which="both"); a.legend(fontsize=7.5, loc="lower right")
@@ -100,13 +105,13 @@ for name, (g, c, m) in groups.items():
     a.semilogy(0.5 * (T[:-1] + T[1:])[k], 1e3 * (np.diff(Pg) / np.diff(T))[k],
                m, color=c, ms=6, mfc="none",
                label=f"{name.split()[0]}  differential  dΛ/dT")
-a.annotate("differential ≈ 1.3 mW/K, flat over 116–181 K",
-           xy=(155, 1.35), xytext=(95, 2.4), fontsize=8.5, color="#4a5568",
+a.annotate("differential 1.54 → 1.74 mW/K over 108–181 K",
+           xy=(150, 1.62), xytext=(85, 2.9), fontsize=8.5, color="#4a5568",
            arrowprops=dict(arrowstyle="->", color="#4a5568", lw=.9))
-a.annotate("secant falls 21 → 3.7 mW/K", xy=(22, 20), xytext=(55, 24),
+a.annotate("secant falls 26.1 → 4.5 mW/K", xy=(22, 24), xytext=(58, 29),
            fontsize=8.5, color="#4a5568",
            arrowprops=dict(arrowstyle="->", color="#4a5568", lw=.9))
-a.set_ylim(0.8, 40)
+a.set_ylim(1.0, 45)
 a.set_xlabel("sample T  [K]"); a.set_ylabel("conductance  [mW/K]")
 a.set_title("(c) secant ≫ differential — the link saturates")
 a.grid(alpha=.3, which="both"); a.legend(fontsize=7.5, loc="center left")
