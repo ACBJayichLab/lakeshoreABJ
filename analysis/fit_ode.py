@@ -33,10 +33,21 @@ from scipy.optimize import least_squares
 
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
 SWEEP = "data/heater calibration steps/region_20260903-123832_complete_sweep.csv"
-ANCHORS = "analysis/steady_points.csv"
+ANCHORS = "analysis/steps.csv"
 
-#: Margin on a settled hold, in kelvin.  Same cooldown as the sweep, or not.
+#: Margin on a settled point, in kelvin, added in quadrature to twice its own
+#: extrapolation distance.  CD10 is a different cooldown from the sweep and
+#: disagrees with it by 3.2 K at matched power; the recorder is the same one.
 ANCHOR_SIGMA_K = {"fit_recorder": 1.0, "fit_cd10": 3.0}
+ANCHOR_FLOOR_K = 0.3
+
+#: Measured time constants (analysis/steps.py) enter as residuals in log tau.
+#: They are what turns C from a fit parameter into a measurement: with Lambda
+#: known, C = tau * dLambda/dT.  The margin is generous because a relaxation
+#: fit's tau scatters -- 433 to 850 s across the dwells near 137 K -- and
+#: because one pole is a simplification of a body with internal gradients.
+TAU_SIGMA_FACTOR = 1.5
+TAU_SHARE = 0.10
 #: Fractional margin on a sweep sample.  Residuals are fitted in log T so that
 #: 5 K counts as much as 187 K; an absolute-K objective would ignore the whole
 #: cold end, which is the half with no settled anchor in it.
@@ -109,15 +120,39 @@ def load_sweep(path=SWEEP):
             np.interp(grid, t, u))
 
 
-def load_anchors(path=ANCHORS):
+def _rows(path=ANCHORS):
+    return list(csv.DictReader(open(path, newline="", encoding="utf-8")))
+
+
+def load_anchors(path=ANCHORS, t_max=None):
+    """Every dwell whose steady state is usable, with its own error bar."""
     out = []
-    for r in csv.DictReader(open(path, newline="", encoding="utf-8")):
-        if abs(_f(r, "drift_K_per_h")) < 0.15 and _f(r, "hold_h") > 1.0:
-            src = "fit_recorder" if r["source"].startswith("fit_recorder") else "fit_cd10"
-            out.append((_f(r, "T_K"), _f(r, "Coldplate"), _f(r, "P_W"),
-                        ANCHOR_SIGMA_K[src]))
+    for r in _rows(path):
+        if not r.get("grade"):
+            continue
+        T = _f(r, "T_inf")
+        if t_max is not None and T > t_max:
+            continue
+        cool = ANCHOR_SIGMA_K["fit_cd10" if r["source"].startswith("fit_cd10")
+                              else "fit_recorder"]
+        own = max(ANCHOR_FLOOR_K, 2.0 * abs(_f(r, "settle_K")))
+        out.append((T, _f(r, "Coldplate"), _f(r, "P_W"), math.hypot(cool, own)))
     a = np.array(out)
     return a[:, 0], a[:, 1], a[:, 2], a[:, 3]
+
+
+def load_taus(path=ANCHORS, t_max=None):
+    """Dwells whose relaxation ran long enough for tau to mean something."""
+    out = []
+    for r in _rows(path):
+        if r.get("grade") != "tau":
+            continue
+        T = _f(r, "T_inf")
+        if t_max is not None and T > t_max:
+            continue
+        out.append((T, _f(r, "tau_s")))
+    a = np.array(out)
+    return a[:, 0], a[:, 1]
 
 
 class LogLog:
@@ -240,9 +275,10 @@ def build(n_lam, n_cap, T_lo, T_hi):
             _seed(kc, lambda T: 1.00 * mix_c(T) / c_ref))
 
 
-def fit(n_lam, n_cap, data=None, anchors=None, max_nfev=300):
+def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300):
     t, T, Tc, u = data if data is not None else load_sweep()
     aT, aTc, aQ, aS = anchors if anchors is not None else load_anchors()
+    tauT, tauV = taus if taus is not None else load_taus()
     lam, cap, pl0, pc0 = build(n_lam, n_cap, 0.95 * T.min(), 1.05 * T.max())
     n = len(pl0)
     w_anchor = math.sqrt(ANCHOR_SHARE * len(t) / len(aT))
@@ -253,6 +289,9 @@ def fit(n_lam, n_cap, data=None, anchors=None, max_nfev=300):
     p_target = np.log(mix_c(pT) / mix_c(ref)[0])
     w_shape = (math.sqrt(CAP_SHAPE_SHARE * len(t) / len(pT))
                / math.log(CAP_SHAPE_FACTOR))
+    w_tau = (math.sqrt(TAU_SHARE * len(t) / max(len(tauT), 1))
+             / math.log(TAU_SIGMA_FACTOR))
+    log_tau = np.log(tauV)
 
     def resid(p):
         pl, pc = p[:n], p[n:]
@@ -262,7 +301,8 @@ def fit(n_lam, n_cap, data=None, anchors=None, max_nfev=300):
         r_anchor = w_anchor * dQ / lam.slope(pl, aT) / aS
         shape = np.log(cap(pc, pT) / cap(pc, ref)[0])
         r_shape = w_shape * (shape - p_target)
-        return np.concatenate([r_sweep, r_anchor, r_shape])
+        r_tau = w_tau * (np.log(cap(pc, tauT) / lam.slope(pl, tauT)) - log_tau)
+        return np.concatenate([r_sweep, r_anchor, r_shape, r_tau])
 
     s = least_squares(resid, np.concatenate([pl0, pc0]),
                       method="trf", x_scale="jac", max_nfev=max_nfev)
@@ -278,6 +318,8 @@ def fit(n_lam, n_cap, data=None, anchors=None, max_nfev=300):
         "rms_pct": float(100 * np.sqrt(np.mean((err / T) ** 2))),
         "anchor_k": float(np.sqrt(np.mean(
             ((lam(pl, aT) - lam(pl, aTc) - aQ) / lam.slope(pl, aT)) ** 2))),
+        "tau_resid": float(np.sqrt(np.mean(
+            (np.log(cap(pc, tauT) / lam.slope(pl, tauT)) - log_tau) ** 2))),
         "mass_g": float(cap(pc, np.array([CAP_SHAPE_REF_K]))[0]
                         / mix_c(np.array([CAP_SHAPE_REF_K]))[0]),
         "tau_137_s": float(cap(pc, np.array([CAP_SHAPE_REF_K]))[0]
@@ -291,25 +333,25 @@ LADDER_LAMBDA = [(n, 3) for n in range(2, 10)]
 LADDER_CAP = [(6, n) for n in range(2, 8)]
 
 
-def ladder(rows, data, anchors, title, out=None):
+def ladder(rows, data, anchors, title, out=None, taus=None):
     import time
     print(f"\n{title}")
     print(f"{'knots L':>8}{'knots C':>8}{'par':>5}{'rms K':>9}{'max K':>9}"
-          f"{'rms %':>8}{'anchor K':>10}{'mass g':>8}{'tau137':>9}"
-          f"{'nfev':>6}{'s':>7}")
+          f"{'rms %':>8}{'anchor K':>10}{'tau res':>9}{'mass g':>8}"
+          f"{'tau137':>9}{'nfev':>6}{'s':>7}")
     got = []
     for n_lam, n_cap in rows:
         t0 = time.time()
-        r = fit(n_lam, n_cap, data, anchors)
+        r = fit(n_lam, n_cap, data, anchors, taus)
         print(f"{n_lam:>8}{n_cap:>8}{r['npar']:>5}{r['rms_k']:>9.3f}"
               f"{r['max_k']:>9.3f}{r['rms_pct']:>8.2f}{r['anchor_k']:>10.2f}"
-              f"{r['mass_g']:>8.2f}{r['tau_137_s']:>9.0f}"
+              f"{r['tau_resid']:>9.3f}{r['mass_g']:>8.2f}{r['tau_137_s']:>9.0f}"
               f"{r['nfev']:>6}{time.time() - t0:>7.1f}", flush=True)
         got.append({"axis": title.split()[2].rstrip(","), "n_lam": n_lam,
                     "n_cap": n_cap, "npar": r["npar"], "rms_k": r["rms_k"],
                     "max_k": r["max_k"], "rms_pct": r["rms_pct"],
                     "anchor_k": r["anchor_k"], "mass_g": r["mass_g"],
-                    "tau_137_s": r["tau_137_s"]})
+                    "tau_137_s": r["tau_137_s"], "tau_resid": r["tau_resid"]})
     if out is not None:
         out.extend(got)
     return got
@@ -319,14 +361,20 @@ LADDER_CSV = "analysis/ladder.csv"
 
 
 if __name__ == "__main__":
-    data, anchors = load_sweep(), load_anchors()
+    data = load_sweep()
+    hi = float(data[1].max())
+    anchors, taus = load_anchors(t_max=hi), load_taus(t_max=hi)
     print(f"sweep   {len(data[0])} samples at {STEP_S:.0f} s, "
           f"{data[0][-1] / 3600:.1f} h, {data[1].min():.1f}-{data[1].max():.1f} K")
-    print(f"anchors {len(anchors[0])} settled holds, "
-          f"margins {sorted(set(anchors[3]))} K")
+    print(f"anchors {len(anchors[0])} settled dwells, "
+          f"{anchors[0].min():.1f}-{anchors[0].max():.1f} K")
+    print(f"taus    {len(taus[0])} measured, "
+          f"{taus[0].min():.1f}-{taus[0].max():.1f} K")
     rows = []
-    ladder(LADDER_LAMBDA, data, anchors, "freedom in Lambda, C held at 3 knots", rows)
-    ladder(LADDER_CAP, data, anchors, "freedom in C, Lambda held at 6 knots", rows)
+    ladder(LADDER_LAMBDA, data, anchors,
+           "freedom in Lambda, C held at 3 knots", rows, taus)
+    ladder(LADDER_CAP, data, anchors,
+           "freedom in C, Lambda held at 6 knots", rows, taus)
     with open(LADDER_CSV, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()

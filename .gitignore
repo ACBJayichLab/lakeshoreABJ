@@ -35,3 +35,4 @@ data/
 analysis/*.png
 analysis/steady_points.csv
 analysis/ladder.csv
+analysis/steps*.csv

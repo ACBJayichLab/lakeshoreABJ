@@ -21,7 +21,7 @@ sys.path.insert(0, "analysis")
 import fit_ode as F  # noqa: E402
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/ode_fit.png"
-LEVELS = ((4, 3), (6, 3), (8, 3))
+LEVELS = ((4, 3), (6, 3), (8, 4))
 COLORS = ("#2b6cb0", "#c05621", "#2c7a7b")
 
 #: The two independent step-response measurements in the record, for scale.
@@ -38,22 +38,25 @@ def _g(r, k):
         return math.nan
 
 
-def anchor_rows():
+def anchor_rows(t_max=None):
+    """Settled dwells, from the relaxation fits in analysis/steps.py."""
     rows = list(csv.DictReader(open(F.ANCHORS, newline="", encoding="utf-8")))
-    return [r for r in rows
-            if abs(_g(r, "drift_K_per_h")) < 0.15 and _g(r, "hold_h") > 1.0]
+    return [r for r in rows if r.get("grade")
+            and (t_max is None or _g(r, "T_inf") <= t_max)]
 
 
 def trajectory_figure(fits, data, grid, best):
     t, T, Tc, u = data
     th = t / 3600.0
-    srows = anchor_rows()
+    srows = anchor_rows(t_max=float(data[1].max()))
 
     fig = plt.figure(figsize=(14.0, 10.5))
     gs = fig.add_gridspec(3, 3, height_ratios=[1.35, 0.75, 1.25], hspace=.45,
                           wspace=.28)
+    n_tau = len(F.load_taus(t_max=float(T.max()))[0])
     fig.suptitle("LTSPM3 tier-1 ODE fitted to the 8.8 h sweep of 2026-09-03, "
-                 "anchored on 38 settled holds", fontsize=13.5)
+                 f"anchored on {len(srows)} settled dwells "
+                 f"and {n_tau} measured time constants", fontsize=13.5)
 
     a = fig.add_subplot(gs[0, :])
     a.plot(th, T, color="#1a202c", lw=2.0, label="sample, measured")
@@ -87,10 +90,15 @@ def trajectory_figure(fits, data, grid, best):
     for r in fits:
         a.loglog(grid, r["lam"](r["pl"], grid), color=r["color"], lw=1.5,
                  label=f"Λ {r['n_lam']} knots")
-    off = float(best["lam"](best["pl"], np.array([8.3]))[0])
-    a.loglog([_g(r, "T_K") for r in srows], [_g(r, "P_W") + off for r in srows],
-             "o", ms=5, mfc="none", color="#1a202c",
-             label="settled holds,  Q + Λ(8.3 K)")
+    # Lambda(T_inf) = Q + Lambda(T_c), and T_c is NOT the same for every dwell:
+    # the coldplate runs 5.6 K with the heater off and 8.5 K at 180 K.  A single
+    # offset puts the cold dwells a factor of five off the curve and makes a fit
+    # that is right look wrong.
+    aT = np.array([_g(r, "T_inf") for r in srows])
+    aQ = np.array([_g(r, "P_W") for r in srows])
+    aTc = np.array([_g(r, "Coldplate") for r in srows])
+    a.loglog(aT, aQ + best["lam"](best["pl"], aTc), "o", ms=4, mfc="none",
+             color="#1a202c", label=f"{len(srows)} settled dwells,  Q + Λ(T$_c$)")
     a.set_xlabel("T  [K]"); a.set_ylabel("Λ  [W]")
     a.set_title("(c) conductance integral Λ(T)")
     a.grid(alpha=.3, which="both"); a.legend(fontsize=7.5, loc="upper left")
@@ -99,13 +107,21 @@ def trajectory_figure(fits, data, grid, best):
     for r in fits:
         a.loglog(grid, 1e3 * r["lam"].slope(r["pl"], grid), color=r["color"], lw=1.5,
                  label=f"Λ {r['n_lam']} knots")
-    Ts = np.array([_g(r, "T_K") for r in srows])
-    Ps = np.array([_g(r, "P_W") for r in srows])
+    # finite differences only inside ONE cooldown -- the two disagree by 3.2 K
+    # at matched power, and differencing across that boundary manufactures
+    # conductances that belong to neither
+    same = [r for r in srows if not r["source"].startswith("fit_cd10")]
+    Ts = np.array([_g(r, "T_inf") for r in same])
+    # difference Lambda, not Q: the coldplate moves 2.9 K across these dwells,
+    # so dQ/dT alone attributes that motion to the link
+    Ps = (np.array([_g(r, "P_W") for r in same])
+          + best["lam"](best["pl"], np.array([_g(r, "Coldplate") for r in same])))
     o = np.argsort(Ts)
     Ts, Ps = Ts[o], Ps[o]
-    k = np.diff(Ts) > 5.0
+    k = np.diff(Ts) > 3.0
     a.loglog(0.5 * (Ts[:-1] + Ts[1:])[k], 1e3 * (np.diff(Ps) / np.diff(Ts))[k],
-             "o", ms=5, mfc="none", color="#1a202c", label="settled, finite dΛ/dT")
+             "o", ms=4, mfc="none", color="#1a202c",
+             label="settled dwells, finite dΛ/dT")
     a.set_xlabel("T  [K]"); a.set_ylabel("dΛ/dT = k(T)·A/L  [mW/K]")
     a.set_title("(d) differential conductance")
     a.grid(alpha=.3, which="both"); a.legend(fontsize=7.5, loc="lower left")
@@ -130,7 +146,7 @@ def trajectory_figure(fits, data, grid, best):
 
 
 def diagnostics_figure(fits, data, grid):
-    T = data[1]
+    T = data[1]  # noqa: F841
     fig, ax = plt.subplots(1, 3, figsize=(16.0, 4.8))
 
     a = ax[0]
@@ -138,14 +154,17 @@ def diagnostics_figure(fits, data, grid):
         tau = r["cap"](r["pc"], grid) / r["lam"].slope(r["pl"], grid)
         a.loglog(grid, tau / 60.0, color=r["color"], lw=1.8,
                  label=f"Λ {r['n_lam']} knots")
+    tT, tV = F.load_taus(t_max=float(data[1].max()))
+    a.plot(tT, tV / 60.0, "o", ms=6, mfc="none", mew=1.4, color="#1a202c",
+           zorder=5, label=f"{len(tT)} measured relaxations")
     for i, (Tm, taum, lab) in enumerate(MEASURED_TAU):
-        a.plot(Tm, taum / 60.0, "*", ms=15, color="#1a202c", zorder=5)
+        a.plot(Tm, taum / 60.0, "*", ms=15, color="#805ad5", zorder=6)
         a.annotate(lab, (Tm, taum / 60.0), textcoords="offset points",
-                   xytext=(-30, -30 - 46 * i), fontsize=8, ha="right",
-                   color="#1a202c",
-                   arrowprops=dict(arrowstyle="-", color="#718096", lw=.8))
+                   xytext=(-30, -34 - 46 * i), fontsize=8, ha="right",
+                   color="#553c9a",
+                   arrowprops=dict(arrowstyle="-", color="#805ad5", lw=.8))
     a.set_xlabel("T  [K]"); a.set_ylabel("τ = C / (dΛ/dT)  [min]")
-    a.set_title("(f) time constant vs temperature — 7 decades across the sweep")
+    a.set_title("(f) time constant — curves fitted, circles measured")
     a.grid(alpha=.3, which="both"); a.legend(fontsize=8, loc="upper left")
 
     a = ax[1]
@@ -188,10 +207,13 @@ def diagnostics_figure(fits, data, grid):
 
 
 def main():
-    data, anchors = F.load_sweep(), F.load_anchors()
+    data = F.load_sweep()
+    hi = float(data[1].max())
+    anchors, taus = F.load_anchors(t_max=hi), F.load_taus(t_max=hi)
+    print(f"  {len(anchors[0])} settled dwells, {len(taus[0])} measured taus")
     fits = []
     for (nl, nc), c in zip(LEVELS, COLORS):
-        r = F.fit(nl, nc, data, anchors)
+        r = F.fit(nl, nc, data, anchors, taus)
         r["color"] = c
         fits.append(r)
         print(f"  Lambda {nl} knots, C {nc}: {r['npar']} par  rms {r['rms_k']:.3f} K  "
@@ -204,6 +226,8 @@ def main():
     print(f"\nbest = Lambda {best['n_lam']} knots, C {best['n_cap']}")
     print(f"  implied mass {best['mass_g']:.2f} g of the Debye mix")
     print(f"  tau(137 K) = {best['tau_137_s']:.0f} s  (measured 620 s and 709 s)")
+    print(f"  tau residual {best['tau_resid']:.3f} in log = "
+          f"x{math.exp(best['tau_resid']):.2f} against {len(taus[0])} measurements")
     for Tq in (10.0, 30.0, 100.0, 180.0):
         q = np.array([Tq])
         gq = float(best["lam"].slope(best["pl"], q)[0])
