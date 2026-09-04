@@ -70,7 +70,7 @@ box(8, 92, 66, 80, "sample", "Sample stage    $T_s$ ,  $C_s(T_s)$",
 box(8, 31, 40, 56, "wire", "Wiring bundle",
     "$\Lambda_w(T_s) - \Lambda_w(T_c)$")
 box(36, 64, 40, 56, "copper", "Intermediate copper",
-    "$T_m$ ,  $C_m(T_m)$   —   tier 2 only", dashed=True)
+    "$T_m$ ,  $C_m(T_m)$\ntier 2 — refuted by the fit", dashed=True)
 box(69, 92, 40, 56, "rad", "Radiation",
     "$\\sigma_r (T_s^4 - T_c^4)$\nenclosure ≈ 4 K, some 40 K")
 
@@ -93,7 +93,7 @@ ax.text(50, -5.0,
         fontsize=12, ha="center", va="center", color="#2d3748")
 ax.text(50, -12.5,
         "tier 1   " + r"$C(T)\,\dot T = Q(u) - [\,\Lambda(T) - \Lambda(T_c(t))\,]$"
-        "        — structurally exact; the only approximation is lumping the copper node",
+        "        — fits the 8.8 h sweep to 0.28 K rms over 5–187 K",
         fontsize=11.5, ha="center", va="center", color="#553c9a")
 ax.text(50, -21.5,
         r"$\Lambda(T) \equiv \int^{T} k(T')\,(A/L)\,dT'$.  At steady state"
