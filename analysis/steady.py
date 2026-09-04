@@ -9,7 +9,6 @@ number that decides whether a point may anchor the steady-state curve.
 from __future__ import annotations
 
 import csv
-import datetime as dt
 import math
 
 R_HEATER_OHM = 75.5

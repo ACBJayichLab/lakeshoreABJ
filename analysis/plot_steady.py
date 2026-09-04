@@ -85,8 +85,9 @@ m_lo = np.log(lo[1][1] / lo[1][0]) / np.log(lo[0][1] / lo[0][0])
 a.loglog(P[hi], np.exp(np.polyval(np.polyfit(np.log(P[hi]), np.log(dT[hi]), 1),
                                   np.log(P[hi]))), "--", color="#2b6cb0", lw=1.4,
          label=f"local slope 96–181 K:  m = {m_hi:.2f}")
-a.loglog(*lo, "--", color="#38a169", lw=1.4,
-         label=f"{lo[1][0]+f(_a, 'Coldplate'):.0f} K → {lo[1][1]+f(_b, 'Coldplate'):.0f} K secant:  m = {m_lo:.2f}")
+_lab = (f"{lo[1][0] + f(_a, 'Coldplate'):.0f} K → "
+        f"{lo[1][1] + f(_b, 'Coldplate'):.0f} K secant:  m = {m_lo:.2f}")
+a.loglog(*lo, "--", color="#38a169", lw=1.4, label=_lab)
 a.set_xlim(0.25, 0.85); a.set_ylim(8, 250)
 a.set_xlabel("heater power  P = (1.11 · 10 V · u/100)² / 75.5 Ω   [W]")
 a.set_ylabel("ΔT = T$_{sample}$ − T$_{coldplate}$  [K]")
