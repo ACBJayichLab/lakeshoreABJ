@@ -4,11 +4,14 @@ The sample thermometer jitters by 10–15 mK near 100 K. The obvious fix is an R
 low pass on the sensor leads at the 218's input, with a time constant of about
 100 ms to suit ~1 Hz sampling.
 
-**That filter would do nothing.** Not because 100 ms is slightly wrong, but
-because it is in the wrong decade for both the instrument and the noise. This
-document is the measurement behind that, so nobody has to take it on trust —
-and so that if the cryostat changes, the same measurement can be repeated
-rather than the conclusion inherited.
+**That specific filter would do nothing**, because 100 ms is in the wrong decade
+for the sampling chain it is meant to protect. Whether *some* analogue filter
+would help is a narrower and still-open question, and this document is careful
+to keep the two apart: the logs settle the first and cannot settle the second.
+
+Read the split as: below ~0.05 Hz a filter is ruled out by measurement; above it
+a filter is unproven in both directions, and the way to settle it is an
+instrument across the leads, not more arithmetic on these logs.
 
 Everything below comes from `reference/logs/CD10`, two independent settled
 holds at constant heater, and is reproduced by:
@@ -40,9 +43,12 @@ Three facts from there decide this question:
    be a bug, because it could not settle inside a channel dwell.
 2. **2 readings per second per input.** The 218's output is band-limited to
    1 Hz per input whatever the recorder does.
-3. Diode inputs on the 0–2.5 V range resolve **20 µV**.
+3. One fixed excitation per input type — **1 mA across the whole 0–7500 Ω NTC
+   RTD range**, which is what a Cernox sits on, with no current reversal to
+   cancel thermal EMFs or front-end 1/f.
 
-Fact 1 is why the proposal is not dangerous. Fact 2 is why it is useless.
+Fact 1 is why the proposal is not dangerous. Fact 2 is why *this* time constant
+is useless. Fact 3 is a separate problem that no filter addresses at all.
 
 ## 100 ms puts the corner above the instrument's own Nyquist
 
@@ -70,7 +76,7 @@ in the chain, not by intuition about "fast":
 τ = 100 ms is between ten and sixty times too fast to do the job it is being
 proposed for.
 
-## And the noise is not up there anyway
+## Most of the noise is nowhere a filter can reach
 
 Where the noise actually lives, by band:
 
@@ -126,19 +132,28 @@ share thermal fluctuation either. Whatever they share is electrical — the
 harness, a ground return, or the group's A/D. It accounts for r ≈ 0.3 of the
 variance, about **7 mK** of the sample channel's fast band.
 
-The amplitudes are informative. In the fastest band the shared part is ~7.0 mK
-on Input 1 and ~0.38 mK on Input 3, a ratio of about **18:1**, and both of the
-obvious explanations land near it:
+The amplitudes are informative, and reading them needs the sensor. **The sample
+is a Cernox CX-1050-SD-HT-1.4L** (Jeff, 2026-09-04) — an NTC resistor, so
+`|dR/dT|` *falls* steeply with temperature, which is the opposite of a silicon
+diode and inverts most of the arithmetic below.
 
-- a fixed disturbance **in volts** predicts the ratio of the two sensors'
-  sensitivities — about 17:1 for a silicon diode between 6.7 K and 96 K;
-- a fixed **fractional** temperature disturbance predicts 96/6.7 = 14:1.
+In the fastest band the shared part is ~7.0 mK on Input 1 and ~0.38 mK on
+Input 3, a ratio of about **18:1**. What that ratio implies depends on what is
+on inputs 2 and 3, which is **not recorded anywhere in this repository** — and
+the 218 forces every input in a group of four to the same type, so if Input 1 is
+on the NTC RTD range then so are they. Assuming that:
 
-The data does not separate those two, and the sensor type is not recorded
-anywhere in this repository, so the 17:1 figure carries an assumption that
-should be checked before it is leaned on. Either way the component is
-instrument- or wiring-level, which is a thing you fix with a ground and a
-shield, not with a capacitor.
+- a fixed additive disturbance **in ohms or volts** predicts the ratio of the
+  two sensors' sensitivities. For a Cernox between 6.7 K and 96 K that is
+  *hundreds* to one, not 18:1. **This does not fit.**
+- a fixed **fractional** temperature disturbance predicts 96/6.7 = 14:1, and a
+  fixed fractional *resistance* disturbance predicts `(T/S)` ratio ≈ 30:1 on
+  plausible Cernox dimensionless sensitivities. Both are the right order.
+
+So the shared component looks **multiplicative** — excitation, reference or gain
+— rather than an additive offset picked up on the leads. That is a different fix
+from a shield, and a very different fix from a capacitor. Confirm the sensors on
+inputs 2 and 3 before leaning on this.
 
 Input 2 is uncorrelated with both. Whatever the shared path is, it does not
 include that channel — which is itself a lead, because it means the harness and
@@ -159,6 +174,12 @@ and it is not measured here.
 
 Measuring it does not require building the filter first:
 
+0. **Query `INTYPE? 1` and confirm what the archive was taken with.** Everything
+   in this document is measured on Input 1 of the CD10 logs; if that channel
+   carried a different sensor in July 2026 than it does now, the conversion from
+   millikelvin to ohms changes and so does every cross-channel ratio above. The
+   input type also fixes the excitation, which is what the self-heating question
+   turns on.
 1. **Query `FILTER? 1`.** The two archive records behave differently at the fast
    end — `monitor3` averages down considerably better than `monitor1` — and an
    unrecorded change to the 218's internal 2–64 point running average is the
@@ -201,13 +222,39 @@ The three components actually worth chasing, in order of size:
 |---|---|---|
 | 20–28 h wander | 28.5% of `monitor1`'s variance | room temperature; it is already known that a room-temperature covariate works on 2026-08/09 recorder data ([thermal-response.md](thermal-response.md)) |
 | common-mode with Input 3 | ~7 mK, r = 0.55 | grounding, shielding, the harness, the group A/D — tests 4 and 5 above |
-| growth with temperature | fast-band rms rises ~T^1.7 across 118→171 K (16.4 → 30.0 mK, 229 settled hours in `monitor4`/`5`) | thermal, not electrical. A fixed instrument floor in volts would be *flat* here, since a diode's sensitivity barely moves over that span. This is the same effect the `1.36e-6·T²` model in [thermal-response.md](thermal-response.md) describes |
+| growth with temperature | fast-band rms rises ~T^1.7 across 118→171 K (16.4 → 30.0 mK, 229 settled hours in `monitor4`/`5`) | **ambiguous, and it used to be read the wrong way round** — see below |
 
-That last row is worth dwelling on, because it disposes of the third hypothesis
-in the original question. If the 10–15 mK were the 218's readout floor, it would
-be roughly constant in millikelvin across 118–171 K. It nearly doubles. The
-readout is not what limits this measurement — which agrees with the Allan
-deviation already recorded in
+That last row was originally offered here as disposing of the readout
+hypothesis: a fixed instrument floor would be flat in millikelvin across
+118–171 K, and this nearly doubles, so the noise had to be thermal. **That
+argument assumed a silicon diode and is wrong for a Cernox.** An NTC sensor
+loses sensitivity as it warms — `|dR/dT|` falls by roughly 1.5–2× over that
+span — so a *fixed* floor in ohms produces kelvin noise that grows by about
+that factor. Measured growth is 1.83×. The temperature scaling therefore
+**fails to discriminate** readout and wiring from thermal, and readout is back
+on the table rather than excluded.
+
+One thing about the readout does survive independently of the sensor:
+**it is not quantization-limited.** The reported values sit on a 1 mK lattice
+(Rayleigh r = 1.000) which is simply the display's third decimal place, and
+across a settled stretch they span 69 distinct codes at 15 mK rms with no
+coarser step showing through. Whatever the 218 is contributing, it is analogue
+noise in the front end, not the least significant bit.
+
+Two consequences of the Cernox worth chasing, neither of which is a filter:
+
+- **The 218 drives a single fixed 1 mA for the whole NTC RTD range.** In a
+  Cernox that is `I²R` dissipated in the sensor chip itself — tens of µW at
+  100 K, and far more at low temperature where R climbs steeply. Self-heating
+  offsets the reading by whatever the mount's thermal resistance says, and
+  **fluctuations in that thermal contact are real sensor temperature**, so no
+  filter anywhere reaches them.
+- **The 218 is a monitor, not a bridge, and does not reverse the excitation.**
+  Thermal EMFs at the junctions in the adapter chain and 1/f in the front end
+  are therefore uncancelled, where a reversing bridge would subtract them out.
+  That is a plausible home for both the slow wander and the diurnal term.
+
+This all remains consistent with the Allan deviation already recorded in
 [thermal-response.md](thermal-response.md) (6.1 mK @ 4 s → 2.5 mK @ 600 s,
 about 2× worse than 1/√N) and with its conclusion that sampling faster buys
 much less than it looks like it should.
