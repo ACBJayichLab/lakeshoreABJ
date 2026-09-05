@@ -9,6 +9,35 @@ minutes from `data/heater calibration steps/`, which is itself derived (see
 [thermal-response.md](../docs/ltspm3/thermal-response.md) for the two
 converter commands that build it).
 
+## TODO: the fit inputs are not in the repo, and nothing here runs without them
+
+**Not done here, deliberately — this is a note, not a change.**
+
+`data/` is gitignored in its entirety, so `data/heater calibration steps/`
+never reaches the remote. Clone this repository onto another machine and every
+script below fails at its first `open()`. The pipeline is reproducible on the
+machine it was written on and nowhere else, which is the same thing as not
+being reproducible.
+
+Three files carry the whole analysis:
+
+| | |
+|---|---|
+| `region_20260903-123832_complete_sweep.csv` | the 8.8 h sweep, 5–187 K. **This one is irreplaceable** — a recorder export of a run that happened once. |
+| `fit_recorder.csv`, `fit_cd10.csv` | flattened by `lschart/tools/fit_table.py` from the recorder logs and `reference/logs/CD10/*.xls` |
+
+The second row is regenerable *provided* `fit_table.py` is committed and the
+raw logs are present; the first is not regenerable at all. Losing it means
+re-running an 8.8 h sweep on the cryostat.
+
+So they want moving somewhere versioned — `reference/` alongside the `.xls`
+logs and the manuals is the obvious home, since that is already where
+"measured once, never regenerated" lives. Whoever does it should update the
+paths in the commands below and in `fit_ode.SWEEP` / `fit_ode.ANCHORS`.
+
+Until then: **the derived CSVs in `data/` are the only copy.** They are not
+backed up by anything in this repository.
+
 ## The model
 
 Everything the sample touches sinks at the coldplate — structure, wiring and
