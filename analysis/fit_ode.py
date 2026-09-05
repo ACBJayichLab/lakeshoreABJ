@@ -82,6 +82,30 @@ ANCHOR_SHARE = 0.10
 #: worst residual, from 10.7 K to 14.4 K, all of it in one nine-minute window.
 STEP_S = 2.0
 
+#: A slow, unmeasured load on the sample, in watts, fitted as a few knots in
+#: TIME rather than in temperature.  Off by default (``n_drift=0``).
+#:
+#: WHY IT IS NEEDED.  The sweep's two settled holds are missed in opposite
+#: directions -- -0.39 K at 180.5 K and +0.55 K at 192.4 K -- with only 49 mK
+#: of scatter inside each, so the model reproduces each hold thirty times
+#: better than it places the pair.  And during the 22.8 h opening hold, at a
+#: heater that never moves, the sample drifts -3.8 mK/h while every other
+#: channel in the cryostat is flat to +-1.5 mK/h.  Something slow is changing
+#: the steady state and it is not in the log.
+#:
+#: WHY IT DOES NOT SPOIL THE DYNAMICS.  With three knots over 43 h the fastest
+#: this term can move is about 11 h, against tau = 572 s for the sample.  It is
+#: four orders of magnitude too slow to stand in for a relaxation, so Lambda
+#: and C still have to earn the transients.  That separation is the whole
+#: reason it is safe to add: the steady state may drift, the dynamics are
+#: universal.
+#:
+#: The prior keeps it at the size the holds imply.  dT/dP is about 546 K/W at
+#: 180 K, so 0.4 K of hold bias is 0.7 mW; 2 mW is a generous ceiling and stops
+#: the term from absorbing anything Lambda should be explaining.
+DRIFT_SIGMA_W = 2.0e-3
+DRIFT_SHARE = 0.05
+
 #: How far C(T) may depart from a Debye SHAPE, as a factor either way.
 #:
 #: Without this the fit sends C to zero below ~30 K, and it is right to: down
@@ -186,6 +210,30 @@ def load_sweep(path=SWEEP, filter_tau_s=None):
         out = (out[0], _ema(out[1], filter_tau_s, STEP_S),
                _ema(out[2], filter_tau_s, STEP_S), out[3])
     return out
+
+
+#: The adaptively thinned sweep, written by analysis/decimate.py --write.
+#: Same run, same instrument numbers, 4,968 rows instead of 77,375.
+DECIMATED = "sweep_decimated.csv"
+
+
+def load_decimated(path=DECIMATED):
+    """``((t, T, Tc, u), weights)`` from the thinned sweep.
+
+    The weights are what make this equivalent rather than merely smaller: a
+    kept sample stands for its ``span_s`` of the record, and without that the
+    22.8 h hold -- thinned 149:1 -- would quietly stop being half the
+    objective.  Verified against the full grid: fitting here and scoring there
+    moves the (9, 4) rms from 0.4467 to 0.4504 K, 0.8%, with tau(137 K) and the
+    implied mass unchanged to three figures, in 7.3 s rather than 190.
+    """
+    with open_table(path) as fh:
+        rows = list(csv.DictReader(fh))
+    arr = {k: np.array([_f(r, k) for r in rows])
+           for k in ("Time", "span_s", "Sample", "Coldplate", "ls218.aout1")}
+    span = arr["span_s"]
+    return ((arr["Time"], arr["Sample"], arr["Coldplate"], arr["ls218.aout1"]),
+            np.sqrt(span / span.mean()))
 
 
 def _rows(path=ANCHORS):
@@ -301,9 +349,16 @@ class LogLog:
         return at
 
 
-def integrate(lam, cap, pl, pc, t, Tc, u, T0):
-    """Exponential Euler down the sweep.  Returns the modelled T(t)."""
+def integrate(lam, cap, pl, pc, t, Tc, u, T0, q_extra=None):
+    """Exponential Euler down the sweep.  Returns the modelled T(t).
+
+    ``q_extra`` is an additional power in watts, per sample -- the slow drift
+    term.  It enters exactly where the heater does, because that is what it is:
+    a small unmeasured load on the same node.
+    """
     Q = power_w(u)
+    if q_extra is not None:
+        Q = Q + q_extra
     lam_c = lam(pl, np.maximum(Tc, 1e-3))
     lam_at, cap_at = lam.scalar(pl), cap.scalar(pc)
     out = np.empty_like(t)
@@ -458,12 +513,27 @@ def cache_store(key: str, x, nfev: int) -> None:
 
 
 def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
-        tier2=False):
+        tier2=False, weights=None, n_drift=0):
+    """Fit Lambda and C to a sweep.
+
+    ``weights`` is the per-sample weight of the sweep residual, and exists for
+    the adaptively decimated grid (see ``analysis/decimate.py``): a kept sample
+    stands for a span of time rather than for one 2 s tick, and without the
+    weight a 22.8 h hold thinned 149:1 would silently stop mattering.  It is
+    normalised to unit mean square, so ``sum(w**2) == len(t)`` exactly as on a
+    uniform grid -- which is what keeps the anchor, tau and shape shares below
+    balanced against the sweep the same way they were.
+    """
     t, T, Tc, u = data if data is not None else load_sweep()
     aT, aTc, aQ, aS = anchors if anchors is not None else load_anchors()
     tauT, tauV = taus if taus is not None else load_taus()
     lam, cap, pl0, pc0 = build(n_lam, n_cap, 0.95 * T.min(), 1.05 * T.max())
     n = len(pl0)
+    if weights is None:
+        w_sweep = np.ones(len(t))
+    else:
+        w_sweep = np.asarray(weights, float)
+        w_sweep = w_sweep / math.sqrt(float(np.mean(w_sweep ** 2)))
     w_anchor = math.sqrt(ANCHOR_SHARE * len(t) / len(aT))
     logT = np.log(T)
 
@@ -476,29 +546,55 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
              / math.log(TAU_SIGMA_FACTOR))
     log_tau = np.log(tauV)
 
+    # The drift knots are in TIME, evenly, and there are very few of them --
+    # see DRIFT_SIGMA_W.  Linear interpolation rather than a spline: with three
+    # knots a spline's extra smoothness buys nothing and its overshoot is one
+    # more way for a nuisance term to reach somewhere it should not.
+    dk = np.linspace(t[0], t[-1], n_drift) if n_drift else np.zeros(0)
+    w_drift = (math.sqrt(DRIFT_SHARE * len(t) / max(n_drift, 1))
+               / DRIFT_SIGMA_W)
+
+    def drift_of(p):
+        if not n_drift:
+            return None
+        return np.interp(t, dk, p[-n_drift:])
+
     def unpack2(p):
         f = 1.0 / (1.0 + math.exp(-p[-2]))
         return min(max(f, 1e-3), 1 - 1e-3), math.exp(p[-1])
 
+    def split_p(p):
+        """(lambda knots, capacity knots) with the tail parameters removed."""
+        body = p[:-n_drift] if n_drift else p
+        return body[:n], (body[n:-2] if tier2 else body[n:])
+
     def run(p):
+        pl, pc = split_p(p)
+        q = drift_of(p)
         if not tier2:
-            return integrate(lam, cap, p[:n], p[n:], t, Tc, u, T[0])
-        f, g = unpack2(p)
-        return integrate2(lam, cap, p[:n], p[n:-2], f, g, t, Tc, u, T[0])
+            return integrate(lam, cap, pl, pc, t, Tc, u, T[0], q_extra=q)
+        f, g = unpack2(p[:-n_drift] if n_drift else p)
+        return integrate2(lam, cap, pl, pc, f, g, t, Tc, u, T[0])
 
     def resid(p):
-        pl, pc = p[:n], (p[n:-2] if tier2 else p[n:])
+        pl, pc = split_p(p)
         model = run(p)
-        r_sweep = (np.log(model) - logT) / SWEEP_SIGMA_REL
+        r_sweep = w_sweep * (np.log(model) - logT) / SWEEP_SIGMA_REL
         dQ = lam(pl, aT) - lam(pl, aTc) - aQ
         r_anchor = w_anchor * dQ / lam.slope(pl, aT) / aS
         shape = np.log(cap(pc, pT) / cap(pc, ref)[0])
         r_shape = w_shape * (shape - p_target)
         r_tau = w_tau * (np.log(cap(pc, tauT) / lam.slope(pl, tauT)) - log_tau)
-        return np.concatenate([r_sweep, r_anchor, r_shape, r_tau])
+        parts = [r_sweep, r_anchor, r_shape, r_tau]
+        if n_drift:
+            parts.append(w_drift * p[-n_drift:])
+        return np.concatenate(parts)
 
-    p0 = np.concatenate([pl0, pc0] + ([np.array(TIER2_SEED)] if tier2 else []))
-    key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aQ, tauV)
+    p0 = np.concatenate([pl0, pc0]
+                        + ([np.array(TIER2_SEED)] if tier2 else [])
+                        + ([np.zeros(n_drift)] if n_drift else []))
+    key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aQ,
+                    tauV, w_sweep, np.array([n_drift], float))
     hit = cache_load(key, len(p0))
     if hit is not None:
         x, nfev = hit
@@ -507,10 +603,16 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
                           max_nfev=max_nfev)
         x, nfev = s.x, s.nfev
         cache_store(key, x, nfev)
-    pl, pc = x[:n], (x[n:-2] if tier2 else x[n:])
-    split, mass_ratio = unpack2(x) if tier2 else (float("nan"),) * 2
+    pl, pc = split_p(x)
+    split, mass_ratio = (unpack2(x[:-n_drift] if n_drift else x) if tier2
+                         else (float("nan"),) * 2)
     model = run(x)
+    drift_w = x[-n_drift:] if n_drift else np.zeros(0)
     err = model - T
+    # Weighted, so a decimated fit reports the same quantity a full-grid one
+    # does: rms over TIME, not over samples.  Unweighted these agree exactly on
+    # a uniform grid, which is why this was invisible before.
+    wsq = w_sweep ** 2
     hold = opening_hold(t, u)
     moving = np.abs(np.gradient(T, t)) > 2e-3          # > 7.2 K/h
     return {
@@ -522,11 +624,13 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         "hold_max_k": float(np.max(np.abs(err[hold]))),
         "hold_h": float((t[hold][-1] - t[hold][0]) / 3600.0),
         "n_lam": n_lam, "n_cap": n_cap, "npar": len(x), "nfev": nfev,
+        "n_drift": n_drift, "drift_w": drift_w, "drift_t": dk,
+        "drift_mw": float(1e3 * np.abs(drift_w).max()) if n_drift else 0.0,
         "lam": lam, "cap": cap, "pl": pl, "pc": pc,
         "t": t, "T": T, "Tc": Tc, "u": u, "model": model,
-        "rms_k": float(np.sqrt(np.mean(err**2))),
+        "rms_k": float(np.sqrt(np.mean(wsq * err**2))),
         "max_k": float(np.max(np.abs(err))),
-        "rms_pct": float(100 * np.sqrt(np.mean((err / T) ** 2))),
+        "rms_pct": float(100 * np.sqrt(np.mean(wsq * (err / T) ** 2))),
         "anchor_k": float(np.sqrt(np.mean(
             ((lam(pl, aT) - lam(pl, aTc) - aQ) / lam.slope(pl, aT)) ** 2))),
         "tau_resid": float(np.sqrt(np.mean(

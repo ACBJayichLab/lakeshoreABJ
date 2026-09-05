@@ -20,6 +20,7 @@ deliberately, because of what they are derived *from*:
 | `region_..._complete_sweep_even_larger.csv.gz` | the sweep, 2026-09-02 16:01 → 09-04 11:00. 43 h, 4.9–192.6 K, 2 s cadence, no gap over a minute. **Irreplaceable** — a run that happened once. |
 | `fit_recorder.csv.gz` | flattened from the recorder's own 2026-08/09 logs, which are *not* in the repo. Derived, but from a source a clone does not have, so primary in practice. |
 | `fit_cd10.csv.gz` | the one genuinely regenerable file, from the versioned `reference/logs/CD10/*.xls`. Committed anyway, so step one of the pipeline does not fail until somebody finds a two-command dance. |
+| `sweep_decimated.csv.gz` | the sweep again, adaptively thinned by `decimate.py` — 4,968 rows and 46 kB against 77,375 and 1.4 MB. Regenerable in twenty seconds, committed because it is what the production fit actually reads. |
 
 **The 8.8 h cut of the same run that used to be here is gone** (2026-09-04,
 Jeff). It saw only the middle: 2.2 h of the 22.8 h hold at 180 K and 0.4 h of
@@ -69,6 +70,10 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 # 2b. the coldplate's own pole                        (~30 s)
 .venv/Scripts/python.exe analysis/bath.py
 
+# 2c. re-thin the sweep, if the sweep ever changes     (~20 s)
+#     the thinned table is versioned, so this is not part of a normal run
+.venv/Scripts/python.exe analysis/decimate.py --write
+
 # 3. the figures                                       (~5 min)
 .venv/Scripts/python.exe analysis/diagram.py
 .venv/Scripts/python.exe analysis/plot_gain.py
@@ -93,6 +98,7 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 |---|---|
 | `steps.py` | every constant-heater dwell fitted as `T = T∞ + A e^(−t/τ)`. Gives `T∞` extrapolated, `τ` measured, and the extrapolation distance as an error bar. **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
 | `fit_ode.py` | integrates the ODE down the 8.8 h sweep and fits Λ and C as monotone cubics in (log T, log y). One curve's knots freed at a time. Writes `ladder.csv`. |
+| `decimate.py` | the sweep, thinned where nothing is happening and kept where it is. **16x fewer samples, 26x faster to fit, 0.8% different.** Writes `sweep_decimated.csv.gz` |
 | `bath.py` | the coldplate as a first-order lag driven by the heater, not as a bath. **tau = 175 s, 27.6 mK rms over a 2.30 K swing.** What makes the plant self-contained |
 | `_data.py` | where the inputs live and how to open them; every reader here goes through it |
 | `fit_lambda.py` | asks whether the settled points alone can separate `σ_r T⁴` from conduction. They cannot — see below. |
@@ -109,7 +115,7 @@ number below came out of that run. The full ladder is `analysis/ladder.csv`.
 
 | | |
 |---|---|
-| fit quality | **0.404 K rms** over 43 h and 4.9–192.6 K at Λ 10 knots (0.447 at 9, which is what the figures draw). 11.1 K max, all of it inside one 9-minute recovery slew |
+| fit quality | **0.2024 K rms** over 43 h and 4.9–192.6 K — Λ 12 knots, C 4, 3 drift knots, fitted on the decimated sweep and scored on the full one. 10.9 K max, all of it inside one 9-minute recovery slew. Without the drift term, 0.404 K at Λ 10 |
 | what the residual is made of | **bias, not noise.** Inside the 22.8 h hold at 180.5 K the scatter is **49 mK** and the level is **−0.39 K**; inside the 13.9 h hold at 192.4 K, 48 mK and **+0.55 K**. The model reproduces each hold thirty times better than it places the pair |
 | `dΛ/dT` | peaks ~25 mW/K near 10–13 K, 1.60 mW/K at 100 K, 1.79 at 180 K — the link's conductivity maximum |
 | `C(T)` | a **4.89 g** Cu/sapphire/diamond Debye mix |
@@ -215,6 +221,74 @@ are conservative rather than unsafe, but they leave performance on the table.
 0.1 mK/h in `T_c`, and a lag cannot produce a steady-state error by
 construction. That one is Λ shape at the top of the range: 12 knots takes the
 sweep to **0.3225 K** rms and the hold biases to −0.28 / +0.35 K.
+
+## The sweep is 16x smaller now, and the fit did not notice
+
+52% of the sweep is one hold: 22.8 h at 69.027% over which the sample moves
+87 mK in total. Every fit integrated all of it, and `least_squares` did it
+again per parameter per iteration to difference the Jacobian — so a
+14-parameter step integrated a day and a half of a cryostat sitting still,
+fourteen times.
+
+`decimate.py` keeps a sample when the temperature has moved by 50 mK, when the
+heater changed, or when 300 s have passed, and weights each kept sample by
+`sqrt(span)` so the objective stays the *time* integral it was:
+
+| | |
+|---|---|
+| samples | 77,375 → **4,968** (16x), steps 2–300 s |
+| the 22.8 h opening hold | 40,500 → 271 (**149x**) |
+| the 7.5 h excursion | 13,500 → 4,538 (3x) — the informative part is barely touched |
+| (9, 4) fit time | 190 s → **7.3 s** |
+| (9, 4) rms, **both scored on the full 77,375-sample grid** | 0.4467 → 0.4504 K (**0.8%**) |
+| `tau(137 K)`, implied mass | identical to three figures |
+
+Two things make that free rather than merely cheap. `integrate` reads its step
+from `t[k+1] - t[k]` and exponential Euler is *exact* for relaxation towards a
+constant target, which is what a hold is — a 300 s step across constant `u` and
+`T_c` is not an approximation of 150 two-second steps, it is the same answer.
+And the decision to keep is made on a **60 s-smoothed** copy, because comparing
+raw samples asks "has the temperature plus 28 mK of noise changed", which on a
+dead-flat hold is yes, constantly. That one detail is the difference between 5x
+and 16x.
+
+## The steady state drifts; the dynamics do not — 2026-09-05
+
+The sweep's two settled holds were missed in opposite directions, −0.39 K at
+180.5 K and +0.55 K at 192.4 K, with only 49 mK of scatter inside each. And
+during the 22.8 h opening hold, at a heater that never moves, the sample drifts
+**−3.8 mK/h** while every other channel in the cryostat is flat to ±1.5 mK/h.
+Something slow was changing the steady state and it is not in the log.
+
+So `fit(..., n_drift=k)` adds a slow unmeasured load, a few knots in **time**:
+
+```
+C(T) dT/dt = Q(u) + P_drift(t) − [ Λ(T) − Λ(T_c(t)) ]
+```
+
+| model | rms K | hold bias K | `tau(137 K)` | mass g |
+|---|---|---|---|---|
+| Λ 9, no drift | 0.4504 | −0.400 / +0.552 | 572 s | 4.89 |
+| Λ 9, drift 3 | 0.2516 | −0.134 / +0.217 | 566 s | 4.85 |
+| Λ 12, no drift | 0.3223 | −0.283 / +0.342 | 595 s | 4.89 |
+| **Λ 12, drift 3** | **0.2024** | **−0.103 / +0.137** | 589 s | 4.85 |
+| Λ 12, drift 6 | 0.2090 | −0.096 / +0.112 | 590 s | 4.84 |
+
+All scored on the full grid. **The rms halves for three parameters, and
+`tau(137 K)` and the implied mass do not move.** That separation is the whole
+point: with three knots over 43 h the drift cannot move faster than about 11 h,
+against `tau = 572 s` for the sample — four orders of magnitude too slow to
+stand in for a relaxation, so Λ and C still have to earn every transient.
+
+The fitted drift is **2 mW peak to peak on an 800 mW heater**, 0.25%, and
+`DRIFT_SIGMA_W` holds it there. What it *is* remains unidentified: no logged
+channel moves with it, and the aux thermometers are flat to tens of mK across
+the whole 43 h.
+
+`plot_gain.py` now draws this model — Λ 12, C 4, drift 3, on the decimated
+sweep. `plot_ode.py` deliberately does not: it is the complexity study, and it
+compares knot counts on the full grid with no drift so the fan-out means what
+it has always meant.
 
 ## Method, and what is wrong with it
 

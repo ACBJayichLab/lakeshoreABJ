@@ -54,7 +54,16 @@ sys.path.insert(0, "analysis")
 import fit_ode as F  # noqa: E402
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/gain_curve.png"
-N_LAM, N_CAP = 9, 4
+
+#: The production model, as opposed to the complexity study in plot_ode.py.
+#:
+#: Fitted on the adaptively decimated sweep (analysis/decimate.py) with a
+#: three-knot slow drift in the steady state -- 0.2024 K rms over 43 h against
+#: 0.4467 for (9, 4) on the full grid with no drift, in 77 s rather than 190.
+#: The drift is 2 mW peak to peak on an 800 mW heater and cannot move faster
+#: than about 11 h, so it changes where the cryostat settles and leaves the
+#: dynamics alone: tau(137 K) and the implied mass are the same either way.
+N_LAM, N_CAP, N_DRIFT = 12, 4, 3
 
 
 def _g(r, k):
@@ -110,7 +119,8 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
 
     fig, ax = plt.subplots(1, 4, figsize=(21.0, 5.0))
     fig.suptitle("LTSPM3 steady state from the fitted model — "
-                 f"Λ {N_LAM} knots, C {N_CAP}, sweep rms {r['rms_k']:.2f} K"
+                 f"Λ {N_LAM} knots, C {N_CAP}, slow drift {N_DRIFT} knots — "
+                 f"sweep rms {r['rms_k']:.2f} K over 43 h"
                  "   ·   T$_c$ on the corrected Coldplate curve (X186279)",
                  fontsize=12.5)
 
@@ -171,12 +181,17 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
 
 
 def main():
-    data = F.load_sweep()
+    data, w = F.load_decimated()
     hi = float(data[1].max())
     anchors, taus = F.load_anchors(t_max=hi), F.load_taus(t_max=hi)
-    r = F.fit(N_LAM, N_CAP, data, anchors, taus)
-    print(f"  Lambda {N_LAM} knots, C {N_CAP}: rms {r['rms_k']:.3f} K, "
-          f"opening hold {r['hold_max_k']:.2f} K over {r['hold_h']:.1f} h")
+    r = F.fit(N_LAM, N_CAP, data, anchors, taus, weights=w, n_drift=N_DRIFT)
+    print(f"  Lambda {N_LAM} knots, C {N_CAP}, drift {N_DRIFT}: "
+          f"rms {r['rms_k']:.3f} K, opening hold {r['hold_max_k']:.2f} K "
+          f"over {r['hold_h']:.1f} h")
+    if N_DRIFT:
+        print(f"  slow drift {1e3 * r['drift_w'].min():+.2f} to "
+              f"{1e3 * r['drift_w'].max():+.2f} mW over {hi and 43:.0f} h, "
+              f"against an 800 mW heater")
 
     rows = [x for x in csv.DictReader(open(F.ANCHORS, newline="", encoding="utf-8"))
             if x.get("grade") and _g(x, "T_inf") <= hi]
