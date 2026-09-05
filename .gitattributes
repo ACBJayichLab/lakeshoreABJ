@@ -1,0 +1,8 @@
+# PDFs are binary.  Without this git text-diffs them: the 335 manual went in
+# as 121,465 "insertions", and any later `git log -p` touching it would dump
+# that into the terminal.
+*.pdf binary
+
+# The legacy chart-recorder logs, likewise -- xls_to_csv.py reads them, nothing
+# ever edits them.
+*.xls binary
