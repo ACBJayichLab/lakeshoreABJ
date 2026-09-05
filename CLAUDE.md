@@ -191,7 +191,10 @@ matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus
                      remaining skip is conditional on something CI provides.
 docs/                recorder/ (generic) and ltspm3/ (one cryostat). Keep them apart.
 examples/            config-335-usb.yaml (coworker), config-336-usb.yaml (bench)
-reference/           Legacy MATLAB + 24 .xls chart-recorder logs. Not built.
+reference/           Legacy MATLAB + 24 .xls chart-recorder logs, and the 218 /
+                     335 / 336 vendor manuals. Not built. Nothing regenerates
+                     any of it, which is why the manuals are in-repo despite
+                     the 24 MB.
 data/                GITIGNORED. The recorder writes here; nothing in it is
                      versioned, so NONE OF IT EXISTS ON A FRESH CLONE.
                      Two derived sets, made by the two tools above:
@@ -205,6 +208,15 @@ data/                GITIGNORED. The recorder writes here; nothing in it is
                      Which logs are usable for what is in
                      docs/ltspm3/thermal-response.md.
 tests/               Generic. tests_ltspm3/ has the virtual-clock control harness.
+analysis/            EXPLORATORY, not shipped. Fits the thermal model from the
+                     logs: Lambda(T) the conductance integral, C(T) the heat
+                     capacity, and what they imply for gain, tau and settling.
+                     Imports NEITHER package and is imported by neither, so it
+                     cannot bend invariant 1 -- it reads CSVs and nothing else.
+                     `pip install -e ".[analysis]"` for scipy/matplotlib -- the
+                     recorder needs neither. Read analysis/README.md first: it
+                     carries the caveats, and the note that its inputs live in
+                     the GITIGNORED data/ and so do not exist on a fresh clone.
 ```
 
 ## Conventions
