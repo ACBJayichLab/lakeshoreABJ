@@ -33,13 +33,16 @@ import os
 #: Versioned, and the default location for everything the fits read.
 DATA_DIR = os.path.join("reference", "heater-calibration")
 
-#: The 8.8 h sweep of 2026-09-03: the trajectory the ODE is fitted to.
-SWEEP = "region_20260903-123832_complete_sweep.csv"
-#: The same export widened to 2026-09-02 16:01 -> 2026-09-04 11:00.  Not used
-#: by anything here, and kept because it is the raw archive the sweep was cut
-#: from.  **Its tail crosses the 12:07 2026-09-04 Coldplate recalibration**, so
-#: it is not a drop-in replacement for SWEEP -- see docs/ltspm3/cryostat.md.
-SWEEP_WIDE = "region_20260903-123832_complete_sweep_even_larger.csv"
+#: The sweep the ODE is fitted to: 2026-09-02 16:01 -> 2026-09-04 11:00, 43 h,
+#: 4.9-192.6 K, 2 s cadence, no gap longer than a minute.
+#:
+#: This is the WIDE export, and it is the one to use.  The 8.8 h cut of the
+#: same run that was here before caught only the middle: it saw 2.2 h of the
+#: 22.8 h hold at 180 K and 0.4 h of the 13.9 h hold at 192 K, which is what
+#: pins the slow bath behaviour.  It ends 67 minutes BEFORE the 12:07:16
+#: 2026-09-04 Coldplate recalibration, so it is entirely pre-cutover and
+#: internally consistent -- see docs/ltspm3/cryostat.md.
+SWEEP = "region_20260903-123832_complete_sweep_even_larger.csv"
 #: Flattened recorder and CD10 logs -- the dwells steps.py extracts from.
 FIT_RECORDER = "fit_recorder.csv"
 FIT_CD10 = "fit_cd10.csv"

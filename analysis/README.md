@@ -17,14 +17,20 @@ deliberately, because of what they are derived *from*:
 
 | | |
 |---|---|
-| `region_20260903-123832_complete_sweep.csv.gz` | the 8.8 h sweep, 5–187 K. **Irreplaceable** — a recorder export of a run that happened once. Nothing regenerates it. |
+| `region_..._complete_sweep_even_larger.csv.gz` | the sweep, 2026-09-02 16:01 → 09-04 11:00. 43 h, 4.9–192.6 K, 2 s cadence, no gap over a minute. **Irreplaceable** — a run that happened once. |
 | `fit_recorder.csv.gz` | flattened from the recorder's own 2026-08/09 logs, which are *not* in the repo. Derived, but from a source a clone does not have, so primary in practice. |
 | `fit_cd10.csv.gz` | the one genuinely regenerable file, from the versioned `reference/logs/CD10/*.xls`. Committed anyway, so step one of the pipeline does not fail until somebody finds a two-command dance. |
 
-Also there: `..._even_larger.csv.gz`, the same export widened to
-2026-09-02 → 09-04. Nothing uses it and it is **not** a drop-in for the sweep —
-its tail crosses the 12:07 2026-09-04 Coldplate recalibration. It is kept as
-the raw archive the sweep was cut from.
+**The 8.8 h cut of the same run that used to be here is gone** (2026-09-04,
+Jeff). It saw only the middle: 2.2 h of the 22.8 h hold at 180 K and 0.4 h of
+the 13.9 h hold at 192 K, and those long holds are what pin the slow bath
+behaviour. It survives in git history and in the gitignored `data/`; it is not
+on the remote because the wide export contains it.
+
+The wide export ends **67 minutes before** the 12:07:16 2026-09-04 Coldplate
+recalibration, so it is entirely pre-cutover and internally consistent. (An
+earlier revision of this file claimed its tail crossed the cutover. That was
+wrong — 11:00 is before 12:07.)
 
 Gzipped because git stores the same compressed bytes either way, so plain CSV
 would only buy 79 MB in every working tree instead of 13 — including for
@@ -84,6 +90,15 @@ needs neither.
 | `settling.py` | why a settle takes 20–30 min, and what a 10 K/min sweep needs |
 
 ## What came out
+
+> **STALE — re-run before quoting. 2026-09-04.** Every number in this section
+> was computed on the 8.8 h sweep and on the pre-2026-09-04 dwell grader. Both
+> have since changed: the sweep is now the 43 h wide export, and `steps.py`
+> decides a dwell on how fast it was still moving at its end rather than on how
+> far it moved in total. `steps.py` has been re-run (65 graded dwells, 17 with
+> a usable τ, 5.1–192.4 K, now including holds of 144.4 h, 74.9 h and 22.8 h
+> that the old rule discarded). **`fit_ode.py` and the figures have not.**
+> Re-run them in the order below, then replace this table and delete this note.
 
 | | |
 |---|---|

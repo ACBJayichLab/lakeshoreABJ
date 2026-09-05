@@ -184,26 +184,39 @@ def analyse(path, label=None):
             "amp_sigma": abs(A) / sigma,
             "rms_K": rms,
             "rms_sigma": rms / sigma,
+            # |dT/dt| at the last sample, from the fitted pole
+            "end_rate_k_per_h": 3600.0 * abs(A) / tau * math.exp(-span / tau),
             "Coldplate": float(np.nanmean(Tc[a:b])),
         })
     return rows
 
 
-#: A dwell that barely moved is settled whatever its reach says -- reach is
-#: meaningless when there is no transient to time, because tau is then fitted
-#: to noise.  Above this the 3-tau rule applies to T_inf exactly as it does to
-#: tau: a dwell cut off two time constants into a large relaxation returns a
-#: T_inf that is short by more than the extrapolation admits.  Both outliers
-#: this caught had reach ~2 and transients of 5 K and 18 K, and sat 12 K and
-#: 15 K off a curve every settled neighbour agrees with.
-QUIET_AMPLITUDE_K = 0.5
+#: The question a dwell has to answer is "were you still moving when you
+#: ended", and this is the rate at which it was, in K/h, read off the fitted
+#: pole at the last sample.
+#:
+#: It replaces a test on total amplitude, which asked "did you move at all" and
+#: got the long holds exactly backwards.  A 22.8 h hold at 180 K that drifts
+#: 0.50 K -- fitting at 0.99 sigma, the sensor noise floor -- has an amplitude
+#: just over the old 0.5 K bar, so the single-pole fit called that drift a
+#: relaxation with tau = 19 DAYS, reach collapsed to 0.05, and the best anchor
+#: in the whole dataset was thrown away.  Slow drift and an unfinished
+#: relaxation both give reach < 1; what separates them is how fast the sample
+#: was still moving at the end, and there the two are five orders of magnitude
+#: apart:
+#:
+#:     22.8 h at 180.07 K      0.001 K/h    settled, keep
+#:     74.9 h at 150.42 K      0.003 K/h    settled, keep
+#:     74 s  at  53.86 K     231     K/h    cut off mid-relaxation, drop
+#:     170 s at 116.89 K      31     K/h    cut off mid-relaxation, drop
+MAX_END_RATE_K_PER_H = 0.5
 
 
 def grade(r):
     """'tau' if the time constant may be believed, 'steady' if only T_inf, else ''."""
     if abs(r["settle_K"]) > MAX_SETTLE_K:
         return ""
-    if r["reach"] < MIN_REACH and r["amp_K"] >= QUIET_AMPLITUDE_K:
+    if r["end_rate_k_per_h"] > MAX_END_RATE_K_PER_H:
         return ""
     if (r["reach"] >= MIN_REACH and r["amp_sigma"] >= MIN_AMPLITUDE_SIGMA
             and r["rms_sigma"] < 8.0):
