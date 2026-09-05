@@ -191,10 +191,12 @@ matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus
                      remaining skip is conditional on something CI provides.
 docs/                recorder/ (generic) and ltspm3/ (one cryostat). Keep them apart.
 examples/            config-335-usb.yaml (coworker), config-336-usb.yaml (bench)
-reference/           Legacy MATLAB + 24 .xls chart-recorder logs, and the 218 /
-                     335 / 336 vendor manuals. Not built. Nothing regenerates
-                     any of it, which is why the manuals are in-repo despite
-                     the 24 MB.
+reference/           Legacy MATLAB + 24 .xls chart-recorder logs, the 218 /
+                     335 / 336 vendor manuals, and heater-calibration/ -- the
+                     gzipped tables analysis/ fits. Not built. Nothing here
+                     regenerates, which is why all of it is in-repo despite
+                     the size; see analysis/README.md for why the fit inputs
+                     break the derived-data-is-gitignored rule.
 data/                GITIGNORED. The recorder writes here; nothing in it is
                      versioned, so NONE OF IT EXISTS ON A FRESH CLONE.
                      Two derived sets, made by the two tools above:
@@ -202,9 +204,10 @@ data/                GITIGNORED. The recorder writes here; nothing in it is
                          28 daily files -- this is what the VIEWER opens
                          (-o defaults here):
                          python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls"
-                       data/heater calibration steps/   what the FITS read:
-                         fit_cd10.csv, fit_recorder.csv, plus Jeff's region
-                         exports. See tools/fit_table.py for the two commands.
+                       data/heater calibration steps/   the WORKING copies
+                         of what the fits read. The versioned originals are in
+                         reference/heater-calibration/; analysis/ reads those,
+                         not these. See tools/fit_table.py for how they are made.
                      Which logs are usable for what is in
                      docs/ltspm3/thermal-response.md.
 tests/               Generic. tests_ltspm3/ has the virtual-clock control harness.

@@ -4,39 +4,34 @@ Exploratory, not shipped. Nothing here is imported by `lschart` or `ltspm3`,
 and **nothing in `control/` was changed** by any of it. These are the numbers
 for a decision, not the decision.
 
-Everything derived is gitignored — CSVs and PNGs are regenerated in a few
-minutes from `data/heater calibration steps/`, which is itself derived (see
-[thermal-response.md](../docs/ltspm3/thermal-response.md) for the two
-converter commands that build it).
+The outputs are gitignored — CSVs and PNGs are regenerated in a few minutes.
+**The inputs are not**: they live versioned in
+[`reference/heater-calibration/`](../reference/heater-calibration), gzipped,
+and everything here runs from a fresh clone with no setup beyond
+`pip install -e ".[analysis]"`.
 
-## TODO: the fit inputs are not in the repo, and nothing here runs without them
+## Where the inputs live, and why they are in the repo
 
-**Not done here, deliberately — this is a note, not a change.**
-
-`data/` is gitignored in its entirety, so `data/heater calibration steps/`
-never reaches the remote. Clone this repository onto another machine and every
-script below fails at its first `open()`. The pipeline is reproducible on the
-machine it was written on and nowhere else, which is the same thing as not
-being reproducible.
-
-Three files carry the whole analysis:
+This repository gitignores derived data as a rule, and these three break it
+deliberately, because of what they are derived *from*:
 
 | | |
 |---|---|
-| `region_20260903-123832_complete_sweep.csv` | the 8.8 h sweep, 5–187 K. **This one is irreplaceable** — a recorder export of a run that happened once. |
-| `fit_recorder.csv`, `fit_cd10.csv` | flattened by `lschart/tools/fit_table.py` from the recorder logs and `reference/logs/CD10/*.xls` |
+| `region_20260903-123832_complete_sweep.csv.gz` | the 8.8 h sweep, 5–187 K. **Irreplaceable** — a recorder export of a run that happened once. Nothing regenerates it. |
+| `fit_recorder.csv.gz` | flattened from the recorder's own 2026-08/09 logs, which are *not* in the repo. Derived, but from a source a clone does not have, so primary in practice. |
+| `fit_cd10.csv.gz` | the one genuinely regenerable file, from the versioned `reference/logs/CD10/*.xls`. Committed anyway, so step one of the pipeline does not fail until somebody finds a two-command dance. |
 
-The second row is regenerable *provided* `fit_table.py` is committed and the
-raw logs are present; the first is not regenerable at all. Losing it means
-re-running an 8.8 h sweep on the cryostat.
+Also there: `..._even_larger.csv.gz`, the same export widened to
+2026-09-02 → 09-04. Nothing uses it and it is **not** a drop-in for the sweep —
+its tail crosses the 12:07 2026-09-04 Coldplate recalibration. It is kept as
+the raw archive the sweep was cut from.
 
-So they want moving somewhere versioned — `reference/` alongside the `.xls`
-logs and the manuals is the obvious home, since that is already where
-"measured once, never regenerated" lives. Whoever does it should update the
-paths in the commands below and in `fit_ode.SWEEP` / `fit_ode.ANCHORS`.
-
-Until then: **the derived CSVs in `data/` are the only copy.** They are not
-backed up by anything in this repository.
+Gzipped because git stores the same compressed bytes either way, so plain CSV
+would only buy 79 MB in every working tree instead of 13 — including for
+coworkers who wanted the strip chart and nothing else. `analysis/_data.py`
+opens either transparently, resolves names against the repository rather than
+the working directory, and when something really is missing it says which file
+and what to do.
 
 ## The model
 
@@ -59,10 +54,8 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 
 ```bash
 # 1. dwells -> steady points and time constants        (~1 min)
-.venv/Scripts/python.exe analysis/steps.py \
-  "data/heater calibration steps/region_20260903-123832_complete_sweep.csv" \
-  "data/heater calibration steps/fit_recorder.csv" \
-  "data/heater calibration steps/fit_cd10.csv" -o analysis/steps.csv
+#    no arguments: it defaults to the three versioned tables
+.venv/Scripts/python.exe analysis/steps.py
 
 # 2. the complexity ladder -> analysis/ladder.csv      (~15 min)
 .venv/Scripts/python.exe analysis/fit_ode.py
@@ -82,6 +75,7 @@ needs neither.
 |---|---|
 | `steps.py` | every constant-heater dwell fitted as `T = T∞ + A e^(−t/τ)`. Gives `T∞` extrapolated, `τ` measured, and the extrapolation distance as an error bar. **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
 | `fit_ode.py` | integrates the ODE down the 8.8 h sweep and fits Λ and C as monotone cubics in (log T, log y). One curve's knots freed at a time. Writes `ladder.csv`. |
+| `_data.py` | where the inputs live and how to open them; every reader here goes through it |
 | `fit_lambda.py` | asks whether the settled points alone can separate `σ_r T⁴` from conduction. They cannot — see below. |
 | `diagram.py` | the model, with each ODE term on its arrow |
 | `plot_gain.py` | heater → steady temperature, on both a percent and a **power** axis. The watts one is the one to hand to somebody on a different cryostat with the same heater. |
@@ -112,7 +106,7 @@ On **2026-09-04 at 12:07** a transposed digit was corrected in the Coldplate's
 calibration curve — a 6 where a 9 belonged — which had the cold end reading
 high for as long as that curve was loaded. **Every input to every fit here
 predates that**: `fit_lambda`, `fit_ode`, `plot_gain`, `plot_ode` and `steps`
-all read `Coldplate` from `data/heater calibration steps/`, which is built from
+all read `Coldplate` from `reference/heater-calibration/`, which is built from
 pre-cutover logs. See [cryostat.md](../docs/ltspm3/cryostat.md).
 
 **This very likely explains the second caveat below.** A sample settling 0.79 K
@@ -127,7 +121,7 @@ bottom of the conductance curve where `Λ` is smallest, against an `Λ(T_s)` at
 standing reminder that the cold end is where this model is weakest.
 
 > **TODO, in this order** — reprocess the pre-cutover logs onto the corrected
-> curve; rebuild `data/heater calibration steps/`; re-run the ladder in the
+> curve; rebuild `reference/heater-calibration/`; re-run the ladder in the
 > order given below; then check whether the 0.79 K caveat survives. If it does
 > not, the "model undefined below ~12 K" restriction may be liftable, and the
 > stray magnet-side load it was blamed on may not exist.

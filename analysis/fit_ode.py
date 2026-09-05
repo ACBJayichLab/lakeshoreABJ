@@ -31,8 +31,11 @@ import numpy as np
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import least_squares
 
+from _data import SWEEP as SWEEP_NAME
+from _data import open_table
+
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
-SWEEP = "data/heater calibration steps/region_20260903-123832_complete_sweep.csv"
+SWEEP = SWEEP_NAME
 ANCHORS = "analysis/steps.csv"
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
@@ -112,7 +115,8 @@ def _f(row, key):
 
 
 def load_sweep(path=SWEEP):
-    rows = list(csv.DictReader(open(path, newline="", encoding="utf-8")))
+    with open_table(path) as fh:
+        rows = list(csv.DictReader(fh))
     t = np.array([_f(r, "Time") for r in rows])
     T = np.array([_f(r, "Sample") for r in rows])
     Tc = np.array([_f(r, "Coldplate") for r in rows])
@@ -125,7 +129,8 @@ def load_sweep(path=SWEEP):
 
 
 def _rows(path=ANCHORS):
-    return list(csv.DictReader(open(path, newline="", encoding="utf-8")))
+    with open_table(path) as fh:
+        return list(csv.DictReader(fh))
 
 
 def load_anchors(path=ANCHORS, t_max=None):

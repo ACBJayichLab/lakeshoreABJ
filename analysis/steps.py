@@ -36,6 +36,8 @@ import math
 import numpy as np
 from scipy.optimize import minimize_scalar
 
+from _data import FIT_CD10, FIT_RECORDER, SWEEP, open_table
+
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
 
 #: Sensor noise, from docs/ltspm3/thermal-response.md: quadratic in T,
@@ -92,7 +94,8 @@ def _pick(header, keys):
 
 def load(path):
     """(t, T_sample, T_coldplate, u, segment, timestamps) from any recorder-shaped CSV."""
-    rows = list(csv.DictReader(open(path, newline="", encoding="utf-8")))
+    with open_table(path) as fh:
+        rows = list(csv.DictReader(fh))
     if not rows:
         return None
     tk = _pick(rows[0], TIME_KEYS)
@@ -211,8 +214,14 @@ def grade(r):
 if __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser()
-    ap.add_argument("paths", nargs="+")
+    ap = argparse.ArgumentParser(
+        description="fit every constant-heater dwell as a relaxation")
+    # Defaulted, so `python analysis/steps.py` just works in a fresh clone.
+    # The three tables are versioned in reference/heater-calibration/ and are
+    # resolved by name, not by path -- see analysis/_data.py.
+    ap.add_argument("paths", nargs="*",
+                    default=[SWEEP, FIT_RECORDER, FIT_CD10],
+                    help="input tables (default: the three versioned ones)")
     ap.add_argument("-o", "--out", default="analysis/steps.csv")
     a = ap.parse_args()
 
