@@ -127,7 +127,7 @@ box this software is meant to drive.
 
 | Key | Default | |
 |---|---|---|
-| `channels` | `{1: Input 1, 2: Input 2, 3: Input 3}` | `{input number: name}`. Only these are read and logged. Placeholders — name them for your own cryostat |
+| `channels` | `{1: Input 1, 2: Input 2, 3: Input 3}` | `{input number: name}`. Only these are read and logged. Placeholders — name them for your own cryostat. **The numbers need not be contiguous**: `{1: Sample, 2: Coldplate, 5: Magnet}` is a normal map on a box where inputs 3 and 4 are bare, and skipping them keeps dead columns out of the CSV and dead queries out of every cycle. The *name* is what becomes the column, so re-plugging a thermometer into a different input is a one-line change and the column stays continuous across it |
 | `control_input` | `1` | which input carries the sample. **Leave 0 on a box that is only being logged** — this is the channel a *software* loop would control |
 | `analog_output` | `1` | |
 | `analog_decimals` | `3` | |

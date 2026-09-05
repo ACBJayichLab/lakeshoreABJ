@@ -114,9 +114,14 @@ class SimulatedCryostat:
     """Holds the shared clock, the response and the fault state for both fakes."""
 
     #: Resting values for the ancillary channels, so a chart has something to
-    #: show.  Plausible rather than calibrated -- they are scenery.
+    #: show.  Plausible rather than calibrated -- they are scenery.  The key is
+    #: the input the thermometer is WIRED TO, so a thermometer that moves on the
+    #: real box moves here too: 218.5 was 218.3 until 2026-09-04.  ``218.2`` is
+    #: a pre-recalibration Coldplate number and is left as it is on purpose --
+    #: it is scenery, and re-deriving it would mean guessing a correction that
+    #: nobody has measured.
     DEFAULT_AUX_BASE = {
-        "218.2": 8.06, "218.3": 6.72,
+        "218.2": 8.06, "218.5": 6.72,
         "336.A": 38.2, "336.B": 290.6, "336.C": 28.56, "336.D": 3.95,
         "335.B": 77.4,
     }
@@ -180,12 +185,18 @@ class SimulatedCryostat:
         if self.faults.comms_fail:
             raise TransportError("simulated comms failure")
 
-    def aux_base(self, key: str) -> float | None:
+    def aux_base(self, key: str, *, default: float | None = 0.0) -> float | None:
         """Resting value for an ancillary channel; ``None`` means "this is the
-        control channel", which is how :meth:`value` decides whether to read it."""
+        control channel", which is how :meth:`value` decides whether to read it.
+
+        ``default`` is what an unknown channel gets.  It is 0.0 for callers that
+        just want a number, and ``None`` for a caller that needs to tell an
+        unpopulated input from one resting at absolute zero -- which is what
+        :meth:`Sim218._input` asks, since the real box reads exactly 0.0000 on
+        an input with nothing plugged into it."""
         if key in self.CONTROL_KEYS:
             return None
-        return self._aux_base.get(key, 0.0)
+        return self._aux_base.get(key, default)
 
     def value(self, key: str, base: float | None = None) -> float:
         if key in self.faults.dropout_channels:
@@ -238,6 +249,23 @@ class Sim218:
             self.analog_pct = min(100.0, max(0.0, quantised))
             self.cryostat.response.pct = self.analog_pct
 
+    def _input(self, number: int) -> float:
+        """One input's reading, in kelvin.  An unpopulated input reads 0.0000.
+
+        Which inputs exist is the cryostat's business, not this fake's: the
+        populated ones are exactly those the aux map names, plus the control
+        input.  Hardcoding 1-3 here meant that moving a thermometer on the real
+        box -- Magnet from input 3 to input 5 on 2026-09-04 -- turned it into a
+        permanent 0.0 K in simulation, which is the disconnected-sensor
+        signature and would have been read as a fault rather than as this
+        fake's own limitation.
+        """
+        key = f"218.{number}"
+        if key in self.cryostat.CONTROL_KEYS:
+            return self.cryostat.value(key)
+        base = self.cryostat.aux_base(key, default=None)
+        return 0.0 if base is None else self.cryostat.value(key, base)
+
     def handle_query(self, cmd: str) -> str:
         self.cryostat._guard_comms()
         self.cryostat.tick()
@@ -248,14 +276,8 @@ class Sim218:
             return "LSCI,MODEL218,SIM0001,1.0"
         if head == "KRDG?":
             if arg == "0":
-                vals = [
-                    self.cryostat.value("218.1"),
-                    self.cryostat.value("218.2", self.cryostat.aux_base("218.2")),
-                    self.cryostat.value("218.3", self.cryostat.aux_base("218.3")),
-                    0.0, 0.0, 0.0, 0.0, 0.0,
-                ]
-                return ",".join(f"{v:+09.4f}" for v in vals)
-            return f"{self.cryostat.value(f'218.{arg}'):+09.4f}"
+                return ",".join(f"{self._input(i):+09.4f}" for i in range(1, 9))
+            return f"{self._input(int(arg)):+09.4f}"
         if head == "SRDG?":
             return ",".join("+0.00000" for _ in range(8))
         if head == "RDGST?":

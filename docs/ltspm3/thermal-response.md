@@ -8,6 +8,13 @@ default in `ltspm3/control/`.
 > ways the wider set exposed. **Where a number here contradicts memory, the
 > number won**: re-derive from the logs, don't trust the prose.
 
+> **The Coldplate channel in every one of those logs is pre-calibration.** A
+> transposed digit in its curve was corrected at the box on 2026-09-04 12:07;
+> the cold end read high before that. Nothing on *this* page is derived from
+> Coldplate — the numbers here are Sample against heater output — so none of
+> them move. `analysis/` is the part that does depend on it, as `T_c`. See
+> [cryostat](cryostat.md#the-coldplate-was-reading-high-and-every-old-number-carries-it).
+
 ## The measurements
 
 | Property | Value |
@@ -52,7 +59,7 @@ physical `C` and `G`, R sets their absolute scale — the shapes and the ratio
 `τ = C/G` do not care, the magnitudes do.
 
 **What CD10 actually contains (converted to recorder CSV, 2026-09-03).**
-`python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls" -o data/cd10`
+`python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls" -o "data/heater calibration steps"`
 reproduces this; `data/` is gitignored, so the CSVs are derived, not stored.
 
 | log | span | heater cmds | 336? | what it is |
@@ -61,6 +68,17 @@ reproduces this; `data/` is gitignored, so the CSVs are derived, not stored.
 | `sample_monitor1` | 07-17 → 07-20, 72 h | 1 | yes | stages **at base** (1st 28.49 K @ +0.56 mK/h, 2nd 3.94 K @ +0.12 mK/h). A 72 h *constant-heater* hold at 63.07% / 96 K — a drift and noise dataset, **not** a step dataset |
 | `sample_monitor3`, `st2_monitor3` | 07-23 → 07-31 | 0 | no | constant 63.072%, ~98–100 K |
 | **`sample_monitor4`+`5`** | **08-08 → 08-20, 287 h** | **200** | **no** | the ladder: 60–70%, 99.6–170.8 K, 120 steps, **21 dwells > 3 h totalling 279 h** |
+
+**For fitting, load the flattened tables, not these logs.**
+`data/heater calibration steps/fit_cd10.csv` (298,617 rows, 857.9 h, 5 segments)
+and `fit_recorder.csv` (435,300 rows, 244.2 h, 4 segments) carry `Timestamp`,
+`t_s`, `segment`, the thermometers, `u_pct` and `note` -- and nothing else.
+**Fit each `segment` as its own trajectory**: they are split at the recording
+gaps, and CD10's are 65 h and 187 h long. The ladder is `fit_cd10.csv`
+segment 4 -- 286.9 h, 103,282 rows, 60-70%, 99.6-170.8 K.
+
+`data/cd10/` holds the same data as 28 recorder-shaped daily files; that set is
+for the viewer (`--csv`), not for fitting.
 
 **The 336 stopped logging on 2026-07-23**, so the two files carrying 200 of the
 232 heater commands have no `RAD SHIELD` / `THE CHONKE` / stage data at all.

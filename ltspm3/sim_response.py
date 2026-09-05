@@ -139,8 +139,13 @@ class ThermalModel:
 #: transient distinguishable from a one-channel glitch.  Without this coupling
 #: the simulator can never corroborate anything and the coherence logic is
 #: untestable.
+#:
+#: Keyed by the input each thermometer is WIRED TO, not by what it is called.
+#: The magnet's 0.0023 was measured while it sat on input 3; it moved to input 5
+#: on 2026-09-04 and the coupling moved with it, because it is a property of the
+#: thermometer's place in the cryostat and not of the socket.
 LTSPM3_AUX_COUPLING = {
-    "218.2": 0.0082, "218.3": 0.0023,
+    "218.2": 0.0082, "218.5": 0.0023,
     "336.A": 0.0040, "336.B": 0.0002, "336.C": 0.0015, "336.D": 0.0008,
 }
 

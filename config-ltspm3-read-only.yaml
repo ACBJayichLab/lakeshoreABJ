@@ -36,9 +36,38 @@
 #        Magnet      6.913 K          C 1st Stage    28.534 K
 #                                     D 2nd Stage     4.031 K
 #
+#   ^ COLDPLATE HERE IS PRE-CALIBRATION.  See the note below the block.
+#
 #   218 analog out 1 (SAMPLE HEATER)  66.598%   <- warmed by hand since 08-24
 #   loop 1  setpoint 28.5 K,  heater 1 at 0.0%,   range 0
 #   loop 2  setpoint 289.2 K, heater 2 at 100.0%, range 3
+
+# TWO CHANGES AT THE BOX, 2026-09-04 12:07
+# ---------------------------------------------------------------------------
+# The recorder was stopped at 12:07:16 and both of these were made by hand:
+#
+#   Coldplate (input 2) recalibrated.  A transposed digit in the calibration
+#     curve -- a 6 where a 9 belonged -- had the cold end of this cryostat
+#     reading high for as long as that curve was loaded.  EVERY COLDPLATE
+#     NUMBER TIMESTAMPED BEFORE THE CUTOVER CARRIES THAT ERROR, including the
+#     one in the dated block above and every Coldplate figure in
+#     reference/logs/ and docs/.  How wrong it is depends on temperature -- a
+#     bad curve point warps the curve locally, it is not an offset -- so no
+#     correction is quoted here, and none should be guessed.
+#     TODO: reprocess the pre-cutover logs onto the corrected curve so the
+#     archive and the live log can be read on one axis.  Until that is done,
+#     treat 2026-09-04 12:07 as a hard seam in Coldplate.
+#
+#   Magnet moved from input 3 to input 5.  Input 3 is now empty.  Only the
+#     input number changed; the thermometer and its column are the same, so
+#     `Magnet` before and after the seam is the same sensor and is comparable.
+#
+# The pre-cutover log for that day is kept at
+# data/pre-recal-2026-09-04/ltspm3-heater_2026-09-04.csv, so that no single
+# CSV spans both calibrations.  Open it with:
+#     lschart-view --csv "data/pre-recal-2026-09-04/ltspm3-heater_2026-09-04.csv"
+# See docs/ltspm3/cryostat.md.
+# ---------------------------------------------------------------------------
 #
 # Heater 2 is RAILED at 100% -- loop 2 has no headroom left, so anything that
 # adds heat to THE CHONKE will simply lose.  That is a reason to watch it, and a
@@ -78,14 +107,16 @@ instruments:
       retry_min_s: 1.0
       retry_max_s: 30.0
 
-    # Inputs 4-8 are unpopulated on this cryostat: every reference log in
-    # reference/logs/ carries numbers in Input 1-3 and blanks in 4-8.  Listing
-    # only what exists keeps five permanently-dead columns out of the CSV and
-    # five queries out of every cycle.
+    # MOVED 2026-09-04: Magnet was on input 3 and is now on input 5.  Input 3
+    # is empty, and 4 and 6-8 always were, so this map is deliberately
+    # non-contiguous -- listing only what exists keeps five permanently-dead
+    # columns out of the CSV and five queries out of every cycle.  The name is
+    # what becomes a CSV column, so `Magnet` stays `Magnet` and the column
+    # keeps its meaning across the move; the input number never reaches the log.
     channels:
       1: Sample
       2: Coldplate
-      3: Magnet
+      5: Magnet
 
     # 0 = "this box is only being logged".  It is what makes `check` report
     # "records only", and it is the honest declaration for a config with no

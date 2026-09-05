@@ -40,7 +40,7 @@ instruments:
     channels:                 # {input number: display name}; only these are read
       1: Sample
       2: Coldplate
-      3: Magnet
+      5: Magnet         # was input 3 until 2026-09-04
     control_input: 1          # the sample -- this is what the software PID controls
     # Polling RDGST? for every input costs 8 transactions a cycle and is the
     # single thing that makes a 1 s cadence impossible.  Poll it occasionally

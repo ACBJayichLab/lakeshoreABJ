@@ -55,12 +55,15 @@ class Harness:
         )
         self.sim = Sim218(self.cryostat)
         self.cryostat.response.pct = self.sim.analog_pct
-        # All three populated inputs, as on the real cryostat.  The ancillary
-        # channels are not decoration: cross-channel corroboration is what
-        # separates a fast cooldown from a sick sensor.
+        # All three populated inputs, as on the real cryostat -- and at the
+        # input numbers the real cryostat uses, which since 2026-09-04 skip 3
+        # because the magnet moved to input 5.  The gap is the point: it is the
+        # harness's only guard that nothing downstream assumes inputs 1..N.
+        # The ancillary channels are not decoration either: cross-channel
+        # corroboration is what separates a fast cooldown from a sick sensor.
         self.inst = LS218(
             LoopbackTransport(self.sim),
-            channels={1: "Sample", 2: "Coldplate", 3: "Magnet"},
+            channels={1: "Sample", 2: "Coldplate", 5: "Magnet"},
             # What an armed LTSPM3 config has to say, and for the same two
             # reasons.  `allow_writes` because the 218's analog output is the
             # sample heater and the driver now gates it like any other heater;

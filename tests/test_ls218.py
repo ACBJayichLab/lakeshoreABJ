@@ -37,6 +37,46 @@ def test_one_query_fetches_every_populated_input():
     assert "ls218.aout1" in aux
 
 
+def test_a_channel_map_with_a_gap_reads_the_inputs_it_names():
+    """A thermometer is wired to an input, and inputs are not a dense range.
+
+    On 2026-09-04 the LTSPM3 magnet moved from input 3 to input 5, leaving 3
+    empty.  The driver already read `sorted(channels)` rather than 1..N, but
+    `Sim218` answered `KRDG? 0` from a hardcoded three-element list, so in
+    simulation the moved channel came back 0.0000 -- which is precisely what
+    the real box reports for an input with nothing plugged into it, and is
+    classified as a dead sensor.  A fake that manufactures the one failure
+    signature it is supposed to help distinguish is worse than no fake.
+    """
+    cryostat = SimulatedCryostat(None, start_k=96.0)
+    cryostat._aux_base = {"218.2": 8.06, "218.5": 6.72}
+    sim = Sim218(cryostat)
+    inst = LS218(
+        LoopbackTransport(sim, inter_command_delay=0.0),
+        channels={1: "Sample", 2: "Coldplate", 5: "Magnet"},
+    )
+    readings, _ = inst.read_frame()
+
+    assert set(readings) == {"Sample", "Coldplate", "Magnet"}
+    # Not merely present: actually carrying the value wired to input 5, and
+    # graded on it.  The validity is the assertion that matters -- a 0.0 K here
+    # would still have produced a Reading, just one condemned as NO_SENSOR.
+    assert readings["Magnet"].kelvin == pytest.approx(6.72, abs=0.5)
+    assert readings["Coldplate"].kelvin == pytest.approx(8.06, abs=0.5)
+    assert all(r.validity.good for r in readings.values())
+
+
+def test_an_input_nothing_is_wired_to_reads_zero():
+    """The empty half of the same rule.  Input 3 is now bare, and a fake that
+    invented a temperature for it would hide exactly the fault the validity
+    grading exists to catch."""
+    cryostat = SimulatedCryostat(None, start_k=96.0)
+    cryostat._aux_base = {"218.2": 8.06, "218.5": 6.72}
+    sim = Sim218(cryostat)
+    assert float(sim.handle_query("KRDG? 3")) == 0.0
+    assert [float(v) for v in sim.handle_query("KRDG? 0").split(",")][2] == 0.0
+
+
 def test_a_failed_readback_does_not_discard_good_temperatures():
     """AOUT? is a nice-to-have; three working thermometers are not."""
     inst, sim = build()

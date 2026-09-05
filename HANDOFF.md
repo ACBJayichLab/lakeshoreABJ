@@ -1,3 +1,161 @@
+# Handoff — 2026-09-03 (twelfth session: CD10 in the viewer, and a heater that is not 50 ohm)
+
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
+> ## 2026-09-04 — two changes at the 218, made at the box
+>
+> Jeff recalibrated the **Coldplate** (input 2) and moved the **Magnet** from
+> **input 3 to input 5**. The recorder was stopped at **12:07:16** and that is
+> the cutover.
+>
+> **The Coldplate had a transposed digit in its calibration curve** — a 6 where
+> a 9 belonged — so the cold end has been reading high for as long as that
+> curve was loaded. Every Coldplate number below, in `docs/`, and in every log
+> before the cutover carries the error. The size of it depends on temperature
+> and **has not been measured, so no correction is quoted anywhere** — do not
+> guess one. This is invariant 9 with nothing yet to win with.
+>
+> **It reaches the fits.** `Coldplate` is `T_c` in `analysis/`, so everything
+> in `data/heater calibration steps/` and every number in `analysis/README.md`
+> is pre-cutover. It may also *resolve* the standing 0.79 K anomaly there — a
+> sample cannot settle below its own heat sink, and a sink reading high is
+> exactly that. See the top of [`analysis/README.md`](analysis/README.md).
+>
+> **The Magnet move costs analysis nothing** — same thermometer, same `Magnet`
+> column, different socket. Only `channels:` changed.
+>
+> The pre-cutover part of 09-04 is archived at
+> `data/pre-recal-2026-09-04/` so no CSV spans two calibrations. Open it with
+> `lschart-view --csv <path>`; the viewer will not splice it into live history.
+>
+> Full account: [docs/ltspm3/cryostat.md](docs/ltspm3/cryostat.md).
+
+Three commits, **786 passing, ruff clean**, no hardware touched. The session began
+as a question about how to fit heater-step data and became mostly about making the
+data reachable at all.
+
+## Start here if you are analysing heater steps
+
+**`data/` is gitignored, so none of this exists on a fresh clone.** There are two
+derived sets and they are not interchangeable -- one is shaped for the viewer, the
+other for a fit:
+
+```bash
+# the viewer's copy: recorder-shaped, one file per day
+python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls"
+python -m lschart.gui -c config.yaml --csv data/cd10/cd10_2026-08-20.csv
+
+# the fitting tables: one file each, recording gaps marked
+python -m lschart.tools.fit_table "data/cd10/cd10_*.csv"  -o "data/heater calibration steps/fit_cd10.csv"
+python -m lschart.tools.fit_table "data/ltspm3-heater_*.csv"  -o "data/heater calibration steps/fit_recorder.csv"  --rename "Cold Head=Coldplate,Shield=Magnet"
+```
+
+`data/cd10/` is 28 daily files, header byte-identical to a live recorder CSV, so
+the viewer and `steptest --from-csv` read it without knowing it is a year old.
+Point the viewer at **any one file** and backfill recovers the rest of the run
+(verified: 198,616 points, 07-15 to 08-20, from one filename).
+
+`data/heater calibration steps/` is what the fits read: `fit_cd10.csv` (298,617
+rows, 857.9 h, **5 segments**) and `fit_recorder.csv` (435,300 rows, 244.2 h,
+4 segments), each one flat table of `Timestamp, t_s, segment, <thermometers>,
+u_pct, note`. **Fit each `segment` separately** — they are split at the
+recording gaps, and CD10's are 65 h and 187 h long. The ladder is `fit_cd10.csv`
+segment 4: 286.9 h, 103,282 rows, 60–70 %, 99.6–170.8 K.
+
+Folding `Cold Head`/`Shield` onto `Coldplate`/`Magnet` is deliberate: the 218's
+inputs 2 and 3 were relabelled at the 08-26 part-roll, values continuous across
+the boundary to 2 mK. Without `--rename` that is four half-empty columns and a
+thermometer that appears from nowhere halfway through the run.
+
+Note that `--rename` is about the 08-26 **relabelling**, which is a different
+event from the 09-04 **move**: the magnet went from input 3 to input 5 without
+its name changing, so it needs no rename and the column is continuous. The
+Coldplate's *name* has been stable since 08-26; its *calibration* has not.
+
+The provenance table — what each log is and which parts are usable — is in
+[thermal-response.md](docs/ltspm3/thermal-response.md).
+
+## What landed this session
+
+### The heater is 75.5 ohm, not 50 (`a09c040`)
+
+Measured by Jeff, against the 50 the prose had carried in seven places since the
+model was written. **No fitted number moves**: R never enters a calculation here,
+because every fit is against *percent* and `dT = A·P^m` with `P = V²/R` absorbs R
+entirely into `A`. `P ∝ pct²`, `m = 3.16`, the local gains and the simulator are
+all untouched. It bites at exactly one boundary — absolute watts, where anything
+quoted against the old value is high by **1.51×**.
+
+### CD10 converted to the recorder's own CSV (`9bbf805`)
+
+`lschart/tools/xls_to_csv.py`. Three joins, each of which can produce a plausible
+file full of wrong numbers: the 336 merged by wall clock (two programs, two files,
+no shared row index) with the match rate reported per file; `ls218.aout1`
+reconstructed as a zero-order hold on the Notes column's ANALOG commands, carried
+across files, blank before the first recorded command rather than guessed; and the
+model sniffed from row 0 because `st2_monitor3.xls` is a 218 log.
+
+**The 336 stopped logging on 2026-07-23.** So `monitor4`+`5` — 287 h, 200 heater
+commands, 60–70 %, 99.6–170.8 K, the only real ladder in the archive — have no
+shield or stage data at all. `monitor1` has the 336 *and* has the stages at base
+(1st 28.49 K at +0.56 mK/h, 2nd 3.94 K at +0.12 mK/h) but is a 72 h
+**constant-heater** hold: a drift dataset, not a step dataset. `sample_cold` is
+mid-cooldown and not valid for calibration (Jeff's call).
+
+### The viewer can open a finished log (`1f70e21`)
+
+`--csv PATH`. Two silent bugs had to be fixed before it drew anything:
+
+- The channel list comes from `status.json`, so with no status file **every
+  thermometer classified as "other" and was dropped** — the chart drew the heater
+  alone over a file that had loaded perfectly, with no error anywhere.
+  `CsvTail.channel_columns()` recovers them from the header (aux columns are always
+  `instrument.key`, so the dot is the discriminator). It is a fallback, so a live
+  viewer whose status is briefly unreadable now also draws.
+- The default window is the last N seconds *of now*, and this data is a fortnight
+  old, so the chart came up empty a second time for an unrelated reason. `--csv`
+  now frames the data's own extent.
+
+## The tree, as left
+
+`main`, no worktrees, nothing uncommitted. **The recorder from the eleventh session
+is still live in `data/`** (pid 6708, `config-ltspm3-heater.yaml`, writing
+`ltspm3-heater_2026-09-03.csv`). Nothing here touched it: the converted logs go to
+`data/heater calibration steps/`, and it cannot be spliced into the live history either by directory
+(`_older_logs` uses a non-recursive `listdir`) or by name (the `cd10` prefix
+differs from `ltspm3-heater`, which is what that prefix check is for).
+
+Still no `control:` section in the running config, so the closed loop has still
+never run on this cryostat.
+
+## The analysis question this session did not settle
+
+The model carries `tau_slow = 14400 s` at `fast_fraction = 0.90`. Whether that
+second pole is real matters: with it, gain from a short step is low by the fast
+pole's share; without it, a single-pole fit is unbiased and short steps suffice.
+
+The evidence for it is thin. A two-pole grid over the 26 h hold is **flat**
+(43.7–44.1 mK, no combination preferred, already at the 44.1 mK sensor noise), and
+**every long hold in both archives follows the closing leg of a doublet** — net
+excursion ~0, so none of them can test for it. Jeff's point that hours-scale drift
+is systematic (room temperature) rather than thermal is consistent with the
+measured floor: **4.18 mK/h linear and 18.3 mK diurnal** over 59 h at constant `u`,
+phase-locked to `THE CHONKE` (peak 2.4 h vs 2.5 h local, 45 % of detrended variance).
+
+**One measurement decides it: a step of ≥1 % held ≥6 h, not a doublet.** At 13 K/%
+a 10 % slow-pole share is 1.3 K — thirty times the noise floor, unmissable. If the
+residual after the fast pole is flat, single-pole is correct everywhere and the
+campaign gets much cheaper.
+
+## Still open
+
+- The three items under [Before the first armed
+  run](docs/ltspm3/running.md#before-the-first-armed-run), `verify_readback` on the
+  218 over GPIB most of all.
+- The slow-pole test above, before any τ or K from this data is trusted.
+
+---
+
 # Handoff — 2026-08-28 (eleventh session: the panic button did not hold)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.

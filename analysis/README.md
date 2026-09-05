@@ -70,6 +70,42 @@ needs neither.
 | `τ(137 K)` | 536 s fitted, against 620 s and 709 s measured independently |
 | local gain | 0.58 → 13.4 K/%, or 40 → 650 K/W; nearly all the change between 50% and 60% |
 
+## Every `T_c` here is pre-calibration — 2026-09-04
+
+`Coldplate` is not a passenger column in this directory. It is `T_c`, and it
+enters the model directly:
+
+```
+Λ(T_s) = Q + Λ(T_c)          at steady state
+```
+
+On **2026-09-04 at 12:07** a transposed digit was corrected in the Coldplate's
+calibration curve — a 6 where a 9 belonged — which had the cold end reading
+high for as long as that curve was loaded. **Every input to every fit here
+predates that**: `fit_lambda`, `fit_ode`, `plot_gain`, `plot_ode` and `steps`
+all read `Coldplate` from `data/heater calibration steps/`, which is built from
+pre-cutover logs. See [cryostat.md](../docs/ltspm3/cryostat.md).
+
+**This very likely explains the second caveat below.** A sample settling 0.79 K
+*beneath* its own heat sink is not physics; it is the sink reading high. That
+the correction is of the same order as the anomaly is suggestive, not proof —
+neither number has been measured against the other yet.
+
+How much the fitted `Λ` moves is *not* known and is not guessed here. The
+expectation is "little": `T_c` enters only as `Λ(T_c)`, evaluated at the very
+bottom of the conductance curve where `Λ` is smallest, against an `Λ(T_s)` at
+100–200 K. But an expectation is not a result, and the anomaly above is the
+standing reminder that the cold end is where this model is weakest.
+
+> **TODO, in this order** — reprocess the pre-cutover logs onto the corrected
+> curve; rebuild `data/heater calibration steps/`; re-run the ladder in the
+> order given below; then check whether the 0.79 K caveat survives. If it does
+> not, the "model undefined below ~12 K" restriction may be liftable, and the
+> stray magnet-side load it was blamed on may not exist.
+
+Nothing in `control/` depends on any of this — see the top of this file — so
+none of it is urgent, and none of it is a safety matter.
+
 ## Caveats that outlive the numbers
 
 - **The two cooldowns differ by ~3.2 K at matched power.** Absorbed by
@@ -77,7 +113,9 @@ needs neither.
   dynamics alone.
 - **At zero power the sample settles 0.79 K *below* the coldplate reading.**
   Thermometry plus stray magnet-side load. No increasing `Λ` can represent it,
-  so the model is undefined below ~12 K and the plots say so.
+  so the model is undefined below ~12 K and the plots say so. **Read this
+  against the recalibration note above: the leading suspect is now the
+  coldplate thermometer, not a stray load.**
 - **`C(T)` is the weakly constrained half.** The ladder buys 24× from Λ knots
   and ~10% from C knots; the 20 measured τ pin it to about ±30%. Anything
   sized on `C` — the velocity feedforward gain especially — inherits that.

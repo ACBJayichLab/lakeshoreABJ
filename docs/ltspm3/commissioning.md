@@ -24,7 +24,7 @@ the older documents will find "nothing on this cryostat has been talked to yet"
 | Recorder | live on `config-ltspm3-heater.yaml`, cadence **2.0 s**, **6.0 days uptime, 0 dropped cycles** |
 | Sample | **180.57 K**, settled — 69.027% held **25.7 h**, +0.019 K/h |
 | `ls218.aout1` | **69.027 %** — and the ceiling is 70.0%, so **0.97% of headroom** |
-| Coldplate / Magnet | 8.47 K / 7.04 K |
+| Coldplate / Magnet | 8.47 K / 7.04 K — **the Coldplate figure is pre-calibration and wrong**; see [cryostat](cryostat.md#the-coldplate-was-reading-high-and-every-old-number-carries-it) |
 | RAD SHIELD / 1st / 2nd Stage | 40.02 K / 28.61 K / 4.08 K |
 | 336 loop 2 (THE CHONKE) | 289.06 K, heater 2 at **100 %, still railed** |
 | Data on disk | 422,852 rows over 237 h, 2026-08-24 → now |
@@ -333,6 +333,8 @@ What to get out of it:
 | Readback resolution | `AOUT?` flickers by 0.003% with nothing commanded — but **only at some commanded values**. See below |
 | The 336's loop 2 | heater 2 is **railed at 99.8%**. Watch it; do not touch it. It has no headroom, so anything adding heat to THE CHONKE simply wins |
 | Column names moved mid-run | files up to `2026-08-26` carry `Cold Head` / `Shield`; `2026-08-26_part2` onward carry `Coldplate` / `Magnet`, for the same two physical inputs. Any analysis spanning the rename must accept both spellings or it silently drops five days down to two |
+| Coldplate recalibrated | **2026-09-04 12:07:16.** A transposed digit in the calibration curve had it reading high for as long as that curve was loaded. Every Coldplate number above, and in every log before the cutover, carries the error; the size of it depends on temperature and has not been measured, so no correction is quoted. The pre-cutover part of that day is archived at `data/pre-recal-2026-09-04/`. See [cryostat](cryostat.md) |
+| Magnet moved input | **2026-09-04.** Input 3 → input 5; input 3 is now empty. The name and hence the CSV column are unchanged, so `Magnet` is continuous and comparable across the move — unlike Coldplate, this one costs analysis nothing |
 
 #### The `AOUT?` flicker, characterised
 
