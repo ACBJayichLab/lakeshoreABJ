@@ -61,6 +61,11 @@ MIN_REACH = 3.0
 MAX_SETTLE_K = 2.0
 MAX_END_RATE_K_PER_H = 0.5
 
+#: Aim for this fraction of each bar rather than for the bar.  See `dwell_for`:
+#: a plan with no margin loses the rungs whose tau the model has slightly low,
+#: and those are the expensive ones at the top of the ladder.
+AIM = 0.5
+
 
 def model(hi_k: float = 190.0, n: int = 4000):
     """``(T, u, tau, dTdu)`` along the fitted steady state.
@@ -118,7 +123,8 @@ def targets(lo: float, hi: float, n: int, space: str, T, u, Q):
 
 
 def dwell_for(d_t: float, tau: float, *, min_reach: float, max_settle_k: float,
-              max_end_rate: float, min_s: float, max_s: float) -> float:
+              max_end_rate: float, min_s: float, max_s: float,
+              aim: float = AIM) -> float:
     """How long the grader will need this rung to be held.
 
     All three of its tests are the same exponential seen from different sides,
@@ -126,16 +132,25 @@ def dwell_for(d_t: float, tau: float, *, min_reach: float, max_settle_k: float,
     is almost always the one that does: it is the strictest by roughly
     ``ln(3600 * max_settle / (tau * max_end_rate))``, about two further time
     constants at 110 K.
+
+    ``aim`` is why this does not size for the bar itself.  Sizing a dwell to
+    land exactly on 0.5 K/h means every rung whose tau the model has slightly
+    low comes back at 0.51 and is thrown away -- which is what a rehearsal
+    against the fitted plant does, four times out of thirty, on a plan with no
+    margin at all.  Half the bar costs ``tau ln 2`` per rung, about half an hour
+    across a 30-rung ladder, and it is the cheapest half hour in the campaign.
     """
     d_t = abs(d_t)
     if tau <= 0 or d_t <= 0:
         return min_s
+    settle_target = max_settle_k * aim
+    rate_target = max_end_rate * aim
     need = min_reach * tau
-    if d_t > max_settle_k:
-        need = max(need, tau * math.log(d_t / max_settle_k))
+    if d_t > settle_target:
+        need = max(need, tau * math.log(d_t / settle_target))
     rate0 = 3600.0 * d_t / tau
-    if rate0 > max_end_rate:
-        need = max(need, tau * math.log(rate0 / max_end_rate))
+    if rate0 > rate_target:
+        need = max(need, tau * math.log(rate0 / rate_target))
     return min(max_s, max(min_s, need))
 
 
@@ -152,7 +167,11 @@ def main() -> int:
     ap.add_argument("--max-settle-k", type=float, default=MAX_SETTLE_K)
     ap.add_argument("--max-end-rate", type=float, default=MAX_END_RATE_K_PER_H)
     ap.add_argument("--min-dwell", type=float, default=120.0)
-    ap.add_argument("--max-dwell", type=float, default=2400.0)
+    ap.add_argument("--max-dwell", type=float, default=3600.0)
+    ap.add_argument("--aim", type=float, default=AIM,
+                    help="fraction of each grading bar to size the dwell for; "
+                         "1.0 sizes for the bar itself and loses every rung the "
+                         "model was slightly optimistic about")
     ap.add_argument("-o", "--out", default="analysis/sweep_plan.csv")
     args = ap.parse_args()
 
@@ -181,7 +200,8 @@ def main() -> int:
         dwell = dwell_for(d_t, float(tq), min_reach=args.min_reach,
                           max_settle_k=args.max_settle_k,
                           max_end_rate=args.max_end_rate,
-                          min_s=args.min_dwell, max_s=args.max_dwell)
+                          min_s=args.min_dwell, max_s=args.max_dwell,
+                          aim=args.aim)
         cum += dwell
         rows.append({"u_pct": f"{uq:.3f}", "T_pred_k": f"{Tq:.3f}",
                      "d_t_k": f"{d_t:.3f}", "gain_k_per_pct": f"{gq:.3f}",

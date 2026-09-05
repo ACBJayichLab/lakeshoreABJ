@@ -17,6 +17,42 @@ default in `ltspm3/control/`.
 > see
 > [cryostat](cryostat.md#the-coldplate-was-reading-high-because-it-had-another-sensors-curve).
 
+## τ is not a constant — 2026-09-05
+
+The numbers below were the best available from the legacy logs, and the 43 h
+sweep of 2026-09-02 → 09-04 has since superseded two of them. The ODE fitted to
+that sweep in `analysis/` gives **τ = C(T)/Λ′(T)** as a function of temperature,
+and it moves by three orders of magnitude:
+
+| T | u% | dT/du | τ |
+|---|---|---|---|
+| 10 K | 24.6 | 0.3 K/% | < 1 s |
+| 40 K | 56.4 | 3.9 K/% | 36 s |
+| 70 K | 60.6 | 11.6 K/% | 246 s |
+| 110 K | 63.7 | 13.2 K/% | 489 s |
+| 137 K | 65.5 | 13.1 K/% | 586 s |
+
+The 620 s below is the 137 K value and is right *there*. It is wrong everywhere
+else, and the reason is physics rather than measurement: C falls steeply as the
+cryostat cools while the link's conductance does not, so the cold end settles
+almost instantly and the warm end takes ten minutes.
+
+Two things follow.
+
+**Below about 25 K the recorder cannot measure τ at all.** τ is a few seconds
+against a 2 s cadence, so a dwell down there yields a steady state and nothing
+else, however long it is held. That is not a defect in the dwell — it is
+Nyquist, and the fix if τ(T) at the cold end ever matters is a faster cadence
+for those rungs, not a longer hold.
+
+**The simulator has both versions.** `ltspm3/sim_response.py` is the two-pole
+model these legacy numbers describe, and the control harness is still calibrated
+against it. `ltspm3/fitted_response.py` integrates the fitted ODE from a frozen
+table, needs no scipy, and is what `ltspm3.tools.sweep --simulate` rehearses
+against — because a sweep is the one thing that crosses the whole range, and the
+two models disagree by up to 17 K in the middle of it. Regenerate the table with
+`python analysis/export_response.py` after any refit.
+
 ## The measurements
 
 | Property | Value |

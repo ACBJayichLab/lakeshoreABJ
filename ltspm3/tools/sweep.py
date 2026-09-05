@@ -71,7 +71,9 @@ Plan it first -- this touches nothing and prints the ladder and the ETA::
 
     python -m ltspm3.tools.sweep --plan sweep_plan.csv --plan-only
 
-Rehearse the whole thing on a virtual clock, no recorder and no hardware::
+Rehearse the whole thing on a virtual clock, no recorder and no hardware.  The
+plant is the same fitted ODE the plan was sized from, so the rehearsal's dwell
+lengths are the ones to expect::
 
     python -m ltspm3.tools.sweep --plan sweep_plan.csv --simulate
 
@@ -589,22 +591,26 @@ class RecorderLink:
 class SimLink:
     """The same interface against the calibrated simulator, on a virtual clock.
 
-    A rehearsal, and the only way the stepping logic is testable at all.  What
-    it proves is the *procedure* -- the ordering, the stop rule, the journal,
-    the abort paths.  What it does not prove is the timing: the simulator's
-    ``ResponseParams`` carries one time constant inferred from a single step at
-    137 K, where the fitted model has tau running from under a second at 10 K to
-    about 500 s at 110 K.  Read a rehearsal's dwell lengths as fiction.
+    A rehearsal, and the only way the stepping logic is testable at all.  It
+    proves the *procedure* -- the ordering, the stop rule, the journal, the
+    abort paths -- and on ``model="fitted"`` it also proves the timing, because
+    then the plant is the same fitted ODE the plan's dwells were sized from.
+
+    ``model="legacy"`` is :mod:`ltspm3.sim_response`'s two-pole response, kept
+    because the control harness is calibrated against it and because a rehearsal
+    that disagrees between the two is worth looking at.  Its steady state is out
+    by up to 17 K in the middle of the range and its tau is one flat 620 s, so
+    read *that* one's dwell lengths as fiction.
     """
 
-    def __init__(self, *, dt: float = 2.0, start_pct: float = 6.0,
+    def __init__(self, *, dt: float = 2.0, start_pct: float = 0.0,
                  channel: str = "Sample", coldplate: str | None = "Coldplate",
-                 max_output_pct: float = 70.0) -> None:
+                 max_output_pct: float = 70.0, model: str = "fitted") -> None:
         from lschart.instruments import LS218
         from lschart.instruments.sim import Sim218, SimulatedCryostat
         from lschart.transport import LoopbackTransport
 
-        from ..sim_response import LTSPM3_AUX_COUPLING, ResponseParams, ThermalModel
+        from ..sim_response import LTSPM3_AUX_COUPLING
 
         class _Clock:
             t = 0.0
@@ -616,26 +622,42 @@ class SimLink:
         self.dt = dt
         self.channel = channel
         self.coldplate = coldplate
-        params = ResponseParams()
-        start_k = params.steady_state(start_pct)
+        self.model = model
+        if model == "fitted":
+            from ..fitted_response import FittedResponse
+
+            response = FittedResponse(start_pct=start_pct)
+            #: The plan's per-rung caps came from this same model, so they
+            #: apply here unchanged -- which is the whole point of rehearsing
+            #: against it.
+            self.tau_fast_s = None
+        elif model == "legacy":
+            from ..sim_response import ResponseParams, ThermalModel
+
+            params = ResponseParams()
+            response = ThermalModel(params, start_k=params.steady_state(start_pct))
+            #: One flat time constant, so a rehearsal against this one has to
+            #: size its own dwell cap -- the plan's belong to a different plant.
+            self.tau_fast_s = float(params.tau_fast)
+        else:
+            raise SweepAbort(f"unknown simulator model {model!r}")
+        response.pct = start_pct
+        start_k = response.temperature
         self.cryostat = SimulatedCryostat(
-            ThermalModel(params, start_k=start_k), start_k=start_k,
-            time_source=self.clock, seed=7, aux_coupling=LTSPM3_AUX_COUPLING)
+            response, start_k=start_k, time_source=self.clock, seed=7,
+            aux_coupling=LTSPM3_AUX_COUPLING)
         self.sim = Sim218(self.cryostat)
         self.sim.analog_pct = start_pct
-        self.cryostat.response.pct = start_pct
         self.inst = LS218(LoopbackTransport(self.sim),
                           channels={1: "Sample", 2: "Coldplate", 5: "Magnet"},
                           allow_writes=True, verify_writes=False,
                           max_output_pct=max_output_pct)
-        #: The simulator's own time constant, published so a rehearsal can size
-        #: its dwell cap from the plant it is actually driving rather than from
-        #: the fitted model, which this is not.
-        self.tau_fast_s = float(params.tau_fast)
         self.writes: list[tuple[float, float]] = []
 
     def describe(self) -> str:
-        return "the calibrated simulator, on a virtual clock"
+        which = ("the fitted ODE" if self.model == "fitted"
+                 else "the legacy two-pole response")
+        return f"the simulator on {which}, on a virtual clock"
 
     def sample(self, timeout_s: float = 60.0) -> Sample:
         self.clock.t += self.dt
@@ -674,7 +696,7 @@ class SimLink:
 @dataclass
 class Options:
     min_dwell_s: float = 120.0
-    max_dwell_s: float = 2400.0
+    max_dwell_s: float = 3600.0
     min_reach: float = MIN_REACH
     max_settle_k: float = MAX_SETTLE_K
     max_end_rate: float = MAX_END_RATE_K_PER_H
@@ -956,6 +978,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the ladder and the ETA, and touch nothing")
     ap.add_argument("--simulate", action="store_true",
                     help="rehearse against the simulator on a virtual clock")
+    ap.add_argument("--sim-model", choices=("fitted", "legacy"), default="fitted",
+                    help="which plant to rehearse against: the fitted ODE "
+                         "(default) or sim_response's two-pole model, whose "
+                         "steady state is out by up to 17 K in the middle")
+    ap.add_argument("--sim-start-pct", type=float, default=0.0,
+                    help="where the simulated heater starts (default 0%%, which "
+                         "is where the cryostat sits before a sweep)")
     ap.add_argument("--journal", help="where to write the dwell journal")
     ap.add_argument("--channel", default="Sample")
     ap.add_argument("--coldplate", default="Coldplate")
@@ -965,9 +994,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-dwell", type=float, default=120.0,
                     help="seconds before a rung may be called settled")
     ap.add_argument("--max-dwell", type=float, default=None,
-                    help="seconds after which a rung is abandoned and recorded "
-                         "anyway (default 2400; a rehearsal sizes it from the "
-                         "simulator's own tau instead)")
+                    help="global backstop, in seconds, after which a rung is "
+                         "abandoned and recorded anyway (default 3600). The "
+                         "plan's own per-rung cap is used where it is shorter")
     ap.add_argument("--min-reach", type=float, default=MIN_REACH,
                     help="time constants a dwell must run before tau is believed")
     ap.add_argument("--max-settle-k", type=float, default=MAX_SETTLE_K)
@@ -994,7 +1023,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     opts = Options(
-        min_dwell_s=args.min_dwell, max_dwell_s=args.max_dwell or 2400.0,
+        min_dwell_s=args.min_dwell, max_dwell_s=args.max_dwell or 3600.0,
         min_reach=args.min_reach, max_settle_k=args.max_settle_k,
         max_end_rate=args.max_end_rate, max_k=args.max_k,
         max_coldplate_k=args.max_coldplate_k,
@@ -1011,21 +1040,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.simulate:
-        link = SimLink(dt=2.0, start_pct=min(t.u_pct for t in treads),
-                       channel=args.channel, coldplate=args.coldplate or None)
+        try:
+            link = SimLink(dt=2.0, start_pct=args.sim_start_pct,
+                           channel=args.channel, coldplate=args.coldplate or None,
+                           model=args.sim_model)
+        except SweepAbort as exc:
+            print(exc, file=sys.stderr)
+            return 2
         journal_path = args.journal
-        treads = without_model_dwells(treads)
-        if args.max_dwell is None:
-            # Six time constants.  The end-rate bar is the strictest of the
-            # three and needs about four and a half of them; sizing the cap
-            # from the fitted model instead would cut every cold rung one fifth
-            # of the way through a relaxation the simulator does not share.
-            opts.max_dwell_s = 6.0 * link.tau_fast_s
-        print("rehearsal: the plan's per-rung caps are dropped. They come from "
-              "tau(T) off\nthe fitted model, and the simulator has one flat tau "
-              f"of {link.tau_fast_s:.0f} s at every\ntemperature -- so a cap of "
-              f"{opts.max_dwell_s:.0f} s applies throughout instead. This checks "
-              "the\nprocedure; the timing is fiction.\n")
+        if link.tau_fast_s is not None:
+            # The legacy response is a different plant: one flat tau at every
+            # temperature, where the plan's caps came from a tau that spans
+            # three orders of magnitude.  Handing it those caps cuts every cold
+            # rung a fifth of the way through a relaxation and returns a page of
+            # dropped rungs that says nothing about the cryostat.
+            treads = without_model_dwells(treads)
+            if args.max_dwell is None:
+                # Six time constants: the end-rate bar is the strictest of the
+                # three and needs about four and a half.
+                opts.max_dwell_s = 6.0 * link.tau_fast_s
+            print("rehearsal on the LEGACY response: the plan's per-rung caps "
+                  "are dropped,\nbecause they came from tau(T) off the fitted "
+                  f"model and this plant has one\nflat tau of {link.tau_fast_s:.0f}"
+                  f" s. A cap of {opts.max_dwell_s:.0f} s applies throughout "
+                  "instead, and\nthe timing is fiction.\n")
     else:
         from lschart import config as config_mod
 
