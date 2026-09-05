@@ -371,9 +371,13 @@ def report(t: np.ndarray, cols: dict[str, np.ndarray], channel: str,
     jit, mad, rho = sample_jitter(w)
     p(f"  SAMPLE-TO-SAMPLE JITTER {jit * 1e3:.2f} mK "
       f"(robust {mad * 1e3:.2f}, lag-1 rho {rho:+.2f})")
-    p(f"    -- the 218 makes ~{max(1, round(2.0 * dt)):d} readings per logged sample "
-      f"at 2 rdg/s per input; averaging them would divide this by "
-      f"~{max(1.0, (2.0 * dt) ** 0.5):.1f}x if it is white at the instrument's rate")
+    p("    -- if the instrument reads faster than this log samples, the readings "
+      "in between")
+    p("       are being discarded; averaging them instead is free noise "
+      "reduction.  On a")
+    p("       218 the per-input rate is 16/(inputs enabled) Hz, so the factor "
+      "is config-")
+    p("       dependent -- see docs/recorder/instruments.md.")
 
     p("\n  WHERE THE NOISE LIVES (rms by band)")
     for label, _lo, _hi, sd in band_rms(w, dt):
