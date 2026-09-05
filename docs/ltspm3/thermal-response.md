@@ -8,12 +8,14 @@ default in `ltspm3/control/`.
 > ways the wider set exposed. **Where a number here contradicts memory, the
 > number won**: re-derive from the logs, don't trust the prose.
 
-> **The Coldplate channel in every one of those logs is pre-calibration.** A
-> transposed digit in its curve was corrected at the box on 2026-09-04 12:07;
-> the cold end read high before that. Nothing on *this* page is derived from
+> **The Coldplate channel in every one of those logs is pre-calibration.**
+> Input 2 was carrying another thermometer's curve until 2026-09-04 12:07, so
+> the cold end read high by 12–13%. Nothing on *this* page is derived from
 > Coldplate — the numbers here are Sample against heater output — so none of
-> them move. `analysis/` is the part that does depend on it, as `T_c`. See
-> [cryostat](cryostat.md#the-coldplate-was-reading-high-and-every-old-number-carries-it).
+> them move. `analysis/` is the part that does depend on it, as `T_c`, and its
+> inputs have been remapped. Reprocessed logs live in `data/coldplate-recal/`;
+> see
+> [cryostat](cryostat.md#the-coldplate-was-reading-high-because-it-had-another-sensors-curve).
 
 ## The measurements
 

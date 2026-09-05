@@ -89,7 +89,8 @@
 #        Magnet      6.913 K          C 1st Stage    28.534 K
 #                                     D 2nd Stage     4.031 K
 #
-#   ^ COLDPLATE HERE IS PRE-CALIBRATION.  See the note below the block.
+#   ^ COLDPLATE HERE IS PRE-CALIBRATION: the box was on the wrong curve, and
+#     8.304 K was really 6.762 K.  See the note below the block.
 #
 #   218 analog out 1 (SAMPLE HEATER)  66.598%  <- what this file can move
 #   336 loop 1  setpoint 28.5 K,  heater 1 at 0.0%, range 0
@@ -99,17 +100,17 @@
 # ---------------------------------------------------------------------------
 # The recorder was stopped at 12:07:16 and both of these were made by hand:
 #
-#   Coldplate (input 2) recalibrated.  A transposed digit in the calibration
-#     curve -- a 6 where a 9 belonged -- had the cold end of this cryostat
-#     reading high for as long as that curve was loaded.  EVERY COLDPLATE
+#   Coldplate (input 2) recalibrated.  The 218 was carrying X186276's curve on
+#     this input; the Coldplate is X186279.  A different thermometer, about 12%
+#     higher in resistance at every temperature, so the cold end of this
+#     cryostat read high for as long as that curve was loaded.  EVERY COLDPLATE
 #     NUMBER TIMESTAMPED BEFORE THE CUTOVER CARRIES THAT ERROR, including the
 #     one in the dated block above and every Coldplate figure in
-#     reference/logs/ and docs/.  How wrong it is depends on temperature -- a
-#     bad curve point warps the curve locally, it is not an offset -- so no
-#     correction is quoted here, and none should be guessed.
-#     TODO: reprocess the pre-cutover logs onto the corrected curve so the
-#     archive and the live log can be read on one axis.  Until that is done,
-#     treat 2026-09-04 12:07 as a hard seam in Coldplate.
+#     reference/logs/ and docs/.  It is not an offset -- 6 K logged was 4.93 K,
+#     77 K logged was 65.33 K -- but it IS exactly computable, and the
+#     pre-cutover logs have been reprocessed into data/coldplate-recal/.
+#     Both curves are in reference/sensor-curves/; the tool is
+#     `python -m lschart.tools.recalibrate --report --from ... --to ...`.
 #
 #   Magnet moved from input 3 to input 5.  Input 3 is now empty.  Only the
 #     input number changed; the thermometer and its column are the same, so

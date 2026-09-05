@@ -163,6 +163,16 @@ lschart/                    GENERIC -- any Lake Shore cryostat
                      integrated through one of those converges on a number
                      anyway. Aux readbacks dropped; --rename folds a
                      relabelled channel (Cold Head -> Coldplate, 08-26).
+  tools/recalibrate.py  Re-reads a log through a different sensor curve, when
+                     the box turns out to have had the wrong one loaded:
+                     kelvin -> resistance -> kelvin through two .340 breakpoint
+                     tables, which is exact because it is the instrument's own
+                     interpolation run backwards and then forwards. REFUSES to
+                     invert a RAILED reading -- past the end of the loaded table
+                     the box clamped and the resistance is gone, and the
+                     plausible-looking number you get from inverting the clamp
+                     is the worst possible output. Never writes over its input.
+                     Used once, for the Coldplate; see reference/sensor-curves/.
 
 ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
   thermal_response.py The one measured P(pct)/T(P) curve. Shared by the
@@ -192,11 +202,16 @@ matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus
 docs/                recorder/ (generic) and ltspm3/ (one cryostat). Keep them apart.
 examples/            config-335-usb.yaml (coworker), config-336-usb.yaml (bench)
 reference/           Legacy MATLAB + 24 .xls chart-recorder logs, the 218 /
-                     335 / 336 vendor manuals, and heater-calibration/ -- the
-                     gzipped tables analysis/ fits. Not built. Nothing here
-                     regenerates, which is why all of it is in-repo despite
-                     the size; see analysis/README.md for why the fit inputs
-                     break the derived-data-is-gitignored rule.
+                     335 / 336 vendor manuals, heater-calibration/ -- the
+                     gzipped tables analysis/ fits -- and sensor-curves/, the
+                     vendor .340 breakpoint tables. A log is meaningless
+                     without knowing which curve was loaded when it was
+                     written, and the 218 had the WRONG ONE on input 2 until
+                     2026-09-04: X186276's, where the Coldplate is X186279.
+                     Not built. Nothing here regenerates, which is why all of
+                     it is in-repo despite the size; see analysis/README.md for
+                     why the fit inputs break the derived-data-is-gitignored
+                     rule.
 data/                GITIGNORED. The recorder writes here; nothing in it is
                      versioned, so NONE OF IT EXISTS ON A FRESH CLONE.
                      Two derived sets, made by the two tools above:
@@ -208,6 +223,11 @@ data/                GITIGNORED. The recorder writes here; nothing in it is
                          of what the fits read. The versioned originals are in
                          reference/heater-calibration/; analysis/ reads those,
                          not these. See tools/fit_table.py for how they are made.
+                       data/coldplate-recal/             every pre-cutover log
+                         re-read on the right Coldplate curve -- cd10/,
+                         recorder/ and fit-inputs/. THIS is what to open for
+                         anything before 2026-09-04 12:07. Its README.txt has
+                         the commands. Made by tools/recalibrate.py.
                      Which logs are usable for what is in
                      docs/ltspm3/thermal-response.md.
 tests/               Generic. tests_ltspm3/ has the virtual-clock control harness.

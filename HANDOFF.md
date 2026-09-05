@@ -2,24 +2,33 @@
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
 
-> ## 2026-09-04 — two changes at the 218, made at the box
+> ## 2026-09-04/05 — two changes at the 218, and the reprocessing they needed
 >
 > Jeff recalibrated the **Coldplate** (input 2) and moved the **Magnet** from
 > **input 3 to input 5**. The recorder was stopped at **12:07:16** and that is
 > the cutover.
 >
-> **The Coldplate had a transposed digit in its calibration curve** — a 6 where
-> a 9 belonged — so the cold end has been reading high for as long as that
-> curve was loaded. Every Coldplate number below, in `docs/`, and in every log
-> before the cutover carries the error. The size of it depends on temperature
-> and **has not been measured, so no correction is quoted anywhere** — do not
-> guess one. This is invariant 9 with nothing yet to win with.
+> **The Coldplate had another thermometer's calibration loaded.** The 218 was
+> carrying **X186276**'s curve on input 2; the Coldplate is **X186279**. The
+> serials differ in one digit and the sensors do not — X186276 is a CX-1050-CU
+> unit about 12% higher in resistance at every temperature — so the cold end
+> read high for as long as that curve was loaded. Every Coldplate number below,
+> in `docs/`, and in every log before the cutover carries it. (The 09-04
+> session wrote this up as "a transposed digit in the curve"; the digit was in
+> the *serial number*.)
 >
-> **It reaches the fits.** `Coldplate` is `T_c` in `analysis/`, so everything
-> in `data/heater calibration steps/` and every number in `analysis/README.md`
-> is pre-cutover. It may also *resolve* the standing 0.79 K anomaly there — a
-> sample cannot settle below its own heat sink, and a sink reading high is
-> exactly that. See the top of [`analysis/README.md`](analysis/README.md).
+> **The correction is exact, and it has been applied.** Both curve files are in
+> [`reference/sensor-curves/`](reference/sensor-curves/), and
+> `lschart.tools.recalibrate` composes them — kelvin → resistance → kelvin.
+> 6 K logged was 4.93 K; 77 K was 65.33 K; 300 K was 265.10 K. The pre-cutover
+> logs are reprocessed into `data/coldplate-recal/`, and
+> `reference/heater-calibration/` has been remapped in place so `analysis/`
+> reads the corrected `T_c` with no code change.
+>
+> **It resolved the 0.79 K anomaly outright.** 13,290 rows across the three fit
+> tables had the sample sitting *below* its own heat sink; after the remap
+> there are **none**, in any table, at any power. See the top of
+> [`analysis/README.md`](analysis/README.md).
 >
 > **The Magnet move costs analysis nothing** — same thermometer, same `Magnet`
 > column, different socket. Only `channels:` changed.
