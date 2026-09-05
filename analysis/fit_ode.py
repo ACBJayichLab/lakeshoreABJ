@@ -53,7 +53,7 @@ ANCHORS = "analysis/steps.csv"
 #: It is part of the cache key, so bumping it invalidates every stored fit
 #: at once -- which is the point: the input digest catches changed DATA and
 #: cannot possibly catch changed CODE.
-FIT_CACHE_VERSION = 2
+FIT_CACHE_VERSION = 3
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
 #: extrapolation distance.  CD10 is a different cooldown from the sweep and
@@ -289,6 +289,24 @@ def load_decimated(path=DECIMATED):
 def _rows(path=ANCHORS):
     with open_table(path) as fh:
         return list(csv.DictReader(fh))
+
+
+def anchor_groups(path=ANCHORS, t_max=None):
+    """Which cooldown each anchor came from: 0 for the sweep's own, 1 for CD10.
+
+    The two are known to disagree by about 3 K at matched power -- different
+    contact, different radiation, a different parasitic load -- and no single
+    Lambda can satisfy both.  Fitted as one free power offset per cooldown,
+    that stops being an error and becomes a measurement; see `fit(groups=...)`.
+    """
+    out = []
+    for r in _rows(path):
+        if not r.get("grade"):
+            continue
+        if t_max is not None and _f(r, "T_inf") > t_max:
+            continue
+        out.append(1 if r["source"].startswith("fit_cd10") else 0)
+    return np.array(out, dtype=int)
 
 
 def load_anchors(path=ANCHORS, t_max=None):
@@ -564,7 +582,7 @@ def cache_store(key: str, x, nfev: int) -> None:
 
 
 def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
-        tier2=False, weights=None, n_drift=0):
+        tier2=False, weights=None, n_drift=0, groups=None):
     """Fit Lambda and C to a sweep.
 
     ``weights`` is the per-sample weight of the sweep residual, and exists for
@@ -601,6 +619,12 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     # see DRIFT_SIGMA_W.  Linear interpolation rather than a spline: with three
     # knots a spline's extra smoothness buys nothing and its overshoot is one
     # more way for a nuisance term to reach somewhere it should not.
+    # One free power offset per anchor group beyond the first.  Group 0 is the
+    # sweep's own cooldown and is the reference, so it gets no offset -- an
+    # offset on every group would be degenerate with Lambda's own level.
+    groups = np.zeros(len(aT), int) if groups is None else np.asarray(groups, int)
+    n_group = int(groups.max()) if len(groups) else 0
+
     dk = np.linspace(t[0], t[-1], n_drift) if n_drift else np.zeros(0)
     w_drift = (math.sqrt(DRIFT_SHARE * len(t) / max(n_drift, 1))
                / DRIFT_SIGMA_W)
@@ -608,7 +632,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     def drift_of(p):
         if not n_drift:
             return None
-        return np.interp(t, dk, p[-n_drift:])
+        return np.interp(t, dk, p[len(p) - n_tail:len(p) - n_group])
 
     def unpack2(p):
         f = 1.0 / (1.0 + math.exp(-p[-2]))
@@ -626,24 +650,33 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
                if LAMBDA_SMOOTH_SHARE and len(rough_T) > 2 else 0.0)
     rough_lx = np.log(rough_T)
 
+    n_tail = n_drift + n_group
+
     def split_p(p):
         """(lambda knots, capacity knots) with the tail parameters removed."""
-        body = p[:-n_drift] if n_drift else p
+        body = p[:-n_tail] if n_tail else p
         return body[:n], (body[n:-2] if tier2 else body[n:])
+
+    def group_offsets(p):
+        """Per-anchor power offset, in watts.  Zero for the reference group."""
+        if not n_group:
+            return 0.0
+        q = np.concatenate([[0.0], p[len(p) - n_group:]])
+        return q[groups]
 
     def run(p):
         pl, pc = split_p(p)
         q = drift_of(p)
         if not tier2:
             return integrate(lam, cap, pl, pc, t, Tc, u, T[0], q_extra=q)
-        f, g = unpack2(p[:-n_drift] if n_drift else p)
+        f, g = unpack2(p[:-n_tail] if n_tail else p)
         return integrate2(lam, cap, pl, pc, f, g, t, Tc, u, T[0])
 
     def resid(p):
         pl, pc = split_p(p)
         model = run(p)
         r_sweep = w_sweep * (np.log(model) - logT) / SWEEP_SIGMA_REL
-        dQ = lam(pl, aT) - lam(pl, aTc) - aQ
+        dQ = lam(pl, aT) - lam(pl, aTc) - aQ - group_offsets(p)
         r_anchor = w_anchor * dQ / lam.slope(pl, aT) / aS
         shape = np.log(cap(pc, pT) / cap(pc, ref)[0])
         r_shape = w_shape * (shape - p_target)
@@ -655,14 +688,16 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
                   - (g[1:-1] - g[:-2]) / (rough_lx[1:-1] - rough_lx[:-2]))
             parts.append(w_rough * d2)
         if n_drift:
-            parts.append(w_drift * p[-n_drift:])
+            parts.append(w_drift
+                         * p[len(p) - n_tail:len(p) - n_group])
         return np.concatenate(parts)
 
     p0 = np.concatenate([pl0, pc0]
                         + ([np.array(TIER2_SEED)] if tier2 else [])
-                        + ([np.zeros(n_drift)] if n_drift else []))
+                        + ([np.zeros(n_drift)] if n_drift else [])
+                        + ([np.zeros(n_group)] if n_group else []))
     key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aQ,
-                    tauV, w_sweep,
+                    tauV, w_sweep, groups,
                     np.array([n_drift, LAMBDA_SMOOTH_SHARE,
                               LAMBDA_SMOOTH_SIGMA], float))
     hit = cache_load(key, len(p0))
@@ -674,10 +709,12 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         x, nfev = s.x, s.nfev
         cache_store(key, x, nfev)
     pl, pc = split_p(x)
-    split, mass_ratio = (unpack2(x[:-n_drift] if n_drift else x) if tier2
+    split, mass_ratio = (unpack2(x[:-n_tail] if n_tail else x) if tier2
                          else (float("nan"),) * 2)
     model = run(x)
-    drift_w = x[-n_drift:] if n_drift else np.zeros(0)
+    drift_w = (x[len(x) - n_tail:len(x) - n_group] if n_drift
+               else np.zeros(0))
+    group_w = x[len(x) - n_group:] if n_group else np.zeros(0)
     err = model - T
     # Weighted, so a decimated fit reports the same quantity a full-grid one
     # does: rms over TIME, not over samples.  Unweighted these agree exactly on
@@ -695,6 +732,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         "hold_h": float((t[hold][-1] - t[hold][0]) / 3600.0),
         "n_lam": n_lam, "n_cap": n_cap, "npar": len(x), "nfev": nfev,
         "n_drift": n_drift, "drift_w": drift_w, "drift_t": dk,
+        "n_group": n_group, "group_w": group_w,
         "drift_mw": float(1e3 * np.abs(drift_w).max()) if n_drift else 0.0,
         "lam": lam, "cap": cap, "pl": pl, "pc": pc,
         "t": t, "T": T, "Tc": Tc, "u": u, "model": model,

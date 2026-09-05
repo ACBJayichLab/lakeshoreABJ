@@ -119,7 +119,7 @@ number below came out of that run. The full ladder is `analysis/ladder.csv`.
 
 | | |
 |---|---|
-| fit quality | **0.2024 K rms** over 43 h and 4.9–192.6 K — Λ 12 knots, C 4, 3 drift knots, fitted on the decimated sweep and scored on the full one. 10.9 K max, all of it inside one 9-minute recovery slew. Without the drift term, 0.404 K at Λ 10 |
+| fit quality | **0.1577 K rms** over 43 h and 4.9–192.6 K — Λ 20 knots with a curvature penalty on dΛ/dT, C 4, 3 drift knots, a per-cooldown offset, fitted on the decimated sweep. 10.9 K max, all of it inside one 9-minute recovery slew. Without the drift term, 0.404 K at Λ 10 |
 | what the residual is made of | **bias, not noise.** Inside the 22.8 h hold at 180.5 K the scatter is **49 mK** and the level is **−0.39 K**; inside the 13.9 h hold at 192.4 K, 48 mK and **+0.55 K**. The model reproduces each hold thirty times better than it places the pair |
 | `dΛ/dT` | peaks ~25 mW/K near 10–13 K, 1.60 mW/K at 100 K, 1.79 at 180 K — the link's conductivity maximum |
 | `C(T)` | a **4.89 g** Cu/sapphire/diamond Debye mix |
@@ -293,6 +293,45 @@ the whole 43 h.
 sweep. `plot_ode.py` deliberately does not: it is the complexity study, and it
 compares knot counts on the full grid with no drift so the fan-out means what
 it has always meant.
+
+## Each cooldown gets its own offset — 2026-09-05
+
+The residual against the settled dwells had a systematic look that survived
+everything thrown at it: 9 to 20 Λ knots, the curvature penalty, the drift
+term, and driving `T_c` from the bath. Correlating it against every anchor
+property said why it was not a Λ problem:
+
+| | vs `T_inf` | vs `settle_K` | vs `span_s` | vs `tau_s` |
+|---|---|---|---|---|
+| this cooldown | −0.36 | **−0.55** | −0.55 | −0.31 |
+| CD10 | −0.18 | **−0.71** | +0.03 | +0.61 |
+
+The residual tracks how far each anchor's `T_inf` was *extrapolated* better
+than it tracks temperature. And the dominant feature was never the slope: it
+was a **2.46 K separation between the two cooldowns**, with the same
+−3.7 mK/K slope inside each. A common slope on two independent cooldowns is a
+property of the anchors, not of either cryostat state.
+
+CD10 is a different cooldown — different contact, different radiation, a
+different parasitic load — and no single Λ can satisfy both. That has been a
+caveat in this file since it was written. It is now **one fitted parameter**:
+
+| | sweep rms | this cooldown | CD10 |
+|---|---|---|---|
+| one curve for both | 0.1678 K | mean −0.25 K, max \|res\| 2.39 | mean **+2.21 K**, max 3.53 |
+| a power offset for CD10 | **0.1577 K** | mean −0.11 K, max 2.39 | mean **+0.17 K**, max 1.50 |
+
+**CD10 sits −3.67 mW from this cooldown at matched temperature**, which at
+~550 K/W near 180 K is about 2 K and is the "two cooldowns differ by 3.2 K"
+caveat, measured instead of absorbed into per-anchor margins. Both clouds now
+sit within 0.2 K of zero and Λ stays universal — the same principle as the
+slow drift, one timescale up.
+
+Things that did **not** explain it, all measured before this one was tried:
+more Λ knots (9→20 leaves the trend at −6.4 mK/K), the curvature penalty,
+adding the fitted drift to the drawn steady-state curve (it makes this cooldown
+*worse*, −0.25 → −0.74 K), and dropping CD10's anchors entirely (sweep rms
+0.4467 → 0.4383).
 
 ## Method, and what is wrong with it
 

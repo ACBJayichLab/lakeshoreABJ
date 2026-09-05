@@ -114,6 +114,19 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
     mT = np.array([_g(v, "T_inf") for v in rows])
     cd10 = np.array([v["source"].startswith("fit_cd10") for v in rows])
 
+    # CD10 is a different cooldown -- different contact, different radiation,
+    # a different parasitic load -- and no single Lambda can satisfy both.  The
+    # fit measures that as ONE free power offset (fit_ode.anchor_groups), so
+    # CD10's dwells are drawn against the same curve shifted by it rather than
+    # against a curve that was never theirs.  Without this they sat 2.2 K high
+    # as a body, which reads as a model error and is not one.
+    offset_mw = 1e3 * float(r["group_w"][0]) if r["n_group"] else 0.0
+    mP = mP + np.where(cd10, offset_mw, 0.0)
+    mU = np.where(cd10, 100.0 * np.sqrt(np.maximum(mP, 0) * 1e-3 * F.R_OHM)
+                  / (F.GAIN * F.V_FS), mU)
+    cd10_label = (f"settled dwells, CD10 ({offset_mw:+.1f} mW)" if offset_mw
+                  else "settled dwells, CD10 (other cooldown)")
+
 
     fig, ax = plt.subplots(1, 4, figsize=(21.0, 5.0))
     fig.suptitle("LTSPM3 steady state from the fitted model — "
@@ -127,7 +140,7 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
         a.plot(mx[~cd10], mT[~cd10], "o", ms=5, mfc="none", color="#1a202c",
                label="settled dwells, this cooldown")
         a.plot(mx[cd10], mT[cd10], "s", ms=4, mfc="none", color="#c05621",
-               label="settled dwells, CD10 (other cooldown)")
+               label=cd10_label)
         a.axvspan(0, float(x.min()), color="#e2e8f0", alpha=.7, lw=0)
         a.set_xlabel(ylabel); a.set_ylabel("steady sample T  [K]")
         a.set_title(title)
@@ -149,12 +162,12 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
     a.plot(mT[~cd10], (pred - mT)[~cd10], "o", ms=5, mfc="none",
            color="#1a202c", label="this cooldown")
     a.plot(mT[cd10], (pred - mT)[cd10], "s", ms=4, mfc="none",
-           color="#c05621", label="CD10")
+           color="#c05621", label=f"CD10 ({offset_mw:+.1f} mW)")
     a.axhline(0, color="#718096", lw=.7)
     a.axhspan(-1, 1, color="#2c7a7b", alpha=.10, lw=0, label="±1 K")
     a.set_xlabel("measured steady T  [K]")
     a.set_ylabel("model − measured  [K]")
-    a.set_title("(c) against the settled dwells, on the power axis")
+    a.set_title("(c) against the settled dwells, each cooldown on its own offset")
     a.grid(alpha=.3); a.legend(fontsize=8)
 
     # Panel (d) is tau, not thermal resistance.  dT/dP is a static property and
@@ -188,7 +201,9 @@ def main():
     data, w = F.load_decimated()
     hi = float(data[1].max())
     anchors, taus = F.load_anchors(t_max=hi), F.load_taus(t_max=hi)
-    r = F.fit(N_LAM, N_CAP, data, anchors, taus, weights=w, n_drift=N_DRIFT)
+    groups = F.anchor_groups(t_max=hi)
+    r = F.fit(N_LAM, N_CAP, data, anchors, taus, weights=w, n_drift=N_DRIFT,
+              groups=groups)
     print(f"  Lambda {N_LAM} knots, C {N_CAP}, drift {N_DRIFT}: "
           f"rms {r['rms_k']:.3f} K, opening hold {r['hold_max_k']:.2f} K "
           f"over {r['hold_h']:.1f} h")
@@ -248,6 +263,9 @@ def main():
     dudT = (50.0 / (F.GAIN * F.V_FS)) * np.sqrt(F.R_OHM / Q) * dQdT
     dTdu = 1.0 / dudT
 
+    if r["n_group"]:
+        print(f"  CD10 sits {1e3 * r['group_w'][0]:+.2f} mW from this cooldown "
+              f"at matched temperature")
     figure(r, T, Tc, Q, u, dTdu, rows, OUT)
 
     print(f"\n{'P mW':>9}{'u %':>8}{'T_ss K':>10}{'dT/dP K/W':>11}"
