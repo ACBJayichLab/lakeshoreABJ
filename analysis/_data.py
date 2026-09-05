@@ -4,9 +4,11 @@ They live in ``reference/heater-calibration/``, gzipped, and they are in the
 repository.  That is a deliberate reversal of this repo's usual rule that
 derived data is gitignored, and the reason is what they are derived *from*:
 
-* ``region_*_complete_sweep.csv`` is a recorder export of a run that happened
-  once -- 8.8 h, 5-187 K, 2026-09-03.  Nothing regenerates it.  Losing it means
-  running another sweep on the cryostat.
+* ``region_*_complete_sweep_even_larger.csv`` is a recorder export of a run
+  that happened once -- 43 h, 4.9-192.6 K, 2026-09-02 16:01 to 09-04 11:00.
+  Nothing regenerates it.  Losing it means running another sweep on the
+  cryostat.  Its ``Coldplate`` column was remapped onto the corrected curve on
+  2026-09-05; every other column is as the recorder wrote it.
 * ``fit_recorder.csv`` is flattened from the recorder's own 2026-08/09 logs,
   which are **not** in the repository.  Derived, but from a source that is
   gone as far as a fresh clone is concerned, so it is primary in practice.

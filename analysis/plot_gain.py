@@ -1,13 +1,17 @@
 """Heater vs steady temperature, out of the fitted model.
 
-Drawn twice, against heater percent and against heater power.
+One figure, four panels.  **Percent appears exactly once**, in panel (a),
+because percent is what somebody standing at this cryostat types -- and it
+carries this rig's whole actuator chain, the 218's full scale and the 1.11
+voltage gain in front of the heater, none of which transfers anywhere.
+Everything else is watts.  Power does transfer: anyone driving the same
+75.5 ohm heater can put their own cryostat on the same axis, and the
+differential dT/dP in K/W IS the thermal resistance of their link rather than
+a property of anybody's DAC.
 
-Percent is what this cryostat is commanded in, and it carries this rig's whole
-actuator chain -- the 218's full scale and the 1.11 voltage gain in front of
-the heater.  None of that transfers.  Power does: anyone driving the same
-75.5 ohm heater can put their own cryostat on the watts axis and compare
-directly, and the differential gain in K/W is the thermal resistance of their
-link, not a property of anybody's DAC.
+(This used to draw the whole three-panel figure twice, once per axis.  Two
+figures differing only in the abscissa is two things to keep in step and one
+of them is always the stale one.)
 
 The curve comes out of the fit without root-finding, by parameterising on
 temperature rather than on output:
@@ -15,16 +19,24 @@ temperature rather than on output:
     Q(T)  =  Lambda(T) - Lambda(T_c(T))          the power that holds T
     u(T)  =  100 * sqrt(Q R) / (G * V_fs)        exactly invertible
 
-T_c is not a constant.  The coldplate runs 5.7 K with the heater off and 8.5 K
+T_c is not a constant.  The coldplate runs 4.7 K with the heater off and 6.9 K
 at 180 K, and it is measured, so it is interpolated from the settled dwells
 rather than assumed -- which also makes the curve self-consistent instead of
 being a family of curves indexed by a bath temperature nobody chose.
 
-Below about 12 K the sample settles COLDER than the coldplate reads -- 4.88 K
-against 5.67 K at zero power.  That is thermometry, plus whatever small heat
-leak sits on the magnet side, and it is real but it is not the link: no
-increasing Lambda can produce it.  The model is undefined there and the plot
-says so rather than extrapolating into it.
+Those two numbers used to read 5.7 and 8.5.  The 218 was carrying another
+thermometer's curve on input 2 until 2026-09-04, and reference/heater-calibration/
+has since been remapped; see analysis/README.md.  What went with it was the
+reason this model was declared undefined below ~12 K: the sample appeared to
+settle COLDER than its own heat sink -- 4.88 K against 5.67 K at zero power --
+which no increasing Lambda can produce.  On the corrected curve the coldplate
+is at 4.67 K and the sample sits 0.21 K above it, an ordinary small parasitic
+load and nothing a Lambda cannot represent.
+
+The shaded region below the fit and the note on the plot are STILL DRAWN, and
+should be, until somebody re-derives the low-temperature end on the corrected
+T_c.  The anomaly that motivated the restriction is gone; whether the fit now
+extends down there is a separate question that has not been asked yet.
 """
 from __future__ import annotations
 
@@ -74,78 +86,84 @@ def coldplate_of(rows, n_bins=8):
     return PchipInterpolator(np.array(xs), y, extrapolate=True), T.min(), T.max()
 
 
-def figure(mode, r, T, Tc, Q, u, dTdu, rows, out):
-    """One figure; `mode` picks the input axis, percent or power."""
-    watts = mode == "watt"
-    x = 1e3 * Q if watts else u
-    xlabel = ("heater power  P = V² / 75.5 Ω   [mW]" if watts
-              else "heater output u  [%]")
-    mX = (1e3 * np.array([_g(v, "P_W") for v in rows]) if watts
-          else np.array([_g(v, "u_pct") for v in rows]))
+def figure(r, T, Tc, Q, u, dTdu, rows, out):
+    """One figure: percent once, because that is what the operator types, and
+    watts everywhere else, because that is the half another cryostat can use.
+
+    Percent carries this rig's entire actuator chain -- the 218's full scale
+    and the 1.11 voltage gain in front of the heater -- and none of it
+    transfers.  Power does: the differential dT/dP in K/W IS the thermal
+    resistance of the link.  So panel (a) is the one anyone standing at this
+    cryostat needs, and (b) to (d) are the physics.
+    """
+    P = 1e3 * Q                                       # mW
+    mU = np.array([_g(v, "u_pct") for v in rows])
+    mP = 1e3 * np.array([_g(v, "P_W") for v in rows])
     mT = np.array([_g(v, "T_inf") for v in rows])
     cd10 = np.array([v["source"].startswith("fit_cd10") for v in rows])
 
     # dT/dP = (dT/du)(du/dP), and dP/du = 2P/u, so dT/dP = dT/du * u / (2P).
-    # It is the differential thermal resistance of the link and the only one of
-    # these two curves another cryostat can be compared against.
-    gain = dTdu * u / (2.0 * Q) if watts else dTdu
-    gname = "dT/dP  [K/W]" if watts else "dT/du  [K/%]"
+    # Analytic throughout -- see main() -- because u(T) is very flat where the
+    # steady state is steep, and differencing the curve there returns spikes
+    # that are arithmetic rather than cryostat.
+    dTdP = dTdu * u / (2.0 * Q)
 
-    fig, ax = plt.subplots(1, 3, figsize=(16.5, 5.0))
+    fig, ax = plt.subplots(1, 4, figsize=(21.0, 5.0))
     fig.suptitle("LTSPM3 steady state from the fitted model — "
                  f"Λ {N_LAM} knots, C {N_CAP}, sweep rms {r['rms_k']:.2f} K"
-                 + ("   ·   power axis: transferable to any cryostat on the "
-                    "same 75.5 Ω heater" if watts else
-                    "   ·   percent axis: this rig's DAC and 1.11 voltage gain"),
+                 "   ·   T$_c$ on the corrected Coldplate curve (X186279)",
                  fontsize=12.5)
 
-    a = ax[0]
-    a.plot(x, T, "-", color="#2c7a7b", lw=2.0, label="model steady state")
-    a.plot(mX[~cd10], mT[~cd10], "o", ms=5, mfc="none", color="#1a202c",
-           label="settled dwells, this cooldown")
-    a.plot(mX[cd10], mT[cd10], "s", ms=4, mfc="none", color="#c05621",
-           label="settled dwells, CD10 (other cooldown)")
-    a.axvspan(0, float(x.min()), color="#e2e8f0", alpha=.7, lw=0)
-    a.annotate("sample settles colder than\nthe coldplate reads — thermometry\n"
-               "and stray magnet-side load", (float(x.min()), 20),
-               textcoords="offset points", xytext=(30, 30), fontsize=8,
-               color="#4a5568",
-               arrowprops=dict(arrowstyle="->", color="#a0aec0", lw=.9))
-    a.set_xlabel(xlabel); a.set_ylabel("steady sample T  [K]")
-    a.set_title("(a) heater to temperature")
-    a.grid(alpha=.3); a.legend(fontsize=8, loc="upper left")
+    def dwells(a, x, mx, ylabel, title):
+        a.plot(x, T, "-", color="#2c7a7b", lw=2.0, label="model steady state")
+        a.plot(mx[~cd10], mT[~cd10], "o", ms=5, mfc="none", color="#1a202c",
+               label="settled dwells, this cooldown")
+        a.plot(mx[cd10], mT[cd10], "s", ms=4, mfc="none", color="#c05621",
+               label="settled dwells, CD10 (other cooldown)")
+        a.axvspan(0, float(x.min()), color="#e2e8f0", alpha=.7, lw=0)
+        a.set_xlabel(ylabel); a.set_ylabel("steady sample T  [K]")
+        a.set_title(title)
+        a.grid(alpha=.3); a.legend(fontsize=8, loc="upper left")
 
-    a = ax[1]
-    pred = np.interp(mX, x, T)
-    a.plot(mT[~cd10], (pred - mT)[~cd10], "o", ms=5, mfc="none", color="#1a202c",
-           label="this cooldown")
-    a.plot(mT[cd10], (pred - mT)[cd10], "s", ms=4, mfc="none", color="#c05621",
-           label="CD10")
+    dwells(ax[0], u, mU, "heater output u  [%]",
+           "(a) what to type — this rig's DAC and 1.11 gain")
+    ax[0].annotate("below the fitted range —\nnot re-derived since\n"
+                   "the 2026-09-04 T$_c$ remap", (float(u.min()), 20),
+                   textcoords="offset points", xytext=(30, 30), fontsize=8,
+                   color="#4a5568",
+                   arrowprops=dict(arrowstyle="->", color="#a0aec0", lw=.9))
+
+    dwells(ax[1], P, mP, "heater power  P = V² / 75.5 Ω   [mW]",
+           "(b) the transferable one — same heater, any cryostat")
+
+    a = ax[2]
+    pred = np.interp(mP, P, T)
+    a.plot(mT[~cd10], (pred - mT)[~cd10], "o", ms=5, mfc="none",
+           color="#1a202c", label="this cooldown")
+    a.plot(mT[cd10], (pred - mT)[cd10], "s", ms=4, mfc="none",
+           color="#c05621", label="CD10")
     a.axhline(0, color="#718096", lw=.7)
     a.axhspan(-1, 1, color="#2c7a7b", alpha=.10, lw=0, label="±1 K")
     a.set_xlabel("measured steady T  [K]")
     a.set_ylabel("model − measured  [K]")
-    a.set_title("(b) how well the curve reproduces the settled dwells")
+    a.set_title("(c) against the settled dwells, on the power axis")
     a.grid(alpha=.3); a.legend(fontsize=8)
 
-    a = ax[2]
-    a.semilogy(T, gain, "-", color="#2c7a7b", lw=2.0,
-               label="differential  " + ("dT/dP" if watts else "dT/du"))
-    if watts:
-        a.semilogy(T, (T - Tc) / Q, "--", color="#805ad5", lw=1.6,
-                   label="secant  (T − T$_c$) / P")
-        a.legend(fontsize=8, loc="lower right")
+    a = ax[3]
+    a.semilogy(T, dTdP, "-", color="#2c7a7b", lw=2.0,
+               label="differential  dT/dP")
+    a.semilogy(T, (T - Tc) / Q, "--", color="#805ad5", lw=1.6,
+               label="secant  (T − T$_c$) / P")
     for Tq, lab in ((99.6, "99.6 K"), (151.1, "151 K"), (180.6, "181 K")):
-        gq = float(np.interp(Tq, T, gain))
+        gq = float(np.interp(Tq, T, dTdP))
         a.plot(Tq, gq, "*", ms=13, color="#805ad5", zorder=5)
-        a.annotate(f"{lab}\n{gq:.0f}" + (" K/W" if watts else " K/%"),
-                   (Tq, gq), textcoords="offset points", xytext=(-10, -36),
+        a.annotate(f"{lab}\n{gq:.0f} K/W", (Tq, gq),
+                   textcoords="offset points", xytext=(-10, -36),
                    fontsize=8, ha="right", color="#553c9a",
                    arrowprops=dict(arrowstyle="-", color="#805ad5", lw=.8))
-    a.set_xlabel("steady sample T  [K]"); a.set_ylabel(gname)
-    a.set_title("(c) " + ("thermal resistance of the link"
-                          if watts else "local gain"))
-    a.grid(alpha=.3, which="both")
+    a.set_xlabel("steady sample T  [K]"); a.set_ylabel("dT/dP  [K/W]")
+    a.set_title("(d) thermal resistance of the link")
+    a.grid(alpha=.3, which="both"); a.legend(fontsize=8, loc="lower right")
 
     fig.tight_layout()
     fig.savefig(out, dpi=130)
@@ -167,7 +185,15 @@ def main():
     T = np.geomspace(4.9, 190.0, 1200)
     Tc = np.clip(tc_of(T), 1.0, None)
     Q = r["lam"](r["pl"], T) - r["lam"](r["pl"], Tc)
-    ok = Q > 0
+
+    # Stop at the lowest power anybody actually held, not at Q > 0.  As the
+    # sample approaches its own heat sink both Lambda(T) - Lambda(T_c) and
+    # dQ/dT go to zero together, so dT/dP is 0/0 and the curve grows a spike
+    # that is arithmetic rather than cryostat -- and it appears exactly where
+    # there is no measurement to contradict it.  The floor is the smallest
+    # settled dwell's power, so the curve ends where the evidence does.
+    floor = float(np.nanmin([_g(v, "P_W") for v in rows]))
+    ok = Q >= floor
     T, Tc, Q = T[ok], Tc[ok], Q[ok]
     u = 100.0 * np.sqrt(Q * F.R_OHM) / (F.GAIN * F.V_FS)
 
@@ -182,9 +208,7 @@ def main():
     dudT = (50.0 / (F.GAIN * F.V_FS)) * np.sqrt(F.R_OHM / Q) * dQdT
     dTdu = 1.0 / dudT
 
-    figure("pct", r, T, Tc, Q, u, dTdu, rows, OUT)
-    figure("watt", r, T, Tc, Q, u, dTdu, rows,
-           OUT.replace(".png", "_watts.png"))
+    figure(r, T, Tc, Q, u, dTdu, rows, OUT)
 
     print(f"\n{'P mW':>9}{'u %':>8}{'T_ss K':>10}{'dT/dP K/W':>11}"
           f"{'secant K/W':>12}{'dT/du K/%':>11}")

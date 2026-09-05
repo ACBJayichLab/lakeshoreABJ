@@ -22,6 +22,12 @@ import fit_ode as F  # noqa: E402
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/ode_fit.png"
 LEVELS = ((7, 4), (8, 4), (9, 4))
+
+#: Worst error tolerated on the sweep's opening hold, in kelvin.  The
+#: cryostat did not move over that stretch, so anything here is the
+#: model's own drift.  Calibrated when the opening hold was 2.2 h; on the
+#: 43 h sweep it is 22.8 h and nothing clears it, which the panel says.
+HOLD_LIMIT_K = 0.5
 COLORS = ("#2b6cb0", "#c05621", "#2c7a7b")
 
 #: The two independent step-response measurements in the record, for scale.
@@ -54,7 +60,7 @@ def trajectory_figure(fits, data, grid, best):
     gs = fig.add_gridspec(3, 3, height_ratios=[1.35, 0.75, 1.25], hspace=.45,
                           wspace=.28)
     n_tau = len(F.load_taus(t_max=float(T.max()))[0])
-    fig.suptitle("LTSPM3 tier-1 ODE fitted to the 8.8 h sweep of 2026-09-03, "
+    fig.suptitle("LTSPM3 tier-1 ODE fitted to the 43 h sweep of 2026-09-02/04, "
                  f"anchored on {len(srows)} settled dwells "
                  f"and {n_tau} measured time constants", fontsize=13.5)
 
@@ -198,15 +204,28 @@ def diagnostics_figure(fits, data, grid):
                    [float(r["hold_max_k"]) for r in lam_rows], "o--",
                    color="#c53030", mfc="none",
                    label="worst error on the opening hold")
-        a.axhline(0.5, color="#c53030", lw=.8, ls=":")
-        bad = [int(r["n_lam"]) for r in lam_rows
-               if float(r["hold_max_k"]) > 0.5]
-        if bad:
-            a.axvspan(min(bad) - .4, max(bad) + .4, color="#fed7d7", alpha=.45,
+        a.axhline(HOLD_LIMIT_K, color="#c53030", lw=.8, ls=":")
+        # Only the LEADING run of rejects is shaded.  Shading min(bad)..max(bad)
+        # paints the whole panel the moment nothing clears the line, which is
+        # exactly what happened when the sweep grew from 8.8 h to 43 h: the
+        # opening hold went from 2.2 h to 22.8 h and no knot count clears
+        # 0.5 K any more.  A band across everything says "all rejected" while
+        # looking like "some rejected", which is the worst of both.
+        counts = [int(r["n_lam"]) for r in lam_rows]
+        over = [float(r["hold_max_k"]) > HOLD_LIMIT_K for r in lam_rows]
+        lead = 0
+        while lead < len(over) and over[lead]:
+            lead += 1
+        if lead:
+            hi_x = counts[lead - 1] + (.4 if lead < len(counts) else .3)
+            a.axvspan(counts[0] - .3, hi_x, color="#fed7d7", alpha=.45,
                       lw=0, zorder=0)
-            a.text((min(bad) + max(bad)) / 2, 0.55, "rejected: drifts during\n"
-                   "a hold that did not move", fontsize=7.5, ha="center",
-                   va="bottom", color="#742a2a")
+            a.text((counts[0] + counts[lead - 1]) / 2, HOLD_LIMIT_K * 1.1,
+                   ("rejected: drifts during\na hold that did not move"
+                    if lead < len(counts) else
+                    "NO knot count clears this on the 43 h sweep —\n"
+                    "its opening hold is 22.8 h, not 2.2 h"),
+                   fontsize=7.5, ha="center", va="bottom", color="#742a2a")
         a.set_xlabel("knots in the curve being freed")
         a.set_ylabel("residual  [K]")
         a.set_title("(h) which curve the data constrains, and what it rejects")

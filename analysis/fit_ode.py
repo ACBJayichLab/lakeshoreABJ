@@ -1,4 +1,4 @@
-"""Fit the tier-1 ODE to the 8.8 h sweep, anchored on the settled holds.
+"""Fit the tier-1 ODE to the 43 h sweep, anchored on the settled holds.
 
     C(T) dT/dt = Q(u) - [ Lambda(T) - Lambda(T_c(t)) ]
 
@@ -20,11 +20,22 @@ Integration is exponential Euler: T += g*tau*(1 - exp(-dt/tau)) with
 tau = C/Lambda'.  It is exact for the linearised relaxation and unconditionally
 stable, which matters because C falls steeply at the cold end and an explicit
 step would go unstable there long before the interesting physics did.
+
+**Converged fits are cached** under ``analysis/.fit_cache/``, keyed on a digest
+of the sweep, the anchors, the taus and the knot counts.  Four scripts here fit
+the same (9, 4) model and each one used to spend a quarter of an hour
+rediscovering it; now the ladder pays for all of them.  The key contains the
+data, so remapping ``T_c`` invalidates every entry on its own -- but it cannot
+see a change to the objective in THIS file, which is what FIT_CACHE_VERSION is
+for.  Bump it, or delete the directory.
 """
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import math
+import os
 from bisect import bisect_right
 
 import numpy as np
@@ -37,6 +48,12 @@ from _data import open_table
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
 SWEEP = SWEEP_NAME
 ANCHORS = "analysis/steps.csv"
+
+#: Bump when anything about the parameterisation or the objective changes.
+#: It is part of the cache key, so bumping it invalidates every stored fit
+#: at once -- which is the point: the input digest catches changed DATA and
+#: cannot possibly catch changed CODE.
+FIT_CACHE_VERSION = 1
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
 #: extrapolation distance.  CD10 is a different cooldown from the sweep and
@@ -114,7 +131,44 @@ def _f(row, key):
         return math.nan
 
 
-def load_sweep(path=SWEEP):
+#: The 218's own input filter as it is now configured: 4 points on a 4 Hz
+#: sample, so a single pole at about 1 s.
+#:
+#: MEASURED, twice, and it is off by default because of what the measurements
+#: say rather than out of caution.
+#:
+#: On the sweep's 22.8 h hold at 180.6 K the sample's sample-to-sample noise is
+#: 28.1 mK; running this filter over the logged 2 s data leaves 22.4 mK.  It
+#: removes a fifth of a term that is already three orders below the residual,
+#: because a 1 s pole is FASTER than the 2 s cadence the log was written at and
+#: there is very little left in the record for it to remove.  End to end, on
+#: the (3, 4) fit: **the residual moves by 0.007 mK against an rms of 5.23 K**.
+#:
+#: It is not merely useless here, it is slightly harmful.  The same filter
+#: displaces the trace by up to **1.48 K** during the recovery ramp, where the
+#: sample slews at 4 K/s -- that is measurement lag, it looks exactly like
+#: model mismatch, and the fit would spend real freedom absorbing it.  Filter
+#: a fit's input to remove noise it does not have and you buy lag it did not.
+#:
+#: Where it does matter is the LOOP, not the fit: it puts a 1 s lag in the
+#: measurement path, which is nothing against tau = 600 s at 137 K and is a
+#: quarter of tau at 25 K.  That belongs in pid_tuning.py, against the plant.
+HARDWARE_FILTER_TAU_S = 1.0
+
+
+def _ema(x, tau_s, dt_s):
+    """Single-pole low pass, dt-aware, the same form the recorder's own filters
+    use: ``alpha = 1 - exp(-dt/tau)`` rather than a fixed alpha."""
+    alpha = 1.0 - math.exp(-dt_s / tau_s)
+    out = np.empty_like(x)
+    acc = x[0]
+    for i, v in enumerate(x):
+        acc += alpha * (v - acc)
+        out[i] = acc
+    return out
+
+
+def load_sweep(path=SWEEP, filter_tau_s=None):
     with open_table(path) as fh:
         rows = list(csv.DictReader(fh))
     t = np.array([_f(r, "Time") for r in rows])
@@ -124,8 +178,14 @@ def load_sweep(path=SWEEP):
     ok = ~(np.isnan(t) | np.isnan(T) | np.isnan(Tc) | np.isnan(u))
     t, T, Tc, u = t[ok], T[ok], Tc[ok], u[ok]
     grid = np.arange(t[0], t[-1], STEP_S)
-    return (grid, np.interp(grid, t, T), np.interp(grid, t, Tc),
-            np.interp(grid, t, u))
+    out = (grid, np.interp(grid, t, T), np.interp(grid, t, Tc),
+           np.interp(grid, t, u))
+    if filter_tau_s:
+        # Thermometers only.  The heater is a commanded step, and low-passing
+        # a step turns the one input the fit knows exactly into a guess.
+        out = (out[0], _ema(out[1], filter_tau_s, STEP_S),
+               _ema(out[2], filter_tau_s, STEP_S), out[3])
+    return out
 
 
 def _rows(path=ANCHORS):
@@ -351,6 +411,52 @@ def opening_hold(t, u):
 TIER2_SEED = (0.0, 0.0)
 
 
+#: Where a converged parameter vector is kept so the figure scripts do not
+#: each spend a quarter of an hour re-deriving one another's fit.  Gitignored:
+#: it is derived, it is keyed on a digest of the inputs, and a stale entry
+#: cannot survive a change to the sweep, the anchors or the taus because all
+#: three are in the key.  Delete the directory to force a refit.
+CACHE_DIR = os.path.join("analysis", ".fit_cache")
+
+
+def cache_key(n_lam, n_cap, tier2, max_nfev, *arrays) -> str:
+    h = hashlib.sha256()
+    for name in (n_lam, n_cap, tier2, max_nfev, FIT_CACHE_VERSION):
+        h.update(repr(name).encode())
+    for a in arrays:
+        b = np.ascontiguousarray(a, dtype=np.float64)
+        h.update(repr(b.shape).encode())
+        h.update(b.tobytes())
+    return h.hexdigest()[:32]
+
+
+def cache_load(key: str, npar: int):
+    """``(x, nfev)`` for a previous run of this exact fit, or ``None``.
+
+    Refuses an entry of the wrong length rather than reshaping it: that would
+    mean the key collided or the parameterisation changed, and either way a
+    silent wrong answer is the one outcome worth spending a refit to avoid.
+    """
+    path = os.path.join(CACHE_DIR, key + ".json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    x = np.array(blob.get("x", ()), dtype=float)
+    if x.size != npar:
+        return None
+    return x, int(blob.get("nfev", 0))
+
+
+def cache_store(key: str, x, nfev: int) -> None:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    tmp = os.path.join(CACHE_DIR, key + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"x": [float(v) for v in x], "nfev": int(nfev)}, fh)
+    os.replace(tmp, os.path.join(CACHE_DIR, key + ".json"))
+
+
 def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         tier2=False):
     t, T, Tc, u = data if data is not None else load_sweep()
@@ -392,10 +498,18 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         return np.concatenate([r_sweep, r_anchor, r_shape, r_tau])
 
     p0 = np.concatenate([pl0, pc0] + ([np.array(TIER2_SEED)] if tier2 else []))
-    s = least_squares(resid, p0, method="trf", x_scale="jac", max_nfev=max_nfev)
-    pl, pc = s.x[:n], (s.x[n:-2] if tier2 else s.x[n:])
-    split, mass_ratio = unpack2(s.x) if tier2 else (float("nan"),) * 2
-    model = run(s.x)
+    key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aQ, tauV)
+    hit = cache_load(key, len(p0))
+    if hit is not None:
+        x, nfev = hit
+    else:
+        s = least_squares(resid, p0, method="trf", x_scale="jac",
+                          max_nfev=max_nfev)
+        x, nfev = s.x, s.nfev
+        cache_store(key, x, nfev)
+    pl, pc = x[:n], (x[n:-2] if tier2 else x[n:])
+    split, mass_ratio = unpack2(x) if tier2 else (float("nan"),) * 2
+    model = run(x)
     err = model - T
     hold = opening_hold(t, u)
     moving = np.abs(np.gradient(T, t)) > 2e-3          # > 7.2 K/h
@@ -407,7 +521,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         "hold_k": float(np.sqrt(np.mean(err[hold] ** 2))),
         "hold_max_k": float(np.max(np.abs(err[hold]))),
         "hold_h": float((t[hold][-1] - t[hold][0]) / 3600.0),
-        "n_lam": n_lam, "n_cap": n_cap, "npar": len(s.x), "nfev": s.nfev,
+        "n_lam": n_lam, "n_cap": n_cap, "npar": len(x), "nfev": nfev,
         "lam": lam, "cap": cap, "pl": pl, "pc": pc,
         "t": t, "T": T, "Tc": Tc, "u": u, "model": model,
         "rms_k": float(np.sqrt(np.mean(err**2))),

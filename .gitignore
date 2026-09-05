@@ -36,3 +36,6 @@ analysis/*.png
 analysis/steady_points.csv
 analysis/ladder.csv
 analysis/steps*.csv
+
+# The ODE fit cache -- derived, keyed on a digest of its inputs
+analysis/.fit_cache/

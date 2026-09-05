@@ -93,7 +93,7 @@ ax.text(50, -5.0,
         fontsize=12, ha="center", va="center", color="#2d3748")
 ax.text(50, -12.5,
         "tier 1   " + r"$C(T)\,\dot T = Q(u) - [\,\Lambda(T) - \Lambda(T_c(t))\,]$"
-        "        — fits the 8.8 h sweep to 0.28 K rms over 5–187 K",
+        "        — fits the 43 h sweep to 0.40 K rms over 4.9–192.6 K",
         fontsize=11.5, ha="center", va="center", color="#553c9a")
 ax.text(50, -21.5,
         r"$\Lambda(T) \equiv \int^{T} k(T')\,(A/L)\,dT'$.  At steady state"

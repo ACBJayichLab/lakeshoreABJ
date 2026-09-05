@@ -77,6 +77,15 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 `pip install -e ".[analysis]"` for scipy and matplotlib; the recorder itself
 needs neither.
 
+**Converged fits are cached** under the gitignored `analysis/.fit_cache/`,
+keyed on a digest of the sweep, the anchors, the taus and the knot counts.
+Step 2 is the only expensive one -- on the 43 h sweep a single 9-knot fit is a
+quarter of an hour -- and steps 3 to 6 all wanted the same (9, 4) model, so
+each of them used to pay for it again. Now the ladder pays once and the figures
+take seconds. The key contains the data, so remapping `T_c` invalidates every
+entry by itself; it cannot see a change to the objective in `fit_ode.py`, which
+is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
+
 | | |
 |---|---|
 | `steps.py` | every constant-heater dwell fitted as `T = T∞ + A e^(−t/τ)`. Gives `T∞` extrapolated, `τ` measured, and the extrapolation distance as an error bar. **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
@@ -91,22 +100,26 @@ needs neither.
 
 ## What came out
 
-> **STALE — re-run before quoting. 2026-09-04.** Every number in this section
-> was computed on the 8.8 h sweep and on the pre-2026-09-04 dwell grader. Both
-> have since changed: the sweep is now the 43 h wide export, and `steps.py`
-> decides a dwell on how fast it was still moving at its end rather than on how
-> far it moved in total. `steps.py` has been re-run (65 graded dwells, 17 with
-> a usable τ, 5.1–192.4 K, now including holds of 144.4 h, 74.9 h and 22.8 h
-> that the old rule discarded). **`fit_ode.py` and the figures have not.**
-> Re-run them in the order below, then replace this table and delete this note.
+Re-run 2026-09-05: 43 h sweep, corrected `T_c`, current dwell grader. Every
+number below came out of that run. The full ladder is `analysis/ladder.csv`.
 
 | | |
 |---|---|
-| fit quality | 0.284 K rms over 8.8 h and 5–187 K; 0.256 K rms / 2.12 K max outside one 9-minute slew |
-| `dΛ/dT` | peaks ~25 mW/K near 13 K, falls to 1.8 by 150 K — the link's conductivity maximum |
-| `C(T)` | a 4.7 g Cu/sapphire/diamond Debye mix |
-| `τ(137 K)` | 536 s fitted, against 620 s and 709 s measured independently |
-| local gain | 0.58 → 13.4 K/%, or 40 → 650 K/W; nearly all the change between 50% and 60% |
+| fit quality | **0.404 K rms** over 43 h and 4.9–192.6 K at Λ 10 knots (0.447 at 9, which is what the figures draw). 11.1 K max, all of it inside one 9-minute recovery slew |
+| what the residual is made of | **bias, not noise.** Inside the 22.8 h hold at 180.5 K the scatter is **49 mK** and the level is **−0.39 K**; inside the 13.9 h hold at 192.4 K, 48 mK and **+0.55 K**. The model reproduces each hold thirty times better than it places the pair |
+| `dΛ/dT` | peaks ~25 mW/K near 10–13 K, 1.60 mW/K at 100 K, 1.79 at 180 K — the link's conductivity maximum |
+| `C(T)` | a **4.89 g** Cu/sapphire/diamond Debye mix |
+| `τ(137 K)` | **572 s** fitted, against 620 s and 709 s measured independently; ×1.22 in log against all 17 |
+| local gain | 0.24 → 13.7 K/%, or 41 → 665 K/W. Nearly all the change is between 50% and 60% |
+| how much complexity buys | Λ knots 3→10: rms 5.23 → 0.404 K, flattening after 8. **C knots 2→7: 0.625 → 0.438 K, and 3 knots already gets 0.456.** C is the weakly constrained half and the ladder says so |
+
+**Two things the re-run settled, both negative.** Dropping the 34 CD10 anchors
+— a different cooldown, which disagrees with this one by ~3.2 K at matched
+power and which the fit misses by −2.62 K on average — moves the sweep rms from
+0.4467 to 0.4383 K. They are not what limits the fit. And **quantile knot
+placement is much worse, not better** (27 K rms): the sweep spends 36 of its
+43 hours above 175 K, so quantiles collapse to three knots and starve the cold
+end. Geomspace stays.
 
 ## `T_c` has been remapped — 2026-09-05
 
