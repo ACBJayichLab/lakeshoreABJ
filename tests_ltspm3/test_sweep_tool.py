@@ -156,6 +156,39 @@ def test_the_dwell_cap_comes_from_the_plan_and_is_clamped():
     assert S.dwell_cap(S.Tread(60.0), o) == 2400.0
 
 
+def test_a_dropped_rung_says_which_test_it_failed():
+    """"Cut at the cap" does not say what it ran out of, and the two answers
+    want opposite responses -- a smaller step, or one more time constant."""
+    tau, t_inf, amp = 600.0, 110.0, -30.0
+    early = [(t, t_inf + amp * math.exp(-t / tau)) for t in range(0, 300, 2)]
+    assert "K still to go" in S.fit_pole(early).shortfall()
+
+    # Settled to well inside the 2 K bar, and still failing on the end rate --
+    # which is the expensive one: it needs about four and a half time
+    # constants where the settle test needs two and a half.
+    late = [(t, t_inf + amp * math.exp(-t / tau)) for t in range(0, 2400, 2)]
+    f = S.fit_pole(late)
+    assert abs(f.settle_k) < S.MAX_SETTLE_K
+    assert "still moving" in f.shortfall()
+    assert S.fit_pole([(t, t_inf + amp * math.exp(-t / tau))
+                       for t in range(0, 4000, 2)]).shortfall() == ""
+
+
+def test_the_rehearsal_drops_the_models_timing_and_keeps_its_temperatures():
+    """The simulator is a different plant, so the plan's caps are not its caps.
+
+    Its tau is flat at 620 s; the fit's is under a second below 30 K. Handing
+    the simulator a 120 s cap for every cold rung cuts all of them one fifth of
+    the way through a relaxation, and a page of dropped rungs then says nothing
+    about the cryostat at all.
+    """
+    treads = [S.Tread(56.064, t_pred_k=38.66, tau_pred_s=31.0, dwell_pred_s=210.0)]
+    out = S.without_model_dwells(treads)
+    assert out[0].t_pred_k == 38.66
+    assert out[0].tau_pred_s is None and out[0].dwell_pred_s is None
+    assert S.dwell_cap(out[0], opts(max_dwell_s=3720.0)) == 3720.0
+
+
 @pytest.mark.parametrize("order,current,first", [
     ("up", None, 10.0),
     ("down", None, 60.0),
@@ -363,6 +396,31 @@ def test_preflight_refuses_a_stale_status_file(tmp_path):
     _status(tmp_path, t_wall=1.0)
     with pytest.raises(S.SweepAbort, match="not cycling"):
         _link(tmp_path).preflight([S.Tread(20.0)])
+
+
+def test_a_quiet_recorder_is_waited_out_rather_than_treated_as_a_fault(tmp_path):
+    """A GPIB retry outlasts the staleness bar, and the heater is not moving.
+
+    Three intervals is the right bar for "should I queue a command", which is
+    what `lschart send` uses it for.  It is the wrong bar for a four-hour run
+    that is only sitting and watching: one 3 s bus timeout on a 2 s cadence
+    would end the afternoon over something the recorder recovers from itself.
+    """
+    _status(tmp_path, t_wall=1.0)                  # ancient
+    link = _link(tmp_path)
+    link.stale_grace_s = 0.6
+    with pytest.raises(S.SweepAbort, match="not sampling"):
+        link.sample()
+    # ...and the message says how stale it actually was, not just that it was.
+    _status(tmp_path)
+    assert link.sample().kelvin == 42.0
+
+
+def test_a_recorder_that_says_it_stopped_ends_the_run_immediately(tmp_path):
+    """Not a hiccup: it is a process that has decided to stop cycling."""
+    _status(tmp_path, running=False)
+    with pytest.raises(S.SweepAbort, match="has stopped"):
+        _link(tmp_path).sample()
 
 
 def test_a_sample_is_read_out_of_the_status_file(tmp_path):

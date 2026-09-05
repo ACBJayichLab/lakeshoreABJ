@@ -57,6 +57,13 @@ heater is a change of state rather than a retreat to safety.  ``--on-abort off``
 sends the ``heaters_off`` panic instead, and is for the case where the operator
 has decided the stage is better cold than warm.
 
+``--on-abort off`` is not a bigger version of the same thing, and on LTSPM3 it
+is the wrong choice.  ``heaters_off`` means *every writable heater on this
+recorder*, deliberately -- a panic button that leaves one heater running is
+worse than none.  ``config-ltspm3-heater.yaml`` also opens the 336, whose
+heater 2 is railed at 100% holding THE CHONKE and is somebody else's, so that
+flag would cut theirs as well as ours.  Leave it on ``hold``.
+
 Usage
 -----
 
@@ -86,7 +93,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 # -- the grader, mirrored --------------------------------------------------
 #
@@ -179,6 +186,20 @@ def plan_from_percents(text: str) -> list[Tread]:
     return [Tread(float(p)) for p in text.replace(",", " ").split()]
 
 
+def without_model_dwells(treads: list[Tread]) -> list[Tread]:
+    """The ladder with the model's TIMING stripped and its temperatures kept.
+
+    For the rehearsal, and it is not a detail.  The plan's per-rung caps come
+    from ``tau(T)`` off the fitted model -- under a second below 30 K -- and the
+    simulator does not implement that model: ``ResponseParams`` carries ONE time
+    constant, about 620 s, inferred from a single step at 137 K.  Hand the
+    simulator a 120 s cap for every cold rung and it cuts all of them one fifth
+    of the way through a relaxation, and the run comes back a page of dropped
+    rungs that says nothing whatever about the cryostat.
+    """
+    return [replace(t, tau_pred_s=None, dwell_pred_s=None) for t in treads]
+
+
 def order_plan(treads: list[Tread], order: str,
                current_pct: float | None) -> list[Tread]:
     """Up, down, or from whichever end the cryostat is already nearest.
@@ -250,6 +271,30 @@ class PoleFit:
                 and self.rms_sigma < 8.0):
             return "tau"
         return "steady"
+
+    def shortfall(self, *, min_reach: float = MIN_REACH,
+                  max_settle_k: float = MAX_SETTLE_K,
+                  max_end_rate: float = MAX_END_RATE_K_PER_H) -> str:
+        """Which test this dwell failed, in words, or why its tau is weak.
+
+        "Cut at the cap" says a dwell ran out of time and not what it ran out
+        of, and those want opposite responses: still a long way to go means the
+        step was too big for the time allowed, while still moving slowly at the
+        end means only that the last stretch of the exponential is expensive
+        and the cap wanted another time constant.
+        """
+        why = []
+        if abs(self.settle_k) > max_settle_k:
+            why.append(f"{abs(self.settle_k):.2f} K still to go")
+        if self.end_rate_k_per_h > max_end_rate:
+            why.append(f"still moving {self.end_rate_k_per_h:.2f} K/h")
+        if why:
+            return ", ".join(why)
+        if self.amp_sigma < MIN_AMPLITUDE_SIGMA:
+            return "nothing moved, so T_inf only"
+        if self.reach < min_reach:
+            return f"only {self.reach:.1f} time constants, so T_inf only"
+        return ""
 
 
 def _solve(ts, ys, tau: float):
@@ -359,7 +404,8 @@ class RecorderLink:
 
     def __init__(self, cfg, *, channel: str, coldplate: str | None,
                  heater_aux: str | None, source: str,
-                 ack_timeout_s: float = 30.0) -> None:
+                 ack_timeout_s: float = 30.0,
+                 stale_grace_s: float = 120.0) -> None:
         from lschart.ipc.commands import CommandSpool
 
         self.cfg = cfg
@@ -368,17 +414,34 @@ class RecorderLink:
         self.heater_aux = heater_aux
         self.source = source
         self.ack_timeout_s = ack_timeout_s
+        self.stale_grace_s = stale_grace_s
         self.status_path = cfg.ipc.status_path()
         self.spool = CommandSpool(cfg.ipc.command_path(), ttl_s=cfg.ipc.command_ttl_s)
         self.interval_s = float(cfg.acquisition.interval_s)
         self._last_cycle: object = object()
+        self._last_age_s = 0.0
 
     def describe(self) -> str:
         return f"the recorder at {self.status_path}"
 
     # -- reading -----------------------------------------------------------
 
-    def _status(self) -> dict:
+    def _status(self, *, strict: bool = False) -> dict:
+        """The status file, or ``{}`` when there is nothing current to read.
+
+        ``strict`` is for the preflight, where a stale file means "do not
+        start".  Mid-run it is off, and that is deliberate: a 2 s cadence on a
+        GPIB board with a 3 s timeout and a 1-30 s reconnect backoff will
+        produce cycles longer than the three-interval staleness bar without
+        anything being wrong, and a four-hour run that ends on one of those has
+        thrown away the afternoon over a hiccup the recorder recovered from by
+        itself.  What makes waiting safe is that the heater is not moving while
+        we wait -- the sweep only commands between dwells.  ``stale_grace_s``
+        is where patience runs out and the run stops with the output held.
+
+        A recorder that says it has *stopped* is not a hiccup and ends the run
+        whichever mode this is in.
+        """
         from lschart.ipc.status import read_status, status_age_s
 
         status = read_status(self.status_path)
@@ -390,9 +453,12 @@ class RecorderLink:
         if not status.get("running", True):
             raise SweepAbort("the recorder says it has stopped")
         age = status_age_s(status) or 0.0
+        self._last_age_s = age
         if age > max(3 * self.interval_s, 5.0):
-            raise SweepAbort(f"the recorder's status file is {age:.0f} s old -- "
-                             "it is up but not cycling")
+            if strict:
+                raise SweepAbort(f"the recorder's status file is {age:.0f} s old "
+                                 "-- it is up but not cycling")
+            return {}
         return status
 
     @staticmethod
@@ -415,8 +481,9 @@ class RecorderLink:
             "no analog-output readback in the status file (looked for an "
             f"`*.aoutN` entry; saw {names}) -- pass --heater-aux")
 
-    def sample(self, timeout_s: float = 60.0) -> Sample:
+    def sample(self, timeout_s: float | None = None) -> Sample:
         """Block until the recorder publishes a cycle we have not seen."""
+        timeout_s = self.stale_grace_s if timeout_s is None else timeout_s
         deadline = time.monotonic() + timeout_s
         while True:
             status = self._status()
@@ -443,7 +510,8 @@ class RecorderLink:
             if time.monotonic() > deadline:
                 raise SweepAbort(
                     f"no new acquisition cycle in {timeout_s:g} s -- the recorder "
-                    "is up but not sampling")
+                    "is up but not sampling (its status file was last written "
+                    f"{self._last_age_s:.0f} s ago)")
             time.sleep(min(0.5, self.interval_s / 2.0))
 
     # -- writing -----------------------------------------------------------
@@ -493,7 +561,7 @@ class RecorderLink:
                 f"no recorder is running here: {self.status_path} is absent or "
                 "unreadable. This tool drives a recorder; it does not open the "
                 "port itself")
-        status = self._status()          # staleness and running, with messages
+        status = self._status(strict=True)   # staleness and running, by name
 
         if not (status.get("commands") or {}).get("accepted"):
             raise SweepAbort("this recorder does not accept commands at all "
@@ -560,6 +628,10 @@ class SimLink:
                           channels={1: "Sample", 2: "Coldplate", 5: "Magnet"},
                           allow_writes=True, verify_writes=False,
                           max_output_pct=max_output_pct)
+        #: The simulator's own time constant, published so a rehearsal can size
+        #: its dwell cap from the plant it is actually driving rather than from
+        #: the fitted model, which this is not.
+        self.tau_fast_s = float(params.tau_fast)
         self.writes: list[tuple[float, float]] = []
 
     def describe(self) -> str:
@@ -800,6 +872,11 @@ def dwell(link, tread: Tread, opts: Options, *, on_sample=None) -> DwellResult:
     grade = "" if fit is None else fit.grade(
         min_reach=opts.min_reach, max_settle_k=opts.max_settle_k,
         max_end_rate=opts.max_end_rate)
+    if fit is not None and grade != "tau":
+        why = fit.shortfall(min_reach=opts.min_reach,
+                            max_settle_k=opts.max_settle_k,
+                            max_end_rate=opts.max_end_rate)
+        note = f"{note}; {why}" if note and why else (why or note)
     return DwellResult(
         tread=tread, u_readback_pct=readback,
         started_iso=started_iso, ended_iso=ended_iso,
@@ -887,8 +964,10 @@ def main(argv: list[str] | None = None) -> int:
                          "(default: the first `*.aoutN` there is)")
     ap.add_argument("--min-dwell", type=float, default=120.0,
                     help="seconds before a rung may be called settled")
-    ap.add_argument("--max-dwell", type=float, default=2400.0,
-                    help="seconds after which it is abandoned and recorded anyway")
+    ap.add_argument("--max-dwell", type=float, default=None,
+                    help="seconds after which a rung is abandoned and recorded "
+                         "anyway (default 2400; a rehearsal sizes it from the "
+                         "simulator's own tau instead)")
     ap.add_argument("--min-reach", type=float, default=MIN_REACH,
                     help="time constants a dwell must run before tau is believed")
     ap.add_argument("--max-settle-k", type=float, default=MAX_SETTLE_K)
@@ -897,9 +976,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-k", type=float, default=120.0,
                     help="stop the sweep if the sample goes above this")
     ap.add_argument("--max-coldplate-k", type=float, default=None)
+    ap.add_argument("--stale-grace", type=float, default=120.0,
+                    help="seconds the recorder may go quiet mid-dwell before "
+                         "the run stops. The heater is not moving while we "
+                         "wait, and a GPIB retry outlasts the staleness bar")
     ap.add_argument("--on-abort", choices=("hold", "off"), default="hold",
                     help="hold leaves the output where it is (the default, and "
-                         "invariant 6); off sends the heaters_off panic")
+                         "invariant 6); off sends the heaters_off panic, which "
+                         "cuts EVERY writable heater on the recorder -- on "
+                         "LTSPM3 that includes the 336's, holding THE CHONKE")
     ap.add_argument("--yes", action="store_true",
                     help="skip the confirmation before the first write")
     args = ap.parse_args(argv)
@@ -909,7 +994,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     opts = Options(
-        min_dwell_s=args.min_dwell, max_dwell_s=args.max_dwell,
+        min_dwell_s=args.min_dwell, max_dwell_s=args.max_dwell or 2400.0,
         min_reach=args.min_reach, max_settle_k=args.max_settle_k,
         max_end_rate=args.max_end_rate, max_k=args.max_k,
         max_coldplate_k=args.max_coldplate_k,
@@ -929,6 +1014,18 @@ def main(argv: list[str] | None = None) -> int:
         link = SimLink(dt=2.0, start_pct=min(t.u_pct for t in treads),
                        channel=args.channel, coldplate=args.coldplate or None)
         journal_path = args.journal
+        treads = without_model_dwells(treads)
+        if args.max_dwell is None:
+            # Six time constants.  The end-rate bar is the strictest of the
+            # three and needs about four and a half of them; sizing the cap
+            # from the fitted model instead would cut every cold rung one fifth
+            # of the way through a relaxation the simulator does not share.
+            opts.max_dwell_s = 6.0 * link.tau_fast_s
+        print("rehearsal: the plan's per-rung caps are dropped. They come from "
+              "tau(T) off\nthe fitted model, and the simulator has one flat tau "
+              f"of {link.tau_fast_s:.0f} s at every\ntemperature -- so a cap of "
+              f"{opts.max_dwell_s:.0f} s applies throughout instead. This checks "
+              "the\nprocedure; the timing is fiction.\n")
     else:
         from lschart import config as config_mod
 
@@ -942,6 +1039,7 @@ def main(argv: list[str] | None = None) -> int:
         link = RecorderLink(cfg, channel=args.channel,
                             coldplate=args.coldplate or None,
                             heater_aux=args.heater_aux,
+                            stale_grace_s=args.stale_grace,
                             source=f"ltspm3-sweep/{os.getpid()}")
         journal_path = args.journal
 
