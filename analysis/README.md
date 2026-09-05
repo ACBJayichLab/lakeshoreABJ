@@ -63,8 +63,11 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 #    no arguments: it defaults to the three versioned tables
 .venv/Scripts/python.exe analysis/steps.py
 
-# 2. the complexity ladder -> analysis/ladder.csv      (~15 min)
+# 2. the complexity ladder -> analysis/ladder.csv      (~15 min, 4 workers)
 .venv/Scripts/python.exe analysis/fit_ode.py
+
+# 2b. the coldplate's own pole                        (~30 s)
+.venv/Scripts/python.exe analysis/bath.py
 
 # 3. the figures                                       (~5 min)
 .venv/Scripts/python.exe analysis/diagram.py
@@ -90,6 +93,7 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 |---|---|
 | `steps.py` | every constant-heater dwell fitted as `T = T∞ + A e^(−t/τ)`. Gives `T∞` extrapolated, `τ` measured, and the extrapolation distance as an error bar. **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
 | `fit_ode.py` | integrates the ODE down the 8.8 h sweep and fits Λ and C as monotone cubics in (log T, log y). One curve's knots freed at a time. Writes `ladder.csv`. |
+| `bath.py` | the coldplate as a first-order lag driven by the heater, not as a bath. **tau = 175 s, 27.6 mK rms over a 2.30 K swing.** What makes the plant self-contained |
 | `_data.py` | where the inputs live and how to open them; every reader here goes through it |
 | `fit_lambda.py` | asks whether the settled points alone can separate `σ_r T⁴` from conduction. They cannot — see below. |
 | `diagram.py` | the model, with each ODE term on its arrow |
@@ -179,6 +183,62 @@ may not exist. That is the next thing to check, not something this note claims.
 
 Nothing in `control/` depends on any of this — see the top of this file — so
 none of it is urgent, and none of it is a safety matter.
+
+## The coldplate needed a pole — 2026-09-05
+
+`fit_ode` takes `T_c(t)` as an exogenous input, read from the log. For fitting
+that is exact and free. For **control** it is silently useless: raising the
+sample heater warms the coldplate too, and that comes back as a change in the
+sample's own sink temperature. A plant that takes `T_c` as given cannot see
+that loop, and there is no log to read from when you are predicting.
+
+So `bath.py` fits it — one pole on a monotone steady-state curve in heater
+power, over the whole 43 h sweep:
+
+| | |
+|---|---|
+| `tau_bath` | **175 s** (2.9 min) |
+| whole record | **27.6 mK rms**, 617 mK max, over a **2.30 K** swing — 1.2% of it |
+| the 22.8 h opening hold | 1.5 mK rms |
+| the 13.9 h closing hold | 3.8 mK rms |
+| the 7.5 h excursion | 65.8 mK rms |
+| `T_c` at u = 0 / u = 70% | 4.80 K / 6.93 K |
+
+**It is not a small effect for tuning.** `tau_bath / tau_sample(137 K) = 0.31`:
+the sink moves at a third of the sample's rate, which is neither of the two
+things a fixed-sink plant can assume. The pole helps — warming the sink cuts
+the gradient the heater has to hold — so gains sized on the fixed-sink plant
+are conservative rather than unsafe, but they leave performance on the table.
+**`pid_tuning.py` and `settling.py` do not yet use it.**
+
+**It does not explain the steady-state bias.** Both long holds are settled to
+0.1 mK/h in `T_c`, and a lag cannot produce a steady-state error by
+construction. That one is Λ shape at the top of the range: 12 knots takes the
+sweep to **0.3225 K** rms and the hold biases to −0.28 / +0.35 K.
+
+## Method, and what is wrong with it
+
+**The ladder is parallel now.** The rungs are independent least-squares
+problems and were being run one at a time; `LADDER_WORKERS` (default 4, set it
+to 1 for a readable traceback) runs them in processes. Processes rather than
+threads because the cost is `integrate`, a Python loop over 77,375 samples
+holding the GIL throughout.
+
+**Three rungs in the shipped ladder did not converge.** Λ at 6, 7 and 8 knots
+all stopped at `nfev = 300 = max_nfev`; their rms figures — 0.877, 0.594,
+0.497 K — are *upper bounds*, not fits. Λ at 9 and 10 knots converged in 88 and
+78 evaluations, which is the odd part: more parameters, a quarter of the work.
+So "the ladder flattens after 8 knots" is partly an artefact of the cap, and
+the flattening should not be quoted as evidence about the cryostat until those
+three are re-run. Raising `max_nfev` changes the cache key and invalidates
+every stored fit, which is why it has not been done in passing.
+
+**The Jacobian is the cost.** `least_squares` differences it, one extra
+77,375-sample integration per parameter per iteration, so a 14-parameter fit
+integrates the sweep fourteen times to take one step. The two ways out are an
+adjoint gradient and a coarser residual grid; `STEP_S` is already at the log's
+own 2 s cadence for a documented reason (coarsening to 4 s triples the worst
+residual), so the grid is not free to move.
 
 ## Caveats that outlive the numbers
 

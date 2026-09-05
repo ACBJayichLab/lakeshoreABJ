@@ -547,27 +547,87 @@ LADDER_LAMBDA = [(n, 4) for n in range(3, 11)]
 LADDER_CAP = [(9, n) for n in range(2, 8)]
 
 
-def ladder(rows, data, anchors, title, out=None, taus=None):
+#: How many ladder rungs to fit at once.  The rungs are INDEPENDENT -- each is
+#: a separate least_squares from its own seed, and none reads another's answer
+#: -- so the ladder is embarrassingly parallel and was being run one at a time.
+#:
+#: Processes, not threads: the cost is `integrate`, a Python loop over 77,375
+#: samples that holds the GIL the whole way, so threads would serialise exactly
+#: the part that is slow.  Each worker re-reads the sweep from the gzipped
+#: table, about a second against fits that take minutes.
+#:
+#: Capped at 4 rather than at the core count.  least_squares builds its
+#: Jacobian by finite differences -- one extra integration per parameter -- and
+#: the cryostat machine has a recorder to run as well.  `LADDER_WORKERS=1` in
+#: the environment turns it off, which is what to do when a traceback needs to
+#: be readable.
+LADDER_WORKERS = int(os.environ.get("LADDER_WORKERS", "4"))
+
+_HEAD = (f"{'knots L':>8}{'knots C':>8}{'par':>5}{'rms K':>9}{'max K':>9}"
+         f"{'rms %':>8}{'hold K':>8}{'anchor K':>10}{'tau res':>9}"
+         f"{'mass g':>8}{'tau137':>9}{'nfev':>6}{'s':>7}")
+
+
+def _summary(r, axis, secs):
+    return {"axis": axis, "n_lam": r["n_lam"], "n_cap": r["n_cap"],
+            "npar": r["npar"], "rms_k": r["rms_k"], "max_k": r["max_k"],
+            "rms_pct": r["rms_pct"], "anchor_k": r["anchor_k"],
+            "mass_g": r["mass_g"], "tau_137_s": r["tau_137_s"],
+            "tau_resid": r["tau_resid"], "hold_k": r["hold_k"],
+            "hold_max_k": r["hold_max_k"], "nfev": r["nfev"], "secs": secs}
+
+
+def _line(d):
+    return (f"{d['n_lam']:>8}{d['n_cap']:>8}{d['npar']:>5}{d['rms_k']:>9.3f}"
+            f"{d['max_k']:>9.3f}{d['rms_pct']:>8.2f}{d['hold_max_k']:>8.2f}"
+            f"{d['anchor_k']:>10.2f}{d['tau_resid']:>9.3f}{d['mass_g']:>8.2f}"
+            f"{d['tau_137_s']:>9.0f}{d['nfev']:>6}{d['secs']:>7.1f}")
+
+
+def _worker(job):
+    """One rung, in its own process.
+
+    Returns only what the table needs.  A fit dict carries two spline objects
+    and the whole 77,375-sample trajectory, and pickling those back across the
+    pipe costs more than some of the arithmetic that made them.
+    """
     import time
+    n_lam, n_cap, t_max = job
+    t0 = time.time()
+    r = fit(n_lam, n_cap, load_sweep(), load_anchors(t_max=t_max),
+            load_taus(t_max=t_max))
+    return _summary(r, "", time.time() - t0)
+
+
+def ladder(rows, data, anchors, title, out=None, taus=None, workers=None):
+    import time
+    axis = title.split()[2].rstrip(",")
+    workers = LADDER_WORKERS if workers is None else workers
     print(f"\n{title}")
-    print(f"{'knots L':>8}{'knots C':>8}{'par':>5}{'rms K':>9}{'max K':>9}"
-          f"{'rms %':>8}{'hold K':>8}{'anchor K':>10}{'tau res':>9}"
-          f"{'mass g':>8}{'tau137':>9}{'nfev':>6}{'s':>7}")
+    print(_HEAD)
     got = []
-    for n_lam, n_cap in rows:
-        t0 = time.time()
-        r = fit(n_lam, n_cap, data, anchors, taus)
-        print(f"{n_lam:>8}{n_cap:>8}{r['npar']:>5}{r['rms_k']:>9.3f}"
-              f"{r['max_k']:>9.3f}{r['rms_pct']:>8.2f}{r['hold_max_k']:>8.2f}"
-              f"{r['anchor_k']:>10.2f}"
-              f"{r['tau_resid']:>9.3f}{r['mass_g']:>8.2f}{r['tau_137_s']:>9.0f}"
-              f"{r['nfev']:>6}{time.time() - t0:>7.1f}", flush=True)
-        got.append({"axis": title.split()[2].rstrip(","), "n_lam": n_lam,
-                    "n_cap": n_cap, "npar": r["npar"], "rms_k": r["rms_k"],
-                    "max_k": r["max_k"], "rms_pct": r["rms_pct"],
-                    "anchor_k": r["anchor_k"], "mass_g": r["mass_g"],
-                    "tau_137_s": r["tau_137_s"], "tau_resid": r["tau_resid"],
-                    "hold_k": r["hold_k"], "hold_max_k": r["hold_max_k"]})
+    if workers > 1 and len(rows) > 1:
+        from concurrent.futures import ProcessPoolExecutor
+        t_max = float(data[1].max())
+        wall = time.time()
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            # map keeps the results in the order the rungs were given, so the
+            # table still reads top to bottom however the workers finish.
+            done = list(pool.map(_worker, [(a, b, t_max) for a, b in rows]))
+        for d in done:
+            d["axis"] = axis
+            got.append(d)
+            print(_line(d), flush=True)
+        serial = sum(d["secs"] for d in done)
+        print(f"  {len(rows)} rungs on {workers} workers: "
+              f"{time.time() - wall:.0f} s wall, {serial:.0f} s of fitting")
+    else:
+        for n_lam, n_cap in rows:
+            t0 = time.time()
+            d = _summary(fit(n_lam, n_cap, data, anchors, taus), axis,
+                         time.time() - t0)
+            got.append(d)
+            print(_line(d), flush=True)
     if out is not None:
         out.extend(got)
     return got
