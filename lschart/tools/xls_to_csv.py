@@ -41,8 +41,13 @@ instead, which is easier to trace back and is not viewer-native.
 
 Usage::
 
-    python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls" -o data/cd10
+    python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls"
     python -m lschart.gui -c config.yaml --csv data/cd10/cd10_2026-08-08.csv
+
+This produces **the viewer's copy** of a run: recorder-shaped, one file per
+day, in ``data/cd10``.  It is not the shape a fit wants -- for that, feed these
+files to :mod:`lschart.tools.fit_table`, which flattens them into one table
+with the recording gaps marked.
 """
 
 from __future__ import annotations
@@ -254,7 +259,10 @@ def convert(pattern: str, outdir: str, *, channel_map: dict[int, str],
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="legacy .xls -> recorder CSV")
     ap.add_argument("pattern", help="glob for the .xls logs")
-    ap.add_argument("-o", "--outdir", default="data/cd10")
+    ap.add_argument("-o", "--outdir", default="data/cd10",
+                    help="where the CSVs land; these are the viewer's copy of "
+                         "the run, not the fitting table -- see "
+                         "lschart.tools.fit_table for that")
     ap.add_argument("--channels", default="1:Sample,2:Coldplate,3:Magnet",
                     help="218 input number to display name")
     ap.add_argument("--merge-tolerance", type=float, default=30.0,

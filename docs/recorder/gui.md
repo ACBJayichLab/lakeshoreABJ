@@ -33,7 +33,7 @@ legacy `.xls` put through
 [`xls_to_csv`](../../lschart/tools/xls_to_csv.py):
 
 ```bash
-python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls" -o data/cd10
+python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls"
 python -m lschart.gui -c config.yaml --csv data/cd10/cd10_2026-08-20.csv
 ```
 

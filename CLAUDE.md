@@ -156,6 +156,13 @@ lschart/                    GENERIC -- any Lake Shore cryostat
                      reconstructs ls218.aout1 as a zero-order hold on the
                      Notes column's ANALOG commands -- the 218 never logged
                      its own output.
+  tools/fit_table.py   Recorder CSVs -> ONE table a fitter loads: Timestamp,
+                     t_s, segment, the thermometers, u_pct, note. `segment`
+                     increments at every recording gap and is the column that
+                     matters -- CD10 has a 65 h and a 187 h hole, and an ODE
+                     integrated through one of those converges on a number
+                     anyway. Aux readbacks dropped; --rename folds a
+                     relabelled channel (Cold Head -> Coldplate, 08-26).
 
 ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
   thermal_response.py The one measured P(pct)/T(P) curve. Shared by the
@@ -185,6 +192,18 @@ matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus
 docs/                recorder/ (generic) and ltspm3/ (one cryostat). Keep them apart.
 examples/            config-335-usb.yaml (coworker), config-336-usb.yaml (bench)
 reference/           Legacy MATLAB + 24 .xls chart-recorder logs. Not built.
+data/                GITIGNORED. The recorder writes here; nothing in it is
+                     versioned, so NONE OF IT EXISTS ON A FRESH CLONE.
+                     Two derived sets, made by the two tools above:
+                       data/cd10/                       CD10 as recorder CSV,
+                         28 daily files -- this is what the VIEWER opens
+                         (-o defaults here):
+                         python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls"
+                       data/heater calibration steps/   what the FITS read:
+                         fit_cd10.csv, fit_recorder.csv, plus Jeff's region
+                         exports. See tools/fit_table.py for the two commands.
+                     Which logs are usable for what is in
+                     docs/ltspm3/thermal-response.md.
 tests/               Generic. tests_ltspm3/ has the virtual-clock control harness.
 ```
 
