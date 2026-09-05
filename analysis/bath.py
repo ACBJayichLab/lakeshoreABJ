@@ -76,6 +76,11 @@ class Bath:
         """Where the coldplate ends up, for a heater power held forever."""
         return self._f(np.asarray(q_w, float))
 
+    def dsteady(self, q_w):
+        """dT_c/dQ, in K/W.  Analytic off the spline, because it enters the
+        steady-state gain and differencing a curve there returns spikes."""
+        return self._f.derivative()(np.asarray(q_w, float))
+
     def run(self, q_w, dt_s, t_c0):
         """Integrate the lag over a power trace.  Exponential Euler, as the
         sample ODE uses, so a coarse step stays exact for a pure relaxation."""

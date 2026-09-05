@@ -51,6 +51,7 @@ import numpy as np
 from scipy.interpolate import PchipInterpolator
 
 sys.path.insert(0, "analysis")
+import bath as B  # noqa: E402
 import fit_ode as F  # noqa: E402
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/gain_curve.png"
@@ -58,12 +59,14 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/gain_curve.png"
 #: The production model, as opposed to the complexity study in plot_ode.py.
 #:
 #: Fitted on the adaptively decimated sweep (analysis/decimate.py) with a
-#: three-knot slow drift in the steady state -- 0.2024 K rms over 43 h against
-#: 0.4467 for (9, 4) on the full grid with no drift, in 77 s rather than 190.
+#: three-knot slow drift in the steady state and a curvature penalty on
+#: dLambda/dT -- 0.168 K rms over 43 h against 0.4467 for (9, 4) on the full
+#: grid with no drift, and a conductance four times smoother than twenty free
+#: knots would give.
 #: The drift is 2 mW peak to peak on an 800 mW heater and cannot move faster
 #: than about 11 h, so it changes where the cryostat settles and leaves the
 #: dynamics alone: tau(137 K) and the implied mass are the same either way.
-N_LAM, N_CAP, N_DRIFT = 12, 4, 3
+N_LAM, N_CAP, N_DRIFT = 20, 4, 3
 
 
 def _g(r, k):
@@ -111,11 +114,6 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
     mT = np.array([_g(v, "T_inf") for v in rows])
     cd10 = np.array([v["source"].startswith("fit_cd10") for v in rows])
 
-    # dT/dP = (dT/du)(du/dP), and dP/du = 2P/u, so dT/dP = dT/du * u / (2P).
-    # Analytic throughout -- see main() -- because u(T) is very flat where the
-    # steady state is steep, and differencing the curve there returns spikes
-    # that are arithmetic rather than cryostat.
-    dTdP = dTdu * u / (2.0 * Q)
 
     fig, ax = plt.subplots(1, 4, figsize=(21.0, 5.0))
     fig.suptitle("LTSPM3 steady state from the fitted model — "
@@ -159,21 +157,27 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
     a.set_title("(c) against the settled dwells, on the power axis")
     a.grid(alpha=.3); a.legend(fontsize=8)
 
+    # Panel (d) is tau, not thermal resistance.  dT/dP is a static property and
+    # it is in the printed table below; tau is what a settle costs, what a
+    # sweep rate has to respect, and what sets every gain in pid_tuning.  It is
+    # also the honest one to draw, because seventeen relaxations were measured
+    # and no thermal resistance ever was.
     a = ax[3]
-    a.semilogy(T, dTdP, "-", color="#2c7a7b", lw=2.0,
-               label="differential  dT/dP")
-    a.semilogy(T, (T - Tc) / Q, "--", color="#805ad5", lw=1.6,
-               label="secant  (T − T$_c$) / P")
-    for Tq, lab in ((99.6, "99.6 K"), (151.1, "151 K"), (180.6, "181 K")):
-        gq = float(np.interp(Tq, T, dTdP))
-        a.plot(Tq, gq, "*", ms=13, color="#805ad5", zorder=5)
-        a.annotate(f"{lab}\n{gq:.0f} K/W", (Tq, gq),
-                   textcoords="offset points", xytext=(-10, -36),
-                   fontsize=8, ha="right", color="#553c9a",
-                   arrowprops=dict(arrowstyle="-", color="#805ad5", lw=.8))
-    a.set_xlabel("steady sample T  [K]"); a.set_ylabel("dT/dP  [K/W]")
-    a.set_title("(d) thermal resistance of the link")
-    a.grid(alpha=.3, which="both"); a.legend(fontsize=8, loc="lower right")
+    tau = r["cap"](r["pc"], T) / r["lam"].slope(r["pl"], T)
+    a.loglog(T, tau / 60.0, "-", color="#2c7a7b", lw=2.0,
+             label="fitted  τ = C / (dΛ/dT)")
+    tT, tV = F.load_taus(t_max=float(T.max()))
+    a.plot(tT, tV / 60.0, "o", ms=6, mfc="none", mew=1.4, color="#1a202c",
+           zorder=5, label=f"{len(tT)} measured relaxations")
+    for Tq, tq in ((137.3, 620.0), (137.0, 709.0)):
+        a.plot(Tq, tq / 60.0, "*", ms=14, color="#805ad5", zorder=6)
+    a.annotate("620 s and 709 s at 137 K,\nmeasured independently",
+               (137.0, 709.0 / 60.0), textcoords="offset points",
+               xytext=(-16, -50), fontsize=8, ha="right", color="#553c9a",
+               arrowprops=dict(arrowstyle="-", color="#805ad5", lw=.8))
+    a.set_xlabel("steady sample T  [K]"); a.set_ylabel("τ  [min]")
+    a.set_title("(d) time constant — what a settle actually costs")
+    a.grid(alpha=.3, which="both"); a.legend(fontsize=8, loc="upper left")
 
     fig.tight_layout()
     fig.savefig(out, dpi=130)
@@ -198,7 +202,22 @@ def main():
     tc_of, _, _ = coldplate_of(rows)
 
     T = np.geomspace(4.9, 190.0, 1200)
+
+    # T_c comes from the fitted bath, not from the dwell map, and the two are
+    # not the same claim.  coldplate_of() maps T_c against T_SAMPLE, which is a
+    # correlation between two things the heater drives; bath.py fits T_c
+    # against POWER, which is the causal direction, to 27.6 mK over the whole
+    # record.  Swapping them halves the residual trend against the settled
+    # dwells -- -6.4 to -3.6 mK/K on this cooldown, -11.4 to -3.3 on CD10,
+    # whose correlation falls from -0.50 to -0.16.
+    #
+    # It is implicit, since Q depends on T_c and T_c on Q, so it is iterated.
+    # T_c moves 2.3 K against a sample at 5-190 K, so this converges in three.
+    bath, _ = B.fit(F.load_sweep())
     Tc = np.clip(tc_of(T), 1.0, None)
+    for _ in range(4):
+        Q = r["lam"](r["pl"], T) - r["lam"](r["pl"], Tc)
+        Tc = np.clip(bath.steady(np.clip(Q, 0.0, None)), 1.0, None)
     Q = r["lam"](r["pl"], T) - r["lam"](r["pl"], Tc)
 
     # Stop at the lowest power anybody actually held, not at Q > 0.  As the
@@ -218,8 +237,14 @@ def main():
     #
     #   dQ/dT = Lambda'(T) - Lambda'(T_c) dT_c/dT      the coldplate follows
     #   du/dT = (50/(G V_fs)) sqrt(R/Q) dQ/dT
+    # dQ/dT = L'(T) - L'(T_c) dT_c/dT and dT_c/dT = (dT_c/dQ)(dQ/dT), so the
+    # coldplate's response folds in as a denominator rather than as a term
+    # differenced off an empirical map:
+    #
+    #     dQ/dT = L'(T) / (1 + L'(T_c) dT_c/dQ)
+    dTcdQ = bath.dsteady(np.clip(Q, 0.0, None))
     dQdT = (r["lam"].slope(r["pl"], T)
-            - r["lam"].slope(r["pl"], Tc) * tc_of.derivative()(T))
+            / (1.0 + r["lam"].slope(r["pl"], Tc) * dTcdQ))
     dudT = (50.0 / (F.GAIN * F.V_FS)) * np.sqrt(F.R_OHM / Q) * dQdT
     dTdu = 1.0 / dudT
 

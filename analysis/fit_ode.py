@@ -53,7 +53,7 @@ ANCHORS = "analysis/steps.csv"
 #: It is part of the cache key, so bumping it invalidates every stored fit
 #: at once -- which is the point: the input digest catches changed DATA and
 #: cannot possibly catch changed CODE.
-FIT_CACHE_VERSION = 1
+FIT_CACHE_VERSION = 2
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
 #: extrapolation distance.  CD10 is a different cooldown from the sweep and
@@ -81,6 +81,56 @@ ANCHOR_SHARE = 0.10
 #: mismatch and is not.  Coarsening to 4 s costs 0.06 K of rms and triples the
 #: worst residual, from 10.7 K to 14.4 K, all of it in one nine-minute window.
 STEP_S = 2.0
+
+#: Roughness penalty on Lambda, as a second difference of its knot values in
+#: (log T, log Lambda).  Zero turns it off.
+#:
+#: THE PROBLEM IT SOLVES.  Knot count was doing two jobs at once and could only
+#: do one of them well.  Twelve knots place the two settled holds far better
+#: than nine (0.32 K against 0.45 before the drift term), because both holds
+#: sit in the top decade where geomspace puts one interval -- but the same
+#: twelve knots put freedom into the bottom decade too, where the sweep has two
+#: settled dwells and passes through in minutes, and the curve grows wiggles
+#: there that are the parameterisation talking, not the cryostat.  dLambda/dT
+#: IS the physical conductance and dT/dP IS the thermal resistance, so a wiggle
+#: is not cosmetic: it is a claim about the link that nothing measured.
+#:
+#: WHAT TO PENALISE, and the first attempt got it wrong.  Penalising the
+#: curvature of log Lambda did nothing measurable: Lambda is the conductance
+#: INTEGRAL, and curvature in an integral is only slope in its derivative, so a
+#: prior on it barely reaches the curve anybody looks at.  What is displayed
+#: and what the loop cares about is dLambda/dT -- it IS the physical
+#: conductance k(T)A/L, and tau = C/(dLambda/dT).  So the penalty acts on the
+#: second difference of **log(dLambda/dT)** against log T.
+#:
+#: Its null space is then exactly a POWER-LAW CONDUCTANCE, k ~ T^a, which costs
+#: nothing; any curvature away from one costs.  That is the right prior here:
+#: k(T) for a metal or a dielectric is smooth over a decade, and nothing in
+#: this cryostat justifies structure the settled dwells cannot see.
+#:
+#: Scaled like every other prior in this file: a share of the sweep's weight
+#: divided by the departure that share is worth.  The first version of this was
+#: a bare multiplier and was four orders too weak -- 0.005, 0.02 and 0.08 gave
+#: byte-identical fits, which is what a penalty that never enters the objective
+#: looks like.  If a knob's whole range does nothing, it is not tuned, it is
+#: disconnected.
+#: MEASURED at 20 knots on the decimated sweep, scored on the full grid:
+#:
+#:   share   rms K    roughness of dLambda/dT
+#:   0.00    0.1649       129.0
+#:   0.02    0.1678        33.1     <- default
+#:   0.05    0.1715        31.7
+#:   0.20    0.1864        29.4
+#:
+#: 0.02 buys a FOUR TIMES smoother conductance for 1.8% of rms, and beats 12
+#: unpenalised knots on both counts at once (0.2024 K, roughness 55.2).  Past
+#: 0.05 the roughness has stopped falling and only the fit is getting worse,
+#: which is what the knee of a regularisation path looks like.
+LAMBDA_SMOOTH_SHARE = 0.02
+#: Second difference of log Lambda per knot that the prior treats as free.
+#: 0.30 is a factor of 1.35 of curvature between adjacent knots, which is far
+#: more than a conductivity maximum needs and far less than a wiggle.
+LAMBDA_SMOOTH_SIGMA = 0.30
 
 #: A slow, unmeasured load on the sample, in watts, fitted as a few knots in
 #: TIME rather than in temperature.  Off by default (``n_drift=0``).
@@ -292,7 +342,8 @@ class LogLog:
     """
 
     def __init__(self, T_knots):
-        self.lk = np.log(np.asarray(T_knots, float))
+        self.knots = np.asarray(T_knots, float)
+        self.lk = np.log(self.knots)
         self.n = len(self.lk)
 
     def unpack(self, p):
@@ -563,6 +614,18 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         f = 1.0 / (1.0 + math.exp(-p[-2]))
         return min(max(f, 1e-3), 1 - 1e-3), math.exp(p[-1])
 
+    # Second-difference operator on the knot log-values.  Built once; the knots
+    # are geomspaced, so they are evenly spaced in log T and no spacing weights
+    # are needed.
+    # Evaluated between the knots, not on them: PCHIP's derivative is pinned at
+    # a knot by the neighbours, so sampling there measures the parameterisation
+    # rather than the curve.  Midpoints in log T see what is actually drawn.
+    rough_T = np.exp(0.5 * (np.log(lam.knots[:-1]) + np.log(lam.knots[1:])))
+    w_rough = (math.sqrt(LAMBDA_SMOOTH_SHARE * len(t) / max(len(rough_T) - 2, 1))
+               / LAMBDA_SMOOTH_SIGMA
+               if LAMBDA_SMOOTH_SHARE and len(rough_T) > 2 else 0.0)
+    rough_lx = np.log(rough_T)
+
     def split_p(p):
         """(lambda knots, capacity knots) with the tail parameters removed."""
         body = p[:-n_drift] if n_drift else p
@@ -586,6 +649,11 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         r_shape = w_shape * (shape - p_target)
         r_tau = w_tau * (np.log(cap(pc, tauT) / lam.slope(pl, tauT)) - log_tau)
         parts = [r_sweep, r_anchor, r_shape, r_tau]
+        if w_rough:
+            g = np.log(np.maximum(lam.slope(pl, rough_T), 1e-30))
+            d2 = ((g[2:] - g[1:-1]) / (rough_lx[2:] - rough_lx[1:-1])
+                  - (g[1:-1] - g[:-2]) / (rough_lx[1:-1] - rough_lx[:-2]))
+            parts.append(w_rough * d2)
         if n_drift:
             parts.append(w_drift * p[-n_drift:])
         return np.concatenate(parts)
@@ -594,7 +662,9 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
                         + ([np.array(TIER2_SEED)] if tier2 else [])
                         + ([np.zeros(n_drift)] if n_drift else []))
     key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aQ,
-                    tauV, w_sweep, np.array([n_drift], float))
+                    tauV, w_sweep,
+                    np.array([n_drift, LAMBDA_SMOOTH_SHARE,
+                              LAMBDA_SMOOTH_SIGMA], float))
     hit = cache_load(key, len(p0))
     if hit is not None:
         x, nfev = hit
