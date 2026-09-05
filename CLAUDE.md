@@ -192,7 +192,14 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      tests_ltspm3/test_status_projection.py, because a rename
                      up here would otherwise leave a status file that still
                      parses and is quietly full of nulls.
-  tools/             replay.py (the only test on genuine data), steptest.py.
+  tools/             replay.py (the only test on genuine data), steptest.py,
+                     sweep.py -- drives a RUNNING recorder up a ladder of heater
+                     outputs through the command spool, holding each rung until
+                     it would grade by analysis/steps.py's rule rather than for
+                     a fixed time.  tau spans 1 s to 500 s over 5-110 K, so a
+                     fixed dwell is wrong at both ends.  --simulate rehearses
+                     the whole procedure on a virtual clock.  The ladder comes
+                     from analysis/plan_sweep.py.
 
 matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus
                      selftest.m and a README. Not built; copied to the cryostat.

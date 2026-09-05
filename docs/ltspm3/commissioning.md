@@ -783,6 +783,58 @@ and `SupervisorConfig.response_lag_s`. Both `K` and `τ` vary with temperature
 *and* with what the coldplate is doing, so record the coldplate temperature with
 each point (`OperatingPoint.coldplate_k` exists for this).
 
+#### Running it automatically — `ltspm3.tools.sweep`
+
+The staircase above was walked by hand in the 43 h run of 2026-09-02 → 09-04,
+and that run is what the fitted model in `analysis/` now stands on. Two things
+came out of it that change how the *next* one should be run.
+
+**The table above was wrong in the middle, by up to 17 K.** It was
+`SteadyStateCurve.kelvin_for()`, and between 43% and 63% that curve is a
+two-point power law — it is the hole this campaign existed to fill, so nothing
+else was possible at the time. Against the fitted model, row 10 (55.0% → 52 K)
+is really ≈ 35 K and row 7 (62.0% → 92 K) is ≈ 88 K. Do not plan from it.
+`analysis/plan_sweep.py` inverts the fitted steady state instead and prints the
+ladder, the local gain and τ at every rung.
+
+**τ is not constant, and it is what a dwell costs.** `τ = C/Λ′` off the same fit
+runs from under a second at 10 K to ≈ 489 s at 110 K — the factor of a thousand
+that the note above suspected and could not yet measure. So one hold length for
+a whole ladder is either an afternoon wasted at the cold end or a set of points
+the fitter will throw away at the warm one, and neither shows up until
+afterwards.
+
+`ltspm3/tools/sweep.py` runs a planned ladder against a **running recorder**,
+through the command spool, so it passes exactly the interlocks a typed command
+passes and nothing else needs to change to allow or forbid it. It fits each
+dwell as it happens and moves on when the dwell would *grade* by
+`analysis/steps.py`'s rule — reach ≥ 3τ, under 2 K still to go, under 0.5 K/h
+still moving — capped per rung by what the model predicted. A rung that hits its
+cap is journalled with an empty grade rather than dropped, which is what says
+"re-run this one".
+
+```bash
+# what to run, and what it costs -- touches nothing
+.venv/Scripts/python.exe analysis/plan_sweep.py --n 30 --lo 5.3 --hi 110
+
+# rehearse the procedure on a virtual clock -- no recorder, no port
+.venv/Scripts/python.exe -m ltspm3.tools.sweep --plan analysis/sweep_plan.csv --simulate
+
+# the real thing.  It asks before the first write
+.venv/Scripts/python.exe -m ltspm3.tools.sweep -c config.yaml     --plan analysis/sweep_plan.csv --max-k 120
+```
+
+Thirty rungs from 5.3 K to 110 K, log-spaced, is **4.3 h** if every dwell runs
+to its predicted length; two thirds of that is the last six rungs, because
+`τ ln(3600 ΔT / (τ · 0.5))` is what the 0.5 K/h bar costs at 110 K. Trading it
+is a real choice and it belongs to whoever is standing there: `--max-dwell 480`
+finishes in 1.8 h and the top three rungs come back ungraded.
+
+The recorder's own CSV is still the dataset — the sweep writes only the journal
+of which rung was held when. It **refuses to start** if the software loop is
+driving, and on any fault it stops where it stands and leaves the output alone,
+which is invariant 6.
+
 ### C3 — re-run replay against real armed data
 
 Feed the stage-4 CSVs through `replay.py`. The guard thresholds are currently

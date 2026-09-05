@@ -80,6 +80,9 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 .venv/Scripts/python.exe analysis/plot_ode.py
 .venv/Scripts/python.exe analysis/pid_tuning.py
 .venv/Scripts/python.exe analysis/settling.py
+
+# 4. plan the next sweep -- what to fill in, and how long it takes  (~10 s)
+.venv/Scripts/python.exe analysis/plan_sweep.py
 ```
 
 `pip install -e ".[analysis]"` for scipy and matplotlib; the recorder itself
@@ -107,6 +110,7 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 | `plot_ode.py` | trajectory, residual, Λ, dΛ/dT, C, τ, and the ladder |
 | `pid_tuning.py` | SIMC PI gains scheduled against T, on the loop *as configured* |
 | `settling.py` | why a settle takes 20–30 min, and what a 10 K/min sweep needs |
+| `plan_sweep.py` | where to put the rungs of the **next** sweep, and what each will cost. Inverts the fitted steady state for `u(T)` and reads `τ(T) = C/Λ′` off the same fit, then applies `steps.py`'s grader backwards to say how long each dwell has to run. Writes `sweep_plan.csv`, which `ltspm3/tools/sweep.py` runs. |
 
 ## What came out
 
