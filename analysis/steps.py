@@ -36,7 +36,7 @@ import math
 import numpy as np
 from scipy.optimize import minimize_scalar
 
-from _data import FIT_CD10, FIT_RECORDER, SWEEP, open_table
+from _data import FIT_CD10, FIT_RECORDER, LADDER, SWEEP, open_table
 
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
 
@@ -233,8 +233,8 @@ if __name__ == "__main__":
     # The three tables are versioned in reference/heater-calibration/ and are
     # resolved by name, not by path -- see analysis/_data.py.
     ap.add_argument("paths", nargs="*",
-                    default=[SWEEP, FIT_RECORDER, FIT_CD10],
-                    help="input tables (default: the three versioned ones)")
+                    default=[SWEEP, LADDER, FIT_RECORDER, FIT_CD10],
+                    help="input tables (default: the four versioned ones)")
     ap.add_argument("-o", "--out", default="analysis/steps.csv")
     a = ap.parse_args()
 

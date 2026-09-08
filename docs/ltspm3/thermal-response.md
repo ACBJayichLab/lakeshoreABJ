@@ -45,6 +45,37 @@ else, however long it is held. That is not a defect in the dwell — it is
 Nyquist, and the fix if τ(T) at the cold end ever matters is a faster cadence
 for those rungs, not a longer hold.
 
+### The programmed ladder measured it — 2026-09-05
+
+`ltspm3.tools.sweep` ran 30 rungs from 7.19% to 63.70% against the live
+recorder in **4 h 17 min**, and it settles both halves of this page.
+
+**τ was already right.** Measured against the fitted model, from 77 K to 114 K:
+1.03, 1.03, 1.03, 1.02, 1.01. At 50–57 K it is 0.88–0.90. The dynamics
+generalise, as this page has always claimed they would.
+
+**The steady state was not.** The model came back **low by up to 4.5 K** across
+the band it had been interpolating through, rising smoothly from +0.35 K at
+28 K to a plateau of about +4.5 K from 53 K up — 25 times the fit's own 0.168 K
+residual. Λ(T) between 40 K and 98 K had been an interpolation between anchors
+twenty percentage points apart, and there was no measurement in it to argue.
+
+| u% | model | measured |
+|---|---|---|
+| 51.708 | 28.24 | 28.59 |
+| 57.108 | 42.90 | 45.28 |
+| 60.798 | 72.37 | 77.10 |
+| 63.699 | 109.97 | **114.28** |
+
+That last row is the one to keep in mind when setting `--max-k`: the ceiling for
+that run was 120 K, chosen off a model that turned out to be 4.3 K low, and it
+finished with 5.7 K of headroom.
+
+The run is versioned at
+`reference/heater-calibration/region_20260905-114532_many_tau_steps.csv.gz` and
+is one of `analysis/steps.py`'s default inputs, so `python analysis/steps.py`
+on a fresh clone rebuilds all 92 anchors including these.
+
 **The simulator has both versions.** `ltspm3/sim_response.py` is the two-pole
 model these legacy numbers describe, and the control harness is still calibrated
 against it. `ltspm3/fitted_response.py` integrates the fitted ODE from a frozen

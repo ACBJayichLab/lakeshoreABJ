@@ -20,6 +20,7 @@ deliberately, because of what they are derived *from*:
 | `region_..._complete_sweep_even_larger.csv.gz` | the sweep, 2026-09-02 16:01 → 09-04 11:00. 43 h, 4.9–192.6 K, 2 s cadence, no gap over a minute. **Irreplaceable** — a run that happened once. |
 | `fit_recorder.csv.gz` | flattened from the recorder's own 2026-08/09 logs, which are *not* in the repo. Derived, but from a source a clone does not have, so primary in practice. |
 | `fit_cd10.csv.gz` | the one genuinely regenerable file, from the versioned `reference/logs/CD10/*.xls`. Committed anyway, so step one of the pipeline does not fail until somebody finds a two-command dance. |
+| `region_20260905-114532_many_tau_steps.csv.gz` | the **programmed ladder**, 2026-09-05 — 30 rungs in 4 h 17 min from `ltspm3.tools.sweep`, plus an aborted 13-rung attempt earlier that day. Irreplaceable in the same way as the sweep above. It is what filled 40–98 K, where the 43 h sweep left no settled point at all, and it showed the model **4.5 K low** through that band. Post-cutover, so its Coldplate needs no remap. |
 | `sweep_decimated.csv.gz` | the sweep again, adaptively thinned by `decimate.py` — 4,968 rows and 46 kB against 77,375 and 1.4 MB. Regenerable in twenty seconds, committed because it is what the production fit actually reads. |
 
 **The 8.8 h cut of the same run that used to be here is gone** (2026-09-04,

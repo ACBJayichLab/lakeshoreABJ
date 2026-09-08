@@ -45,6 +45,24 @@ DATA_DIR = os.path.join("reference", "heater-calibration")
 #: 2026-09-04 Coldplate recalibration, so it is entirely pre-cutover and
 #: internally consistent -- see docs/ltspm3/cryostat.md.
 SWEEP = "region_20260903-123832_complete_sweep_even_larger.csv"
+#: The PROGRAMMED ladder, 2026-09-05 -- 30 rungs from 7.19% to 63.70%, run by
+#: `ltspm3.tools.sweep` against the live recorder in 4 h 17 min, plus an aborted
+#: 13-rung attempt earlier the same day and the material before it.
+#:
+#: It exists because the 43 h sweep above was walked by hand and dwelt where
+#: somebody was watching: between 40 K and 98 K it left **no settled point at
+#: all**, and that band is where the local gain runs from 4 to 13 K/%.  This one
+#: put 19 graded points into 26-105 K where there had been 8, four of which were
+#: one CD10 hold counted four times.
+#:
+#: What it showed is why it was worth running: the model fitted to the 43 h
+#: sweep was **low by up to 4.5 K** through the hole it was interpolating
+#: across -- 25 times its own 0.168 K residual -- while tau came back within 3%
+#: from 77 K to 114 K.  The dynamics travelled; the steady state did not.
+#:
+#: Post-cutover, so its Coldplate is on the corrected X186279 curve as written
+#: and needs no remap, unlike everything above.
+LADDER = "region_20260905-114532_many_tau_steps.csv"
 #: Flattened recorder and CD10 logs -- the dwells steps.py extracts from.
 FIT_RECORDER = "fit_recorder.csv"
 FIT_CD10 = "fit_cd10.csv"

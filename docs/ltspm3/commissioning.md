@@ -835,6 +835,37 @@ of which rung was held when. It **refuses to start** if the software loop is
 driving, and on any fault it stops where it stands and leaves the output alone,
 which is invariant 6.
 
+#### It ran — 2026-09-05
+
+30 rungs, 7.19% → 63.70%, **4 h 17 min**, 13:18 → 17:35. Nothing was refused;
+every command was verified by readback. The result is in
+[thermal response](thermal-response.md#the-programmed-ladder-measured-it--2026-09-05):
+τ within 3% of the model from 77 K up, the steady state **low by up to 4.5 K**
+through the band that had no measurement in it.
+
+Two things to do differently next time, both learned the expensive way.
+
+**`--min-dwell` must clear 60 s.** The run used 45, which produced 48 s dwells,
+and `analysis/steps.py`'s extractor requires `min_span_s = 60` — so three rungs
+(45.31%, 47.69%, 49.82%, about 20.6–25.4 K) were dropped before they were ever
+graded. Nothing said so at the time; they are simply absent. **Use 75.** The
+cold rungs below 42.7% survived only because an aborted earlier attempt that day
+had covered the same outputs at 120 s.
+
+**The end-rate bar is the wrong test for a designed dwell.** Four of the best
+warm points — 56.74, 63.15, 69.93 and **114.28 K** — were thrown away for
+reading 0.51–0.71 K/h against the 0.50 K/h bar, at reach 4.7–5.7 and settled to
+within 0.04 K of their own T_inf. `MAX_END_RATE_K_PER_H` exists to catch
+relaxations cut off mid-flight in logs nobody planned; on a rung whose step time
+is known and whose reach is over 4, it rejects points good to forty millikelvin.
+Whether to loosen `grade()` for these is **open** — it changes what the pipeline
+keeps from the historical logs too, so it is Jeff's call and not a tidy-up.
+
+An earlier attempt the same day stopped at rung 13 when the heater was commanded
+to 0% from elsewhere; the sweep noticed the readback disagreeing and stopped
+where it stood, which is what it is supposed to do. Its 12 rungs are in the same
+export and are used.
+
 ### C3 — re-run replay against real armed data
 
 Feed the stage-4 CSVs through `replay.py`. The guard thresholds are currently

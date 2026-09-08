@@ -1,3 +1,124 @@
+# Handoff — 2026-09-07 (thirteenth session: a programmed sweep, and the model was 4.5 K low)
+
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+
+> ## THE HEATER IS ON, AND HAS BEEN FOR TWO DAYS
+>
+> The recorder is running `config-ltspm3-heater.yaml` and the 218's analog
+> output has been held at **63.699% — sample 114.4 K, coldplate 6.63 K** since
+> 2026-09-05 16:55. That is the last rung of the sweep, and the sweep leaves the
+> output where it finished on purpose: invariant 6, availability outranks
+> tidiness, and cutting this heater is a change of state rather than a retreat
+> to safety.
+>
+> Nothing will move it on its own. Move it deliberately, or leave it.
+
+## What this session was for
+
+Jeff asked for a program that steps the heater and dwells, to fill in the
+blanks in the steady-state curve. It exists, it ran, and what it measured
+changed the model.
+
+Four commits, **881 passing, ruff clean**.
+
+| | |
+|---|---|
+| `2240028` | the sweep tool and the planner |
+| `abddcff` | say why a rung was dropped; stop the rehearsal lying about time |
+| `0fb2815` | the simulator runs the fitted ODE, not the two-pole response |
+| *this one* | docs, and the run archived as a versioned input |
+
+## The result, which is the point
+
+The ladder ran **30 rungs, 7.19% → 63.70%, 4 h 17 min**, 2026-09-05 13:18–17:35.
+Nothing was refused; every command was verified by readback.
+
+**τ was already right** — measured/model is 1.03, 1.03, 1.03, 1.02, 1.01 from
+77 K to 114 K. **The steady state was not**: the model came back **low by up to
+4.5 K** through the band it had been interpolating across, 25 times its own
+0.168 K residual. Between 40 K and 98 K the 43 h sweep had left no settled point
+at all, so nothing had ever contradicted it.
+
+Graded anchors in 26–105 K: **8 before, 19 now** — and four of those eight were
+one CD10 hold counted four times.
+
+Full account in
+[thermal response](docs/ltspm3/thermal-response.md#the-programmed-ladder-measured-it--2026-09-05).
+
+## Two decisions left open
+
+**1. The end-rate bar rejects good designed dwells.** Four of the best warm
+points — 56.74, 63.15, 69.93 and **114.28 K** — were dropped for reading
+0.51–0.71 K/h against `MAX_END_RATE_K_PER_H = 0.5`, at reach 4.7–5.7 and settled
+to within **0.04 K** of their own T_inf. That test exists to catch relaxations
+cut off mid-flight in logs nobody planned. Loosening `grade()` so reach ≥ 3 plus
+a small `settle_K` is enough would recover them — **and would change what the
+pipeline keeps from the historical logs too**, which is why it was left for
+Jeff. Asked, not answered.
+
+**2. The refit has not been run.** `analysis/steps.csv` now has 92 graded
+anchors including the new run, and nothing downstream has been refitted against
+them. In order:
+
+```bash
+.venv/Scripts/python.exe analysis/steps.py          # 92 anchors, all four inputs
+.venv/Scripts/python.exe analysis/fit_ode.py        # ~15 min, the cache is keyed on the anchors
+.venv/Scripts/python.exe analysis/plot_gain.py
+.venv/Scripts/python.exe analysis/export_response.py --verify   # refreeze the simulator's table
+.venv/Scripts/python.exe analysis/plan_sweep.py                 # and re-plan, if another run follows
+```
+
+Expect Λ(T) to move by about 4.5 K worth of temperature between 50 K and 115 K,
+and expect `ltspm3/_fitted_table.py` to change with it.
+
+## Three rungs were lost, and it is four minutes to get them back
+
+`--min-dwell 45` produced 48 s dwells; `analysis/steps.py` requires
+`min_span_s = 60`. So **45.31%, 47.69% and 49.82%** (about 20.6–25.4 K) were
+dropped before grading, silently. Nothing is wrong with the data that was kept.
+**Use `--min-dwell 75`.** To recover just those three, from the repo root:
+
+```bash
+cd /d C:\Coding\Python\lakeshoreABJ && .venv\Scripts\python.exe -m ltspm3.tools.sweep -c config-ltspm3-heater.yaml --percents 45.31,47.69,49.82 --min-dwell 75 --max-k 120
+```
+
+It will ask before the first write. Note the cryostat is at 114 K on 63.7%, so
+that run starts by dropping the output a long way and waiting for it to cool —
+`--order nearest` will not help, there is no near end.
+
+## What the tools are
+
+| | |
+|---|---|
+| `analysis/plan_sweep.py` | picks the rungs from the fit: `u(T)` by inverting Q, `τ(T) = C/Λ′` for the cost, and `steps.py`'s grader run backwards for the dwell. Aims at **half** each bar — sized to the bar itself, four rungs came back at 0.51 K/h and were binned. |
+| `ltspm3/tools/sweep.py` | runs it against a **running recorder** through the command spool, so it passes exactly the interlocks a typed command passes. Fits each dwell live and moves on when it would grade. Refuses to start if the software loop is driving; on any fault it stops where it stands and holds. |
+| `ltspm3/fitted_response.py` | the simulator on the fitted ODE, stdlib only, from a frozen table. `--simulate` rehearses against the same plant the plan was sized from, so its dwell lengths are the ones to expect. |
+| `analysis/export_response.py` | regenerates that table. **Re-run after any refit.** |
+
+**`--on-abort off` is wrong on this cryostat.** `heaters_off` means every
+writable heater on the recorder, and `config-ltspm3-heater.yaml` also opens the
+336 — whose heater 2 is railed at 100% holding THE CHONKE and is somebody
+else's. The default `hold` is correct.
+
+## Smaller things
+
+- The 4 h 17 min run is versioned at
+  `reference/heater-calibration/region_20260905-114532_many_tau_steps.csv.gz`
+  (207 kB) and is one of `steps.py`'s default inputs, so a fresh clone rebuilds
+  all 92 anchors with no arguments. It is post-cutover, so its Coldplate is on
+  the corrected X186279 curve as written.
+- Below about 25 K, **τ cannot be measured at a 2 s cadence** — it is a few
+  seconds, and every cold rung came back pinned at 4.0 s, which is the fit's own
+  lower bracket. Those rungs give a steady state and nothing else, however long
+  they are held. A faster cadence is the only fix, and nobody has needed one yet.
+- The first attempt that day stopped at rung 13 when the heater was commanded to
+  0% from elsewhere. The sweep saw the readback disagree and stopped where it
+  stood. Its 12 rungs are in the same export and are used.
+- `ltspm3` is not importable outside the repo root in this venv — the editable
+  install predates it. Run these from `C:\Coding\Python\lakeshoreABJ`.
+
+---
+
 # Handoff — 2026-09-03 (twelfth session: CD10 in the viewer, and a heater that is not 50 ohm)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
