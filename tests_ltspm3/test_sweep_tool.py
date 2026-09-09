@@ -11,6 +11,8 @@ fault leaves the heater exactly where it was.
 import csv
 import json
 import math
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -479,3 +481,74 @@ def test_the_journal_defaults_to_beside_the_recorders_own_log(tmp_path):
     path = S.default_journal_path(status)
     assert path.startswith(str(tmp_path)) and path.endswith(".csv")
     assert "sweep-" in path
+
+
+# -- the admission thresholds, and the clock they are measured on -----------
+#
+# Both of these pin findings 1 and 3 of AUDIT-2026-09-09.md.
+
+def test_the_mirrored_grader_constants_still_match_analysis_steps():
+    """The duplication is deliberate; silent divergence is what it costs.
+
+    ``analysis/steps.py`` is read as TEXT rather than imported.  Importing it
+    would need scipy, which the recorder does not depend on and CI does not
+    install for this suite -- and a skipped test fails the build here -- and it
+    would also make ``analysis/`` a module something imports, which is the
+    property that keeps it clear of invariant 1.
+    """
+    src = (Path(__file__).resolve().parents[1] / "analysis" / "steps.py").read_text(
+        encoding="utf-8")
+    for name in ("NOISE_FLOOR_K", "NOISE_QUADRATIC", "MIN_REACH",
+                 "MIN_AMPLITUDE_SIGMA", "MAX_SETTLE_K", "MAX_END_RATE_K_PER_H",
+                 "MIN_SPAN_S", "MIN_N"):
+        found = re.search(rf"^{name}\s*=\s*([0-9.e-]+)\s*$", src, re.M)
+        assert found, f"analysis/steps.py no longer defines {name} at module level"
+        assert float(found.group(1)) == float(getattr(S, name)), (
+            f"{name} has diverged: sweep.py says {getattr(S, name)}, "
+            f"analysis/steps.py says {found.group(1)}")
+
+
+def test_a_dwell_shorter_than_the_admission_floor_is_refused_not_clamped(capsys):
+    """The 2026-09-05 loss, as a test: it ran, it reported success, it kept nothing."""
+    rc = S.main(["--percents", "45.31,47.69,49.82", "--min-dwell", "45",
+                 "--simulate"])
+    out, err = capsys.readouterr()
+    assert rc == 2
+    assert "60" in err and "--min-dwell" in err
+    # The point is that nothing RAN.  A clamp would have rehearsed the ladder
+    # and printed the rung table; the refusal is on stderr and stdout is bare.
+    assert "dwells graded" not in out
+
+
+def test_the_floor_itself_is_accepted():
+    assert S.main(["--percents", "45.31", "--min-dwell", str(S.MIN_SPAN_S),
+                   "--plan-only"]) == 0
+
+
+def test_a_recorder_link_times_its_dwells_on_its_own_monotonic_clock(tmp_path):
+    """An NTP step in the recorder's `t_wall` must not enter a tau fit.
+
+    `t_wall` is `time.time()`.  A correction on a machine that has been up for
+    days lands inside a dwell as a jump in the independent variable, and the
+    fit it corrupts is the one being used as the stop rule.
+    """
+    import time as _t
+
+    # Offsets from now, not absolute: `_status()` rejects a status file that
+    # looks stale, so a fabricated 1970-ish `t_wall` would be refused before it
+    # could reach the fit at all.  The jump is FORWARD, which is the case that
+    # is dangerous rather than merely rude -- a backward step makes the file
+    # look stale and the tool says so.
+    now = _t.time()
+    link = _link(tmp_path)
+    stamps = []
+    for cycle, offset in enumerate([0.0, 2.0, 4.0,
+                                    98000.0,       # +27 h, mid-dwell
+                                    98002.0]):
+        _status(tmp_path, cycle=cycle, t_wall=now + offset)
+        stamps.append(link.sample().t_s)
+
+    steps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert all(s >= 0.0 for s in steps), "a monotonic clock cannot go backwards"
+    assert max(steps) < 5.0, (
+        f"the 27 h t_wall jump reached the fit as {max(steps):.0f} s")

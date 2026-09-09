@@ -43,6 +43,16 @@
 #   max_output_pct: 70.0            a ceiling BELOW full scale.  See below --
 #                                   this is the guard that matters most
 #
+# Open by OMISSION, which is the seventh interlock and the easiest to overlook:
+#
+#   ipc.sources: (empty)            WHICH CLIENT may ask.  Empty means no
+#                                   policy, so any process that can write into
+#                                   `data/commands` may command this heater.
+#                                   The other six gate the action; only this one
+#                                   gates the asker.  See the `ipc:` section for
+#                                   the three named clients and what closing it
+#                                   would cost.
+#
 # Note both power gates cover ZERO as well as anything above it: cutting a
 # heater is not automatically the safe direction.  What always works regardless
 # is `send heaters_off` and `send hold` -- the two panic commands are the only
@@ -310,3 +320,26 @@ ipc:
   # lowering".  To stop the cryostat regardless of any of these gates, use
   # `send heaters_off` or `send hold`.
   allow_heater_range: true
+
+  # <-- OPEN, BY OMISSION, and it is the seventh interlock.  Every gate above
+  # answers "may this action happen"; this one answers "may this CLIENT ask",
+  # which none of the others can express.  Absent or empty means there is no
+  # policy and ANY process that can write into `data/commands` may command this
+  # heater -- which on this file is the sample heater and a 336 range.
+  #
+  # It is left open deliberately rather than by oversight.  There are three
+  # named clients -- `lschart-cli/<pid>`, `matlab`, and `ltspm3-sweep/<pid>` --
+  # and writing them here flips `default:` to false, so a client that turns up
+  # under a fourth label is refused mid-run.  On a cryostat where availability
+  # outranks control quality, that trade is Jeff's to make and not a default.
+  #
+  # To close it, uncomment and check every label against what the clients
+  # actually stamp; a typo fails closed, which is the right direction but is
+  # discovered at the worst moment.  `sources.json` in the IPC directory can
+  # narrow this at runtime without a restart, and can never widen it.
+  #
+  # sources:
+  #   lschart-cli: true
+  #   matlab: true
+  #   ltspm3-sweep: true
+  #   default: false

@@ -62,6 +62,17 @@ MIN_AMPLITUDE_SIGMA = 20.0
 #: measurement of the cryostat.
 MAX_SETTLE_K = 2.0
 
+#: The ADMISSION thresholds: a dwell shorter than this, or with fewer samples,
+#: is not graded at all.  They are module constants rather than bare ``dwells()``
+#: defaults because they run UPSTREAM of ``grade()`` and so are invisible to it
+#: -- a dwell they reject never reaches the grader and never gets a grade to
+#: report.  On 2026-09-05 that cost three good rungs: ``--min-dwell 45`` produced
+#: 48 s dwells, the sweep's journal graded all three "steady", and this test
+#: dropped them before the fit ever saw them.  Named so that
+#: ``ltspm3/tools/sweep.py`` can mirror them by name and stop repeating it.
+MIN_SPAN_S = 60.0
+MIN_N = 15
+
 TIME_KEYS = ("t_s", "Time")
 HEATER_KEYS = ("u_pct", "ls218.aout1", "heater_pct")
 
@@ -121,7 +132,7 @@ def load(path):
             [s for s, k in zip(stamps, ok) if k])
 
 
-def dwells(t, T, Tc, u, seg, stamps, min_span_s=60.0, min_n=15):
+def dwells(t, T, Tc, u, seg, stamps, min_span_s=MIN_SPAN_S, min_n=MIN_N):
     """Maximal runs of constant u inside one segment; see U_TOL_PCT."""
     out = []
     start = 0

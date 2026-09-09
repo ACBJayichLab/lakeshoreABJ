@@ -123,6 +123,34 @@ def verify(r, g) -> None:
           f"{T[-1]:.0f} K")
 
 
+#: Emitted verbatim into the generated header; empty string when there is
+#: nothing to say.
+#:
+#: The provenance block below records what the fit was fitted TO.  It cannot
+#: record what has contradicted it SINCE, and on 2026-09-05 something did.  That
+#: finding lived in HANDOFF.md, two docs, analysis/README.md and _data.py -- and
+#: in none of the files that ship the table, so a `--simulate` rehearsal or a
+#: re-plan next month inherited the error with nothing on screen to say so.
+#:
+#: It lives here rather than being pasted into ltspm3/_fitted_table.py because
+#: that file is generated: a hand-edited warning is deleted by the next refit,
+#: which is precisely the moment somebody is relying on it.
+SUPERSEDED_NOTE = """\
+KNOWN LOW, and not yet refitted.  The programmed ladder of 2026-09-05 measured
+the steady state LOW BY UP TO 4.5 K across 40-98 K -- 25 times the rms residual
+quoted above -- through the band where the 43 h sweep left no settled point at
+all and this fit was therefore interpolating.  tau came back within 3% from
+77 K to 114 K, so the dynamics travelled and the steady state did not.
+
+Both `ltspm3.tools.sweep --simulate` and analysis/plan_sweep.py read this table
+and inherit the error.  Invariant 9: where a measured number contradicts the
+model, the number wins.
+
+CLEAR SUPERSEDED_NOTE in analysis/export_response.py when a refit reconciles
+them.  HANDOFF.md has the command order; tests_ltspm3/test_fitted_table.py
+checks that this warning is actually present in the generated file."""
+
+
 def write(r, g, path: str) -> None:
     stamp = _dt.date.today().isoformat()
     lines = [
@@ -136,6 +164,7 @@ def write(r, g, path: str) -> None:
         f"{r['rms_k']:.3f} K rms, {r['max_k']:.2f} K max; tau(137 K) = "
         f"{r['tau_137_s']:.0f} s;",
         f"implied mass {r['mass_g']:.2f} g of the Cu/sapphire/diamond mix.",
+        *(["", *SUPERSEDED_NOTE.split("\n")] if SUPERSEDED_NOTE else []),
         "",
         "Columns, one row per grid point:",
         "",

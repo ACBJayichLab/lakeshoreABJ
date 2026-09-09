@@ -20,6 +20,13 @@ one thing that crosses the whole range -- rehearse a 30-rung ladder against the
 old response and two thirds of the rungs come back cut off mid-relaxation, none
 of it telling you anything about the cryostat.
 
+**And this one has since been contradicted in its turn.**  The programmed ladder
+of 2026-09-05 measured the steady state low by up to 4.5 K across 40-98 K, and
+the refit has not been run.  Being the correction to ``sim_response`` is not the
+same as being right; see the header of :mod:`ltspm3._fitted_table` for what is
+known wrong and ``HANDOFF.md`` for the refit.  tau is unaffected -- it came back
+within 3% from 77 K to 114 K.
+
 What this integrates
 --------------------
 

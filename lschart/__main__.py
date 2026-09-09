@@ -156,6 +156,14 @@ def cmd_check(args) -> int:
                   f"{'on' if ipc.sources.get('default', False) else 'OFF'}")
             print(f"  runtime overlay: {ipc.sources_path()} "
                   "(may narrow this, never widen it)")
+        elif ipc.accept_commands:
+            # Empty means open, and printing nothing was how the seventh
+            # interlock stayed invisible on the one config that can move a
+            # sample heater.  The other six are reported above whether they are
+            # open or shut; this one now is too.
+            print("  source policy  : none -- ANY client may ask"
+                  f"{' (including ' + ' and '.join(allowed) + ')' if allowed else ''}"
+                  f"; set ipc.sources to name them")
     else:
         print("  status file    : disabled (ipc.enabled: false) -- the viewer and "
               "MATLAB have nothing to read")

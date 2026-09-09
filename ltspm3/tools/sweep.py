@@ -106,6 +106,15 @@ from dataclasses import dataclass, replace
 # a keep/drop decision there, and if they ever diverge the symptom is a sweep
 # whose points the fitter throws away -- which the journal's ``grade`` column
 # reports on the spot rather than a week later.
+#
+# That last claim held only for the constants ``grade()`` reads.  MIN_SPAN_S and
+# MIN_N below are ADMISSION thresholds: ``steps.py``'s ``dwells()`` applies them
+# upstream of ``grade()``, so a dwell they reject is never graded and the journal
+# has nothing to report.  On 2026-09-05 the journal said "3/3 dwells graded" and
+# the fitter kept none of them.  They are mirrored here for exactly the reason
+# the paragraph above gives, and ``--min-dwell`` is refused below MIN_SPAN_S
+# rather than silently raised, because a tool quietly doing something other than
+# what it was told is the failure being fixed, not the fix.
 
 #: Sensor noise, from docs/ltspm3/thermal-response.md: quadratic in T, floored
 #: near 1.8 mK.
@@ -127,6 +136,13 @@ MAX_SETTLE_K = 2.0
 #: settled hold from one cut off mid-relaxation; total amplitude gets that
 #: backwards for the long holds.
 MAX_END_RATE_K_PER_H = 0.5
+
+#: A dwell shorter than this, or with fewer samples than MIN_N, is not graded by
+#: ``analysis/steps.py`` at all -- see the note at the top of this block.  MIN_N
+#: is latent at the live 2 s cadence, where 60 s is 30 samples, and bites above
+#: 4 s.
+MIN_SPAN_S = 60.0
+MIN_N = 15
 
 #: How far the reported heater may wander from what was commanded before this
 #: concludes somebody else is driving.  NOT the DAC resolution: the 218's
@@ -504,7 +520,23 @@ class RecorderLink:
                         f"no channel named {self.channel!r} in the status file "
                         f"({[c.get('name') for c in status.get('channels', [])]})")
                 return Sample(
-                    t_s=float(status.get("t_wall") or time.time()),
+                    # The client's OWN monotonic clock, not the recorder's
+                    # ``t_wall``.  Every interval derived from this -- span_s,
+                    # tau_s, end_rate_k_per_h -- is a difference, and t_wall is
+                    # ``time.time()``: an NTP correction on a machine that has
+                    # been up for days lands inside a dwell as a step in the
+                    # independent variable and corrupts the fit at the moment
+                    # the fit is the stop rule.  status.json publishes no
+                    # monotonic clock to use instead.
+                    #
+                    # Safe because this is reached exactly once per acquisition
+                    # cycle -- the dedup on ``cycle`` above guarantees it -- so
+                    # the stamps inherit the recorder's cadence with only poll
+                    # latency added, under 0.5 s against a 2 s cadence and a
+                    # 36 s tau at the fast end of the band that matters.  The
+                    # absolute clock is not lost: it travels in ``iso``, which
+                    # is what the journal records.
+                    t_s=time.monotonic(),
                     kelvin=kelvin, usable=bool(usable),
                     u_pct=self._aux(status, self._heater_name(status)),
                     coldplate_k=cold, iso=str(status.get("iso") or ""),
@@ -873,7 +905,7 @@ def dwell(link, tread: Tread, opts: Options, *, on_sample=None) -> DwellResult:
         if on_sample is not None:
             on_sample(s, elapsed, fit)
 
-        if elapsed >= opts.min_dwell_s and len(samples) >= 8:
+        if elapsed >= opts.min_dwell_s and len(samples) >= MIN_N:
             if fit is None or len(samples) % opts.fit_every == 0:
                 try:
                     fit = fit_pole(samples)
@@ -1020,6 +1052,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if bool(args.plan) == bool(args.percents):
         print("give exactly one of --plan or --percents", file=sys.stderr)
+        return 2
+
+    if args.min_dwell < MIN_SPAN_S:
+        print(f"--min-dwell {args.min_dwell:g} is below the {MIN_SPAN_S:g} s "
+              f"floor analysis/steps.py admits a dwell at, so every rung this "
+              f"run grades would be dropped before it was fitted.\n"
+              f"  Pass --min-dwell {MIN_SPAN_S:g} or more. This happened on "
+              f"2026-09-05 with 45: the journal reported every rung graded and "
+              f"the fitter kept none of them.", file=sys.stderr)
         return 2
 
     opts = Options(

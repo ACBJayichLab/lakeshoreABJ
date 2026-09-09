@@ -8,6 +8,20 @@ Fitted 2026-09-05 to region_20260903-123832_complete_sweep_even_larger.csv
 0.168 K rms, 11.03 K max; tau(137 K) = 586 s;
 implied mass 4.86 g of the Cu/sapphire/diamond mix.
 
+KNOWN LOW, and not yet refitted.  The programmed ladder of 2026-09-05 measured
+the steady state LOW BY UP TO 4.5 K across 40-98 K -- 25 times the rms residual
+quoted above -- through the band where the 43 h sweep left no settled point at
+all and this fit was therefore interpolating.  tau came back within 3% from
+77 K to 114 K, so the dynamics travelled and the steady state did not.
+
+Both `ltspm3.tools.sweep --simulate` and analysis/plan_sweep.py read this table
+and inherit the error.  Invariant 9: where a measured number contradicts the
+model, the number wins.
+
+CLEAR SUPERSEDED_NOTE in analysis/export_response.py when a refit reconciles
+them.  HANDOFF.md has the command order; tests_ltspm3/test_fitted_table.py
+checks that this warning is actually present in the generated file.
+
 Columns, one row per grid point:
 
     T        K       sample temperature

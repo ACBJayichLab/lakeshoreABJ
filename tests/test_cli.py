@@ -132,6 +132,49 @@ def test_check_calls_a_writable_analog_output_a_heater(tmp_path, capsys):
     assert "70%" in out, "the ceiling is the guard; it has to be visible"
 
 
+def test_check_reports_an_empty_source_policy_as_open(tmp_path, capsys):
+    """Empty `ipc.sources` means any client may ask, and `check` used to say
+    nothing at all -- so the one interlock with no visible "off" state was also
+    the one the reader never saw.  Finding 5 of AUDIT-2026-09-09.md."""
+    p = tmp_path / "open.yaml"
+    p.write_text('instruments:\n  - name: ls218\n    model: "218"\n'
+                 "    driver: sim\n    allow_writes: true\n    max_output_pct: 70\n"
+                 "recorder:\n  enabled: false\n"
+                 f"ipc:\n  enabled: true\n  directory: {tmp_path.as_posix()}\n"
+                 "  accept_commands: true\n  allow_analog_output: true\n")
+    assert cli.main(["-c", str(p), "check"]) == 0
+    out = capsys.readouterr().out
+    assert "source policy" in out
+    assert "ANY client may ask" in out
+    assert "ipc.sources" in out, "saying it is open must name the way to close it"
+
+
+def test_check_names_the_clients_when_a_source_policy_exists(tmp_path, capsys):
+    p = tmp_path / "named.yaml"
+    p.write_text('instruments:\n  - name: ls218\n    model: "218"\n'
+                 "    driver: sim\n"
+                 "recorder:\n  enabled: false\n"
+                 f"ipc:\n  enabled: true\n  directory: {tmp_path.as_posix()}\n"
+                 "  accept_commands: true\n"
+                 "  sources:\n    matlab: true\n    default: false\n")
+    assert cli.main(["-c", str(p), "check"]) == 0
+    out = capsys.readouterr().out
+    assert "matlab=on" in out
+    assert "ANY client may ask" not in out
+
+
+def test_check_says_nothing_about_sources_when_commands_are_refused(tmp_path, capsys):
+    """No policy is needed where nothing may ask; a warning there is noise."""
+    p = tmp_path / "shut.yaml"
+    p.write_text('instruments:\n  - name: ls218\n    model: "218"\n'
+                 "    driver: sim\n"
+                 "recorder:\n  enabled: false\n"
+                 f"ipc:\n  enabled: true\n  directory: {tmp_path.as_posix()}\n"
+                 "  accept_commands: false\n")
+    assert cli.main(["-c", str(p), "check"]) == 0
+    assert "ANY client may ask" not in capsys.readouterr().out
+
+
 def test_check_does_not_call_a_box_writable_when_no_bytes_can_leave(tmp_path, capsys):
     """The half-opened config: `allow_writes` on, `transport.read_only` on.
     Reporting only the first would be a lie in the safe direction, which is
