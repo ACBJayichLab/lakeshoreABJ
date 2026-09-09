@@ -172,6 +172,17 @@ Allan deviation: 6.1 mK @ 4 s, 4.1 mK @ 60 s, 2.5 mK @ 600 s — about 2× worse
 than 1/√N. **The measurement, not the DAC, is what limits mK stability**, and
 it is why sampling faster than 1 Hz buys much less than it looks like it should.
 
+Worse than 1/√N means the noise is correlated, and [noise.md](noise.md) takes
+that apart: the jitter and the bands it lives in, how far averaging actually
+gets (measured, not modelled), and why the temperature scaling cannot by itself
+say whether the floor is thermal or instrumental — the sample is a Cernox, and
+an NTC loses sensitivity as it warms.
+
+**Those numbers are from the archive and predate the 2026-09-04/05 rework** —
+new wiring, the Magnet on input 5, the 218's filter on, 4 Hz per input. They
+describe fixed logs and remain true of them; they are not a description of the
+cryostat as it now stands.
+
 ## The consequence that shapes the whole design
 
 At ~10.0 K/%, one 0.01% DAC code is **~100 mK** — roughly forty times the sensor

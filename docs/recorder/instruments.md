@@ -133,6 +133,110 @@ A software loop writing this output every cycle should set `verify_writes:
 false` and confirm for itself (`SupervisorConfig.verify_readback`), rather than
 paying for a second transaction and a settle in every control cycle.
 
+## How a 218 actually reads a thermometer
+
+Worth knowing before anyone proposes to change what arrives at its terminals.
+From the [Model 218 user's manual][218man] and its specification table:
+
+| | |
+|---|---|
+| Inputs | 8, in **two groups of four**; every input in a group must be the same sensor type |
+| Measurement | **four-lead differential** — one twisted pair carries the excitation, the other carries the sense voltage |
+| Excitation | **eight dedicated constant-current sources, one per input, always on**. Diode inputs get 10 µA ±0.05% |
+| A/D | two converters, one per group of four |
+| Update rate | **16 readings/s total, split over the *enabled* inputs** — see below |
+| Diode, 0–2.5 V range | measurement resolution **20 µV**; electronic accuracy ±160 µV ±0.01% of reading |
+| Diode, 0–7.5 V range | measurement resolution 100 µV; accuracy ±160 µV ±0.02% of reading |
+| Sensor types | `INTYPE <group>, <type>` — 0 = 2.5 V diode, 1 = 7.5 V diode, 2/3/4 = 250 Ω / 500 Ω / 5 kΩ platinum, **5 = Cernox**. `<group>` is a **letter**: `A` = inputs 1–4, `B` = inputs 5–8 |
+| Digital filter | `FILTER <input>,<off/on>,<points>,<window>` — **exponential** smoothing over 2–64 points, plus a window percentage that *restarts* it on a step |
+
+Two consequences matter, and they pull in opposite directions.
+
+**The excitation is never switched, which makes the input forgiving.** Most
+scanning monitors multiplex one current source across their channels; the
+manual makes a point of the 218 not doing that, because not waiting for a
+current source to settle is how it gets to 16 rdg/s. So a capacitor at a 218
+input sits across a sensor that is being driven continuously, and the
+multiplexer only moves the voltmeter. On a switched-excitation instrument the
+same capacitor would be a serious bug — it could not settle inside a channel
+dwell, and every reading would carry the previous channel's charge.
+
+**The per-input reading rate is configuration, not a constant.** The box has a
+fixed 16 rdg/s budget and divides it over the inputs that are switched on
+(`INPUT <n>, <off/on>`), so turning inputs off makes the survivors faster —
+manual Table 4-2:
+
+| inputs enabled | readings/s, each |
+|---|---|
+| 1 | 16 |
+| 2 (one per group) | 8 |
+| 4 (two per group) | **4** |
+| 8 | 2 |
+
+**Split them evenly between the two groups.** Each group of four has its own
+A/D, so the fuller group is the bottleneck; three in group A and one in group B
+runs slower than two and two.
+
+Whatever that rate is, it is the ceiling on everything downstream: the 218's
+output stream is band-limited to half of it, and anything faster has already
+aliased inside the 218's own A/D before the recorder sees a number. No amount
+of polling, averaging or filtering *after* the GPIB cable separates it out
+again. An anti-alias filter for this box needs a corner well below half the
+per-input rate — a time constant of seconds, not milliseconds.
+
+### The input filter is exponential, and that changes both numbers
+
+Manual §4.7.3: *"the reading filter applies exponential smoothing to the sensor
+input readings"*, and it settles after a step in *"about 6 times the number of
+filter points"*. One point is one reading on that input, so:
+
+- **time constant** = `points / rate`, not `points/2` — an exponential's lag is
+  τ, where a boxcar's group delay would be half its width. Assuming a boxcar
+  halves every lag figure;
+- **noise gain** = `sqrt(α/(2−α))` with `α = 1/N`, so N points buys about
+  `sqrt(2N)` on white noise — *better* than a boxcar of the same point count.
+
+The `window` is a percent of full scale and a reading further than that from
+the filter value **restarts** it. Set it tight enough to trip on the noise and
+the filter continually restarts and intermittently does nothing — which is
+worse for a control loop than either extreme, because the lag comes and goes.
+
+Size it so the smoothing spans roughly one polling interval: that averages the
+readings the recorder would otherwise discard, without making consecutive
+logged samples share most of their inputs. Past that point the filter keeps
+reducing noise, but the CSV's sample-to-sample jitter stops measuring the noise
+and starts measuring the filter.
+
+### Ask it in the sensor's own units, not in kelvin
+
+`read_sensor_units: true` adds one `SRDG? 0` per cycle and logs every input in
+the units the sensor actually works in — volts on a diode range, ohms on an RTD
+— as `{name}.sensor{n}` columns beside the kelvin ones.
+
+It is off by default because it costs a transaction, and on for exactly one
+reason: **kelvin is the wrong domain to ask a noise question in.** A sensor's
+sensitivity varies by orders of magnitude across its range, so a noise floor
+that is *constant in ohms* — which is what an instrument or a wiring fault
+produces — appears in kelvin as a figure that grows with temperature and looks
+convincingly like physics. Logging both columns settles that by subtraction
+rather than by datasheet, which matters because sensitivity tables are the
+thing nobody has to hand at the moment they need them.
+
+It also identifies the sensor by inspection, which is why there is no
+`INTYPE?` here: ~1 V is a diode, tens to thousands of ohms is an RTD.
+
+**Neither `FILTER` nor `INTYPE` is implemented in `ls218.py`, deliberately.**
+Both are per-input instrument settings that change about never, they are
+reachable from the front panel, and polling them costs transactions the 1 Hz
+budget does not have. The cost of leaving them out is real and worth naming:
+**a record taken with the filter on and one taken with it off do not describe
+the same instrument, and nothing in the CSV says which you have.** Write the
+setting down when you change it.
+
+`docs/ltspm3/noise.md` works through what all this meant on one cryostat.
+
+[218man]: https://www.lakeshore.com/docs/default-source/product-downloads/manuals/218_manual.pdf
+
 ## The interlocks, in the order they apply
 
 A command that applies power needs four gates: the three common ones plus

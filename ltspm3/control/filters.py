@@ -38,9 +38,19 @@ class MedianFilter:
 class ExponentialFilter:
     """Single-pole low pass with dt-aware gain.
 
-    At tau=60 s and dt=4 s the output noise is 0.18x the input, i.e. the cryostat's
-    ~10 mK sample noise becomes ~1.8 mK -- enough for millikelvin work while
-    staying 6x faster than the thermal response's ~360 s fast pole.
+    **It buys much less than sqrt(dt/2*tau) suggests, and the difference is not
+    small.**  That expression is the noise gain for *uncorrelated* samples, and
+    at tau=60 s, dt=4 s it promises 0.18x -- ~10 mK of sample noise becoming
+    ~1.8 mK.  Run over this cryostat's own settled holds the same filter
+    delivers **0.41x and 0.73x** on the two records in
+    ``reference/logs/CD10``, because the noise is not white: most of it sits at
+    periods of tens of seconds to tens of hours, where a low pass cannot reach
+    it without also removing the measurement.  Even tau=600 s only reaches
+    0.22x/0.49x.
+
+    Plan with the measured numbers.  ``docs/ltspm3/noise.md`` has the bands, the
+    tau sweep and the reasoning; ``python -m lschart.tools.noisespec`` re-derives
+    all of it.
     """
 
     def __init__(self, tau: float) -> None:

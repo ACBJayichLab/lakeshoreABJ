@@ -99,6 +99,7 @@ class LS218(Instrument):
         channels: dict[int, str] | None = None,
         analog: AnalogOutputConfig | None = None,
         read_status: bool = True,
+        read_sensor_units: bool = False,
         allow_writes: bool = False,
         max_output_pct: float = 100.0,
         verify_writes: bool = True,
@@ -109,6 +110,26 @@ class LS218(Instrument):
         self.channels = dict(channels or {i: f"Input {i}" for i in self.ALL_INPUTS})
         self.analog = analog or AnalogOutputConfig()
         self.read_status = read_status
+        #: Also log ``SRDG? 0`` -- the reading in the sensor's OWN units, volts
+        #: for a diode and ohms for an RTD, before any curve is applied.
+        #:
+        #: Worth one extra transaction when a noise question is open, because
+        #: kelvin is the wrong domain to ask it in.  A sensor's sensitivity
+        #: varies by orders of magnitude across its range -- a Cernox loses
+        #: most of its dR/dT between 10 K and 300 K -- so a noise floor that is
+        #: *constant in ohms*, which is what an instrument or a wiring fault
+        #: produces, shows up in kelvin as a number that grows with
+        #: temperature and looks convincingly like physics.  Logging the raw
+        #: units settles that by subtraction instead of by datasheet.
+        #:
+        #: It also identifies the sensor by inspection: ~1 V is a diode, tens
+        #: to thousands of ohms is an RTD.  No ``INTYPE?`` guesswork needed.
+        #:
+        #: **Off by default**, for the same arithmetical reason ``read_pid`` is
+        #: off on a 33x: the default 218 + 336 config has no room for another
+        #: transaction at 1 Hz, and the default must not quietly stop being
+        #: 1 Hz.  A cryostat at 2 s has room for it.
+        self.read_sensor_units = read_sensor_units
         self.allow_writes = allow_writes
         self.max_output_pct = float(max_output_pct)
         self.verify_writes = verify_writes
@@ -139,9 +160,39 @@ class LS218(Instrument):
             aux[f"{self.name}.aout{self.analog.output}"] = self.get_analog_percent()
         except (TransportError, ValueError) as exc:
             log.debug("%s: AOUT? failed: %s", self.name, exc)
+        # Same rule as the readback above: one failed query must not cost eight
+        # good temperatures.  A missing sensor-units column is a gap in a
+        # diagnostic; a dropped frame is a gap in the record.
+        if self.read_sensor_units:
+            try:
+                units = self.read_sensor_units_all()
+            except (TransportError, ValueError) as exc:
+                log.debug("%s: SRDG? 0 failed: %s", self.name, exc)
+            else:
+                for inp in sorted(self.channels):
+                    if inp - 1 < len(units):
+                        aux[f"{self.name}.sensor{inp}"] = units[inp - 1]
         return readings, aux
 
+    def aux_keys(self) -> list[str]:
+        """The aux columns this instrument produces, in a stable order.
+
+        The recorder needs the CSV header before the first frame arrives, so
+        this is derived from configuration alone and must not depend on what a
+        query happened to return.
+        """
+        keys = [f"{self.name}.aout{self.analog.output}"]
+        if self.read_sensor_units:
+            keys += [f"{self.name}.sensor{i}" for i in sorted(self.channels)]
+        return keys
+
     def read_sensor_units_all(self) -> list[float]:
+        """``SRDG? 0`` -- all eight inputs in the sensor's own units.
+
+        Volts on a diode range, ohms on an RTD range.  This is the reading
+        *before* the curve, so it is the only place a noise figure can be
+        quoted in units the instrument's own specification is written in.
+        """
         return parse_float_list(self.transport.query("SRDG? 0"))
 
     # -- the heater actuator ----------------------------------------------
