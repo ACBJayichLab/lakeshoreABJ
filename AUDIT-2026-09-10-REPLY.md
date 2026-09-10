@@ -13,6 +13,16 @@ decision is auditable against the reasoning rather than only against the diff.
 | refuse *any* grade for a floor pin whose amplitude is under `MIN_AMPLITUDE_SIGMA` | **not applied** — the discriminator is anti-correlated with correctness (§1) |
 | refuse *any* grade for a ceiling pin | **not applied** — costs five good anchors to catch two (§2). A better test exists (§4) |
 
+**Both non-applications were conceded** in
+[AUDIT-2026-09-10-REJOINDER.md](AUDIT-2026-09-10-REJOINDER.md), which also
+corrects one overstated margin in §4 (see the note there) and makes the point
+this document missed: §4's reasoning is scoped to `analysis/`, and **the live
+sweep tool is where the same failure costs data on the day, with no review
+pause protecting it**. That is now fixed — `PoleFit.long_enough` puts the guard
+on the plant's tau whenever the plan carries one — and §4's `analysis/` half
+remains deferred to the Phase A pause as
+[REFIT_PLAN.md §6.2](REFIT_PLAN.md) option 4.
+
 Everything below is reproducible from the archive at this commit.
 
 ## The one-sentence diagnosis
@@ -125,12 +135,31 @@ recomputed against the plant's τ rather than the fitted one, on the same seven:
   rec-20260901-222818   170.64 K    232 s   plant tau   611.56 s   reach     0.38   UNDER MIN_REACH
 ```
 
-**Perfect separation against the existing `MIN_REACH = 3.0`**, with three
-orders of magnitude of daylight on either side of the boundary. Both doubtful
+**Perfect separation against the existing `MIN_REACH = 3.0`.** Both doubtful
 dwells are caught, all five settled ones are kept, and no new constant is
 introduced. This is finding 1's prescription — "a dwell with no resolvable
 transient should have to run some multiple of the plant's tau at its own
 temperature, not 60 s" — applied to finding 2, where it also works.
+
+> **Correction.** This paragraph first claimed "three orders of magnitude of
+> daylight on either side of the boundary". That is true of six of the seven
+> rows and **not of `pp-20260808-155602`**, which scores 1.93 against a bar of
+> 3.0 — a factor of 1.5, as
+> [the rejoinder](AUDIT-2026-09-10-REJOINDER.md) points out. The claim was
+> overstated; the verdict survives it, checked at 99 K specifically rather than
+> assumed from the 40–120 K band:
+>
+> | | |
+> |---|---|
+> | τ anchors bracketing it | 93.547 K → 413.9 s, 103.288 K → 467.2 s |
+> | log-log interpolant at 99.42 K | **445.9 s** |
+> | `fitted_response.tau_s(99.42)` | 436.4 s, **+2.2 %** apart |
+> | reach on each | 1.88 and 1.92 — both under the bar |
+> | τ needed to pass | ≤ 280 s, i.e. **37 % low**, a factor of 1.59 |
+>
+> So the two independent clocks agree to 2.2 % where it matters and the verdict
+> needs 37 % to flip. It holds — but on a margin of 1.6 in τ, and that is the
+> number to quote for this row rather than the one the other six enjoy.
 
 Finding 1 rejected it for `analysis/` on the grounds that "`analysis/steps.py`
 has no plant model and should not import one". The second half is right and is
@@ -150,11 +179,16 @@ Three things to be honest about before anyone builds it:
   build τ(T), then settle the ceiling pins. That is one round of iteration, and
   "curate, do not discover" contains it: the output is a committed manifest a
   human reviewed, not a fixed point rediscovered per run.
-- **Coverage is thin below 25.8 K and the verdict does not care.** The two cold
-  pins need τ(T) extrapolated. It does not matter: at 38 s and 78 s, τ would
-  have to be wrong by a factor of ~1,300 to pull reach under 3. Where the
+- **Coverage is thin below 25.8 K and the verdict does not care *there*.** The
+  two cold pins need τ(T) extrapolated. It does not matter: at 38 s and 78 s, τ
+  would have to be wrong by a factor of ~1,300 to pull reach under 3. Where the
   extrapolation is weak the answer is insensitive to it, which is the good case
   for extrapolating.
+- **Where it is not insensitive is 99 K**, and there interpolation is well
+  covered but the margin is only 1.6 in τ. So the interpolant's uncertainty has
+  to be carried on that row — the rejoinder's step 2 asks for exactly this, and
+  it is the one verdict of the seven that a reviewer should look at rather than
+  wave through.
 
 The table above used `ltspm3.fitted_response.tau_s` to show the discriminator
 works, because it was to hand in a scratch script. That table's steady state is

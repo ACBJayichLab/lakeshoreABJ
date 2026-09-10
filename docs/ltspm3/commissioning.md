@@ -860,11 +860,27 @@ against a 0.5 bar, and a transient 60 to 1265 times the sensor noise. They were
 the best-settled points in the archive and a wall clock threw them out. **The
 dwell lengths this run chose were right.**
 
-`MIN_SPAN_S` now lives inside `settled()` and applies only to a dwell with *no
-resolvable transient*, which is the one failure it was really protecting
-against — 48 s at 145 K, where τ is 600 s, fits a pole to noise and certifies
-itself finished. Use whatever `--min-dwell` the plan calls for; the grader will
-say per rung, in the journal, whether it believes the result.
+`MIN_SPAN_S` now lives inside `settled()` and applies only to a dwell whose
+fitted pole cannot be believed — no resolvable transient, or a τ pinned at the
+top of the search — which is the failure it was really protecting against:
+48 s at 145 K, where τ is 600 s, fits a pole to noise and certifies itself
+finished.
+
+**And it is no longer the test that decides, where the plan can do better.**
+A duration cannot answer "did this run several time constants" on a plant whose
+τ spans a factor of five thousand, and it failed *at its own value* — measured,
+a 60 s dwell at 145 K with 0.76 K still to go was certified `steady` 16 times
+in 200, and `--min-dwell 60` certified one run in ten. So `settled()` now asks
+for `MIN_REACH × tau_pred_s` whenever the rung carries the model's prediction,
+and falls back to `MIN_SPAN_S` — labelled a proxy in the code — only for a
+ladder that has none, which means `--percents` and the rehearsal.
+
+**Run a planned ladder, then, and `--min-dwell` stops being load-bearing:** the
+journal's `tau_pred_s` column is what the guard uses and the `grade` column
+says per rung whether it believed the result. **On `--percents`, where there is
+no prediction, keep `--min-dwell` at 120 s or above** — that is the value the
+audit measured as safe for the 145 K case, and 60 s is the value at which the
+proxy is inert.
 
 **The end-rate bar is the wrong test for a designed dwell.** Four of the best
 warm points — 56.74, 63.15, 69.93 and **114.28 K** — were thrown away for

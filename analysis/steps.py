@@ -102,6 +102,22 @@ MIN_N = 15
 #: whose amplitude is under ``MIN_AMPLITUDE_SIGMA`` has to have run this long to
 #: be called settled.  One with a transient it can actually see is judged on
 #: reach and remainder, in units the plant sets.  See :func:`settled`.
+#:
+#: **It is still a proxy, and ``ltspm3/tools/sweep.py`` no longer uses it where
+#: it can do better.** The real question is whether the dwell ran several of the
+#: PLANT's time constants, and a duration cannot answer that on a plant whose
+#: tau spans a factor of five thousand -- measured, this bar leaks at exactly
+#: its own value, certifying a 60 s dwell at 145 K with 0.76 K still to go 16
+#: times in 200.  The sweep tool asks ``MIN_REACH * tau_pred_s`` instead,
+#: because the plan is in the room there and ``ltspm3`` already imports the
+#: plant model.
+#:
+#: This module cannot follow it: ``analysis/`` imports neither package, which is
+#: invariant 1, and a plant model reconstructed here would be a second copy of
+#: one.  What it does instead is refuse to believe a pinned pole -- see
+#: :func:`pole_floor` and :func:`pole_ceiling`.  The two graders therefore
+#: DIVERGE on this one test, on purpose; do not reconcile them.  See
+#: AUDIT-2026-09-10-REJOINDER.md.
 MIN_SPAN_S = 60.0
 
 TIME_KEYS = ("t_s", "Time")

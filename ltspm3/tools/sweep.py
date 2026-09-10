@@ -37,6 +37,11 @@ pole ``T(t) = T_inf + A exp(-t/tau)``, and move on when
   ``--max-settle-k``;
 * the fitted rate at the last sample is under ``--max-end-rate``.
 
+...and, when the fitted pole cannot be believed at all, only after the dwell
+has run ``--min-reach`` times the PLANT's tau for that rung.  That last test is
+the one place this tool is stricter than ``analysis/steps.py``, which has no
+plant model to consult -- see :meth:`PoleFit.long_enough`.
+
 A dwell that meets those is a point the fitter will keep.  A dwell that does
 not meet them by ``--max-dwell`` is recorded anyway, with its grade blank, so
 the journal says which treads are worth re-running rather than silently
@@ -115,11 +120,22 @@ from dataclasses import dataclass, replace
 # 11.5 time constants.
 #
 # It is not an admission threshold any more.  MIN_SPAN_S is a conditional test
-# inside ``settled()``, applying only to a dwell with no resolvable transient,
+# inside ``settled()``, applying only to a dwell whose pole cannot be believed,
 # and MIN_N -- a sample COUNT, which is what a fit actually needs -- is the only
 # thing left upstream.  So the mirror is whole again: every constant here is one
 # ``grade()`` reads, and a divergence shows up in the journal's own ``grade``
 # column while the run is happening.
+#
+# ONE THING DELIBERATELY DOES NOT MIRROR, and it is not a constant.  When the
+# pole cannot be believed, this module asks whether the dwell ran
+# ``MIN_REACH`` times the PLANT's tau (``Tread.tau_pred_s``, off the fitted
+# model) and ``analysis/steps.py`` keeps the wall clock -- because that module
+# imports neither package and must not import a plant model, which is
+# invariant 1, while this one already has it.  ``steps.py`` compensates by
+# refusing to believe a pinned pole's tau at all.  Two different answers to the
+# same question, each the best available where it sits; do not "fix" either
+# into the other.  See :meth:`PoleFit.long_enough` and
+# AUDIT-2026-09-10-REJOINDER.md.
 
 #: Sensor noise, from docs/ltspm3/thermal-response.md: quadratic in T, floored
 #: near 1.8 mK.
@@ -150,11 +166,25 @@ MAX_END_RATE_K_PER_H = 0.5
 #: analysis/steps.py, which this mirrors, for where the number comes from.
 SETTLED_REMAINDER_K = 0.15
 
-#: How long a dwell with NO RESOLVABLE TRANSIENT has to run before ``settled``
-#: will believe it -- see the note at the top of this block, and
-#: ``analysis/steps.py``, which this mirrors and which carries the reasoning.
-#: A dwell whose amplitude clears MIN_AMPLITUDE_SIGMA is judged on reach and
-#: remainder instead, in units the plant sets, however short it was.
+#: **A PROXY, and only used when the better test is unavailable.**
+#:
+#: How long a dwell whose pole cannot be believed has to run before ``settled``
+#: will believe it anyway.  The real question is "did this dwell run several of
+#: the PLANT's time constants", and a duration cannot answer it: tau runs from
+#: under a tenth of a second at 5 K to 534 s at 114 K, a factor of five
+#: thousand, so one number is wrong at both ends.  Measured on the case
+#: AUDIT-2026-09-10.md names -- 145 K, tau 600 s, 0.76 K still to go, the
+#: sensor's own noise -- a 60 s dwell was certified ``steady`` sixteen times in
+#: two hundred, 0.69 K short, and ``--min-dwell 60`` certified one run in ten.
+#: The bar and the failure sat at the same value.
+#:
+#: So ``settled`` now prefers ``min_reach * tau_plant_s`` whenever the plan
+#: carries a prediction for the rung, and falls back to this only for a ladder
+#: that has none -- ``--percents``, or a rehearsal, where
+#: ``without_model_dwells`` strips the model's timing on purpose.  Kept at 60 s
+#: rather than raised to a safer 120 because a fallback that is wrong by a
+#: factor of five thousand is not made right by a factor of two, and labelling
+#: it is more honest than tuning it.  See :meth:`PoleFit.settled`.
 MIN_SPAN_S = 60.0
 #: Samples, not seconds: the one thing still tested upstream of the grader,
 #: because two parameters and a pole need points to fit to whatever the dwell
@@ -349,17 +379,58 @@ class PoleFit:
         return (math.isfinite(self.tau_hi)
                 and self.tau_s >= self.tau_hi * (1.0 - POLE_PIN_TOL))
 
+    @property
+    def pole_unbelievable(self) -> bool:
+        """Are ``reach``, ``remainder_k`` and ``end_rate_k_per_h`` meaningless?
+
+        All three are computed FROM the fitted tau, so they are only as good as
+        it is, and there are two ways for it to be worthless.  The dwell had no
+        resolvable transient, so the pole was fitted to noise -- 48 s at 145 K
+        moved 80 mK against 28 mK of sensor noise, came back tau = 8.6 s, and
+        ``reach`` read 5.6 on a window one twelfth of the way into an eight
+        hour relaxation.  Or tau is at the top of the search, where the
+        exponential has degenerated into a straight line and the rate test
+        passes on any transient under ``span / 342`` K whatever the plant is
+        doing.
+
+        Both fail OPTIMISTICALLY, which is why they are worth naming together.
+        """
+        return self.amp_sigma < MIN_AMPLITUDE_SIGMA or self.tau_ceiling
+
+    def long_enough(self, *, min_reach: float = MIN_REACH,
+                    tau_plant_s: float | None = None) -> bool:
+        """Did this dwell run several of the PLANT's time constants?
+
+        The one honest question to ask when the fitted pole cannot answer
+        anything, and the plan is what makes it answerable: ``tau_pred_s`` per
+        rung off the fitted model, so ``min_reach`` time constants is a real
+        requirement in the plant's own units rather than a duration somebody
+        picked.  Falls back to ``MIN_SPAN_S``, which is labelled a proxy where
+        it is defined, for a ladder that carries no prediction.
+
+        This is where this module deliberately STOPS mirroring
+        ``analysis/steps.py``.  That module has no plant model and must not
+        import one -- invariant 1 -- so it keeps the wall clock and instead
+        refuses to believe a pinned pole at all.  This one already imports the
+        plant model, so it can ask the better question.  See
+        AUDIT-2026-09-10-REJOINDER.md.
+        """
+        if tau_plant_s is not None and tau_plant_s > 0.0:
+            return self.span_s >= min_reach * tau_plant_s
+        return self.span_s >= MIN_SPAN_S
+
     def settled(self, *, min_reach: float = MIN_REACH,
-                max_end_rate: float = MAX_END_RATE_K_PER_H) -> bool:
+                max_end_rate: float = MAX_END_RATE_K_PER_H,
+                tau_plant_s: float | None = None) -> bool:
         """Is this dwell's relaxation over?  Either test may answer yes.
 
-        Unless the pole cannot be believed at all: ``reach`` and
-        ``remainder_k`` are both read off the fitted tau, so a dwell with no
-        resolvable transient has fitted them to noise and both fail
-        OPTIMISTICALLY.  There, and only there, MIN_SPAN_S is the last honest
-        test.  Mirrors ``analysis/steps.py``'s ``settled``.
+        Unless the pole cannot be believed at all -- see
+        :attr:`pole_unbelievable` -- in which case the dwell first has to have
+        run long enough on the PLANT's clock (:meth:`long_enough`) before its
+        own numbers get a hearing.
         """
-        if self.amp_sigma < MIN_AMPLITUDE_SIGMA and self.span_s < MIN_SPAN_S:
+        if self.pole_unbelievable and not self.long_enough(
+                min_reach=min_reach, tau_plant_s=tau_plant_s):
             return False
         return (self.end_rate_k_per_h <= max_end_rate
                 or (self.reach >= min_reach
@@ -367,12 +438,14 @@ class PoleFit:
 
     def grade(self, *, min_reach: float = MIN_REACH,
               max_settle_k: float = MAX_SETTLE_K,
-              max_end_rate: float = MAX_END_RATE_K_PER_H) -> str:
+              max_end_rate: float = MAX_END_RATE_K_PER_H,
+              tau_plant_s: float | None = None) -> str:
         """``'tau'`` if the time constant may be believed, ``'steady'`` if only
         ``T_inf`` may be, ``''`` if the dwell ended too early to be either."""
         if abs(self.settle_k) > max_settle_k:
             return ""
-        if not self.settled(min_reach=min_reach, max_end_rate=max_end_rate):
+        if not self.settled(min_reach=min_reach, max_end_rate=max_end_rate,
+                            tau_plant_s=tau_plant_s):
             return ""
         if (self.reach >= min_reach and self.amp_sigma >= MIN_AMPLITUDE_SIGMA
                 and self.rms_sigma < 8.0 and not self.tau_floor):
@@ -381,7 +454,8 @@ class PoleFit:
 
     def shortfall(self, *, min_reach: float = MIN_REACH,
                   max_settle_k: float = MAX_SETTLE_K,
-                  max_end_rate: float = MAX_END_RATE_K_PER_H) -> str:
+                  max_end_rate: float = MAX_END_RATE_K_PER_H,
+                  tau_plant_s: float | None = None) -> str:
         """Which test this dwell failed, in words, or why its tau is weak.
 
         "Cut at the cap" says a dwell ran out of time and not what it ran out
@@ -393,12 +467,29 @@ class PoleFit:
         why = []
         if abs(self.settle_k) > max_settle_k:
             why.append(f"{abs(self.settle_k):.2f} K still to go")
-        if (self.amp_sigma < MIN_AMPLITUDE_SIGMA
-                and self.span_s < MIN_SPAN_S):
-            why.append(f"nothing resolvable moved ({self.amp_sigma:.1f} sigma) "
+        if self.pole_unbelievable and not self.long_enough(
+                min_reach=min_reach, tau_plant_s=tau_plant_s):
+            # Say which of the two ways the pole is worthless, and say the bar
+            # in the units it was actually applied in -- an operator reading
+            # "hold it 60 s" when the test wanted 1800 s is being misled by the
+            # message rather than by the grader.
+            if self.tau_ceiling:
+                bad = (f"tau pinned at the top of the search "
+                       f"({self.tau_s:.0f} s over {self.span_s:.0f} s), so the "
+                       f"pole is a straight line")
+            else:
+                bad = (f"nothing resolvable moved ({self.amp_sigma:.1f} sigma) "
                        f"in {self.span_s:.0f} s, so the fitted pole means "
-                       f"nothing -- hold it {MIN_SPAN_S:.0f} s")
-        elif not self.settled(min_reach=min_reach, max_end_rate=max_end_rate):
+                       f"nothing")
+            if tau_plant_s is not None and tau_plant_s > 0.0:
+                need = (f"hold it {min_reach * tau_plant_s:.0f} s "
+                        f"({min_reach:.0f} x the model's {tau_plant_s:.0f} s)")
+            else:
+                need = (f"hold it {MIN_SPAN_S:.0f} s -- no tau_pred_s on this "
+                        f"rung, so that bar is a proxy")
+            why.append(f"{bad} -- {need}")
+        elif not self.settled(min_reach=min_reach, max_end_rate=max_end_rate,
+                              tau_plant_s=tau_plant_s):
             why.append(f"still moving {self.end_rate_k_per_h:.2f} K/h "
                        f"after {self.reach:.1f} time constants")
         if why:
@@ -1009,7 +1100,8 @@ def dwell(link, tread: Tread, opts: Options, *, on_sample=None) -> DwellResult:
                     fit = None
             if fit is not None and fit.grade(
                     min_reach=opts.min_reach, max_settle_k=opts.max_settle_k,
-                    max_end_rate=opts.max_end_rate):
+                    max_end_rate=opts.max_end_rate,
+                    tau_plant_s=tread.tau_pred_s):
                 break
         if elapsed >= cap:
             note = f"cut at the {cap:.0f} s cap"
@@ -1021,11 +1113,12 @@ def dwell(link, tread: Tread, opts: Options, *, on_sample=None) -> DwellResult:
 
     grade = "" if fit is None else fit.grade(
         min_reach=opts.min_reach, max_settle_k=opts.max_settle_k,
-        max_end_rate=opts.max_end_rate)
+        max_end_rate=opts.max_end_rate, tau_plant_s=tread.tau_pred_s)
     if fit is not None and grade != "tau":
         why = fit.shortfall(min_reach=opts.min_reach,
                             max_settle_k=opts.max_settle_k,
-                            max_end_rate=opts.max_end_rate)
+                            max_end_rate=opts.max_end_rate,
+                            tau_plant_s=tread.tau_pred_s)
         note = f"{note}; {why}" if note and why else (why or note)
     return DwellResult(
         tread=tread, u_readback_pct=readback,

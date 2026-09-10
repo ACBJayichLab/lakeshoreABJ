@@ -3,8 +3,12 @@
 **Status: PHASE A DONE and awaiting review. Phase B is next, after the pause.**
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
 manifest) and the commit after it (the rewiring and the deletion).
-**AUDIT-2026-09-10 finding 2 is half done** - the floor half is fixed and the
-ceiling half is a judgement left for the review. See section 6.2.
+**AUDIT-2026-09-10 findings 1 and 2 are done in the LIVE TOOL and half done in
+`analysis/`.** The sweep tool's guard is on the plant's tau now; `analysis/`
+keeps its wall clock because invariant 1 forbids it a plant model, and refuses
+to believe a pinned pole instead. The ceiling half in `analysis/` is a
+judgement left for the review - section 6.2 option 4, and
+AUDIT-2026-09-10-REJOINDER.md step 2.
 **Shape:** three phases, two hard pauses. Phase 0 → *pause* → Phase A → *pause* → Phase B.
 Update this Status line as phases land.
 
@@ -18,7 +22,10 @@ Update this Status line as phases land.
 | **done** | the rewiring. `_data.py`, `steps.py`, `plot_ladder.py`, `decimate.py` and `fit_ode.load_sweep` read the archive; the five old tables are deleted |
 | **done** | Phase A (§6) - `analysis/measure.py`, `analysis/measured.csv`, all four exit criteria met by `measure.py --verify`. Findings in §6.1 |
 | **done** | AUDIT-2026-09-10 finding 2, floor half - a tau at the search floor is no longer graded `tau`. 45 → **37** tau anchors, 149 unchanged. §6.2 |
-| **next** | finding 2's ceiling half needs a decision (§6.2), then Phase B (§7) |
+| **done** | AUDIT-2026-09-10-REJOINDER step 1 - the sweep tool's `settled()` guard runs on `MIN_REACH × tau_pred_s` where the plan carries a prediction, a ceiling pin has to answer to it too, `MIN_SPAN_S` is labelled a proxy in both graders, and the audit's synthetic case is a test. Commissioning corrected |
+| **next** | finding 2's ceiling half in `analysis/` needs a decision (§6.2 option 4 / rejoinder step 2), then Phase B (§7) |
+| **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
+| **then** | rejoinder step 5 - finding 5's leftovers |
 
 Everything in `analysis/` reads the archive. The five overlapping tables in
 `reference/heater-calibration/` are gone; only `sweep_decimated.csv.gz`
@@ -513,6 +520,24 @@ between them is in [AUDIT-2026-09-10-REPLY.md](AUDIT-2026-09-10-REPLY.md):**
    "curate, do not discover" contains, because the output is a committed
    manifest and not a fixed point rediscovered per run. The reply's §4 has the
    coverage caveat below 25.8 K and why the verdict is insensitive to it.
+
+**Option 4 is now live in the sweep tool and still open in `analysis/`.**
+[AUDIT-2026-09-10-REJOINDER.md](AUDIT-2026-09-10-REJOINDER.md) makes the point
+§6.2 and the reply both missed: the reasoning above is scoped to `analysis/`
+and its review pause, while `ltspm3/tools/sweep.py` runs against the cryostat
+on the day with no pause protecting it. So the guard went in there first —
+`PoleFit.long_enough`, `MIN_REACH × Tread.tau_pred_s` whenever the plan carries
+a prediction, with a ceiling pin now having to answer to it as well. The two
+graders therefore **diverge on this one test on purpose**, and both say so at
+`MIN_SPAN_S`: `ltspm3` already imports the plant model and `analysis/` must not.
+
+When option 4 is taken here, one row needs a manifest note: **`pp-20260808-155602`
+is decided by a margin of 1.6 in τ, not the three orders of magnitude the other
+six enjoy.** Checked at 99 K rather than assumed — the τ anchors bracketing it
+interpolate to 445.9 s against the shipped table's 436.4 s, 2.2 % apart, giving
+reach 1.88 and 1.92; τ would have to be 37 % low for the pin to pass. The
+verdict holds, and it is the one of the seven a reviewer should actually look
+at.
 
 Phase B does not depend on this being settled first. Its τ residuals read
 `load_taus`, which the floor fix has already cleaned, and no ceiling pin is

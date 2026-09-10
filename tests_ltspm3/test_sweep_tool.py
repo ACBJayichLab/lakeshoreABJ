@@ -11,6 +11,7 @@ fault leaves the heater exactly where it was.
 import csv
 import json
 import math
+import random
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -593,8 +594,10 @@ def test_a_dwell_with_no_resolvable_transient_is_refused_until_it_runs_long():
     relaxation still 0.76 K from its answer.
 
     reach cannot catch this, because reach is computed from the tau being
-    tested.  Only the wall clock can, which is why MIN_SPAN_S still exists --
-    conditioned on the amplitude rather than applied to every dwell.
+    tested.  Something outside the fitted pole has to, which is what
+    ``long_enough`` is -- ``min_reach`` times the PLANT's tau where the plan
+    carries one, and MIN_SPAN_S as a labelled proxy where it does not.  This
+    test is the proxy path; the one below it is the plant-clock path.
     """
     noise = S.noise_k(145.0)
     samples = [(t, 145.0 + 0.4 * noise * (-1) ** t) for t in range(0, 48, 2)]
@@ -611,6 +614,97 @@ def test_a_dwell_with_no_resolvable_transient_is_refused_until_it_runs_long():
     # distinguishable only by duration.
     long = [(t, 145.0 + 0.4 * noise * (-1) ** t) for t in range(0, 4000, 2)]
     assert S.fit_pole(long).settled()
+
+
+def test_the_guard_runs_on_the_plants_clock_not_a_wall_clock():
+    """AUDIT-2026-09-10 finding 1, as a test, with the numbers it measured.
+
+    The case the audit named: 145 K, plant tau 600 s, **0.76 K still to go**,
+    and the sensor's own 28.6 mK of noise.  Every one of these windows is
+    genuinely unsettled -- the sample has three quarters of a kelvin left to
+    travel -- so a grader that certifies any of them is wrong by that much.
+
+    The wall clock let them through, and precisely at its own value: with
+    ``MIN_SPAN_S = 60`` and the test written ``span_s < MIN_SPAN_S``, a 60 s
+    dwell clears the guard by nothing at all and is then judged on numbers read
+    off a pole fitted to noise.  The audit measured 16 certifications in 200 at
+    60-62 s; this reproduces 10 and 16 on a fixed seed.  The bar and the
+    failure sat at the same number, which is what made 120 s "safe" and 60 s
+    not, with nothing in the code saying so.
+
+    On the plant's clock there is no such edge.  ``min_reach * 600 s`` is
+    1800 s, every span below it is refused outright, and the refusal does not
+    depend on how the noise happened to fall.
+    """
+    TAU_PLANT_S, LEFT_K, T_K = 600.0, 0.76, 145.0
+    noise = S.noise_k(T_K)
+
+    def realise(span, rng):
+        # A relaxation with LEFT_K still to run at t = span, plus sensor noise.
+        return [(float(t), T_K + LEFT_K * (1.0 - math.exp((span - t) / TAU_PLANT_S))
+                           + rng.gauss(0.0, noise))
+                for t in range(0, int(span) + 1, 2)]
+
+    def certifications(span, *, tau_plant_s):
+        # Seeded, so this does not depend on the time of day -- the house rule.
+        rng = random.Random(20260910)
+        return sum(bool(S.fit_pole(realise(span, rng)).grade(
+            tau_plant_s=tau_plant_s)) for _ in range(200))
+
+    # The regression, reproduced: the wall clock leaks exactly at its own value.
+    assert certifications(48, tau_plant_s=None) == 0
+    assert certifications(62, tau_plant_s=None) > 0
+
+    # ...and the plant clock does not leak anywhere below MIN_REACH * tau.
+    for span in (48, 60, 62, 90, 120, 300, 600, 1200, 1740):
+        assert span < S.MIN_REACH * TAU_PLANT_S           # all still unsettled
+        assert certifications(span, tau_plant_s=TAU_PLANT_S) == 0, (
+            f"a {span:.0f} s dwell with {LEFT_K} K still to go was certified "
+            f"against a plant tau of {TAU_PLANT_S:.0f} s")
+
+
+def test_a_pole_pinned_at_the_top_of_the_search_is_not_believed_either():
+    """A ceiling pin is a straight line, and the rate test passes on those.
+
+    With tau pinned at ``POLE_TAU_SPAN_FACTOR * span`` the fitted end rate is
+    ``171 * amp / span`` K/h, so any transient under ``span / 342`` K clears
+    the 0.5 K/h bar whatever the plant is doing -- which is how a 232 s dwell
+    at 170.6 K came to be graded ``steady`` while sitting 0.53 K from its
+    answer.  ``pole_unbelievable`` names it alongside the no-transient case,
+    and both then have to answer to the plant's clock.
+
+    AUDIT-2026-09-10 finding 2's ceiling half, in the one place a plant model
+    is available to decide it; ``analysis/steps.py`` cannot and only reports
+    the pin.  See AUDIT-2026-09-10-REJOINDER.md.
+    """
+    # A slow ramp at 170.6 K: 0.1 mK/s for ten minutes.  No exponential fits
+    # inside the window, so the search runs tau to its ceiling and reports the
+    # ramp as the tail of a relaxation that is 1.17 K from finishing.
+    samples = [(float(t), 170.6 + 1.0e-4 * t) for t in range(0, 600, 2)]
+    fit = S.fit_pole(samples)
+
+    assert fit.tau_s == pytest.approx(fit.tau_hi)     # the search gave up
+    assert fit.tau_ceiling
+    # ...and this is NOT the no-transient case.  60 mK over the window is 31
+    # sigma, comfortably resolvable, so `amp_sigma` has nothing to object to
+    # and the ceiling is the only thing wrong with the pole.
+    assert fit.amp_sigma > S.MIN_AMPLITUDE_SIGMA
+    assert fit.pole_unbelievable
+
+    # The rate test then waves it through, exactly as the audit's arithmetic
+    # says: with tau pinned at 20 x span the end rate is 171 * amp / span, so
+    # an amplitude under span/342 K clears the bar however far it has to go.
+    assert fit.end_rate_k_per_h <= S.MAX_END_RATE_K_PER_H
+    assert abs(fit.amp) < fit.span_s / 342.0
+    assert fit.settled()                    # no plant tau: 598 s clears 60 s
+    assert fit.grade() == "steady"           # graded, and 1.17 K out
+    assert abs(fit.settle_k) > 1.0
+
+    # With the plant's tau, 598 s is under a time constant and it is refused.
+    assert not fit.settled(tau_plant_s=612.0)
+    assert fit.grade(tau_plant_s=612.0) == ""
+    why = fit.shortfall(tau_plant_s=612.0)
+    assert "pinned at the top" in why and "1836 s" in why
 
 
 def test_the_floor_itself_is_accepted():

@@ -309,6 +309,32 @@ def read_table(file: str) -> Table:
             if "note" in at and row[at["note"]]:
                 note[i] = row[at["note"]].strip()
 
+    # The clock has to be sorted, and nothing downstream checks.
+    #
+    # Every stamp in the archive is naive local time, so on 2026-11-01 at 02:00
+    # the Pacific clock falls back, 01:00-02:00 happens twice, and
+    # `fromisoformat().timestamp()` maps both hours onto the first -- `epoch`
+    # runs backwards for an hour and then catches up.  `Table.slice` is a
+    # `searchsorted` on that array and would select the wrong rows without
+    # raising, and `dwells()` would fit a pole to a time axis with a fold in
+    # it.  Cooldown 10 began in July and is still running, and the third table
+    # is appended to, so this is a dated defect rather than a hypothetical:
+    # AUDIT-2026-09-10.md finding 4.
+    #
+    # This assertion is the cheap half of the fix and it only makes the fold
+    # loud.  Curing it means taking `t_s` from the recorder's own monotonic
+    # `Time` column in `lschart/tools/fit_table.py` and using the stamp only to
+    # place the file's origin, which fixes the archive at its source.
+    bad = int(np.argmin(np.diff(epoch))) if n > 1 else -1
+    if n > 1 and epoch[bad + 1] <= epoch[bad]:
+        raise SystemExit(
+            f"segments: {file} has a non-monotonic clock at row {bad + 2}: "
+            f"{_iso(epoch[bad])} -> {_iso(epoch[bad + 1])}.  The stamps are "
+            f"naive local time, so a daylight-saving fall-back repeats an hour "
+            f"and every `searchsorted` on this table silently selects the "
+            f"wrong rows.  Rebuild it taking `t_s` from the recorder's `Time` "
+            f"column -- see AUDIT-2026-09-10.md finding 4.")
+
     table = Table(file=file, epoch=epoch, t=epoch - epoch[0],
                   segment=segment, chan=chan, note=note)
     _CACHE[file] = table
