@@ -71,20 +71,22 @@ them. In order:
 Expect Λ(T) to move by about 4.5 K worth of temperature between 50 K and 115 K,
 and expect `ltspm3/_fitted_table.py` to change with it.
 
-## Three rungs were lost, and it is four minutes to get them back
+## ~~Three rungs were lost, and it is four minutes to get them back~~
 
-`--min-dwell 45` produced 48 s dwells; `analysis/steps.py` requires
-`min_span_s = 60`. So **45.31%, 47.69% and 49.82%** (about 20.6–25.4 K) were
-dropped before grading, silently. Nothing is wrong with the data that was kept.
-**Use `--min-dwell 75`.** To recover just those three, from the repo root:
+> **RESOLVED 2026-09-10 WITHOUT TOUCHING THE CRYOSTAT.** It was sixteen rungs,
+> not three, and the bar was wrong rather than the run. `analysis/steps.py`
+> would not *admit* a dwell under `MIN_SPAN_S = 60` — a test upstream of the
+> grader, so those rungs never got a verdict. At 5–25 K τ is about 4 s, so the
+> 46 s dwells the run chose were **11.5 time constants** and settled to a
+> remainder of 0.000 K. The bar now applies only to a dwell with no resolvable
+> transient, and all sixteen are anchors: **149 where there were 111.**
+>
+> **Do not run the recovery sweep below.** There is nothing to recover; the
+> measurement was always in the log. `--min-dwell 75` is no longer advice —
+> use whatever the plan calls for.
 
-```bash
-cd /d C:\Coding\Python\lakeshoreABJ && .venv\Scripts\python.exe -m ltspm3.tools.sweep -c config-ltspm3-heater.yaml --percents 45.31,47.69,49.82 --min-dwell 75 --max-k 120
-```
-
-It will ask before the first write. Note the cryostat is at 114 K on 63.7%, so
-that run starts by dropping the output a long way and waiting for it to cool —
-`--order nearest` will not help, there is no near end.
+The command that used to be here would have moved the heater to re-measure
+points the archive already had. It is left out on purpose.
 
 ## What the tools are
 

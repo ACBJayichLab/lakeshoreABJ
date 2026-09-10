@@ -845,12 +845,26 @@ through the band that had no measurement in it.
 
 Two things to do differently next time, both learned the expensive way.
 
-**`--min-dwell` must clear 60 s.** The run used 45, which produced 48 s dwells,
-and `analysis/steps.py`'s extractor requires `min_span_s = 60` — so three rungs
-(45.31%, 47.69%, 49.82%, about 20.6–25.4 K) were dropped before they were ever
-graded. Nothing said so at the time; they are simply absent. **Use 75.** The
-cold rungs below 42.7% survived only because an aborted earlier attempt that day
-had covered the same outputs at 120 s.
+**~~`--min-dwell` must clear 60 s.~~ FIXED 2026-09-10 — the bar was wrong, not
+the run.** The run used 45, which produced 46–48 s dwells, and
+`analysis/steps.py` would not *admit* a dwell under `MIN_SPAN_S = 60` — a test
+upstream of the grader, so the rungs were dropped without ever getting a
+verdict. It cost **sixteen rungs**, not the three first counted: 7.19 % to
+49.82 %, 5.4 K to 25.7 K. The other thirteen went unnoticed because the aborted
+earlier attempt that day had covered the same outputs at 120 s, so the loss
+looked like duplicate coverage.
+
+At 5–25 K τ is about 4 s, so 46 s is **11.5 time constants**, and every one of
+those rungs came back with a remainder of 0.000 K, an end rate of 0.001–0.052 K/h
+against a 0.5 bar, and a transient 60 to 1265 times the sensor noise. They were
+the best-settled points in the archive and a wall clock threw them out. **The
+dwell lengths this run chose were right.**
+
+`MIN_SPAN_S` now lives inside `settled()` and applies only to a dwell with *no
+resolvable transient*, which is the one failure it was really protecting
+against — 48 s at 145 K, where τ is 600 s, fits a pole to noise and certifies
+itself finished. Use whatever `--min-dwell` the plan calls for; the grader will
+say per rung, in the journal, whether it believes the result.
 
 **The end-rate bar is the wrong test for a designed dwell.** Four of the best
 warm points — 56.74, 63.15, 69.93 and **114.28 K** — were thrown away for

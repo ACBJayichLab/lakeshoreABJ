@@ -108,7 +108,7 @@ these are committed despite being derived -- the same reasoning as
 
 ## `segments.csv` -- the manifest
 
-239 named windows in the three tables: which stretch is a long settled hold,
+315 named windows in the three tables: which stretch is a long settled hold,
 which is a driven step worth a time constant, which is a trajectory for the ODE,
 and which is masked off and why.
 
@@ -140,12 +140,21 @@ one mask so far -- the 2026-09-09 18:06 power transient -- and cutting there is
 what turns 26 h of hold into an anchor: read straight through the transient the
 same stretch fits a 24-day pole and grades as nothing.
 
+**The first thing the review caught, and what it was worth.** Jeff read the
+manifest and said good data was being cut, pointing at the programmed sweep.
+He was right, and it was not a judgement call: `analysis/steps.py` would not
+*admit* a dwell shorter than 60 s, upstream of the grader, so **sixteen rungs**
+of the 2026-09-05 run were dropped without a verdict -- 46 s each, which at
+5-25 K is 11.5 time constants, remainder 0.000 K, end rate under 0.05 K/h. The
+bar now applies only where the fitted pole cannot be believed. **149 anchors
+where there were 111**, and the 4-40 K bands went from 30 to 68.
+
 What it comes to, against the five overlapping tables it replaces:
 
 | | |
 |---|---|
-| dwells found | 234 -> 236 |
-| usable anchors | 111 -> **111**, 109 inside 4-200 K, 36 with a believable tau |
+| dwells found | 234 -> 312 |
+| usable anchors | 111 -> **149**, 147 inside 4-200 K, 45 with a believable tau |
 | reproduction | 103 of the 105 shared graded anchors agree to **3 nK** |
 
 The differences are all boundary effects, all in the archive's favour, and each

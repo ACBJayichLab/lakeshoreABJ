@@ -552,16 +552,56 @@ def test_a_relaxation_cut_off_early_is_still_refused():
     assert "still moving" in fit.shortfall()
 
 
-def test_a_dwell_shorter_than_the_admission_floor_is_refused_not_clamped(capsys):
-    """The 2026-09-05 loss, as a test: it ran, it reported success, it kept nothing."""
+def test_a_short_dwell_with_a_real_transient_in_it_is_allowed(capsys):
+    """The 2026-09-05 loss, the other way round -- and this is the fix, not the bug.
+
+    These three rungs ran 46 s each on the day.  At 20-26 K tau is about 4 s, so
+    46 s is **eleven time constants**, and they came back with a remainder of
+    0.000 K and end rates under 0.05 K/h against a 0.5 bar.  They were then
+    thrown away by a clock: ``analysis/steps.py`` would not ADMIT a dwell under
+    MIN_SPAN_S, upstream of the grader, so the journal said every rung graded
+    and the fitter kept none of them.
+
+    The response at the time was to refuse ``--min-dwell`` below 60 s here,
+    which forbade the tool from doing the thing it had done well.  The bar now
+    lives in ``settled()`` and applies only where the pole cannot be believed,
+    so this must RUN.
+    """
     rc = S.main(["--percents", "45.31,47.69,49.82", "--min-dwell", "45",
                  "--simulate"])
-    out, err = capsys.readouterr()
-    assert rc == 2
-    assert "60" in err and "--min-dwell" in err
-    # The point is that nothing RAN.  A clamp would have rehearsed the ladder
-    # and printed the rung table; the refusal is on stderr and stdout is bare.
-    assert "dwells graded" not in out
+    out, _ = capsys.readouterr()
+    assert rc == 0
+    assert "dwells graded" in out
+
+
+def test_a_dwell_with_no_resolvable_transient_is_refused_until_it_runs_long():
+    """The failure the clock was really protecting against, and its one real case.
+
+    48 s at 145 K, where tau is about 600 s: the sample moved 80 mK against
+    28 mK of sensor noise, so the pole was fitted to NOISE.  It came back
+    tau = 8.6 s, and ``reach`` -- computed from that tau -- read 5.6 and
+    certified as finished a window 1/12 of a time constant into an 8 h
+    relaxation still 0.76 K from its answer.
+
+    reach cannot catch this, because reach is computed from the tau being
+    tested.  Only the wall clock can, which is why MIN_SPAN_S still exists --
+    conditioned on the amplitude rather than applied to every dwell.
+    """
+    noise = S.noise_k(145.0)
+    samples = [(t, 145.0 + 0.4 * noise * (-1) ** t) for t in range(0, 48, 2)]
+    fit = S.fit_pole(samples)
+
+    assert fit.amp_sigma < S.MIN_AMPLITUDE_SIGMA    # nothing resolvable moved
+    assert fit.span_s < S.MIN_SPAN_S
+    assert not fit.settled()
+    assert fit.grade() == ""
+    assert "nothing resolvable moved" in fit.shortfall()
+
+    # ...and the identical flatness, held long enough, IS settled: a hold at
+    # rest is the other thing a tiny amplitude means, and the two are
+    # distinguishable only by duration.
+    long = [(t, 145.0 + 0.4 * noise * (-1) ** t) for t in range(0, 4000, 2)]
+    assert S.fit_pole(long).settled()
 
 
 def test_the_floor_itself_is_accepted():

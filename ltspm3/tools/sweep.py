@@ -107,14 +107,19 @@ from dataclasses import dataclass, replace
 # whose points the fitter throws away -- which the journal's ``grade`` column
 # reports on the spot rather than a week later.
 #
-# That last claim held only for the constants ``grade()`` reads.  MIN_SPAN_S and
-# MIN_N below are ADMISSION thresholds: ``steps.py``'s ``dwells()`` applies them
-# upstream of ``grade()``, so a dwell they reject is never graded and the journal
-# has nothing to report.  On 2026-09-05 the journal said "3/3 dwells graded" and
-# the fitter kept none of them.  They are mirrored here for exactly the reason
-# the paragraph above gives, and ``--min-dwell`` is refused below MIN_SPAN_S
-# rather than silently raised, because a tool quietly doing something other than
-# what it was told is the failure being fixed, not the fix.
+# That claim once failed, and how it failed is worth keeping.  MIN_SPAN_S was an
+# ADMISSION threshold: ``steps.py``'s ``dwells()`` applied it upstream of
+# ``grade()``, so a dwell it rejected was never graded and the journal had
+# nothing to report.  On 2026-09-05 the journal said every rung graded and the
+# fitter kept none of them -- sixteen of them, 46 s each, which at 5-25 K is
+# 11.5 time constants.
+#
+# It is not an admission threshold any more.  MIN_SPAN_S is a conditional test
+# inside ``settled()``, applying only to a dwell with no resolvable transient,
+# and MIN_N -- a sample COUNT, which is what a fit actually needs -- is the only
+# thing left upstream.  So the mirror is whole again: every constant here is one
+# ``grade()`` reads, and a divergence shows up in the journal's own ``grade``
+# column while the run is happening.
 
 #: Sensor noise, from docs/ltspm3/thermal-response.md: quadratic in T, floored
 #: near 1.8 mK.
@@ -145,11 +150,15 @@ MAX_END_RATE_K_PER_H = 0.5
 #: analysis/steps.py, which this mirrors, for where the number comes from.
 SETTLED_REMAINDER_K = 0.15
 
-#: A dwell shorter than this, or with fewer samples than MIN_N, is not graded by
-#: ``analysis/steps.py`` at all -- see the note at the top of this block.  MIN_N
-#: is latent at the live 2 s cadence, where 60 s is 30 samples, and bites above
-#: 4 s.
+#: How long a dwell with NO RESOLVABLE TRANSIENT has to run before ``settled``
+#: will believe it -- see the note at the top of this block, and
+#: ``analysis/steps.py``, which this mirrors and which carries the reasoning.
+#: A dwell whose amplitude clears MIN_AMPLITUDE_SIGMA is judged on reach and
+#: remainder instead, in units the plant sets, however short it was.
 MIN_SPAN_S = 60.0
+#: Samples, not seconds: the one thing still tested upstream of the grader,
+#: because two parameters and a pole need points to fit to whatever the dwell
+#: lasted.  Latent at the live 2 s cadence, where MIN_REACH usually binds first.
 MIN_N = 15
 
 #: How far the reported heater may wander from what was commanded before this
@@ -297,7 +306,16 @@ class PoleFit:
 
     def settled(self, *, min_reach: float = MIN_REACH,
                 max_end_rate: float = MAX_END_RATE_K_PER_H) -> bool:
-        """Is this dwell's relaxation over?  Either test may answer yes."""
+        """Is this dwell's relaxation over?  Either test may answer yes.
+
+        Unless the pole cannot be believed at all: ``reach`` and
+        ``remainder_k`` are both read off the fitted tau, so a dwell with no
+        resolvable transient has fitted them to noise and both fail
+        OPTIMISTICALLY.  There, and only there, MIN_SPAN_S is the last honest
+        test.  Mirrors ``analysis/steps.py``'s ``settled``.
+        """
+        if self.amp_sigma < MIN_AMPLITUDE_SIGMA and self.span_s < MIN_SPAN_S:
+            return False
         return (self.end_rate_k_per_h <= max_end_rate
                 or (self.reach >= min_reach
                     and self.remainder_k <= SETTLED_REMAINDER_K))
@@ -330,7 +348,12 @@ class PoleFit:
         why = []
         if abs(self.settle_k) > max_settle_k:
             why.append(f"{abs(self.settle_k):.2f} K still to go")
-        if not self.settled(min_reach=min_reach, max_end_rate=max_end_rate):
+        if (self.amp_sigma < MIN_AMPLITUDE_SIGMA
+                and self.span_s < MIN_SPAN_S):
+            why.append(f"nothing resolvable moved ({self.amp_sigma:.1f} sigma) "
+                       f"in {self.span_s:.0f} s, so the fitted pole means "
+                       f"nothing -- hold it {MIN_SPAN_S:.0f} s")
+        elif not self.settled(min_reach=min_reach, max_end_rate=max_end_rate):
             why.append(f"still moving {self.end_rate_k_per_h:.2f} K/h "
                        f"after {self.reach:.1f} time constants")
         if why:
@@ -1081,14 +1104,20 @@ def main(argv: list[str] | None = None) -> int:
         print("give exactly one of --plan or --percents", file=sys.stderr)
         return 2
 
-    if args.min_dwell < MIN_SPAN_S:
-        print(f"--min-dwell {args.min_dwell:g} is below the {MIN_SPAN_S:g} s "
-              f"floor analysis/steps.py admits a dwell at, so every rung this "
-              f"run grades would be dropped before it was fitted.\n"
-              f"  Pass --min-dwell {MIN_SPAN_S:g} or more. This happened on "
-              f"2026-09-05 with 45: the journal reported every rung graded and "
-              f"the fitter kept none of them.", file=sys.stderr)
-        return 2
+    # There was a refusal here: --min-dwell below MIN_SPAN_S was rejected,
+    # because analysis/steps.py would not ADMIT a dwell shorter than 60 s and so
+    # every rung this tool graded would have been dropped unfitted.  That was
+    # the right response to the wrong half of the problem.  The bar has moved
+    # into the grader, where it now applies only to a dwell with NO RESOLVABLE
+    # TRANSIENT -- see MIN_SPAN_S in analysis/steps.py -- so a short rung with a
+    # real step in it is kept, and refusing one here would forbid the thing this
+    # tool did well on 2026-09-05: sixteen 46 s rungs, 11.5 time constants each,
+    # thrown away by a clock rather than by the physics.
+    #
+    # Nothing replaces it.  `Fit.settled` already refuses a dwell whose pole it
+    # cannot believe, and the journal's `grade` and `shortfall` columns say so
+    # per rung while the run is still happening, which is what the refusal was
+    # standing in for.
 
     opts = Options(
         min_dwell_s=args.min_dwell, max_dwell_s=args.max_dwell or 3600.0,

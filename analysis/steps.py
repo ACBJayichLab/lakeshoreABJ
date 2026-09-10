@@ -63,16 +63,46 @@ MIN_AMPLITUDE_SIGMA = 20.0
 #: measurement of the cryostat.
 MAX_SETTLE_K = 2.0
 
-#: The ADMISSION thresholds: a dwell shorter than this, or with fewer samples,
-#: is not graded at all.  They are module constants rather than bare ``dwells()``
-#: defaults because they run UPSTREAM of ``grade()`` and so are invisible to it
-#: -- a dwell they reject never reaches the grader and never gets a grade to
-#: report.  On 2026-09-05 that cost three good rungs: ``--min-dwell 45`` produced
-#: 48 s dwells, the sweep's journal graded all three "steady", and this test
-#: dropped them before the fit ever saw them.  Named so that
-#: ``ltspm3/tools/sweep.py`` can mirror them by name and stop repeating it.
-MIN_SPAN_S = 60.0
+#: The one ADMISSION threshold: fewer samples than this and there is not enough
+#: to fit two parameters and a pole to, whatever the dwell lasted.
+#:
+#: It is a count and not a duration on purpose.  What a fit needs is samples per
+#: time constant, and MIN_N against the log's own cadence already says that --
+#: 15 samples is 30 s at the recorder's 2 s and 120 s at the chart recorder's
+#: 8 s, which is the right way round, because the slow log is the old one where
+#: tau was long.
 MIN_N = 15
+
+#: A wall clock, and it is a LAST RESORT rather than a bar on every dwell.
+#:
+#: It used to be exactly that -- an admission threshold beside MIN_N, upstream
+#: of ``grade()`` and so invisible to it, rejecting any dwell under 60 s before
+#: the grader could speak.  On 2026-09-05 that threw away **sixteen** rungs of
+#: the programmed sweep: 46-48 s each, which at 5-25 K is **11.5 time
+#: constants**, with a remainder of 0.000 K, end rates of 0.001-0.052 K/h
+#: against a 0.5 bar, and transients 60 to 1265 times the sensor noise.  They
+#: are the best-settled points in the whole archive and a clock threw them out.
+#: (The docstring here said "three good rungs".  It was sixteen, and the
+#: thirteen it missed are the ones the earlier cancelled run happens to
+#: duplicate -- so the loss looked smaller than it was.)  Worse, the fix at the
+#: time propagated the clock outward: ``ltspm3/tools/sweep.py`` began REFUSING
+#: ``--min-dwell`` below 60 s, so the tool was forbidden from doing the thing it
+#: had done well.
+#:
+#: What the clock was really protecting against is one specific failure, and it
+#: is not shortness.  It is a dwell with **no resolvable transient**: over 48 s
+#: at 145 K, where tau is about 600 s, the sample moved 80 mK against 28 mK of
+#: sensor noise, so the pole was fitted to noise, came back tau = 8.6 s, and
+#: ``reach`` -- computed from that tau -- read 5.6 and certified as settled a
+#: window that was 1/12 of a time constant into an 8-hour relaxation still
+#: 0.76 K from its answer.  ``reach`` cannot catch that, because reach is
+#: computed from the tau being tested.
+#:
+#: So the clock now applies exactly where the pole cannot be trusted: a dwell
+#: whose amplitude is under ``MIN_AMPLITUDE_SIGMA`` has to have run this long to
+#: be called settled.  One with a transient it can actually see is judged on
+#: reach and remainder, in units the plant sets.  See :func:`settled`.
+MIN_SPAN_S = 60.0
 
 TIME_KEYS = ("t_s", "Time")
 HEATER_KEYS = ("u_pct", "ls218.aout1", "heater_pct")
@@ -133,8 +163,16 @@ def load(path):
             [s for s, k in zip(stamps, ok) if k])
 
 
-def dwells(t, T, Tc, u, seg, stamps, min_span_s=MIN_SPAN_S, min_n=MIN_N):
-    """Maximal runs of constant u inside one segment; see U_TOL_PCT."""
+def dwells(t, T, Tc, u, seg, stamps, min_span_s=0.0, min_n=MIN_N):
+    """Maximal runs of constant u inside one segment; see U_TOL_PCT.
+
+    ``min_span_s`` defaults to nothing.  A duration bar here would run upstream
+    of :func:`grade` and be invisible to it, which is how sixteen rungs of the
+    2026-09-05 sweep were thrown away without ever getting a verdict -- see
+    ``MIN_SPAN_S``, which is now a conditional test inside :func:`settled`
+    instead.  Left as a parameter because it is a useful knob for asking what a
+    bar would have cost.
+    """
     out = []
     start = 0
     for i in range(1, len(t) + 1):
@@ -314,7 +352,17 @@ SETTLED_REMAINDER_K = 0.15
 
 
 def settled(r):
-    """Is this dwell's relaxation over?  Either test may answer yes."""
+    """Is this dwell's relaxation over?  Either test may answer yes.
+
+    Unless the pole cannot be believed at all.  ``reach`` and ``remainder_K``
+    are both read off the fitted tau, so a dwell with no resolvable transient
+    has fitted them to noise and both are meaningless -- and they fail
+    OPTIMISTICALLY, certifying a 48 s slice of a 600 s relaxation as finished.
+    There, and only there, the wall clock is the last honest test available.
+    See ``MIN_SPAN_S``.
+    """
+    if r["amp_sigma"] < MIN_AMPLITUDE_SIGMA and r["span_s"] < MIN_SPAN_S:
+        return False
     return (r["end_rate_k_per_h"] <= MAX_END_RATE_K_PER_H
             or (r["reach"] >= MIN_REACH
                 and r["remainder_K"] <= SETTLED_REMAINDER_K))

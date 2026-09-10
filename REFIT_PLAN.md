@@ -1,6 +1,6 @@
 # Thermal model refit — plan
 
-**Status: PHASE 0 DONE. Awaiting the manifest review — the first hard pause.**
+**Status: PHASE 0 DONE, manifest reviewed, first pause cleared. Phase A is next.**
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
 manifest) and the commit after it (the rewiring and the deletion).
 **Shape:** three phases, two hard pauses. Phase 0 → *pause* → Phase A → *pause* → Phase B.
@@ -12,9 +12,9 @@ Update this Status line as phases land.
 |---|---|
 | **done** | §5.1 the archive — `reference/cooldown-10/`, three non-overlapping tables covering the whole cooldown, with a README carrying provenance, segment boundaries and caveats |
 | **done** | §5.4 — the fresh export past 2026-09-09 18:06. The transient is in `cd10_20260904_recorder.csv.gz` segment 0, recording continuous across it |
-| **done** | §5.2 the manifest — `reference/cooldown-10/segments.csv`, 239 windows. §5.3 `analysis/segments.py` + `analysis/curate.py` |
+| **done** | §5.2 the manifest — `reference/cooldown-10/segments.csv`, 315 windows. §5.3 `analysis/segments.py` + `analysis/curate.py` |
 | **done** | the rewiring. `_data.py`, `steps.py`, `plot_ladder.py`, `decimate.py` and `fit_ode.load_sweep` read the archive; the five old tables are deleted |
-| **next** | **a human reads the manifest and agrees with it.** Then Phase A (§6) |
+| **next** | Phase A (§6). The manifest review is done and its one finding is fixed |
 
 Everything in `analysis/` reads the archive. The five overlapping tables in
 `reference/heater-calibration/` are gone; only `sweep_decimated.csv.gz`
@@ -275,7 +275,18 @@ untestable. Cheap now, impossible later.
   the six rows that exist on one side only, are boundary effects — the archive
   has more of the same dwell where a region export cut it — and each has a
   `note` on its row. They are enumerated in `analysis/README.md`.
-- ⏸ **The manifest has not been read by a human yet.** That is the pause.
+- ✅ **The manifest has been read.** Jeff read it 2026-09-10 and found a real
+  defect on the first pass, which is what the pause is for: `MIN_SPAN_S = 60`
+  was an *admission* threshold upstream of the grader, and it had thrown away
+  **sixteen rungs** of the programmed sweep — 46 s dwells that ran 11.5 time
+  constants at 5–25 K, remainder 0.000 K, end rate under 0.05 K/h. The bar now
+  applies only to a dwell with no resolvable transient, which is the one
+  failure it was really guarding against. **149 anchors where there were 111**,
+  147 in band, 45 with a believable τ; the 4–40 K bands went 30 → 68. The
+  manifest diff was 76 additions and **no** verdict changes, and every fit
+  metric improved — `rms_k` 0.2129 → 0.2045 and `anchor_k` 1.8781 → **1.6127**,
+  with 35 % more anchors to satisfy. Details in `analysis/README.md`, "A wall
+  clock was throwing away the best anchors".
 
 Two things turned up doing it that were not in the plan.
 

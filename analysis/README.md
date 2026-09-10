@@ -62,12 +62,15 @@ mechanism for "do not use this" instead of a per-row override flag.
 
 The five old tables are **deleted**. What replacing them cost, measured:
 
-| | before | after |
-|---|---|---|
-| dwells found | 234 | 236 |
-| usable anchors | 111 | **111** (109 in 4–200 K, 36 with a believable τ) |
-| Λ12/C4/drift-3 fit `rms_k` | 0.2113, at `nfev = 300 = max_nfev` — an upper bound, not a fit | **0.2129**, converged in 182 |
-| `tau_137_s` / `mass_g` | 567.8 / 4.7965 | 568.2 / 4.7956 |
+| | before | after the archive | after the review |
+|---|---|---|---|
+| dwells found | 234 | 236 | 312 |
+| usable anchors | 111 | 111 | **149** (147 in 4–200 K, 45 with τ) |
+| Λ12/C4/drift-3 `rms_k` | 0.2113, at `nfev = 300 = max_nfev` — an upper bound, not a fit | 0.2129, converged in 182 | **0.2045** |
+| anchor residual `anchor_k` | 1.8796 | 1.8781 | **1.6127** |
+| `tau_137_s` / `mass_g` | 567.8 / 4.7965 | 568.2 / 4.7956 | 569.9 / 4.7931 |
+
+The third column is [the review finding](#a-wall-clock-was-throwing-away-the-best-anchors--2026-09-10) below. The middle column is what replacing the tables cost by itself:
 
 103 of the 105 shared graded anchors reproduce to **3 nK**. Every difference is
 a boundary effect and every one favours the archive; each has a `note` on its
@@ -88,6 +91,74 @@ row in the manifest. The two that matter:
 been rounded before the Coldplate remap — it wrote values like `6.4000` — where
 the archive carries the log's own precision. Every cached fit was invalidated
 by it.
+
+## A wall clock was throwing away the best anchors — 2026-09-10
+
+The first thing the manifest review caught. Jeff read it and said good data was
+being cut, pointing at the programmed sweep as clearly robust — and it was not a
+judgement call, it was a bug.
+
+`MIN_SPAN_S = 60` was an **admission** threshold: `dwells()` applied it upstream
+of `grade()`, so a dwell it rejected never got a verdict and nothing anywhere
+reported its absence. On 2026-09-05 that dropped **sixteen rungs** of the
+programmed ladder — 7.19 % to 49.82 %, 5.4 K to 25.7 K:
+
+| | |
+|---|---|
+| dwell length | 46–48 s, which at 5–25 K is **11.5 time constants** |
+| remainder | **0.000 K** |
+| end rate | 0.001–0.052 K/h, against a 0.5 K/h bar |
+| transient | 60 to 1265 × the sensor noise |
+
+They are the best-settled points in the archive and a clock threw them out. The
+earlier count of "three rungs" was wrong because the other thirteen are
+duplicated by the cancelled run earlier that day, so the loss looked like
+redundancy. Worse, the response at the time propagated the clock *outward*:
+`ltspm3/tools/sweep.py` began refusing `--min-dwell` below 60 s, forbidding the
+tool from doing the thing it had done well.
+
+**What the clock was really protecting against is not shortness.** It is a dwell
+with no resolvable transient. Over 48 s at 145 K, where τ ≈ 600 s, the sample
+moved 80 mK against 28 mK of sensor noise; the pole was fitted to noise, came
+back τ = 8.6 s, and `reach` — computed from that τ — read 5.6 and certified as
+finished a window 1/12 of a time constant into an 8-hour relaxation still 0.76 K
+from its answer. **`reach` cannot catch that, because `reach` is computed from
+the τ being tested.**
+
+So the clock now applies exactly where the pole cannot be believed:
+
+```python
+def settled(r):
+    if r["amp_sigma"] < MIN_AMPLITUDE_SIGMA and r["span_s"] < MIN_SPAN_S:
+        return False        # the fitted tau is noise; reach means nothing
+    return (r["end_rate_k_per_h"] <= MAX_END_RATE_K_PER_H
+            or (r["reach"] >= MIN_REACH
+                and r["remainder_K"] <= SETTLED_REMAINDER_K))
+```
+
+`MIN_N` — a sample *count*, which is what a fit needs — is the only thing left
+upstream of the grader. The manifest diff was **76 additions and no changes**:
+nothing that was an anchor stopped being one, and no verdict flipped.
+
+| band K | before | after | of which τ |
+|---|---|---|---|
+| 4–15 | 15 | **30** | 6 |
+| 15–40 | 15 | **38** | 12 |
+| 40–98 | 15 | 15 | 7 |
+| 98–130 | 14 | 14 | 5 |
+| 130–160 | 40 | 40 | 12 |
+| 160–200 | 10 | 10 | 1 |
+| 200–300 | 2 | 2 | 2 |
+| **all** | **111** | **149** | **45** |
+
+Every fit metric improved, including the anchor residual — with 35 % more
+anchors to satisfy, which is the evidence that the recovered points are real:
+bad anchors raise `anchor_k`, and it fell 14 %.
+
+The new anchors are all September, so the thin cold-end leverage in the
+**first 39 days** that `REFIT_PLAN.md` §7 step 5 flags is *unchanged* — the
+`prepython` era still has no anchor below 15 K. What improved is the recorder
+and postcal eras, 3 → 8 and 12 → 22 below 15 K.
 
 **The era is a column now, not a filename test.** Five places needed to know
 which side of the two boundaries an anchor fell on: `ANCHOR_SIGMA_K`, the
