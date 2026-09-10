@@ -35,6 +35,19 @@ import os
 #: Versioned, and the default location for everything the fits read.
 DATA_DIR = os.path.join("reference", "heater-calibration")
 
+#: The cooldown-10 archive: three non-overlapping tables that between them are
+#: the whole cooldown, with ``reference/cooldown-10/segments.csv`` naming the
+#: windows inside them.  This supersedes the five overlapping tables ``DATA_DIR``
+#: holds -- see :mod:`segments` and ``REFIT_PLAN.md`` §5.
+ARCHIVE_DIR = os.path.join("reference", "cooldown-10")
+
+#: The repository root, taken from this file's own location and not from the
+#: working directory.  Both directories above are relative, and a relative path
+#: run from anywhere but the repository root resolves to nothing at all -- which
+#: has already cost this repository seven tests that announced themselves as
+#: "reference logs not present".
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 #: The sweep the ODE is fitted to: 2026-09-02 16:01 -> 2026-09-04 11:00, 43 h,
 #: 4.9-192.6 K, 2 s cadence, no gap longer than a minute.
 #:
@@ -99,13 +112,24 @@ FIT_CD10 = "fit_cd10.csv"
 FIT_RECORDER_POSTCAL = "fit_recorder_postcal.csv"
 
 
-def resolve(name: str) -> str:
-    """Full path for a table, whether it is stored plain or gzipped."""
+def resolve(name: str, where: str = DATA_DIR) -> str:
+    """Full path for a table, whether it is stored plain or gzipped.
+
+    ``where`` is the directory a bare name is looked up in -- ``DATA_DIR`` for
+    the fit inputs, ``ARCHIVE_DIR`` for the cooldown-10 archive.  Both are
+    tried relative to the working directory and relative to ``REPO_ROOT``, so
+    a script works from the repository root and from anywhere else.
+    """
     if os.path.sep in name or "/" in name:
-        candidates = [name, name + ".gz"]
+        candidates = [name, name + ".gz",
+                      os.path.join(REPO_ROOT, name),
+                      os.path.join(REPO_ROOT, name + ".gz")]
     else:
-        base = os.path.join(DATA_DIR, name)
-        candidates = [base + ".gz", base, name, name + ".gz"]
+        candidates = []
+        for base in (os.path.join(where, name),
+                     os.path.join(REPO_ROOT, where, name)):
+            candidates += [base + ".gz", base]
+        candidates += [name, name + ".gz"]
     for path in candidates:
         if os.path.exists(path):
             return path
@@ -125,9 +149,9 @@ def _missing(name: str, tried) -> str:
     )
 
 
-def open_table(name: str):
+def open_table(name: str, where: str = DATA_DIR):
     """Text handle on a fit input, gzipped or not.  Use as a context manager."""
-    path = resolve(name)
+    path = resolve(name, where)
     if path.endswith(".gz"):
         return io.TextIOWrapper(gzip.open(path, "rb"), encoding="utf-8",
                                 newline="")

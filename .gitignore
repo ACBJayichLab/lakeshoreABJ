@@ -27,6 +27,11 @@ opencode.json
 data/
 *.csv
 
+# ...but the cooldown-10 manifest is an INDEX, not experiment data.  It is the
+# curated list of which windows of the archive mean what, it is reviewed as a
+# diff, and a clone without it has the data and no idea what any of it is.
+!reference/cooldown-10/segments.csv
+
 # NOTE: reference/logs/*.xls ARE tracked on purpose.  They are the only
 # empirical record of the plant and every default in control/ is derived
 # from them.  ~110 MB total; see CLAUDE.md.
