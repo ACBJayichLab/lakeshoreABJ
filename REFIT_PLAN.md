@@ -695,6 +695,21 @@ pole — two different models, one shipped and one displayed. And
 `export_response --verify` reported **Q max rel error 5.0e-2** on the trial
 refit against a docstring claiming a part in 10⁵; find out why before shipping.
 
+**T10 · Delivered watts are not `P(u)`, and the margin is unknown.** On
+2026-09-10 11:33 the sample fell 3.63 K at a fixed 64.016 % readback; Jeff traced
+it to a wiring / heater-circuit fault (HANDOFF.md, 2026-09-10). Every fit here
+takes `Q = P(u)` from the readback and assumes the circuit delivers it, so the
+fault is a **systematic on the watts-to-kelvin curve** for the whole campaign,
+not a defect in one window, and it stays until a more robust circuit replaces
+this one. Its one measured size is about **5 mW at 0.67 W (0.7 %)**, worth 3.6 K
+at 114 K through the 639 K/W local gain; the ordinary margin is smaller by an
+amount the log cannot say. Carry it as a **power-side** uncertainty `δP` on
+every anchor — it scales with the local gain, 4 to 13 K per percent across the
+band, so one number in kelvin is wrong at both ends — and do not tighten
+`ANCHOR_SIGMA_K` or `sigma_T_inf` past what an unknown `δP` allows. Fixing the
+circuit is out of scope for this plan; recording when it was fixed is not, and
+it belongs in the manifest the way `era` records the recalibration.
+
 ---
 
 ## 9. Out of scope

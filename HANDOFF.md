@@ -35,8 +35,21 @@ reports `control: null`.
 **What the model can and cannot model.** Everything in `analysis/` and in
 `ltspm3/fitted_response.py` takes `Q = P(u)` from the 218's readback and
 assumes the circuit delivers it. That assumption is the model's input, not a
-term in it. So:
+term in it — and Jeff's finding is that **the circuit does not always deliver
+it**. The consequence is not confined to the event window. Delivered watts
+carry an uncertainty of unknown size for the whole campaign, which is a
+**systematic error on the watts-to-kelvin curve itself**, and it stays until a
+more robust circuit replaces this one. The one measurement of its size is this
+event: about 5 mW at 0.67 W, or 0.7 % of delivered power, worth 3.6 K at
+114 K. How much smaller the ordinary margin is, the log cannot say. So:
 
+- **Carry it as a power-side error bar, not a temperature one.** REFIT_PLAN.md
+  trap T10. A steady-state anchor at output `u` is a measurement of `T` at a
+  power `P(u) ± δP`; the fit should see `δP` as such, because it scales with
+  the local gain (639 K/W here, 4 to 13 K per percent across the band) rather
+  than being one number in kelvin. Do not tighten `ANCHOR_SIGMA_K` or Phase
+  A's `sigma_T_inf` past what an unknown `δP` allows; that is precision the
+  circuit did not deliver.
 - **From 11:33 until the circuit is repaired and verified, `Q` is unknown** and
   nothing in that stretch is an anchor — not the transient and not the settled
   level after it, however flat. Once it is flat, archive it and give the whole
