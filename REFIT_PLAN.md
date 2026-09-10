@@ -51,10 +51,13 @@ time and without retuning between them**:
 and to do it from data that is **organised, named and frozen** rather than
 rediscovered by a heuristic each time a fit runs.
 
-That last clause is half the work and it is not decoration. Today the fit scans
-five overlapping tables and *discovers* 234 dwells with a rule keyed on a
-tolerance constant; change the constant and the dataset silently changes, with
-nothing in review to show it.
+That last clause is half the work and it is not decoration. The fit **used to**
+scan five overlapping tables and *discover* 234 dwells with a rule keyed on a
+tolerance constant; change the constant and the dataset silently changed, with
+nothing in review to show it. **Phase 0 fixed this** — the dataset is
+`reference/cooldown-10/segments.csv` and a change to the finder is a diff. The
+rest of §2 is the reasoning that motivated the work and is left as it was
+written.
 
 **Definition of done.** All three rows above green; `ltspm3/_fitted_table.py`
 regenerated; `SUPERSEDED_NOTE` cleared; full suite and `ruff` clean; the docs

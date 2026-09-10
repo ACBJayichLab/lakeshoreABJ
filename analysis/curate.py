@@ -262,16 +262,16 @@ def main(argv=None) -> int:
     committed = read_manifest(path)
 
     if a.verbose:
-        print(f"{'id':<18}{'kind':<6}{'use':<9}{'span h':>8}{'u%':>9}"
+        print(f"{'id':<22}{'kind':<6}{'use':<9}{'span h':>8}{'u%':>9}"
               f"{'T_inf':>9}{'tau s':>10}{'reach':>8}{'rem K':>8}{'K/h':>9}  quality")
         for r in rows:
             f = r.get("_fit")
             if f is None:
-                print(f"{r['id']:<18}{r['kind']:<6}{r['use']:<9}"
+                print(f"{r['id']:<22}{r['kind']:<6}{r['use']:<9}"
                       f"{'':>8}{r['u_pct']:>9}{'':>9}{'':>10}{'':>8}{'':>8}{'':>9}  "
                       f"{r['quality']}")
                 continue
-            print(f"{r['id']:<18}{r['kind']:<6}{r['use']:<9}"
+            print(f"{r['id']:<22}{r['kind']:<6}{r['use']:<9}"
                   f"{f['span_s'] / 3600:>8.2f}{r['u_pct']:>9.4f}"
                   f"{f['T_inf']:>9.3f}{f['tau_s']:>10.1f}{f['reach']:>8.2f}"
                   f"{f['remainder_K']:>8.3f}{f['end_rate_k_per_h']:>9.3f}  "

@@ -265,9 +265,18 @@ analysis/            EXPLORATORY, not shipped. Fits the thermal model from the
                      Imports NEITHER package and is imported by neither, so it
                      cannot bend invariant 1 -- it reads CSVs and nothing else.
                      `pip install -e ".[analysis]"` for scipy/matplotlib -- the
-                     recorder needs neither. Read analysis/README.md first: it
-                     carries the caveats, and the note that its inputs live in
-                     the GITIGNORED data/ and so do not exist on a fresh clone.
+                     recorder needs neither. Its inputs ARE versioned, in
+                     reference/cooldown-10/, so every step runs from a fresh
+                     clone; only the outputs are gitignored. Read
+                     analysis/README.md first for the caveats.
+                     segments.py    the archive and the manifest: read_table
+                       for a whole table, load(id) for one named window.
+                     curate.py      proposes the manifest and DIFFS a proposal
+                       against the committed one. CURATE, DO NOT DISCOVER --
+                       the dataset is a committed file, not something a
+                       heuristic rediscovers per run, so a change to the dwell
+                       finder or its constants arrives as a diff somebody has
+                       to look at. `--propose` prints none on a clean tree.
 ```
 
 ## Conventions

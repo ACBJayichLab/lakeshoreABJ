@@ -166,6 +166,15 @@ data reachable at all.
 
 ## Start here if you are analysing heater steps
 
+> **SUPERSEDED 2026-09-10 by Phase 0 of `REFIT_PLAN.md`.** The two fitting
+> tables below are gone, along with three others, and `analysis/` reads the
+> versioned `reference/cooldown-10/` archive instead -- three non-overlapping
+> tables plus `segments.csv`, the manifest naming every window in them. Start at
+> [`reference/cooldown-10/README.md`](reference/cooldown-10/README.md) and
+> `analysis/README.md`, not here. What is still true below is how the archive's
+> own tables get built (`fit_table`, and `--rename` is required) and that
+> `data/cd10/` is the viewer's copy.
+
 **`data/` is gitignored, so none of this exists on a fresh clone.** There are two
 derived sets and they are not interchangeable -- one is shaped for the viewer, the
 other for a fit:
