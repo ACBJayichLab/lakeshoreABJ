@@ -24,8 +24,8 @@ the sample never reaches.  Fitting
 
     T(t) = T_0 + m t + A exp(-t/tau) + a cos(w x) + b sin(w x)
 
-instead moves nine graded anchors by more than 0.1 K and four of them by more
-than a kelvin -- ``rec-20260828-141631``, a 74.9 h hold, by **1.69 K**, on
+instead moves five graded anchors by more than 0.1 K and three of them by more
+than a kelvin -- ``rec-20260828-141631``, a 74.9 h hold, by **1.53 K**, on
 which the pole had read reach 0.19.  ``T_pole`` is kept beside ``T_inf`` in the
 output precisely so that change stays visible.
 

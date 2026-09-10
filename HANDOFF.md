@@ -13,105 +13,49 @@ Previous: [HANDOFF-2026-09-07.md](HANDOFF-2026-09-07.md).
 > availability outranks tidiness, and cutting this heater is a change of state
 > rather than a retreat to safety. Move it deliberately, or leave it.
 >
-> As of 2026-09-10 14:25 the sample reads **114.83 K**, coldplate 6.628 K.
+> As of 2026-09-10 14:43 the sample reads **114.24 K**, coldplate 6.626 K, and is
+> still falling after the heater-circuit fault noted below.
 
-## READ THIS FIRST: the sample fell 3.6 K this morning at a fixed heater — and Jeff was in the lab
+## Note: the sample fell 3.6 K on 2026-09-10 at a fixed readback — a heater-circuit fault
 
-**Onset 2026-09-10 11:33, output unmoved at 64.016 % throughout.** Jeff has
-since said the time coincides with his own actions at the cryostat, and his
-working hypothesis is that **laser heating of the sample was turned off**. The
-record supports that reading, and it changes what this event means for the
-refit — see below. It is a hypothesis until Jeff's lab timeline confirms it.
+**Onset 11:33, `ls218.aout1` readback unmoved at 64.016 % throughout.** Jeff
+traced it in person to a **wiring / heater-circuit issue**. Fixing it is out of
+scope for this thread; what is in scope is what it means for the model.
 
-One-minute means, because 2nd Stage carries tens of mK of hash:
+One-minute means, 11:32 → 14:24: Sample **−3.630 K**, Coldplate −18 mK, 1st
+Stage +12 mK, 2nd Stage −7 mK, RAD SHIELD −238 mK, readback −0.0003 %. A pole
+on the first 90 minutes gives +3.10 K at τ = 614 s — the plant's own time
+constant at this temperature — so the prompt part is a **step in delivered
+power at the sample**, about 4.9 mW at the 639 K/W the two September holds
+measure between them; a −0.2 K/h tail follows, tracking the shield. As of
+14:43 the sample read 114.24 K and was still falling. **Nothing here is a
+hazard**: the stage is cooling, the readback is unchanged, `status.json`
+reports `control: null`.
 
-| channel | 11:32 | 12:47 | 14:24 | change |
-|---|---|---|---|---|
-| **Sample** | 118.457 | 115.163 | 114.827 | **−3.630 K** |
-| Coldplate | 6.645 | 6.629 | 6.627 | −18 mK |
-| 1st Stage | 28.668 | 28.608 | 28.679 | +12 mK |
-| 2nd Stage | 3.961 | 3.954 | 3.954 | −7 mK |
-| RAD SHIELD | 40.701 | 40.524 | 40.463 | −238 mK |
-| `ls218.aout1` | 64.0153 | 64.0154 | 64.0150 | −0.0003 % |
+**What the model can and cannot model.** Everything in `analysis/` and in
+`ltspm3/fitted_response.py` takes `Q = P(u)` from the 218's readback and
+assumes the circuit delivers it. That assumption is the model's input, not a
+term in it. So:
 
-**What the shape says.** A single pole fitted to the first 90 minutes after
-onset gives an amplitude of **+3.10 K and τ = 614 s**, rms 33 mK — which is the
-plant's own time constant at this temperature (534 ± 6 s measured over 70 h at
-114 K, 4 % low at reach 4.7 the way `fit_pole` always is). So the prompt part is
-a **step change in heat load at the sample**, relaxing exactly as the fitted
-model says the sample relaxes. Behind it is a slow tail, about −0.2 K/h from
-12:30 onward, tracking RAD SHIELD as it cools by 0.24 K over the same hours.
-
-**What the size says.** The two September holds bracket this output and give the
-local gain directly: (118.609 − 114.390 K) / (0.6688 − 0.6622 W) = **639 K/W**;
-the shipped model says 636 at the same point. So the prompt 3.10 K step is
-**4.9 mW** removed from the sample, and the full 3.63 K to 14:24 is 5.7 mW.
-That is milliwatt-class optical power absorbed at a diamond sample and its
-mount — exactly the size an excitation laser delivers — and the sign is what a
-removed load looks like: sample colder, coldplate slightly colder, shield
-slowly colder as the scattered light and the sample's own radiation drop.
-
-**It is NOT the same signature as 2026-09-09 18:06** (`mask-20260909-180604`),
-and the previous draft of this handoff was wrong to say so. On 09-09 the
-**cold-head channels stepped** — 1st Stage −80 mK, 2nd Stage −19 mK, coldplate
-−7.6 mK — and the sample followed slowly, τ ≈ 2,200–3,700 s from the pole, which
-is not the plant's τ; the sample's 0.34 K is 0.5 mW equivalent. Today the cold
-head did not move (+12 / −7 mK, noise) and the sample stepped at the plant's
-own τ. One is a change at the cold head; the other is a change at the sample.
-Whether Jeff was also in the lab at 18:06 on 09-09 is worth asking, because a
-0.5 mW-equivalent change could be a smaller optical event, a shutter, or a
-room-light change — but it is a separate question.
-
-### Why this matters more to the refit than the event itself
-
-The refit is chasing three discrepancies, and every one of them is the size of
-a milliwatt-class load that was not logged:
-
-| discrepancy | size | equivalent at 639 K/W |
-|---|---|---|
-| three settled holds vs the shipped model (§2.1) | +4.35 / +4.42 / +4.44 K | ~7 mW |
-| July–August vs September at matched output (§2.3, "campaign drift") | 1.8–2.9 K warmer | **4.8–5.4 mW** — the fit already measures this as a per-era power step |
-| today's step | 3.63 K | 5.7 mW |
-
-**If a laser was on during some archive windows and off during others, the
-manifest currently has no column that knows it, and a fit that does not know it
-will absorb a binary external input into Λ(T), C(T) or a drift ramp** — which is
-trap T2 and trap T6 at once, and the most plausible single explanation on the
-table for why a physically sensible model is 4.4 K off three holds that agree
-with each other to a tenth. Note in particular that the 43 h sweep the ODE is
-fitted to ended 09-04 11:00 and the ladder that found the model 4.5 K low began
-09-05 11:45; the recorder was down 09-04 12:07 → 23:38 between them, so a
-change in laser state in that gap would be invisible in the log and would look
-exactly like "the model is low everywhere above 40 K".
-
-**What to do about it, in order:**
-
-1. **Leave the heater alone** and let it flatten. Nothing here is a hazard: the
-   stage is cooling, the output is unchanged, `status.json` reports
-   `control: null`.
-2. **Get the laser timeline from Jeff for the whole cooldown** — on/off times
-   and approximate power at the sample — and record it as a **state column in
-   the manifest** (or an era split), the way `era` records the recalibration.
-   Then tag every anchor. Until this is done, do not start Phase B: it would
-   fit a switch as physics.
-3. **Once the sample is flat, archive 11:33 onward.** The transient itself is a
-   `mask` with a paragraph, as `mask-20260909-180604` has. But the settled
-   stretch after it is **not** a mask — it is a legitimate hold at 64.016 % in
-   the laser-off state, and it is the first anchor whose load state is known
-   for certain. Tag it as such. `reference/cooldown-10/README.md` has the
-   commands. Do not archive a half-event (§0.4).
-4. **Log lab actions into the recorder.** The CSV has a `Notes` column and it is
-   empty across both events; nothing in the lab can write to it. A `note`
-   command kind through the spool — text only, no gate needed — would have made
-   both of these attributable on the day rather than a day later. Small, and it
-   belongs in `lschart`, which is the standing priority anyway.
-5. If the laser goes back on, the sample should step back up by the same ~3 K
-   at the plant's τ. That is a free, decisive test of the hypothesis and it
-   costs nothing but noting the time.
+- **From 11:33 until the circuit is repaired and verified, `Q` is unknown** and
+  nothing in that stretch is an anchor — not the transient and not the settled
+  level after it, however flat. Once it is flat, archive it and give the whole
+  stretch one `mask` row with a paragraph, as `mask-20260909-180604` has
+  (`reference/cooldown-10/README.md` has the commands; do not archive a
+  half-event, §0.4). The three post-recalibration holds before 11:33 stand.
+- **A fault of this kind is indistinguishable, in the log, from "a load path
+  the model does not have" (§2.5) or from a per-era power offset.** The 09-09
+  18:06 event is *not* attributed to it — there the cold-head channels stepped
+  and the sample followed at τ ≈ 2,200–3,700 s, a change at the cold head, not
+  at the sample — but the general point stands: a fit can only be as right as
+  the heater circuit was during its inputs. Record repairs and known circuit
+  changes as manifest rows, the way `era` records the recalibration.
+- Nothing in the log records what a person did at the cryostat. The CSV has a
+  `Notes` column and it is empty across both events. A `note` command kind
+  through the spool would make the next one attributable on the day.
 
 > **The data is only on this machine.** `data/` is gitignored, so the event
-> lives in `data/ltspm3-heater_2026-09-10.csv` and nowhere else. A fresh clone
-> does not have it.
+> lives in `data/ltspm3-heater_2026-09-10.csv` and nowhere else.
 
 ## What this session did
 
@@ -138,8 +82,8 @@ it is the point of the phase: §6.1 of the plan is the write-up, and
 
 The three things worth a reviewer's attention:
 
-- **A single pole was the wrong model for a hold**, and it had eight graded
-  anchors wrong — four past a kelvin, worst `rec-20260828-141631` at
+- **A single pole was the wrong model for a hold**, and it had five graded
+  anchors wrong by more than 0.1 K — three past a kelvin, worst `rec-20260828-141631` at
   **−1.534 K** on a 74.9 h hold. `T_pole` sits beside `T_inf` in
   `measured.csv` so every one of those is auditable.
 - **τ at 114 K was two windows all along.** 513 s is the first 40 minutes of
@@ -173,10 +117,9 @@ after the review, not before.
 
 ## Then, in order
 
-1. **The laser timeline, then the live event above once it is flat** — steps 2
-   and 3 of READ THIS FIRST. Phase B waits on the first.
+1. **Mask the 09-10 fault window** once the sample is flat (the note above).
 2. Option 4 in `analysis/`, at the pause.
-3. **Phase B** (§7), only after the laser state is a column. It does not depend on 2: its τ residuals read
+3. **Phase B** (§7). It does not depend on 2: its τ residuals read
    `load_taus`, which the floor fix already cleaned, and no ceiling pin is
    graded `tau`. Read traps T1–T9 before starting, and §6.1's last paragraph —
    **the fit will move at step 1, and that is not a refactor failing to be

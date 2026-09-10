@@ -386,7 +386,7 @@ statistical and does **not** contain it.
 Once a relaxation is over the exponential has only the cryostat's drift left to
 describe, and it describes it — returning τ of days and an asymptote the sample
 never reaches. Fitting level + drift + relaxation + a 24 h harmonic instead
-moves eight graded anchors, four of them past a kelvin:
+moves five graded anchors by more than 0.1 K, three of them past a kelvin:
 
 | hold | span | pole | Phase A | move | drift |
 |---|---|---|---|---|---|
