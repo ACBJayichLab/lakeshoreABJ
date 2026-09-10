@@ -15,14 +15,15 @@ Previous: [HANDOFF-2026-09-07.md](HANDOFF-2026-09-07.md).
 >
 > As of 2026-09-10 14:25 the sample reads **114.83 K**, coldplate 6.628 K.
 
-## READ THIS FIRST: the sample fell 3.6 K this morning at a fixed heater
+## READ THIS FIRST: the sample fell 3.6 K this morning at a fixed heater — and Jeff was in the lab
 
-**A second event of the kind [REFIT_PLAN.md](REFIT_PLAN.md) §2.5 describes, ten
-times larger, and it is still going.** Onset **2026-09-10 11:33**, output
-unmoved at 64.016 % throughout, the last digits being readback flicker.
+**Onset 2026-09-10 11:33, output unmoved at 64.016 % throughout.** Jeff has
+since said the time coincides with his own actions at the cryostat, and his
+working hypothesis is that **laser heating of the sample was turned off**. The
+record supports that reading, and it changes what this event means for the
+refit — see below. It is a hypothesis until Jeff's lab timeline confirms it.
 
-One-minute means below, because 2nd Stage carries tens of mK of hash and a
-single sample of it says whatever you like:
+One-minute means, because 2nd Stage carries tens of mK of hash:
 
 | channel | 11:32 | 12:47 | 14:24 | change |
 |---|---|---|---|---|
@@ -31,36 +32,82 @@ single sample of it says whatever you like:
 | 1st Stage | 28.668 | 28.608 | 28.679 | +12 mK |
 | 2nd Stage | 3.961 | 3.954 | 3.954 | −7 mK |
 | RAD SHIELD | 40.701 | 40.524 | 40.463 | −238 mK |
-| `ls218.aout1` | 64.0153 | 64.0154 | 64.0150 | **−0.0003 %** |
+| `ls218.aout1` | 64.0153 | 64.0154 | 64.0150 | −0.0003 % |
 
-Most of the fall happened in forty minutes (118.46 → 115.28 by 12:12) and the
-tail is still running at about **−220 mK/h**. Compare the 2026-09-09 18:06
-transient, which is `mask-20260909-180604` in the manifest: sample −0.306 K,
-coldplate −7.6 mK. **Same signature, an order of magnitude bigger.**
+**What the shape says.** A single pole fitted to the first 90 minutes after
+onset gives an amplitude of **+3.10 K and τ = 614 s**, rms 33 mK — which is the
+plant's own time constant at this temperature (534 ± 6 s measured over 70 h at
+114 K, 4 % low at reach 4.7 the way `fit_pole` always is). So the prompt part is
+a **step change in heat load at the sample**, relaxing exactly as the fitted
+model says the sample relaxes. Behind it is a slow tail, about −0.2 K/h from
+12:30 onward, tracking RAD SHIELD as it cools by 0.24 K over the same hours.
 
-Why it matters: propagated through the fitted Λ′ ratio, an 18 mK coldplate step
-accounts for at most ~0.17 K of the sample's 3.63 K. So about 3.5 K of this is
-invisible to `Λ(T_s) − Λ(T_c)`, which is the *entire* steady-state model. This
-is §2.5's load path, no longer a 0.3 K curiosity.
+**What the size says.** The two September holds bracket this output and give the
+local gain directly: (118.609 − 114.390 K) / (0.6688 − 0.6622 W) = **639 K/W**;
+the shipped model says 636 at the same point. So the prompt 3.10 K step is
+**4.9 mW** removed from the sample, and the full 3.63 K to 14:24 is 5.7 mW.
+That is milliwatt-class optical power absorbed at a diamond sample and its
+mount — exactly the size an excitation laser delivers — and the sign is what a
+removed load looks like: sample colder, coldplate slightly colder, shield
+slowly colder as the scattered light and the sample's own radiation drop.
 
-Note the sign: the sample is getting **colder** at constant power, i.e. *more*
-cooling. That is the opposite sign to the campaign drift Phase B is built to
-absorb (+0.167 K/day, warming), so it is a second phenomenon and not more of
-the first — trap T2's warning, arriving again from a new direction.
+**It is NOT the same signature as 2026-09-09 18:06** (`mask-20260909-180604`),
+and the previous draft of this handoff was wrong to say so. On 09-09 the
+**cold-head channels stepped** — 1st Stage −80 mK, 2nd Stage −19 mK, coldplate
+−7.6 mK — and the sample followed slowly, τ ≈ 2,200–3,700 s from the pole, which
+is not the plant's τ; the sample's 0.34 K is 0.5 mW equivalent. Today the cold
+head did not move (+12 / −7 mK, noise) and the sample stepped at the plant's
+own τ. One is a change at the cold head; the other is a change at the sample.
+Whether Jeff was also in the lab at 18:06 on 09-09 is worth asking, because a
+0.5 mW-equivalent change could be a smaller optical event, a shutter, or a
+room-light change — but it is a separate question.
+
+### Why this matters more to the refit than the event itself
+
+The refit is chasing three discrepancies, and every one of them is the size of
+a milliwatt-class load that was not logged:
+
+| discrepancy | size | equivalent at 639 K/W |
+|---|---|---|
+| three settled holds vs the shipped model (§2.1) | +4.35 / +4.42 / +4.44 K | ~7 mW |
+| July–August vs September at matched output (§2.3, "campaign drift") | 1.8–2.9 K warmer | **4.8–5.4 mW** — the fit already measures this as a per-era power step |
+| today's step | 3.63 K | 5.7 mW |
+
+**If a laser was on during some archive windows and off during others, the
+manifest currently has no column that knows it, and a fit that does not know it
+will absorb a binary external input into Λ(T), C(T) or a drift ramp** — which is
+trap T2 and trap T6 at once, and the most plausible single explanation on the
+table for why a physically sensible model is 4.4 K off three holds that agree
+with each other to a tenth. Note in particular that the 43 h sweep the ODE is
+fitted to ended 09-04 11:00 and the ladder that found the model 4.5 K low began
+09-05 11:45; the recorder was down 09-04 12:07 → 23:38 between them, so a
+change in laser state in that gap would be invisible in the log and would look
+exactly like "the model is low everywhere above 40 K".
 
 **What to do about it, in order:**
 
 1. **Leave the heater alone** and let it flatten. Nothing here is a hazard: the
    stage is cooling, the output is unchanged, `status.json` reports
-   `control: null` (no software PID armed).
-2. **Once flat, export a fresh archive window covering 11:33 onward** and give
-   it a `mask` row with a paragraph, exactly as `mask-20260909-180604` has.
-   `reference/cooldown-10/README.md` has the commands. **This is the "cheap
-   now, impossible later" case the plan already learned once** (§0.4) — but do
-   not archive a half-event, which is why it is not done in this session.
-3. Ask Jeff. Two of these in two days at a fixed output is a fact about the
-   cryostat, not about the fit, and it may be a vacuum or shield change worth
-   knowing about before more model effort goes in.
+   `control: null`.
+2. **Get the laser timeline from Jeff for the whole cooldown** — on/off times
+   and approximate power at the sample — and record it as a **state column in
+   the manifest** (or an era split), the way `era` records the recalibration.
+   Then tag every anchor. Until this is done, do not start Phase B: it would
+   fit a switch as physics.
+3. **Once the sample is flat, archive 11:33 onward.** The transient itself is a
+   `mask` with a paragraph, as `mask-20260909-180604` has. But the settled
+   stretch after it is **not** a mask — it is a legitimate hold at 64.016 % in
+   the laser-off state, and it is the first anchor whose load state is known
+   for certain. Tag it as such. `reference/cooldown-10/README.md` has the
+   commands. Do not archive a half-event (§0.4).
+4. **Log lab actions into the recorder.** The CSV has a `Notes` column and it is
+   empty across both events; nothing in the lab can write to it. A `note`
+   command kind through the spool — text only, no gate needed — would have made
+   both of these attributable on the day rather than a day later. Small, and it
+   belongs in `lschart`, which is the standing priority anyway.
+5. If the laser goes back on, the sample should step back up by the same ~3 K
+   at the plant's τ. That is a free, decisive test of the hypothesis and it
+   costs nothing but noting the time.
 
 > **The data is only on this machine.** `data/` is gitignored, so the event
 > lives in `data/ltspm3-heater_2026-09-10.csv` and nowhere else. A fresh clone
@@ -74,6 +121,7 @@ four exit criteria.
 
 | | |
 |---|---|
+| `4fb4d20` | `AUDIT-2026-09-10.md` — the audit these commits answer |
 | `4d4c538` | manifest boundaries to the **millisecond**. A second-truncated `t_end` lands before the sample it came from, so slicing a window back out returned one row fewer than the grader saw — 308 of 312 windows, worth up to **0.50 K** of `T_inf` and 83 % of a τ |
 | `48b71b0` | the rehearsal test gets a `--journal`, so it stops dropping a CSV in the working directory every run |
 | `311c204` | **Phase A** — `analysis/measure.py`, `analysis/measured.csv` |
@@ -125,9 +173,10 @@ after the review, not before.
 
 ## Then, in order
 
-1. **The live event above**, once it is flat.
+1. **The laser timeline, then the live event above once it is flat** — steps 2
+   and 3 of READ THIS FIRST. Phase B waits on the first.
 2. Option 4 in `analysis/`, at the pause.
-3. **Phase B** (§7). It does not depend on 2: its τ residuals read
+3. **Phase B** (§7), only after the laser state is a column. It does not depend on 2: its τ residuals read
    `load_taus`, which the floor fix already cleaned, and no ceiling pin is
    graded `tau`. Read traps T1–T9 before starting, and §6.1's last paragraph —
    **the fit will move at step 1, and that is not a refactor failing to be
