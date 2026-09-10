@@ -170,6 +170,85 @@ the curve would come out about a kelvin wrong for both halves with no symptom.
 `segments.ERAS` is the map, and an era with no entry raises. The `prepython`
 set is 37 anchors, which is the old `fit_cd10` set exactly.
 
+## …and then the same wall clock was keeping the worst ones — 2026-09-10
+
+The other half, and it is the same sentence read the other way. `MIN_SPAN_S`
+stopped being an admission threshold above; what it became was a *conditional*
+test — a dwell whose pole cannot be believed has to have lasted 60 s — and 60 s
+is still a duration on a plant whose τ runs from under 0.1 s at 5 K to 850 s at
+142 K. A duration cannot express "several time constants" across a factor of
+five thousand, so it is wrong at both ends: it threw away 46 s at 11.5 τ, and it
+kept 200 s at a third of one.
+
+**`analysis/` can now ask the real question, because Phase A measured the
+answer.** The dwells that resolved their own transients carry τ over
+25.8–247.6 K; `steps.plant_clock` interpolates them log-log, and
+`steps.long_enough` asks `MIN_REACH × τ(T)`. This is `REFIT_PLAN.md` §6.2
+option 4, and it is `AUDIT-2026-09-10`'s finding **1** applied where finding 2
+also needed it.
+
+```python
+def settled(r, tau_plant_s=None):
+    if pole_unbelievable(r) and not long_enough(r, tau_plant_s):
+        return False        # the fitted tau says nothing; reach means nothing
+    return (r["end_rate_k_per_h"] <= MAX_END_RATE_K_PER_H
+            or (r["reach"] >= MIN_REACH
+                and r["remainder_K"] <= SETTLED_REMAINDER_K))
+```
+
+**Three things are load-bearing and each is checked rather than argued.**
+
+*It is not circular.* A `tau` grade requires `reach ≥ MIN_REACH` and
+`amp_sigma ≥ MIN_AMPLITUDE_SIGMA`, which is exactly the negation of
+`pole_unbelievable` plus a bound no ceiling pin can meet — a ceiling pin has
+`reach ≤ 1/19` by construction. So the set that *builds* the clock is disjoint
+from the set *tested against* it. `archive_dwells` grades once without the
+clock, builds it, re-grades with it, and raises if any `tau` verdict moved.
+None does, which is why one round of iteration is the whole of it.
+
+*It does not depend on a file a clone lacks.* `analysis/measured.csv` is
+gitignored. A grader that read it would produce a manifest nobody else could
+reproduce, so `plant_clock` reads the rows `steps` just fitted. That costs
+nothing measurable: the interpolant from all 37 τ anchors, from the 29 shorter
+than `HOLD_MIN_S` (whose poles carry no campaign drift), and from
+`measured.csv`'s own τ column give **the same verdict on all 44 rows** the
+guard is asked about.
+
+*The archive separates cleanly.* `margin` is the factor τ(T) would have to be
+wrong by to flip a verdict, and over the 97 windows the guard judges there is a
+**gap from 0.86 to 2.41 with nothing in it** — the decision is not sitting on
+top of the data. `curate.py --plant` prints all 97 with their margins.
+
+| | before | after |
+|---|---|---|
+| anchors | 149 | **136** |
+| with a believable τ | 37 | **37** — unchanged, by construction |
+| verdict changes | | 13 dropped, **1 recovered** |
+| `quality` relabelled `unsettled` → `unresolved` | | 24, all already excluded |
+
+The one recovered anchor is `rec-20260824-171059`, 57 s at 4.75 K: a ceiling pin
+the 60 s clock had refused, which on the plant's clock ran 11 time constants.
+It is the sixteen rungs again, and it is the reason to be confident this change
+is not simply a stricter bar — the same test that drops 13 warm windows keeps a
+cold one the wall clock could not.
+
+**What was dropped, and it is not what the plan expected.** `REFIT_PLAN.md`
+§6.2 predicted two verdict changes, having measured only the ceiling pins. Two
+of the thirteen are those (`pp-20260808-155602`, `rec-20260901-222818`); the
+other eleven come from the `amp_sigma` branch, which the plan did not score
+because the wall clock was standing in for the plant clock there too. Every one
+is a warm dwell — 128.8 to 180.5 K, spans 70 s to 1641 s — that ran under three
+of the plant's time constants with no transient of its own to prove otherwise.
+Two of them are `AUDIT-2026-09-10-REPLY.md` §1's own examples, 200 s at 147.1 K
+and 330 s at 170.4 K, which that document called "a third of a τ" and "half a
+τ" while having no mechanism to refuse them.
+
+**Four rows are decided by under a factor of two and each carries a manifest
+note.** `pp-20260808-155602` is the rejoinder's named row, decided at 0.63 —
+τ(99.42 K) would have to be 37 % low to keep it, and where the interpolant is
+checkable against the shipped table at that temperature the two agree to 2.2 %.
+`rec-20260828-130841` is the closest call in the archive at 0.86.
+
 ## The model
 
 Everything the sample touches sinks at the coldplate — structure, wiring and
@@ -192,6 +271,9 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 ```bash
 # 0. is the manifest still what the finder proposes?   (~1 min)
 .venv/Scripts/python.exe analysis/curate.py --propose
+.venv/Scripts/python.exe analysis/curate.py --propose --plant   # the plant clock
+#    and every verdict it decided, sorted by margin -- the four thin ones are
+#    the rows to read, and each has a note on it in the manifest
 
 # 1. the manifest's windows -> measurements with error bars   (~15 s)
 #    no arguments: it reads the archive and the committed manifest

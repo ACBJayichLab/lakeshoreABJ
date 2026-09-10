@@ -511,6 +511,35 @@ def test_the_mirrored_grader_constants_still_match_analysis_steps():
             f"analysis/steps.py says {found.group(1)}")
 
 
+def test_both_graders_put_the_guard_on_the_plants_clock():
+    """The two used to differ on this one test, and no longer do.
+
+    Between AUDIT-2026-09-10-REJOINDER.md's step 1 and step 2 they diverged
+    deliberately: this module had ``Tread.tau_pred_s`` from the plan and
+    ``analysis/steps.py`` had no plant model and was forbidden to import one.
+    Phase A ended that -- the archive's own tau anchors ARE a plant model, and
+    ``steps.plant_clock`` interpolates them -- so both graders now ask
+    ``MIN_REACH x tau_plant`` and keep the wall clock only as a labelled
+    fallback.  REFIT_PLAN.md section 6.2 option 4.
+
+    Read as text for the reason the constants above are: importing
+    ``analysis/`` needs scipy and would make it a module something imports.
+    Names only -- the shapes genuinely differ, one being a dataclass property
+    and the other a function on a dict -- but a rename or a deletion on either
+    side is exactly how the reconciliation would come undone unremarked.
+    """
+    src = (Path(__file__).resolve().parents[1] / "analysis" / "steps.py").read_text(
+        encoding="utf-8")
+    for name in ("pole_unbelievable", "long_enough", "plant_clock"):
+        assert re.search(rf"^def {name}\(", src, re.M), (
+            f"analysis/steps.py no longer defines {name}().  The two graders "
+            f"agree on the plant-clock guard as of REFIT_PLAN.md 6.2 option 4; "
+            f"if that is being undone, say so where MIN_SPAN_S is defined in "
+            f"both files.")
+    assert hasattr(S.PoleFit, "pole_unbelievable")
+    assert hasattr(S.PoleFit, "long_enough")
+
+
 def test_a_finished_relaxation_is_graded_however_fast_it_was_still_moving():
     """The 2026-09-05 rejection, as a test, with the measurement that settled it.
 

@@ -73,51 +73,52 @@ MAX_SETTLE_K = 2.0
 #: tau was long.
 MIN_N = 15
 
-#: A wall clock, and it is a LAST RESORT rather than a bar on every dwell.
+#: A wall clock, and it is now only the FIRST PASS's stand-in for one.
 #:
-#: It used to be exactly that -- an admission threshold beside MIN_N, upstream
-#: of ``grade()`` and so invisible to it, rejecting any dwell under 60 s before
-#: the grader could speak.  On 2026-09-05 that threw away **sixteen** rungs of
-#: the programmed sweep: 46-48 s each, which at 5-25 K is **11.5 time
-#: constants**, with a remainder of 0.000 K, end rates of 0.001-0.052 K/h
-#: against a 0.5 bar, and transients 60 to 1265 times the sensor noise.  They
-#: are the best-settled points in the whole archive and a clock threw them out.
-#: (The docstring here said "three good rungs".  It was sixteen, and the
-#: thirteen it missed are the ones the earlier cancelled run happens to
-#: duplicate -- so the loss looked smaller than it was.)  Worse, the fix at the
-#: time propagated the clock outward: ``ltspm3/tools/sweep.py`` began REFUSING
-#: ``--min-dwell`` below 60 s, so the tool was forbidden from doing the thing it
-#: had done well.
+#: It used to be an admission threshold beside MIN_N, upstream of ``grade()``
+#: and so invisible to it, rejecting any dwell under 60 s before the grader
+#: could speak.  On 2026-09-05 that threw away **sixteen** rungs of the
+#: programmed sweep: 46-48 s each, which at 5-25 K is **11.5 time constants**,
+#: with a remainder of 0.000 K, end rates of 0.001-0.052 K/h against a 0.5 bar,
+#: and transients 60 to 1265 times the sensor noise.  They are the best-settled
+#: points in the whole archive and a clock threw them out.  (The docstring here
+#: said "three good rungs".  It was sixteen, and the thirteen it missed are the
+#: ones the earlier cancelled run happens to duplicate -- so the loss looked
+#: smaller than it was.)  Worse, the fix at the time propagated the clock
+#: outward: ``ltspm3/tools/sweep.py`` began REFUSING ``--min-dwell`` below 60 s,
+#: so the tool was forbidden from doing the thing it had done well.
 #:
 #: What the clock was really protecting against is one specific failure, and it
-#: is not shortness.  It is a dwell with **no resolvable transient**: over 48 s
-#: at 145 K, where tau is about 600 s, the sample moved 80 mK against 28 mK of
-#: sensor noise, so the pole was fitted to noise, came back tau = 8.6 s, and
-#: ``reach`` -- computed from that tau -- read 5.6 and certified as settled a
+#: is not shortness.  It is a dwell whose fitted pole **cannot be believed**:
+#: over 48 s at 145 K, where tau is about 600 s, the sample moved 80 mK against
+#: 28 mK of sensor noise, so the pole was fitted to noise, came back tau = 8.6 s,
+#: and ``reach`` -- computed from that tau -- read 5.6 and certified as settled a
 #: window that was 1/12 of a time constant into an 8-hour relaxation still
 #: 0.76 K from its answer.  ``reach`` cannot catch that, because reach is
-#: computed from the tau being tested.
+#: computed from the tau being tested.  See :func:`pole_unbelievable`.
 #:
-#: So the clock now applies exactly where the pole cannot be trusted: a dwell
-#: whose amplitude is under ``MIN_AMPLITUDE_SIGMA`` has to have run this long to
-#: be called settled.  One with a transient it can actually see is judged on
-#: reach and remainder, in units the plant sets.  See :func:`settled`.
+#: **A duration cannot answer the question it is standing in for**, and that is
+#: not an opinion: measured, this bar leaks at exactly its own value, certifying
+#: a 60 s dwell at 145 K with 0.76 K still to go 16 times in 200.  The real
+#: question is whether the dwell ran several of the PLANT's time constants, on a
+#: plant whose tau spans a factor of five thousand.
 #:
-#: **It is still a proxy, and ``ltspm3/tools/sweep.py`` no longer uses it where
-#: it can do better.** The real question is whether the dwell ran several of the
-#: PLANT's time constants, and a duration cannot answer that on a plant whose
-#: tau spans a factor of five thousand -- measured, this bar leaks at exactly
-#: its own value, certifying a 60 s dwell at 145 K with 0.76 K still to go 16
-#: times in 200.  The sweep tool asks ``MIN_REACH * tau_pred_s`` instead,
-#: because the plan is in the room there and ``ltspm3`` already imports the
-#: plant model.
+#: So it is asked, here as well as in the sweep tool.  ``analysis/`` cannot
+#: import a plant model -- invariant 1 -- and it does not need to: it MEASURES
+#: one.  The dwells that resolved their own transients carry tau over
+#: 25.8-247.6 K, and :func:`plant_clock` interpolates them, so
+#: :func:`long_enough` asks ``MIN_REACH * tau_plant`` exactly as
+#: ``sweep.py``'s does.  This bar survives as that function's fallback: the
+#: first of :func:`archive_dwells`' two passes has no plant clock yet, and a
+#: caller grading one dwell in isolation has none either.  **It is a proxy
+#: wherever it is still reached**, and the only thing that makes it harmless in
+#: the first pass is that no ``tau`` grade can depend on it -- see
+#: :func:`archive_dwells`.
 #:
-#: This module cannot follow it: ``analysis/`` imports neither package, which is
-#: invariant 1, and a plant model reconstructed here would be a second copy of
-#: one.  What it does instead is refuse to believe a pinned pole -- see
-#: :func:`pole_floor` and :func:`pole_ceiling`.  The two graders therefore
-#: DIVERGE on this one test, on purpose; do not reconcile them.  See
-#: AUDIT-2026-09-10-REJOINDER.md.
+#: The two graders no longer diverge on this test.  They did between
+#: AUDIT-2026-09-10-REJOINDER.md step 1 and step 2, on purpose and for one
+#: reason -- ``ltspm3`` had a plant model and this module did not.  Phase A gave
+#: this module a measured one.  See REFIT_PLAN.md section 6.2 option 4.
 MIN_SPAN_S = 60.0
 
 TIME_KEYS = ("t_s", "Time")
@@ -240,13 +241,14 @@ def pole_floor(r) -> bool:
 
     Nothing in this window separates the two.  What separates them is the
     plant's tau at that temperature: 600 s of flat at 42 K is many time
-    constants, 200 s of flat at 147 K is a third of one.  ``MIN_SPAN_S``
-    already catches the short version and misses the archive's two real cases,
-    at 147.1 and 170.4 K over 200 s and 330 s -- which is finding 1's
-    conclusion arriving again, that a wall clock is standing in for a plant
-    clock.  This module has no plant model and should not import one, so the
-    two are reported rather than refused: ``measure.py`` gives them
-    ``sigma_tau_s`` of 214 % and 103 % of tau, which is the honest signal.
+    constants, 200 s of flat at 147 K is a third of one.  ``MIN_SPAN_S`` used to
+    be the only test available and it catches the short version while missing
+    the archive's two real cases, at 147.1 and 170.4 K over 200 s and 330 s.
+    :func:`long_enough` on a MEASURED plant clock catches both -- they score
+    reach 0.33 and 0.49 against ``MIN_REACH`` -- and keeps the 42 K case, which
+    is what a wall clock could never do.  Their steady states are refused now
+    rather than merely doubted; ``measure.py`` still reports ``sigma_tau_s`` of
+    214 % and 103 % of tau beside them.
     """
     return r["tau_s"] <= r["tau_lo"] * (1.0 + POLE_PIN_TOL)
 
@@ -256,25 +258,117 @@ def pole_ceiling(r) -> bool:
 
     Then the exponential has degenerated to a straight line, and ``reach``,
     ``remainder_K`` and ``end_rate_k_per_h`` -- all read off that tau -- mean
-    nothing.  46 dwells in the archive are here and 7 of them are graded.
+    nothing.  46 dwells in the archive are here and 6 of them are graded.
 
-    **Reported, not refused, and that is a deliberate difference from the floor
-    case.**  AUDIT-2026-09-10.md finding 2 proposes refusing every ceiling pin.
-    Measured against the archive that would drop five windows that are settled
-    -- three long holds drifting under 4 mK/h, and two dwells at 4.8 and 5.1 K
-    where the plant's tau is under a tenth of a second -- to catch two that are
-    doubtful.  A straight-line slope cannot separate them either: all seven
-    graded ceiling pins drift under 0.5 K/h, so a slope bar changes no verdict
-    at all.  What actually separates a settled drift from a truncated
-    relaxation is the plant's tau at that temperature, and this module has no
-    plant model and should not import one.
+    **Not refused on its own**, which is the deliberate difference from the
+    floor case.  AUDIT-2026-09-10.md finding 2 proposes refusing every ceiling
+    pin.  Measured against the archive that would drop four windows that are
+    settled -- two long holds drifting under 4 mK/h, and two dwells at 4.8 and
+    5.1 K where the plant's tau is under a tenth of a second -- to catch two
+    that are doubtful.  A straight-line slope cannot separate them either:
+    every graded ceiling pin drifts under 0.5 K/h, so a slope bar changes no
+    verdict at all.
 
-    So the pin is recorded and the judgement is left to the manifest, where it
-    is a human's and shows up in review.  Phase A's ``measure.py`` fits these
-    windows with level and drift instead of a pole, which is what makes two of
-    them anchors worth keeping -- REFIT_PLAN.md section 6.1.
+    What separates a settled drift from a truncated relaxation is the plant's
+    tau at that temperature, so a ceiling pin is one of the two ways a pole
+    becomes :func:`pole_unbelievable` and has to answer to :func:`long_enough`
+    instead.  That separates the six perfectly against the existing
+    ``MIN_REACH``: the four settled ones score 7.2 to 101, the two doubtful
+    ones 1.88 and 0.35.  REFIT_PLAN.md section 6.2 option 4.
+
+    Phase A's ``measure.py`` fits the long ones with level and drift instead of
+    a pole, which is what makes them anchors worth keeping at all -- section 6.1.
     """
     return r["tau_s"] >= r["tau_hi"] * (1.0 - POLE_PIN_TOL)
+
+
+def pole_unbelievable(r) -> bool:
+    """Are ``reach``, ``remainder_K`` and ``end_rate_k_per_h`` meaningless?
+
+    All three are computed FROM the fitted tau, so they are only as good as it
+    is, and there are two ways for it to be worthless.  The dwell had no
+    resolvable transient, so the pole was fitted to noise -- 48 s at 145 K moved
+    80 mK against 28 mK of sensor noise, came back tau = 8.6 s, and ``reach``
+    read 5.6 on a window one twelfth of the way into an eight-hour relaxation.
+    Or tau is at the top of the search, where the exponential has degenerated
+    into a straight line and the rate test passes on any transient under
+    ``span / 342`` K whatever the plant is doing.
+
+    Both fail OPTIMISTICALLY, which is why they are worth naming together, and
+    naming them together is what lets one guard cover both.  Mirrors
+    ``ltspm3/tools/sweep.py``'s property of the same name.
+    """
+    return r["amp_sigma"] < MIN_AMPLITUDE_SIGMA or pole_ceiling(r)
+
+
+def long_enough(r, tau_plant_s=None, min_reach=None) -> bool:
+    """Did this dwell run several of the PLANT's time constants?
+
+    The one honest question to ask when the fitted pole cannot answer anything.
+    ``tau_plant_s`` comes from :func:`plant_clock`, which measures it from the
+    dwells that DID resolve their own transients, so ``MIN_REACH`` time
+    constants is a real requirement in the plant's own units rather than a
+    duration somebody picked.
+
+    Falls back to ``MIN_SPAN_S`` with no plant clock -- the first of
+    :func:`archive_dwells`' two passes, or a caller grading one dwell alone.
+    That bar is a proxy and is labelled one where it is defined.
+    """
+    if tau_plant_s is not None and tau_plant_s > 0.0 and math.isfinite(tau_plant_s):
+        return r["span_s"] >= (MIN_REACH if min_reach is None else min_reach) * tau_plant_s
+    return r["span_s"] >= MIN_SPAN_S
+
+
+def plant_clock(rows):
+    """``tau(T)`` for the cryostat, MEASURED -- or ``None`` if nothing measured it.
+
+    Log-log interpolation through the ``(T_inf, tau_s)`` of every dwell graded
+    ``tau``, which is the only plant model ``analysis/`` is allowed: it is this
+    archive's own dwells rather than anything imported, so invariant 1 holds and
+    there is no second copy of ``ltspm3``'s curve to drift out of step.
+
+    **It is not circular**, and that is a property of the grader rather than a
+    hope.  A ``tau`` grade requires ``reach >= MIN_REACH``, ``amp_sigma >=
+    MIN_AMPLITUDE_SIGMA`` and no floor pin, so no dwell that :func:`long_enough`
+    is ever asked about can be in the set that defines it: a ceiling pin has
+    ``reach <= 1/19`` by construction and a noise pole fails the amplitude bar.
+    The set that builds the clock and the set tested against it are disjoint,
+    and :func:`archive_dwells` asserts it every run rather than trusting this
+    paragraph.
+
+    Outside the measured band the nearest anchor is held rather than
+    extrapolated.  At the cold end that OVERSTATES tau -- 5.19 s at 5 K, where
+    the plant's own is nearer 0.01 s -- and overstating it makes
+    :func:`long_enough` stricter, so the conservative direction is the one a
+    clamp gives for free.  The two cold ceiling pins still pass at reach 7.2 and
+    15.0; against the real curve they would score in the thousands, which is the
+    margin the clamp spends.
+
+    Which construction is used barely matters, and that was measured rather than
+    assumed: the interpolant built from all 37 tau anchors, from the 29 whose
+    span is under ``curate.HOLD_MIN_S`` (whose poles carry no campaign drift),
+    and from ``measured.csv``'s own tau column (holds fitted with level and
+    drift) give the SAME verdict on all 44 rows the guard is asked about.  So
+    this reads the rows it just fitted and not ``analysis/measured.csv``, which
+    is gitignored and therefore absent from a fresh clone -- a grader whose
+    verdicts depend on a derived file that a checkout does not have is a
+    manifest nobody else can reproduce.
+    """
+    pairs = sorted((r["T_inf"], r["tau_s"]) for r in rows
+                   if r["tau_s"] > 0.0 and r["T_inf"] > 0.0)
+    if len(pairs) < 2:
+        return None
+    lt = np.log(np.array([p[0] for p in pairs]))
+    ltau = np.log(np.array([p[1] for p in pairs]))
+
+    def tau_of(T):
+        if not (T > 0.0):
+            return math.nan
+        return float(np.exp(np.interp(math.log(T), lt, ltau)))
+
+    tau_of.band = (pairs[0][0], pairs[-1][0])
+    tau_of.n = len(pairs)
+    return tau_of
 
 
 def pole_bounds(t):
@@ -362,14 +456,30 @@ def analyse(path, label=None):
 def archive_dwells(masks_by_file=None):
     """Every dwell in the cooldown-10 archive, fitted and graded.
 
-    The one scan.  ``curate`` builds the manifest from this and ``__main__``
-    below writes ``steps.csv`` from it, so the two cannot disagree about which
-    dwells exist -- which they would within a week if each had its own loop.
+    The one scan.  ``curate`` builds the manifest from this, so nothing else
+    needs a loop of its own -- which is what keeps the manifest and the
+    measurement from disagreeing about which dwells exist.
 
     ``masks_by_file`` maps an archive table to the manifest's ``mask`` windows
     in it.  A dwell is cut at a mask's edges and one lying inside a mask is
     dropped; see ``curate``'s docstring for why that is an input here rather
     than a filter afterwards.
+
+    **Two passes, because the grader needs a clock the graded dwells provide.**
+    Pass 1 grades every dwell with no plant clock, so :func:`long_enough` falls
+    back to ``MIN_SPAN_S``; :func:`plant_clock` is then built from whatever came
+    out ``tau``; pass 2 re-grades with it.  The second pass is what
+    REFIT_PLAN.md section 6.2 option 4 asks for and it is the verdict that
+    reaches the manifest.
+
+    The iteration terminates after exactly one round, and not by luck.  A
+    ``tau`` grade needs ``reach >= MIN_REACH`` and ``amp_sigma >=
+    MIN_AMPLITUDE_SIGMA``, which is precisely the negation of
+    :func:`pole_unbelievable` plus a bound no ceiling pin can meet -- so the
+    guard the two passes differ by cannot touch a ``tau`` verdict, the clock
+    pass 2 would build is the clock pass 2 used, and a third pass would change
+    nothing.  That is the same fact as "the clock is not circular", and the
+    assertion below is it, checked rather than argued.
     """
     masks_by_file = masks_by_file or {}
     out = []
@@ -393,8 +503,28 @@ def archive_dwells(masks_by_file=None):
                      t[a:b], T[a:b], u[a:b], Tc[a:b])
             r["file"] = file
             r["era"] = S.era(file)
-            r["grade"] = grade(r)
+            r["grade"] = grade(r)                # pass 1: no plant clock yet
             out.append(r)
+
+    clock = plant_clock([r for r in out if r["grade"] == "tau"])
+    was_tau = {(r["file"], r["t_start"]) for r in out if r["grade"] == "tau"}
+    for r in out:
+        tp = clock(r["T_inf"]) if clock else math.nan
+        r["tau_plant_s"] = tp
+        r["reach_plant"] = r["span_s"] / tp if tp and math.isfinite(tp) else math.nan
+        # How wrong tau_plant would have to be for this dwell's verdict to
+        # flip, as a factor: >1 keeps it, <1 drops it, and near 1 is the row a
+        # reviewer has to look at rather than wave through.
+        r["plant_margin"] = (r["reach_plant"] / MIN_REACH
+                             if math.isfinite(r["reach_plant"]) else math.nan)
+        r["grade"] = grade(r, tp)                # pass 2: on the plant's clock
+    now_tau = {(r["file"], r["t_start"]) for r in out if r["grade"] == "tau"}
+    if now_tau != was_tau:
+        raise SystemExit(
+            f"steps: the plant clock changed {len(was_tau ^ now_tau)} tau "
+            f"verdict(s), so it depends on itself and the manifest it produces "
+            f"is not reproducible.  A tau grade must be independent of "
+            f"long_enough() -- see plant_clock() and archive_dwells().")
     return out
 
 
@@ -458,28 +588,25 @@ MAX_END_RATE_K_PER_H = 0.5
 SETTLED_REMAINDER_K = 0.15
 
 
-def settled(r):
+def settled(r, tau_plant_s=None):
     """Is this dwell's relaxation over?  Either test may answer yes.
 
-    Unless the pole cannot be believed at all.  ``reach`` and ``remainder_K``
-    are both read off the fitted tau, so a dwell with no resolvable transient
-    has fitted them to noise and both are meaningless -- and they fail
-    OPTIMISTICALLY, certifying a 48 s slice of a 600 s relaxation as finished.
-    There, and only there, the wall clock is the last honest test available.
-    See ``MIN_SPAN_S``.
+    Unless the pole cannot be believed at all -- see :func:`pole_unbelievable` --
+    in which case the dwell first has to have run long enough on the PLANT's
+    clock (:func:`long_enough`) before its own numbers get a hearing.
     """
-    if r["amp_sigma"] < MIN_AMPLITUDE_SIGMA and r["span_s"] < MIN_SPAN_S:
+    if pole_unbelievable(r) and not long_enough(r, tau_plant_s):
         return False
     return (r["end_rate_k_per_h"] <= MAX_END_RATE_K_PER_H
             or (r["reach"] >= MIN_REACH
                 and r["remainder_K"] <= SETTLED_REMAINDER_K))
 
 
-def grade(r):
+def grade(r, tau_plant_s=None):
     """'tau' if the time constant may be believed, 'steady' if only T_inf, else ''."""
     if abs(r["settle_K"]) > MAX_SETTLE_K:
         return ""
-    if not settled(r):
+    if not settled(r, tau_plant_s):
         return ""
     if (r["reach"] >= MIN_REACH and r["amp_sigma"] >= MIN_AMPLITUDE_SIGMA
             and r["rms_sigma"] < 8.0 and not pole_floor(r)):

@@ -1,14 +1,13 @@
 # Thermal model refit — plan
 
-**Status: PHASE A DONE and awaiting review. Phase B is next, after the pause.**
+**Status: PHASE A DONE, and option 4 with it. Phase B is next.**
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
 manifest) and the commit after it (the rewiring and the deletion).
-**AUDIT-2026-09-10 findings 1 and 2 are done in the LIVE TOOL and half done in
-`analysis/`.** The sweep tool's guard is on the plant's tau now; `analysis/`
-keeps its wall clock because invariant 1 forbids it a plant model, and refuses
-to believe a pinned pole instead. The ceiling half in `analysis/` is a
-judgement left for the review - section 6.2 option 4, and
-AUDIT-2026-09-10-REJOINDER.md step 2.
+**AUDIT-2026-09-10 findings 1 and 2 are now done in BOTH graders.** The sweep
+tool's guard went on the plant's tau first (rejoinder step 1); `analysis/` has
+followed it (step 2, section 6.2 option 4), building tau(T) from the archive's
+own tau anchors rather than importing one, so invariant 1 still holds and the
+two graders no longer diverge. **149 anchors -> 136**, 37 taus unchanged.
 **Shape:** three phases, two hard pauses. Phase 0 → *pause* → Phase A → *pause* → Phase B.
 Update this Status line as phases land.
 
@@ -23,7 +22,8 @@ Update this Status line as phases land.
 | **done** | Phase A (§6) - `analysis/measure.py`, `analysis/measured.csv`, all four exit criteria met by `measure.py --verify`. Findings in §6.1 |
 | **done** | AUDIT-2026-09-10 finding 2, floor half - a tau at the search floor is no longer graded `tau`. 45 → **37** tau anchors, 149 unchanged. §6.2 |
 | **done** | AUDIT-2026-09-10-REJOINDER step 1 - the sweep tool's `settled()` guard runs on `MIN_REACH × tau_pred_s` where the plan carries a prediction, a ceiling pin has to answer to it too, `MIN_SPAN_S` is labelled a proxy in both graders, and the audit's synthetic case is a test. Commissioning corrected |
-| **next** | finding 2's ceiling half in `analysis/` needs a decision (§6.2 option 4 / rejoinder step 2), then Phase B (§7) |
+| **done** | §6.2 **option 4** / rejoinder step 2 — `steps.plant_clock` measures τ(T) from the 37 τ anchors and `steps.long_enough` puts the guard on it, in `analysis/` as well as in the sweep tool. **149 → 136 anchors**, 37 τ unchanged *by construction*. §6.3 |
+| **next** | **Phase B** (§7). Read traps T1–T10 and §6.1's last paragraph first |
 | **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
 | **then** | rejoinder step 5 - finding 5's leftovers |
 
@@ -521,6 +521,11 @@ between them is in [AUDIT-2026-09-10-REPLY.md](AUDIT-2026-09-10-REPLY.md):**
    manifest and not a fixed point rediscovered per run. The reply's §4 has the
    coverage caveat below 25.8 K and why the verdict is insensitive to it.
 
+> **Option 4 was taken.** What it actually cost is §6.3 below, and it is not
+> what this section predicted: **thirteen** dropped anchors, not two, because
+> the reasoning above scored only the ceiling pins and the plant clock replaces
+> the wall clock on the `amp_sigma` branch as well. One anchor is *recovered*.
+
 **Option 4 is now live in the sweep tool and still open in `analysis/`.**
 [AUDIT-2026-09-10-REJOINDER.md](AUDIT-2026-09-10-REJOINDER.md) makes the point
 §6.2 and the reply both missed: the reasoning above is scoped to `analysis/`
@@ -542,6 +547,82 @@ at.
 Phase B does not depend on this being settled first. Its τ residuals read
 `load_taus`, which the floor fix has already cleaned, and no ceiling pin is
 graded `tau`.
+
+### 6.3 Option 4, applied — what it cost and what it bought
+
+`steps.plant_clock` interpolates τ(T) log-log through the dwells graded `tau`;
+`steps.long_enough` asks `MIN_REACH × τ(T)` of any dwell whose pole cannot be
+believed — `steps.pole_unbelievable`, which is the ceiling pin **and** the
+amplitude case, exactly as `sweep.py` has had it since the rejoinder's step 1.
+`curate.py --propose --plant` prints every verdict it decided, with a margin.
+Reproducible from a clean clone; `analysis/README.md` has the long version.
+
+**149 → 136 anchors. 37 τ anchors, unchanged — by construction, not by luck.**
+A `tau` grade needs `reach ≥ 3` and `amp_sigma ≥ 20`, which is the negation of
+`pole_unbelievable` plus a bound no ceiling pin can meet, so the set that builds
+the clock is disjoint from the set tested against it. `archive_dwells` grades
+once without the clock, builds it, re-grades, and **raises** if a `tau` verdict
+moved. That is the non-circularity claim of §6.2 turned into an assertion.
+
+| | |
+|---|---|
+| dropped | 13 — 2 ceiling pins, **11 from the `amp_sigma` branch** |
+| recovered | 1 — `rec-20260824-171059`, 57 s at 4.75 K, which is 11 τ |
+| relabelled `unsettled` → `unresolved` | 24, all already excluded |
+
+**The plan predicted two. It scored only the ceiling pins.** The wall clock was
+standing in for the plant clock on the amplitude branch too, and there it was
+letting through warm short dwells: all eleven are 128.8–180.5 K, 70 s to
+1641 s, under three of the plant's time constants with no transient of their
+own to argue otherwise. Two are AUDIT-2026-09-10-REPLY.md §1's own examples —
+200 s at 147.1 K and 330 s at 170.4 K, which it called "a third of a τ" and
+"half a τ" while having no mechanism to refuse them.
+
+**The decision is not sitting on top of the data.** Over the 97 windows the
+guard judges, the margin — the factor τ(T) would have to be wrong by to flip a
+verdict — has a **gap from 0.86 to 2.41 with nothing in it**. Four rows land
+under 2× and each has a manifest note; `pp-20260808-155602` is the rejoinder's
+named row at 0.63, where τ(99.42 K) would have to be 37 % low and the
+interpolant agrees with the shipped table to 2.2 %.
+
+**Which construction of τ(T) is used does not matter, and that was measured.**
+All 37 τ anchors, the 29 shorter than `HOLD_MIN_S` (whose poles carry no
+campaign drift), and `measured.csv`'s own τ column give the **same verdict on
+all 44 rows**. So `plant_clock` reads the rows `steps` just fitted rather than
+`measured.csv` — which is gitignored, and a grader whose verdicts depend on a
+file a fresh clone does not have produces a manifest nobody can reproduce.
+
+**Were the 13 actually wrong?** Fitted on the old manifest at Λ12/C4/drift-3,
+their own per-anchor residuals against the ones kept:
+
+| | kept (133) | dropped (14 in band) |
+|---|---|---|
+| median \|residual\| | **0.229 K** | **1.476 K** |
+| rms | 1.542 K | 1.788 K |
+
+A factor of **6.4 in the median**, and the seven worst are all `prepython` and
+all the **same sign**, −2.1 to −3.5 K, which is what a set of dwells cut short
+in the same direction looks like. But two of the fourteen fit to under 0.13 K,
+and that is the honest shape of this: **the guard removes anchors that cannot
+be shown to have settled, not anchors that are demonstrably wrong.** Some were
+probably fine. Nothing in the window can say which, which is the whole argument.
+
+**The fit is unchanged.** Λ12/C4/drift-3, same preset the rest of this document
+quotes:
+
+| | before (147 in band) | after (134) |
+|---|---|---|
+| `rms_k` | 0.1999 | 0.2025 |
+| `anchor_k` | 1.5674 | **1.5426** |
+| `mass_g` | 4.7903 | 4.7877 |
+| `tau_resid` | 0.1469 | 0.1473 |
+
+`anchor_k` falls 1.6 % — but with 13 fewer anchors that is **not by itself
+evidence**, unlike Phase 0's fall *under a 35 % larger set*; the residual table
+above is the evidence. What the numbers do say is that dropping them costs the
+trajectory and the dynamics nothing: `rms_k` moves 1.3 % and the implied mass
+0.05 %. **Both fits stop at `nfev = 300 = max_nfev`**, so both are upper bounds
+rather than converged fits — the cap §7's preamble warns about, still unfixed.
 
 > ### ⏸ PAUSE — review the measurement table before fitting anything to it.
 > Stage A is the direct measurement. If it is wrong, Stage B will fit it

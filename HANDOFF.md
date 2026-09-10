@@ -72,9 +72,9 @@ event: about 5 mW at 0.67 W, or 0.7 % of delivered power, worth 3.6 K at
 
 ## What this session did
 
-Nine commits, `39dd52a..c58b264`, **merged to `main`**. 914 passing, ruff
-clean, `curate.py --propose` reports no diff, `measure.py --verify` meets all
-four exit criteria.
+Nine commits, `39dd52a..c58b264`, **merged to `main`**, and one after them on a
+branch. 915 passing, ruff clean, `curate.py --propose` reports no diff,
+`measure.py --verify` meets all four exit criteria.
 
 | | |
 |---|---|
@@ -86,6 +86,7 @@ four exit criteria.
 | `1296f70` | `AUDIT-2026-09-10-REPLY.md` — the two parts of the audit's finding 2 that were not applied, and why |
 | `595d87a` | (Jeff) the rejoinder: both conceded, and the live sweep tool is where the fix still had to land |
 | `c58b264` | the sweep tool's guard moved onto the **plant's** τ |
+| *(branch)* | **option 4** — `analysis/`'s guard moved onto the plant's τ as well, on a clock it MEASURES. 149 → 136 anchors, 37 τ unchanged. §6.3 |
 
 ## Where the refit stands
 
@@ -108,42 +109,51 @@ The three things worth a reviewer's attention:
   It is a bound on day-timescale wander, not a building cycle, and Phase B must
   not model it as one.
 
-## The one open decision
+## Option 4 is done — and it cost 13 anchors, not 2
 
-**`analysis/`'s ceiling-pin policy** — [REFIT_PLAN.md](REFIT_PLAN.md) §6.2
-option 4, and step 2 of [the rejoinder](AUDIT-2026-09-10-REJOINDER.md).
+[REFIT_PLAN.md](REFIT_PLAN.md) **§6.3** is the write-up;
+`analysis/curate.py --propose --plant` reproduces every number in it.
 
-Recomputing `reach` against the plant's τ instead of the fitted one separates
-all seven graded ceiling pins perfectly against the existing `MIN_REACH = 3.0`.
-It is already live in `ltspm3/tools/sweep.py`. In `analysis/` it needs τ(T)
-built from `measured.csv`'s own 37 τ anchors — which is not circular, because
-no ceiling pin can be a τ anchor — and it costs one round of iteration.
+`steps.plant_clock` interpolates τ(T) from the archive's own 37 τ anchors and
+`steps.long_enough` asks `MIN_REACH × τ(T)` of any dwell whose pole cannot be
+believed. **149 → 136 anchors; 37 τ anchors unchanged**, which is forced rather
+than lucky — a `tau` grade is the negation of the condition the guard tests, so
+the set building the clock is disjoint from the set tested against it, and
+`archive_dwells` raises if that ever stops being true.
 
-Expect **two verdict changes**, and one of them needs a manifest note:
-`pp-20260808-155602` is decided by a margin of **1.6 in τ**, not the three
-orders of magnitude the other six enjoy. Checked at 99 K rather than assumed:
-445.9 s interpolated against the shipped table's 436.4 s, 2.2 % apart, reach
-1.88 and 1.92, and τ would have to be 37 % low to flip it.
+The three things worth a reviewer's attention:
 
-It changes which windows are anchors — which is the manifest — so it belongs
-after the review, not before.
+- **§6.2 predicted two verdict changes because it scored only the ceiling
+  pins.** Eleven of the thirteen come from the `amp_sigma` branch, where the
+  wall clock was standing in for the plant clock just as badly. All eleven are
+  128.8–180.5 K and ran under three of the plant's time constants.
+- **One anchor is recovered** — `rec-20260824-171059`, 57 s at 4.75 K, which is
+  11 τ and which the 60 s clock had refused. Same failure as the sixteen rungs,
+  and the reason to read this as the right test rather than a stricter one.
+- **The margin has a gap from 0.86 to 2.41** over the 97 windows judged, so no
+  verdict is balanced on the interpolant. Four rows land under 2× and each has
+  a manifest note, including the rejoinder's named `pp-20260808-155602` at 0.63.
+
+Fit effect, Λ12/C4/drift-3: `rms_k` 0.1999 → 0.2025, `anchor_k` 1.5674 →
+1.5426, `mass_g` 4.7903 → 4.7877. Both runs hit `nfev = 300 = max_nfev`, so
+both are upper bounds. The 13 dropped anchors had a median residual of 1.476 K
+against 0.229 K for those kept — but two of them fitted to under 0.13 K, and
+that is the honest shape: **the guard removes anchors that cannot be shown to
+have settled, not anchors shown to be wrong.**
 
 ## Then, in order
 
 1. **Mask the 09-10 fault window** once the sample is flat (the note above).
-2. Option 4 in `analysis/`, at the pause.
-3. **Phase B** (§7). It does not depend on 2: its τ residuals read
-   `load_taus`, which the floor fix already cleaned, and no ceiling pin is
-   graded `tau`. Read traps T1–T9 before starting, and §6.1's last paragraph —
+2. **Phase B** (§7). Read traps T1–T10 first, and §6.1's last paragraph —
    **the fit will move at step 1, and that is not a refactor failing to be
    inert**, because `settle_K` for a hold now means the drift across half the
    window rather than a pole's extrapolation.
-4. **Before November:** the naive-timestamp fold. `segments.read_table` now
+3. **Before November:** the naive-timestamp fold. `segments.read_table` now
    *refuses* a non-monotonic clock and names the row, so 2026-11-01 02:00 is
    loud instead of silently selecting wrong rows through `searchsorted`. The
    source fix — take `t_s` from the recorder's own monotonic `Time` column in
    `lschart/tools/fit_table.py` — is still to do.
-5. `AUDIT-2026-09-10.md` finding 5's leftovers.
+4. `AUDIT-2026-09-10.md` finding 5's leftovers.
 
 **Not this**: `ltspm3/control/` is complete and out of scope (§9), and
 `CLAUDE.md`'s standing priority is the viewer, the MATLAB interface and Windows
@@ -178,11 +188,14 @@ is the finder, the pole and the bars, and `measured.csv` superseded
 
 - **`analysis/measured.csv` is what every fit reads.** `analysis/steps.csv` is
   gone and is not regenerated. `fit_ode.load_rows()` is the single loader.
-- **The two graders diverge on one test, on purpose.** `ltspm3/tools/sweep.py`
-  puts the no-believable-pole guard on the plant's τ; `analysis/steps.py` keeps
-  the wall clock because invariant 1 forbids it a plant model, and refuses to
-  believe a pinned pole instead. Both say so at `MIN_SPAN_S`. Do not reconcile
-  them.
+- **Both graders now put the no-believable-pole guard on the plant's τ**, and
+  they got there separately: `ltspm3/tools/sweep.py` reads `Tread.tau_pred_s`
+  off the plan, `analysis/steps.py` interpolates `steps.plant_clock` from the
+  archive's own 37 τ anchors. They diverged on this one test between the
+  rejoinder's step 1 and step 2, deliberately, because `analysis/` had no plant
+  model and invariant 1 forbids it importing one — it does not forbid it
+  *measuring* one. `MIN_SPAN_S` survives in both as a labelled fallback.
+  `tests_ltspm3/test_sweep_tool.py` pins the reconciliation by name.
 - **`fit_ode` is still on its own error model.** `load_anchors` computes
   `hypot(ANCHOR_SIGMA_K[era], max(0.3, 2·|settle_K|))`; switching it onto
   Phase A's `sigma_T_inf` is Phase B steps 6–8, deliberately after the review.

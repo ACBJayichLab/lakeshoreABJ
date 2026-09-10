@@ -78,10 +78,21 @@ TAGS = {
     "cd10_20260904_recorder.csv": "pc",
 }
 
-#: Why the grader said no.  These are the two rejections ``steps.grade`` makes,
-#: named, so a verdict change shows up in the manifest as a word rather than as
-#: a blank cell.
+#: Why the grader said no.  These are the three rejections ``steps.grade``
+#: makes, named, so a verdict change shows up in the manifest as a word rather
+#: than as a blank cell.
+#:
+#: ``UNSETTLED`` and ``UNRESOLVED`` are different failures and were one word
+#: until REFIT_PLAN.md section 6.2 option 4 separated them.  Unsettled is the
+#: dwell's own pole saying it was still moving when it ended.  Unresolved is the
+#: pole saying **nothing** -- fitted to noise, or pinned at the top of the
+#: search where it has degenerated to a straight line -- on a dwell that had not
+#: run enough of the PLANT's time constants to be believed without it.  The
+#: first is a measurement of a dwell that was cut short; the second is the
+#: absence of one, and a reviewer wants to be able to tell them apart in the
+#: manifest rather than by re-running the grader.
 UNSETTLED = "unsettled"
+UNRESOLVED = "unresolved"
 OVER_EXTRAPOLATED = "over-extrapolated"
 
 
@@ -112,6 +123,9 @@ def propose(masks_by_file: dict) -> list:
             use = quality = r["grade"]
         elif abs(r["settle_K"]) > steps.MAX_SETTLE_K:
             use, quality = "excluded", OVER_EXTRAPOLATED
+        elif (steps.pole_unbelievable(r)
+              and not steps.long_enough(r, r.get("tau_plant_s"))):
+            use, quality = "excluded", UNRESOLVED
         else:
             use, quality = "excluded", UNSETTLED
         out.append({
@@ -235,6 +249,64 @@ def summarise(rows: list) -> None:
               f"{sum(1 for r in fit if r['use'] == 'tau')} with a believable tau")
 
 
+#: A plant-clock verdict decided by less than this factor is quoted as needing
+#: a look.
+#:
+#: A factor of two either way, and it is chosen to catch a specific row rather
+#: than for roundness.  ``pp-20260808-155602`` -- 840 s at 99.42 K -- is decided
+#: at 0.63, which is AUDIT-2026-09-10-REJOINDER.md's "a margin of 1.6 in tau,
+#: not the three orders of magnitude the other six enjoy", and it is the one
+#: verdict that document asks a reviewer to look at by name.  A bar at 1.5 puts
+#: it a hundredth outside the list it exists to be on.  Two also happens to be
+#: about the largest error the interpolant could plausibly carry: where it is
+#: checkable it agrees with the shipped table to 2.2 %.
+MARGIN_ATTENTION = 2.0
+
+
+def plant_report(rows: list) -> None:
+    """Every window the plant clock was asked about, and by how much it decided.
+
+    :func:`steps.long_enough` only speaks when the fitted pole cannot -- see
+    ``steps.pole_unbelievable`` -- so this is the whole of what
+    REFIT_PLAN.md section 6.2 option 4 changed, on one page.  It is printed
+    rather than stored because the manifest's columns are fixed by section 5.2
+    and the verdict is already in ``use``; what wants recording per row is the
+    MARGIN, and for the rows where that is thin the place for it is the
+    ``note`` column, written by a human.
+    """
+    judged = [r for r in rows
+              if r.get("_fit") and steps.pole_unbelievable(r["_fit"])]
+    if not judged:
+        return
+    fits = [r["_fit"] for r in rows if r.get("_fit")]
+    clock = steps.plant_clock([f for f in fits if f["grade"] == "tau"])
+    band = f"{clock.band[0]:.1f}-{clock.band[1]:.1f} K, {clock.n} anchors" if clock \
+        else "NO PLANT CLOCK -- falling back to the MIN_SPAN_S proxy"
+    print(f"\nthe plant clock: tau(T) over {band}")
+    print(f"{'id':<22}{'T_inf':>9}{'span s':>9}{'tau fit':>10}{'tau plant':>10}"
+          f"{'reach':>9}{'margin':>8}  {'verdict':<9}why the pole is mute")
+    for r in sorted(judged, key=lambda r: r["_fit"]["plant_margin"]):
+        f = r["_fit"]
+        why = ("pinned at the search ceiling" if steps.pole_ceiling(f)
+               else f"nothing moved ({f['amp_sigma']:.1f} sigma)")
+        print(f"{r['id']:<22}{f['T_inf']:>9.3f}{f['span_s']:>9.0f}"
+              f"{f['tau_s']:>10.1f}{f['tau_plant_s']:>10.2f}"
+              f"{f['reach_plant']:>9.2f}{f['plant_margin']:>8.2f}"
+              f"  {r['use']:<9}{why}")
+    thin = [r for r in judged
+            if 1.0 / MARGIN_ATTENTION <= r["_fit"]["plant_margin"] <= MARGIN_ATTENTION]
+    print(f"\n  {sum(1 for r in judged if r['use'] != 'excluded')} of {len(judged)} "
+          f"kept.  margin is the factor tau(T) would have to be wrong by to flip "
+          f"the verdict.")
+    if thin:
+        print(f"  {len(thin)} decided by under {MARGIN_ATTENTION}x -- these are the "
+              f"rows to read rather than wave through:")
+        for r in thin:
+            print(f"    {r['id']:<22}{r['_fit']['T_inf']:>9.3f} K  "
+                  f"margin {r['_fit']['plant_margin']:.2f}  -> {r['use']}"
+                  + (f"   note: {r['note']}" if r["note"] else "   NO NOTE"))
+
+
 def main(argv=None) -> int:
     import argparse
 
@@ -249,6 +321,8 @@ def main(argv=None) -> int:
                     help="accept the proposal and write the manifest")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="print every proposed window with its grading numbers")
+    ap.add_argument("--plant", action="store_true",
+                    help="print the plant clock and every verdict it decided")
     a = ap.parse_args(argv)
 
     path = a.manifest
@@ -276,6 +350,9 @@ def main(argv=None) -> int:
                   f"{f['T_inf']:>9.3f}{f['tau_s']:>10.1f}{f['reach']:>8.2f}"
                   f"{f['remainder_K']:>8.3f}{f['end_rate_k_per_h']:>9.3f}  "
                   f"{r['quality']}")
+
+    if a.plant:
+        plant_report(rows)
 
     summarise(rows)
 
