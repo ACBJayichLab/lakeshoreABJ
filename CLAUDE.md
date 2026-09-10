@@ -18,7 +18,7 @@ the code is, and it is the detail that goes stale — edit it there, not here.
 | [`docs/ltspm3/`](docs/ltspm3/) | **LTSPM3 only.** [cryostat](docs/ltspm3/cryostat.md) · [safety](docs/ltspm3/safety.md) · [thermal response](docs/ltspm3/thermal-response.md) · [control](docs/ltspm3/control.md) · [running](docs/ltspm3/running.md) · [commissioning](docs/ltspm3/commissioning.md) · [noise](docs/ltspm3/noise.md) |
 | [`matlab/README.md`](matlab/README.md) | MATLAB's half of the file protocol |
 | [`README.md`](README.md) | The front door, for a new user |
-| [`HANDOFF.md`](HANDOFF.md) | Point-in-time status. Goes stale by design |
+| [`HANDOFF.md`](HANDOFF.md) | Point-in-time status. Goes stale by design; older ones are archived under their own date |
 | `AUDIT-*.md` | Point-in-time audits, findings with nothing fixed. `AUDIT-2026-09-10-REPLY.md` is the argument for the two parts of that one's finding 2 that were deliberately NOT applied; `AUDIT-2026-09-10-REJOINDER.md` concedes both, and says the live sweep tool is where the fix still has to land |
 
 **Keep the split when you write.** Anything true of any Lake Shore cryostat belongs

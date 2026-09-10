@@ -1,951 +1,189 @@
-# Handoff — 2026-09-07 (thirteenth session: a programmed sweep, and the model was 4.5 K low)
+# Handoff — 2026-09-10 (Phase A of the refit, and two audits answered)
 
-Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
+Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
+refit's own state is [REFIT_PLAN.md](REFIT_PLAN.md). This goes stale.
 
-> ## THE HEATER IS ON, AND HAS BEEN FOR TWO DAYS
+Previous: [HANDOFF-2026-09-07.md](HANDOFF-2026-09-07.md).
+
+> ## THE HEATER IS ON, AND HAS BEEN FOR FIVE DAYS
 >
 > The recorder is running `config-ltspm3-heater.yaml` and the 218's analog
-> output has been held at **63.699% — sample 114.4 K, coldplate 6.63 K** since
-> 2026-09-05 16:55. That is the last rung of the sweep, and the sweep leaves the
-> output where it finished on purpose: invariant 6, availability outranks
-> tidiness, and cutting this heater is a change of state rather than a retreat
-> to safety.
+> output has been held at **64.016 %** since 2026-09-08 15:48. It was 63.699 %
+> from 09-05 16:55 before that. Nothing will move it on its own — invariant 6,
+> availability outranks tidiness, and cutting this heater is a change of state
+> rather than a retreat to safety. Move it deliberately, or leave it.
 >
-> Nothing will move it on its own. Move it deliberately, or leave it.
+> As of 2026-09-10 14:25 the sample reads **114.83 K**, coldplate 6.628 K.
 
-## What this session was for
+## READ THIS FIRST: the sample fell 3.6 K this morning at a fixed heater
 
-Jeff asked for a program that steps the heater and dwells, to fill in the
-blanks in the steady-state curve. It exists, it ran, and what it measured
-changed the model.
+**A second event of the kind [REFIT_PLAN.md](REFIT_PLAN.md) §2.5 describes, ten
+times larger, and it is still going.** Onset **2026-09-10 11:33**, output
+unmoved at 64.016 % throughout, the last digits being readback flicker.
 
-Four commits, **881 passing, ruff clean**.
+One-minute means below, because 2nd Stage carries tens of mK of hash and a
+single sample of it says whatever you like:
+
+| channel | 11:32 | 12:47 | 14:24 | change |
+|---|---|---|---|---|
+| **Sample** | 118.457 | 115.163 | 114.827 | **−3.630 K** |
+| Coldplate | 6.645 | 6.629 | 6.627 | −18 mK |
+| 1st Stage | 28.668 | 28.608 | 28.679 | +12 mK |
+| 2nd Stage | 3.961 | 3.954 | 3.954 | −7 mK |
+| RAD SHIELD | 40.701 | 40.524 | 40.463 | −238 mK |
+| `ls218.aout1` | 64.0153 | 64.0154 | 64.0150 | **−0.0003 %** |
+
+Most of the fall happened in forty minutes (118.46 → 115.28 by 12:12) and the
+tail is still running at about **−220 mK/h**. Compare the 2026-09-09 18:06
+transient, which is `mask-20260909-180604` in the manifest: sample −0.306 K,
+coldplate −7.6 mK. **Same signature, an order of magnitude bigger.**
+
+Why it matters: propagated through the fitted Λ′ ratio, an 18 mK coldplate step
+accounts for at most ~0.17 K of the sample's 3.63 K. So about 3.5 K of this is
+invisible to `Λ(T_s) − Λ(T_c)`, which is the *entire* steady-state model. This
+is §2.5's load path, no longer a 0.3 K curiosity.
+
+Note the sign: the sample is getting **colder** at constant power, i.e. *more*
+cooling. That is the opposite sign to the campaign drift Phase B is built to
+absorb (+0.167 K/day, warming), so it is a second phenomenon and not more of
+the first — trap T2's warning, arriving again from a new direction.
+
+**What to do about it, in order:**
+
+1. **Leave the heater alone** and let it flatten. Nothing here is a hazard: the
+   stage is cooling, the output is unchanged, `status.json` reports
+   `control: null` (no software PID armed).
+2. **Once flat, export a fresh archive window covering 11:33 onward** and give
+   it a `mask` row with a paragraph, exactly as `mask-20260909-180604` has.
+   `reference/cooldown-10/README.md` has the commands. **This is the "cheap
+   now, impossible later" case the plan already learned once** (§0.4) — but do
+   not archive a half-event, which is why it is not done in this session.
+3. Ask Jeff. Two of these in two days at a fixed output is a fact about the
+   cryostat, not about the fit, and it may be a vacuum or shield change worth
+   knowing about before more model effort goes in.
+
+> **The data is only on this machine.** `data/` is gitignored, so the event
+> lives in `data/ltspm3-heater_2026-09-10.csv` and nowhere else. A fresh clone
+> does not have it.
+
+## What this session did
+
+Nine commits, `39dd52a..c58b264`, **merged to `main`**. 914 passing, ruff
+clean, `curate.py --propose` reports no diff, `measure.py --verify` meets all
+four exit criteria.
 
 | | |
 |---|---|
-| `2240028` | the sweep tool and the planner |
-| `abddcff` | say why a rung was dropped; stop the rehearsal lying about time |
-| `0fb2815` | the simulator runs the fitted ODE, not the two-pole response |
-| *this one* | docs, and the run archived as a versioned input |
+| `4d4c538` | manifest boundaries to the **millisecond**. A second-truncated `t_end` lands before the sample it came from, so slicing a window back out returned one row fewer than the grader saw — 308 of 312 windows, worth up to **0.50 K** of `T_inf` and 83 % of a τ |
+| `48b71b0` | the rehearsal test gets a `--journal`, so it stops dropping a CSV in the working directory every run |
+| `311c204` | **Phase A** — `analysis/measure.py`, `analysis/measured.csv` |
+| `e3a87c4` | a τ at the search **floor** is no longer graded `tau`. 8 verdict changes, `load_taus` 45 → 37 |
+| `1296f70` | `AUDIT-2026-09-10-REPLY.md` — the two parts of the audit's finding 2 that were not applied, and why |
+| `595d87a` | (Jeff) the rejoinder: both conceded, and the live sweep tool is where the fix still had to land |
+| `c58b264` | the sweep tool's guard moved onto the **plant's** τ |
 
-## The result, which is the point
+## Where the refit stands
 
-The ladder ran **30 rungs, 7.19% → 63.70%, 4 h 17 min**, 2026-09-05 13:18–17:35.
-Nothing was refused; every command was verified by readback.
+**Phase A is done and awaiting a human review.** That review is the pause, and
+it is the point of the phase: §6.1 of the plan is the write-up, and
+`analysis/measure.py --holds --verify` reproduces every number in it.
 
-**τ was already right** — measured/model is 1.03, 1.03, 1.03, 1.02, 1.01 from
-77 K to 114 K. **The steady state was not**: the model came back **low by up to
-4.5 K** through the band it had been interpolating across, 25 times its own
-0.168 K residual. Between 40 K and 98 K the 43 h sweep had left no settled point
-at all, so nothing had ever contradicted it.
+The three things worth a reviewer's attention:
 
-Graded anchors in 26–105 K: **8 before, 19 now** — and four of those eight were
-one CD10 hold counted four times.
+- **A single pole was the wrong model for a hold**, and it had eight graded
+  anchors wrong — four past a kelvin, worst `rec-20260828-141631` at
+  **−1.534 K** on a 74.9 h hold. `T_pole` sits beside `T_inf` in
+  `measured.csv` so every one of those is auditable.
+- **τ at 114 K was two windows all along.** 513 s is the first 40 minutes of
+  `pc-20260905-165509`; over all 70 h the same relaxation gives 534.0 ± 6.0 s.
+  The 40-minute answer is 4.0 % low at reach 4.7, which is `fit_pole`'s own
+  documented reach bias, now measured.
+- **The diurnal amplitude is measured and its phase is not** — 3.9 to 69.2 mK
+  over eight holds, median 16.19, but the peak hour lands anywhere in the 24 h.
+  It is a bound on day-timescale wander, not a building cycle, and Phase B must
+  not model it as one.
 
-Full account in
-[thermal response](docs/ltspm3/thermal-response.md#the-programmed-ladder-measured-it--2026-09-05).
+## The one open decision
 
-## Two decisions left open
+**`analysis/`'s ceiling-pin policy** — [REFIT_PLAN.md](REFIT_PLAN.md) §6.2
+option 4, and step 2 of [the rejoinder](AUDIT-2026-09-10-REJOINDER.md).
 
-**1. The end-rate bar rejects good designed dwells.** Four of the best warm
-points — 56.74, 63.15, 69.93 and **114.28 K** — were dropped for reading
-0.51–0.71 K/h against `MAX_END_RATE_K_PER_H = 0.5`, at reach 4.7–5.7 and settled
-to within **0.04 K** of their own T_inf. That test exists to catch relaxations
-cut off mid-flight in logs nobody planned. Loosening `grade()` so reach ≥ 3 plus
-a small `settle_K` is enough would recover them — **and would change what the
-pipeline keeps from the historical logs too**, which is why it was left for
-Jeff. Asked, not answered.
+Recomputing `reach` against the plant's τ instead of the fitted one separates
+all seven graded ceiling pins perfectly against the existing `MIN_REACH = 3.0`.
+It is already live in `ltspm3/tools/sweep.py`. In `analysis/` it needs τ(T)
+built from `measured.csv`'s own 37 τ anchors — which is not circular, because
+no ceiling pin can be a τ anchor — and it costs one round of iteration.
 
-**2. The refit has not been run.** `analysis/steps.csv` now has 92 graded
-anchors including the new run, and nothing downstream has been refitted against
-them. In order:
+Expect **two verdict changes**, and one of them needs a manifest note:
+`pp-20260808-155602` is decided by a margin of **1.6 in τ**, not the three
+orders of magnitude the other six enjoy. Checked at 99 K rather than assumed:
+445.9 s interpolated against the shipped table's 436.4 s, 2.2 % apart, reach
+1.88 and 1.92, and τ would have to be 37 % low to flip it.
 
-```bash
-.venv/Scripts/python.exe analysis/measure.py        # SUPERSEDES steps.py; 149 anchors off the archive
-.venv/Scripts/python.exe analysis/fit_ode.py        # ~15 min, the cache is keyed on the anchors
-.venv/Scripts/python.exe analysis/plot_gain.py
-.venv/Scripts/python.exe analysis/export_response.py --verify   # refreeze the simulator's table
-.venv/Scripts/python.exe analysis/plan_sweep.py                 # and re-plan, if another run follows
-```
+It changes which windows are anchors — which is the manifest — so it belongs
+after the review, not before.
 
-Expect Λ(T) to move by about 4.5 K worth of temperature between 50 K and 115 K,
-and expect `ltspm3/_fitted_table.py` to change with it.
+## Then, in order
 
-## ~~Three rungs were lost, and it is four minutes to get them back~~
+1. **The live event above**, once it is flat.
+2. Option 4 in `analysis/`, at the pause.
+3. **Phase B** (§7). It does not depend on 2: its τ residuals read
+   `load_taus`, which the floor fix already cleaned, and no ceiling pin is
+   graded `tau`. Read traps T1–T9 before starting, and §6.1's last paragraph —
+   **the fit will move at step 1, and that is not a refactor failing to be
+   inert**, because `settle_K` for a hold now means the drift across half the
+   window rather than a pole's extrapolation.
+4. **Before November:** the naive-timestamp fold. `segments.read_table` now
+   *refuses* a non-monotonic clock and names the row, so 2026-11-01 02:00 is
+   loud instead of silently selecting wrong rows through `searchsorted`. The
+   source fix — take `t_s` from the recorder's own monotonic `Time` column in
+   `lschart/tools/fit_table.py` — is still to do.
+5. `AUDIT-2026-09-10.md` finding 5's leftovers.
 
-> **RESOLVED 2026-09-10 WITHOUT TOUCHING THE CRYOSTAT.** It was sixteen rungs,
-> not three, and the bar was wrong rather than the run. `analysis/steps.py`
-> would not *admit* a dwell under `MIN_SPAN_S = 60` — a test upstream of the
-> grader, so those rungs never got a verdict. At 5–25 K τ is about 4 s, so the
-> 46 s dwells the run chose were **11.5 time constants** and settled to a
-> remainder of 0.000 K. The bar now applies only to a dwell with no resolvable
-> transient, and all sixteen are anchors: **149 where there were 111.**
->
-> **Do not run the recovery sweep below.** There is nothing to recover; the
-> measurement was always in the log. `--min-dwell 75` is no longer advice —
-> use whatever the plan calls for.
+**Not this**: `ltspm3/control/` is complete and out of scope (§9), and
+`CLAUDE.md`'s standing priority is the viewer, the MATLAB interface and Windows
+deployment — none of which this thread touched.
 
-The command that used to be here would have moved the heater to re-measure
-points the archive already had. It is left out on purpose.
+## Running it
 
-## What the tools are
-
-| | |
-|---|---|
-| `analysis/plan_sweep.py` | picks the rungs from the fit: `u(T)` by inverting Q, `τ(T) = C/Λ′` for the cost, and `steps.py`'s grader run backwards for the dwell. Aims at **half** each bar — sized to the bar itself, four rungs came back at 0.51 K/h and were binned. |
-| `ltspm3/tools/sweep.py` | runs it against a **running recorder** through the command spool, so it passes exactly the interlocks a typed command passes. Fits each dwell live and moves on when it would grade. Refuses to start if the software loop is driving; on any fault it stops where it stands and holds. |
-| `ltspm3/fitted_response.py` | the simulator on the fitted ODE, stdlib only, from a frozen table. `--simulate` rehearses against the same plant the plan was sized from, so its dwell lengths are the ones to expect. |
-| `analysis/export_response.py` | regenerates that table. **Re-run after any refit.** |
-
-**`--on-abort off` is wrong on this cryostat.** `heaters_off` means every
-writable heater on the recorder, and `config-ltspm3-heater.yaml` also opens the
-336 — whose heater 2 is railed at 100% holding THE CHONKE and is somebody
-else's. The default `hold` is correct.
-
-## Smaller things
-
-- The 4 h 17 min run is versioned at
-  `reference/heater-calibration/region_20260905-114532_many_tau_steps.csv.gz`
-  (207 kB) and is one of `steps.py`'s default inputs, so a fresh clone rebuilds
-  all 92 anchors with no arguments. It is post-cutover, so its Coldplate is on
-  the corrected X186279 curve as written.
-- Below about 25 K, **τ cannot be measured at a 2 s cadence** — it is a few
-  seconds, and every cold rung came back pinned at 4.0 s, which is the fit's own
-  lower bracket. Those rungs give a steady state and nothing else, however long
-  they are held. A faster cadence is the only fix, and nobody has needed one yet.
-- The first attempt that day stopped at rung 13 when the heater was commanded to
-  0% from elsewhere. The sweep saw the readback disagree and stopped where it
-  stood. Its 12 rungs are in the same export and are used.
-- `ltspm3` is not importable outside the repo root in this venv — the editable
-  install predates it. Run these from `C:\Coding\Python\lakeshoreABJ`.
-
----
-
-# Handoff — 2026-09-03 (twelfth session: CD10 in the viewer, and a heater that is not 50 ohm)
-
-Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
-
-> ## 2026-09-04/05 — two changes at the 218, and the reprocessing they needed
->
-> Jeff recalibrated the **Coldplate** (input 2) and moved the **Magnet** from
-> **input 3 to input 5**. The recorder was stopped at **12:07:16** and that is
-> the cutover.
->
-> **The Coldplate had another thermometer's calibration loaded.** The 218 was
-> carrying **X186276**'s curve on input 2; the Coldplate is **X186279**. The
-> serials differ in one digit and the sensors do not — X186276 is a CX-1050-CU
-> unit about 12% higher in resistance at every temperature — so the cold end
-> read high for as long as that curve was loaded. Every Coldplate number below,
-> in `docs/`, and in every log before the cutover carries it. (The 09-04
-> session wrote this up as "a transposed digit in the curve"; the digit was in
-> the *serial number*.)
->
-> **The correction is exact, and it has been applied.** Both curve files are in
-> [`reference/sensor-curves/`](reference/sensor-curves/), and
-> `lschart.tools.recalibrate` composes them — kelvin → resistance → kelvin.
-> 6 K logged was 4.93 K; 77 K was 65.33 K; 300 K was 265.10 K. The pre-cutover
-> logs are reprocessed into `data/coldplate-recal/`, and
-> `reference/heater-calibration/` has been remapped in place so `analysis/`
-> reads the corrected `T_c` with no code change.
->
-> **It resolved the 0.79 K anomaly outright.** 13,290 rows across the three fit
-> tables had the sample sitting *below* its own heat sink; after the remap
-> there are **none**, in any table, at any power. See the top of
-> [`analysis/README.md`](analysis/README.md).
->
-> **The Magnet move costs analysis nothing** — same thermometer, same `Magnet`
-> column, different socket. Only `channels:` changed.
->
-> The pre-cutover part of 09-04 is archived at
-> `data/pre-recal-2026-09-04/` so no CSV spans two calibrations. Open it with
-> `lschart-view --csv <path>`; the viewer will not splice it into live history.
->
-> Full account: [docs/ltspm3/cryostat.md](docs/ltspm3/cryostat.md).
-
-Three commits, **786 passing, ruff clean**, no hardware touched. The session began
-as a question about how to fit heater-step data and became mostly about making the
-data reachable at all.
-
-## Start here if you are analysing heater steps
-
-> **SUPERSEDED 2026-09-10 by Phase 0 of `REFIT_PLAN.md`.** The two fitting
-> tables below are gone, along with three others, and `analysis/` reads the
-> versioned `reference/cooldown-10/` archive instead -- three non-overlapping
-> tables plus `segments.csv`, the manifest naming every window in them. Start at
-> [`reference/cooldown-10/README.md`](reference/cooldown-10/README.md) and
-> `analysis/README.md`, not here. What is still true below is how the archive's
-> own tables get built (`fit_table`, and `--rename` is required) and that
-> `data/cd10/` is the viewer's copy.
-
-**`data/` is gitignored, so none of this exists on a fresh clone.** There are two
-derived sets and they are not interchangeable -- one is shaped for the viewer, the
-other for a fit:
+The venv is Windows and lives at the **repository root**, not in a worktree:
 
 ```bash
-# the viewer's copy: recorder-shaped, one file per day
-python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls"
-python -m lschart.gui -c config.yaml --csv data/cd10/cd10_2026-08-20.csv
-
-# the fitting tables: one file each, recording gaps marked
-python -m lschart.tools.fit_table "data/cd10/cd10_*.csv"  -o "data/heater calibration steps/fit_cd10.csv"
-python -m lschart.tools.fit_table "data/ltspm3-heater_*.csv"  -o "data/heater calibration steps/fit_recorder.csv"  --rename "Cold Head=Coldplate,Shield=Magnet"
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest -q
 ```
 
-`data/cd10/` is 28 daily files, header byte-identical to a live recorder CSV, so
-the viewer and `steptest --from-csv` read it without knowing it is a year old.
-Point the viewer at **any one file** and backfill recovers the rest of the run
-(verified: 198,616 points, 07-15 to 08-20, from one filename).
-
-`data/heater calibration steps/` is what the fits read: `fit_cd10.csv` (298,617
-rows, 857.9 h, **5 segments**) and `fit_recorder.csv` (435,300 rows, 244.2 h,
-4 segments), each one flat table of `Timestamp, t_s, segment, <thermometers>,
-u_pct, note`. **Fit each `segment` separately** — they are split at the
-recording gaps, and CD10's are 65 h and 187 h long. The ladder is `fit_cd10.csv`
-segment 4: 286.9 h, 103,282 rows, 60–70 %, 99.6–170.8 K.
-
-Folding `Cold Head`/`Shield` onto `Coldplate`/`Magnet` is deliberate: the 218's
-inputs 2 and 3 were relabelled at the 08-26 part-roll, values continuous across
-the boundary to 2 mK. Without `--rename` that is four half-empty columns and a
-thermometer that appears from nowhere halfway through the run.
-
-Note that `--rename` is about the 08-26 **relabelling**, which is a different
-event from the 09-04 **move**: the magnet went from input 3 to input 5 without
-its name changing, so it needs no rename and the column is continuous. The
-Coldplate's *name* has been stable since 08-26; its *calibration* has not.
-
-The provenance table — what each log is and which parts are usable — is in
-[thermal-response.md](docs/ltspm3/thermal-response.md).
-
-## What landed this session
-
-### The heater is 75.5 ohm, not 50 (`a09c040`)
-
-Measured by Jeff, against the 50 the prose had carried in seven places since the
-model was written. **No fitted number moves**: R never enters a calculation here,
-because every fit is against *percent* and `dT = A·P^m` with `P = V²/R` absorbs R
-entirely into `A`. `P ∝ pct²`, `m = 3.16`, the local gains and the simulator are
-all untouched. It bites at exactly one boundary — absolute watts, where anything
-quoted against the old value is high by **1.51×**.
-
-### CD10 converted to the recorder's own CSV (`9bbf805`)
-
-`lschart/tools/xls_to_csv.py`. Three joins, each of which can produce a plausible
-file full of wrong numbers: the 336 merged by wall clock (two programs, two files,
-no shared row index) with the match rate reported per file; `ls218.aout1`
-reconstructed as a zero-order hold on the Notes column's ANALOG commands, carried
-across files, blank before the first recorded command rather than guessed; and the
-model sniffed from row 0 because `st2_monitor3.xls` is a 218 log.
-
-**The 336 stopped logging on 2026-07-23.** So `monitor4`+`5` — 287 h, 200 heater
-commands, 60–70 %, 99.6–170.8 K, the only real ladder in the archive — have no
-shield or stage data at all. `monitor1` has the 336 *and* has the stages at base
-(1st 28.49 K at +0.56 mK/h, 2nd 3.94 K at +0.12 mK/h) but is a 72 h
-**constant-heater** hold: a drift dataset, not a step dataset. `sample_cold` is
-mid-cooldown and not valid for calibration (Jeff's call).
-
-### The viewer can open a finished log (`1f70e21`)
-
-`--csv PATH`. Two silent bugs had to be fixed before it drew anything:
-
-- The channel list comes from `status.json`, so with no status file **every
-  thermometer classified as "other" and was dropped** — the chart drew the heater
-  alone over a file that had loaded perfectly, with no error anywhere.
-  `CsvTail.channel_columns()` recovers them from the header (aux columns are always
-  `instrument.key`, so the dot is the discriminator). It is a fallback, so a live
-  viewer whose status is briefly unreadable now also draws.
-- The default window is the last N seconds *of now*, and this data is a fortnight
-  old, so the chart came up empty a second time for an unrelated reason. `--csv`
-  now frames the data's own extent.
-
-## The tree, as left
-
-`main`, no worktrees, nothing uncommitted. **The recorder from the eleventh session
-is still live in `data/`** (pid 6708, `config-ltspm3-heater.yaml`, writing
-`ltspm3-heater_2026-09-03.csv`). Nothing here touched it: the converted logs go to
-`data/heater calibration steps/`, and it cannot be spliced into the live history either by directory
-(`_older_logs` uses a non-recursive `listdir`) or by name (the `cd10` prefix
-differs from `ltspm3-heater`, which is what that prefix check is for).
-
-Still no `control:` section in the running config, so the closed loop has still
-never run on this cryostat.
-
-## The analysis question this session did not settle
-
-The model carries `tau_slow = 14400 s` at `fast_fraction = 0.90`. Whether that
-second pole is real matters: with it, gain from a short step is low by the fast
-pole's share; without it, a single-pole fit is unbiased and short steps suffice.
-
-The evidence for it is thin. A two-pole grid over the 26 h hold is **flat**
-(43.7–44.1 mK, no combination preferred, already at the 44.1 mK sensor noise), and
-**every long hold in both archives follows the closing leg of a doublet** — net
-excursion ~0, so none of them can test for it. Jeff's point that hours-scale drift
-is systematic (room temperature) rather than thermal is consistent with the
-measured floor: **4.18 mK/h linear and 18.3 mK diurnal** over 59 h at constant `u`,
-phase-locked to `THE CHONKE` (peak 2.4 h vs 2.5 h local, 45 % of detrended variance).
-
-**One measurement decides it: a step of ≥1 % held ≥6 h, not a doublet.** At 13 K/%
-a 10 % slow-pole share is 1.3 K — thirty times the noise floor, unmissable. If the
-residual after the fast pole is flat, single-pole is correct everywhere and the
-campaign gets much cheaper.
-
-## Still open
-
-- The three items under [Before the first armed
-  run](docs/ltspm3/running.md#before-the-first-armed-run), `verify_readback` on the
-  218 over GPIB most of all.
-- The slow-pole test above, before any τ or K from this data is trusted.
-
----
-
-# Handoff — 2026-08-28 (eleventh session: the panic button did not hold)
-
-Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; this goes stale.
-
-**An audit of the software PID found that `heaters_off` did not stop an armed
-`ltspm3` loop — it put 63% back on the heater four minutes later.** Fixed on
-both sides, pinned by a new `tests_ltspm3/test_panic_seam.py`, and verified
-against a live armed sim recorder. **731 passing, ruff clean** — the whole
-suite green for the first time since `9e1bf76`. No hardware was touched.
-
-Also merged in: `claude/pid-intended-behavior`'s commissioning path and its
-measured **τ = 709 s** and **K ≈ 13.8 K/%**. The two lines of work were
-independent and agree; where they touch, see [Two passes, one
-loop](#two-passes-one-loop).
-
-A second, pre-existing defect surfaced with it and is fixed too, on Jeff's call:
-**[the authority band's lower rail overrode the rate
-limiter](#the-band-caps-heat-it-does-not-compel-it)**, so a loop armed while its
-heater was at 0 went to 62 % in a single cycle. Fixed on Jeff's call, together
-with the `hold` defect that shares its root cause.
-
-## What landed this session
-
-### `heaters_off` did not stop the software loop
-
-`_do_hold` called `software_loop.hold()`. `_do_heaters_off` called nothing — it
-iterated instruments and wrote `ANALOG 0` around the supervisor, which stayed in
-PID mode with `output_pct` still remembering 63.08%. Measured against the real
-harness: the sample fell, the guard tripped, the loop held for `anomaly_hold_s`,
-and then began its fault ramp-down **from the remembered value** — commanding
-63.05% onto a heater an operator had just cut, and walking it down over two
-hours while the sample reheated 72 K → 79.5 K.
-
-Every layer behaved exactly as designed. The only thing wrong was that one of
-them was reasoning from memory about a world somebody else had changed.
-
-**Not reachable on any shipped config, and that was luck rather than design.**
-`config.yaml` is the only one with a `control:` section and has no `ipc:` block
-at all, so `accept_commands` defaults false; `config-ltspm3-heater.yaml` has
-every gate open and no `control:` section. The two have never overlapped. `hold`
-and `arm` were exercised against a live software loop in session nine (K3/K4);
-`heaters_off` never was, and `tests/test_ipc_service.py` only ever tested it
-against a stand-in that agreed with whatever it was asked.
-
-Two fixes, and they are not alternatives:
-
-- **`lschart`** — `_do_heaters_off` disarms the software loop **first**, before
-  it zeroes anything. Nothing may be writing to an output at the moment the
-  zero lands.
-- **`ltspm3`** — `_where_the_heater_is()`. Every *relative* move now reads the
-  output instead of remembering it: the rate limiter's base, the fault
-  ramp-down's base, and the value a manual hold adopts. It only re-reads after a
-  cycle that wrote nothing, so a tracking loop pays no extra transaction —
-  `_write_output` has just verified the value by readback anyway.
-
-### `hold` did not hold either — Jeff's call, and he was right
-
-Chasing the above surfaced the same fault in the other panic action, and this
-one is the more likely human intervention: `hold` is what you reach for to stop
-a runaway. It switched the loop to `MANUAL`, and **manual was not a hold.** A
-manual output is still clamped to the authority band and still rate limited, so
-a hold taken while the heater sat outside that band moved it on the very next
-cycle. Measured:
-
-| heater at | `hold` reported | heater one cycle later |
-|---|---|---|
-| 20 % | "holding 20.000%" | **62.080 %** |
-| 63.08 % | "holding 63.080%" | 63.080 % |
-| 68 % | "holding 68.000%" | **64.070 %** |
-
-It only ever really held when the heater happened already to be inside the band,
-and either way the number in the reply was one it was about to leave. A freeze
-that freezes only sometimes is worse than none, because it will be believed.
-
-**Both panic actions now disengage the loop** — `abort_ramp()` then
-`set_mode(OFF)`, which writes nothing at all, ever. A person reaching for either
-has decided the loop should stop deciding, and the software does not get a vote.
-They differ only in what becomes of the heater afterwards, and therefore in what
-the loop may still claim to know: `hold` leaves the output alone and goes on
-reporting it, `heaters_off` zeroes it and reports `null`.
-
-A lockout **survives** both. Stopping the heater is not the same as having
-looked at the cryostat, and a panic action is taken precisely when nobody has
-diagnosed anything yet.
-
-**One thing that had to be replaced.** `off`/`idle` is also where a loop that was
-never armed sits, and the mode used to carry that distinction badly (`manual`
-meant held). The status `reason` now carries it properly and says *which* action
-was taken — "held by an operator" or "heaters off by an operator" — cleared on
-`arm`.
-
-### The status file disagreed with itself — caught on the live recorder
-
-The first fix left a lie behind, and only a live run showed it. `output_pct` is
-what the loop last *commanded*, and it went on being reported after the loop had
-let go. One CSV row read `heater_pct=63.0800` beside `ls218.aout1=0.0000`, with
-the sample falling — the permanent record claiming the loop held 63% power at
-the moment the heater was off.
-
-`panic_off()` now clears `output_pct`. Null is the honest answer for a loop that
-is not driving, the instrument's own `aout1` still carries the truth, and blank
-is properly distinct from both 0 and 63.08 in the log. `status` prints
-`not driving` rather than `None%`.
-
-### A lockout was clearable by nothing at all
-
-`require_ack_after_fault` defaults true, so a completed fault ramp-down latches
-the loop out. `acknowledge()` existed and was reachable from **no** command, CLI
-verb, MATLAB method or button. `arm` refused with a message naming
-`acknowledge()` — a Python method an operator at a terminal cannot call — and
-the only way back was restarting the recorder, which with `on_exit: hold` is
-exactly what you do not want to do to a live cryostat. Every other shut gate in
-this system names its own way out; this one named a wall.
-
-New `ack` command: CLI `send ack`, MATLAB `ack()`, and a **Clear lockout** button
-beside Arm in the viewer. **Not a panic kind** — the exemption the panic kinds
-get is for stopping, never for starting, and this is the first of the two steps
-back to driving the heater, so it passes `ipc.allow_analog_output` and the
-source policy exactly as `arm` does. It leaves the loop **disarmed**: recovery
-stays two acts, which is the whole point of a latch that exists to make somebody
-look at the cryostat.
-
-### The viewer was fine, and I said it was broken — corrected
-
-`test_the_loop_table_never_scrolls_sideways` fails under
-`QT_QPA_PLATFORM=offscreen` with `assert 928 <= 542`, and I diagnosed that as a
-real clipping regression: the reading table hiding `Out`, `Rng`, `State` and
-both marks on the cryostat's own machine. **It is not.** The offscreen platform
-resolves no font at all, so every width there is roughly doubled. Measured with
-`QT_QPA_PLATFORM=windows` on this machine, Segoe UI 9 pt:
-
-| | offscreen | real |
-|---|---|---|
-| `Rad Shield` | 144 px | **74 px** |
-| `Off SP` | 100 px | **44 px** |
-| the nine columns | 928 px | **542 px**, in a 542 px viewport |
-
-The 560 px panel is correct and tight, and its comment ("'Rad Shield' wants
-86") is right for the real font. `memory/gui-pixel-tests-lie-offscreen` had
-already established this, from a real-platform measurement and from Jeff
-observing the viewer was fine; I did not read it before diagnosing, and
-reproduced the same mistake it exists to prevent.
-
-**What was kept, and on what grounds.** `_fit_panel_to_table` stays — but not
-as a bug fix, because there was no bug here. It asks the table how wide it
-needs to be instead of assuming one desktop's font, which is worth having in a
-program that ships to other machines. On this machine it is a **verified
-no-op**: it measures 465 against a 560 floor and leaves the panel exactly where
-it was, font 12 pt, no scrollbar, columns 542 in 542.
-
-**One of my own tests was only true on the lying platform** — it asserted the
-panel had grown past 560, which happens offscreen and never here. It now
-asserts the invariant (the panel is at least what the table asked for; nothing
-is clipped without a scrollbar), which holds on both. The whole GUI suite now
-passes under `offscreen` *and* under `windows`, which is the check that would
-have caught this on the first day.
-
-### The software loop's gains reach the status file
-
-`kp`/`ti` are published as `p`/`i`, under the same names an instrument loop uses,
-so the loop table's existing columns fill themselves. There is no `d`: this
-controller takes its derivative from a regressed slope rather than a gain, and a
-zero there would read as "tuned to nothing" instead of "not a thing this loop
-has". Worth more than a 33x's fixed pair, because these are *scheduled* — the
-tuner re-solves them at the present temperature, so they move as the cryostat
-does.
-
-### The band caps heat; it does not compel it
-
-**Found by the live run, pre-existing, and now fixed** — it is the same root
-cause as the hold above, and one line explains both. In `step()`:
-
-```python
-target = self._rate_limit(current, target, dt)
-target = self.clamp(target)          # <-- undoes the line above, from below
+```bash
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ruff check .
 ```
 
-`clamp` raises anything under the band to `operating_point_pct -
-authority_pct`. So a loop armed while its heater is at 0 is rate-limited to
-0.0033% and then clamped to **62.076% in one cycle** — seen on the live
-recorder going 0 → 62.08 in a single row. `max_step_pct: 0.02` exists precisely
-to prevent that.
-
-This was reachable before any change here, by the recovery
-[running.md](docs/ltspm3/running.md) documents: fault ramp-down to
-`safe_output_pct: 0.0`, then `ack`, then `arm`. `set_mode(PID)` has always
-re-read the output, so `output_pct` was already 0 on that path. This session's
-change added one more route to it (`heaters_off` then `arm`); it did not create
-it. It is also exactly what made `hold` fail to hold, which is why the two are
-one fix.
-
-**The fix is asymmetric, because the two rails are not the same kind of thing.**
-The *ceiling* is the safety limit and stays hard and immediate — less heat is
-never the dangerous direction, and the post-quantise re-application below it
-already worked this way. The *floor* is not a safety limit at all; it is an
-artifact of writing the band as `operating_point ± authority`. It still bounds
-what the PID may **ask** for (`_apply_band_to_pid` sets `out_min`), so the band
-keeps its meaning as the window this loop operates in. What it no longer does is
-force the output into that window in one write. `hard_min_pct` is the real
-lower bound and is unchanged.
-
-**No new config knob, and the numbers say why.** A rate-limited climb from 0 %
-to the band floor takes **5.2 h**, against the **6.1 h** the existing
-`approach_rate_k_per_min` already takes to walk a setpoint from base to 96 K.
-The design already assumed a traverse of that order; the output ramp and the
-setpoint ramp are matched, so a third rate would be a number with nothing to
-justify it (invariant 7).
-
-**The second-order consequence is the more important one.** The floor did not
-just make arming jerky — it meant this loop could not hold *any* temperature
-whose steady-state output lay below the band. Armed at base temperature it would
-command operating-point power (62 %, which settles near 99.6 K) and then fault.
-Verified in sim: from a settled 4 K start it now ramps smoothly to ~24 % and
-holds 4.81 K, largest single-cycle move 0.04 %.
-
-### Smaller
-
-- `tests_ltspm3/conftest.py` still built its 218 with `Cold Head`/`Shield`,
-  which `5a8956f` had renamed to `Coldplate`/`Magnet` everywhere else.
-- `cli.md` said `ipc.allow_heater_range` was needed for `range` *above 0*, and
-  `ipc.allow_analog_output` for `analog` *above 0*. `ada3413` made zero gated
-  like any other value nine commits earlier.
-
-## The tree, as left
-
-One worktree (the main checkout), one branch (`main`), and one tag. All five
-`.claude/worktrees/` sessions were merged and removed; three leave an **empty**
-directory behind only because another session's shell still has it as its
-working directory, and those disappear on their own.
-
-`archive/frosty-banach-status-wip` (`a4f17c6`) is the one thing not on `main`:
-a week of uncommitted status-write work found in that worktree, committed and
-tagged so removing the branch could not destroy it. It is superseded by
-`961bf96` on every axis but one, and that one — the viewer surfacing the
-count — has since been ported. Kept as a record, not as pending work.
-
-**A recorder is live in `data/`** (pid 6708, `config-ltspm3-heater.yaml`,
-~129k cycles, 0 dropped, sample ~149 K). Nothing here touched that directory.
-That config carries **no `control:` section**, so none of this session's
-supervisor changes are running in it — it is a plain recorder with the heater
-under manual control. They take effect the next time a config *with* a
-`control:` section is armed, which has still never happened on this cryostat.
-
-## Two passes, one loop
-
-`claude/pid-intended-behavior` audited the same loop from the documents while
-this branch audited it from the code, and the two agree in a way worth
-recording. Its `commissioning.md` §0.3 states the defect this branch fixed —
-*"MANUAL does not save you … and neither does `hold`. Only mode `OFF` stops
-writes"* — and two of its sentences describe behaviour `main` did **not** have
-and this branch now does: `panic_hold()` freezing where it is from any state,
-and arming below the band being a rate-limited march rather than a step. Its
-staged procedure also needs the `ack` command from this branch, `acknowledge()`
-having had no route from the file interface.
-
-Its measured τ = 709 s (R² = 0.9973) corroborates the config's 620 s. Its
-K ≈ 13.8 K/% at 66.6 % against 10.0 K/% at 63 % is new, and is the argument for
-the gain scheduling that is already there.
-
-**One correction went the other way**, and it is in `c3a36cc`: `running.md` and
-`control.md` both showed a worked `check` line reading `58.076 % .. 68.076 %`,
-five times too wide, pre-existing on `main`. `commissioning.md` §0.3 took it at
-face value and concluded the present 66.598 % sits inside the band with 1.48 %
-of room. Against the real band it is **2.52 % above the ceiling** — ~35 K at
-their own measured gain. Simulated, arming there cuts the output to the ceiling
-on the first cycle, holds, ramps down, and reaches ~13 K about two hours later,
-locked out. Its stage-4 gate catches this; only the worked example inverts it.
-**§0.3's rule needs its other half: "never arm while the present output is
-below the band" should also say "or above it."** That is the one thing left for
-whoever owns that document.
-
-## Still open
-
-- Nothing failing. The three items under [Before the first armed
-  run](docs/ltspm3/running.md#before-the-first-armed-run) remain, `verify_readback`
-  on the 218 over GPIB most of all — and the closed loop has still never run on
-  this cryostat.
-- The three items under [Before the first armed
-  run](docs/ltspm3/running.md#before-the-first-armed-run) are all still open,
-  `verify_readback` on the 218 over GPIB most of all.
-
----
-
-# Handoff — 2026-08-28 (tenth session: X1, the bench 336, and the viewer)
-
-**Everything in [`FEATURE_PLAN.md`](FEATURE_PLAN.md) is now implemented and
-tested, X1 included. 694 tests passing (from 584), ruff clean.** Verified
-against a live armed sim recorder driving a real `ltspm3` software loop through
-a hold and back. **No hardware was touched this session** — the bench 336 was
-not connected.
-
-## Start here
-
-The feature plan is no longer a to-do list; it is a record of why things are
-shaped the way they are. Three sections at the end are worth reading before you
-touch any of it: **Where phase 3 differed from the plan**, **X1, and the half of
-its question that was wrong**, and **The two tables became one**.
-
-**Most of this session was the viewer, and none of it was planned** — it came
-from Jeff opening the thing on a real screen. If you are picking the viewer up,
-read [Themes](docs/recorder/gui.md#themes) and the reading-table section of
-[gui.md](docs/recorder/gui.md) first: both encode rules that are easy to break
-by accident and were broken by accident here.
-
-**Windows deployment is nearly closed out.** Of the three unknowns
-`windows.md` listed, two are now settled: the clock-resolution worry is pinned
-by tests that run on Windows in CI, and `config-ltspm3-heater.yaml` has since
-been run *and commanded* on the cryostat's own machine (Jeff, 2026-08-28),
-which also largely retires the `movefile` question. **What is left is
-`os.replace` over an open `status.json` under a real reader**, plus the
-unattended-running choice (Task Scheduler vs NSSM), which is a decision rather
-than a defect.
-
-## What landed this session
-
-### The viewer, after real use on a real screen (`d5309a7`..`af2f6be`)
-
-Eight commits, all of them from Jeff looking at the thing rather than from a
-plan. Worth reading as a group, because several are the same lesson.
-
-**Dark mode ate the text** (`3358b7a`). Reported from macOS. The viewer was
-written on a light desktop and wrote its foregrounds down as constants, so the
-tables forced `#000000` onto a `#171717` base — a contrast ratio of **1.17**,
-which is not "hard to read", it is not there. Never a macOS bug: a dark Windows
-or KDE theme would have done the same.
-
-New `lschart/gui/theme.py`, and two rules worth keeping when you add a widget:
-
-- **Never paint the normal case.** Ordinary text has no colour of its own; it
-  is whatever the palette says. A hardcoded black is a bug on a dark theme and
-  a hardcoded white is the same bug on a light one, so the fix is not a better
-  constant, it is *no* constant.
-- **Paint the exceptional case from a measured pair.** `tests/test_gui_theme.py`
-  computes contrast ratios against the grounds Qt actually reports, 4.5:1
-  floor. That caught the existing warning orange failing at 3.79 on white —
-  wrong on light mode all along.
-
-Colours resolve at call time, so a desktop that switches theme under a running
-viewer is followed on the spot.
-
-**The chart itself stays white on both themes, deliberately.** The ten curve
-colours are chosen to separate on white and the stat panel is drawn to sit on
-it. Say so before changing it; it is a design decision, not an oversight.
-
-**The panel did not fit and did not scroll** (`f8fa8a9`, `4114986`). It wanted
-**1404 px** against the ~795 a 949 px screen leaves, and a bare `QVBoxLayout`
-answers that by squeezing children below their minimums — which is how
-Setpoint, PID gains and Heater range came to be three titles with nothing under
-them. It is a `QScrollArea` now, and the trace list is both what takes spare
-height and the first to give it back (Jeff's call: it has its own scrollbar and
-loses nothing by being short).
-
-Then: one table instead of two, a status strip across the bottom, denser button
-rows, P/I/D on one line, shorter notes. **1404 → 706 px**, no scrollbar.
-
-**One table, not two** (`f8fa8a9`). See
-[FEATURE_PLAN.md](FEATURE_PLAN.md)'s "The two tables became one" — this
-reverses an L1 decision, and the reason that decision existed is what shapes
-the merge. The row is the channel; the loop is columns on it.
-
-**The status strip** carries Panic, "Listen to" and link health across the
-window. "Listen to" gained MATLAB and **Other clients** beside this viewer;
-*Other* is not a client, it is the overlay's own `default`, and it is the only
-way to shut out a label nobody knew in advance. `sources.py` learned to honour
-a `default` in the overlay for it — narrowing only, like every overlay entry.
-
-**Panic is red, twice as wide, and opens a modal** (`f22c96b`). A popup is a
-small target beside the pointer and the two things in it are "stop heating this
-cryostat" and "freeze it where it is". Still three interactions — open, choose,
-confirm.
-
-**The instrument selector took three attempts** (`d51b4b9`, `3db3f92`,
-`af2f6be`), and the reason is worth remembering: **a titled `QGroupBox` draws
-its title above its frame**, so the widget rectangle and the box anyone sees
-differ by the whole title band. Flush against the widget rect is not flush
-against the box. The fix is that the first *visible* group gives up its title
-to the selector's row. Watch for the two traps it hides: the group titles must
-be **stored** (two change at runtime) and the stack needs a **trailing stretch**
-or the slack lands above the first visible group.
-
-**One defect found by the hardware run** (`d5309a7`): the *Send PID* button
-stayed live while `ipc.allow_pid` was false, so it could only ever produce a
-refusal. The spin boxes stay readable — the gains are worth seeing where they
-cannot be written — and only the button is disabled.
-
-### X1 — the software loop finally has a row (`9a5754c`)
-
-A viewer pointed at a running `ltspm3` used to draw the heater percent as a
-trace and say **nothing whatever** about the loop driving it — not its
-setpoint, not its health, and not that it had locked itself out after a fault.
-The loop that most needed watching was the one loop with no row. On a 218-only
-cryostat the loop table was hidden entirely.
-
-The plan asked "what should its `sensor` and `range` columns say for a loop
-that has neither". **Half of that was wrong:** it does have a sensor, the
-recorder's `control_channel`, which was simply never published — a fact that
-never changes does not end up in a per-cycle struct. Published, the `K` column
-fills itself by the same lookup every other row uses. `range` really is `n/a`,
-the word a 336's loops 3 and 4 already get, for the stronger reason in
-invariant 4.
-
-Three things beyond that, none in the plan:
-
-- **A `State` column, on every row.** Instrument rows show what `OUTMODE?`
-  says; the software row shows the supervisor's state. It is what decides
-  whether either W1 mark applies and it used to be reachable only by hover, so
-  a loop that had quietly stopped trying was invisible without a mouse.
-- **The software loop rails at its own authority band, not at 99%.** That band
-  is about a percent wide, so the fixed rails could never light the mark on the
-  one loop whose authority is genuinely scarce. Not a per-loop knob by the back
-  door: no instrument row passes one, and this is the clamp the supervisor
-  actually enforces, published as `rail_low_pct`/`rail_high_pct`.
-- **The mark is judged on `demand_pct`, not `output_pct`.** A saturated
-  software loop writes *below* its own rail — quantised to a DAC code, then the
-  band re-applied by stepping down one — so testing what it wrote would never
-  fire.
-
-**The row is read, not clicked.** It takes no setpoint, range or PID command,
-only `arm` and the panic `hold`, so it is not selectable: a row that could be
-clicked into a selection the command panel cannot honour would be a row that
-lies.
-
-Two things to expect on the real cryostat. On the shipped numbers a *tracking*
-software loop cannot rail at all — `max_error_k` is 1.0 K against about ±7 K of
-authority, so the anomaly hold fires first and you see `holding`. And when
-health goes bad both marks go **quiet**, because the loop has stopped trying;
-the row is coloured instead.
-
-`tests_ltspm3/test_status_projection.py` is new and is the one that matters:
-`_control` reads every field by name off whatever the poller holds, so a rename
-in `ltspm3` would leave a status file that still parses and is quietly full of
-nulls. It pins the names against a real supervisor.
-
-**The config decision from last session is settled** — `a11dfe9` says the 336
-is writable because it is.
-
-### The bench 336 (LTSPM2), on real hardware
-
-**First hardware run since phase 2.** Everything from phase 3 had only ever
-seen the simulator. `LSA26E0` over USB, cryo off, all four inputs ~295-297 K,
-both heater ranges 0 throughout — **no power was applied at any point**, and
-the box was left exactly as found.
-
-What it settled, in order:
-
-- `probe` — forces read-only regardless of config. `LSCI,MODEL336,LSA26E0`,
-  firmware 3.1, four inputs, all four loops `OUTMODE` closed.
-- `check` — 27 transactions, 1.35 s inside the 2.0 s cadence, exactly what the
-  config's own comment predicted.
-- **`read_pid` against real hardware for the first time.** P/I/D came back per
-  loop (100/5/0, 124/10/1, 325/10/0, 350/10/0) and reached the viewer's boxes.
-  P1 had only ever been exercised against sim and MATLAB.
-- **The W1 marks, confirmed on hardware in the case `gui.md` says to expect.**
-  Loops 1-2 are silent at range 0. Loops 3-4 are analog-only, so they have no
-  range to be switched off by, sit ~20 K above a 275 K setpoint with the output
-  at 0 %, and light *both* marks and keep them lit. That is the documented
-  behaviour, seen for real.
-- **A3, on hardware.** `send range 0` refused, with the message naming the
-  panic path; `send pid` refused (`allow_pid` defaults off); `send heaters_off`
-  **applied through the same gate that had just refused `range 0`**. That is
-  the exemption working outside the simulator.
-- A setpoint written and verified by readback (`SETP 1,280.0000 (verified)`),
-  then restored. Inert throughout, because the range was 0 — invariant 4 doing
-  its job on a real box.
-- 73 cycles, **0 dropped, 0 status-write failures**, clean SIGINT shutdown
-  leaving `running: false`.
-
-**One defect found, fixed, and pinned.** The viewer's *Send PID* button stayed
-live while `ipc.allow_pid` was false, so it could only ever produce a refusal —
-the same shape A3 removed from the range control. The spin boxes stay readable
-(the gains are worth seeing where they cannot be written); the button no longer
-does. Three tests now pin all three states, including that a recorder with
-`read_pid: false` may still be *sent* gains — a missing capability is not a
-withheld permission.
-
-### Windows: the command ordering test was passing for the wrong reason
-
-`docs/recorder/windows.md` listed the ~15 ms clock resolution as unverified.
-There *was* a test — twenty commands queued in a tight loop, asserted to come
-back in order — but on a machine whose clock resolves finely it never touches
-the sequence tie-break at all, and would go green on a spool that had no
-sequence number. It was passing for a reason that had nothing to do with
-Windows.
-
-Two tests replace that hope with arithmetic, and both fail when the behaviour
-they pin is removed (checked by mutation, not assumed):
-
-- **the clock frozen**, so *every* command shares a millisecond — the worst
-  case of a coarse one, and nothing but the sequence can order them;
-- **the clock stepped backwards** mid-run, which must not let a later command
-  sort first. That is what clamps the filename prefix monotonic, and nothing
-  covered it before.
-
-Deterministic on every platform, which is worth more than hoping the CI
-runner's clock is coarse that day. What it does not settle is the end-to-end
-path on the cryostat's own machine, which still has `accept_commands: false`.
-
-## What landed in the session before this one (phase 3)
-
-Four commits, in the order the plan's priority section gives.
-
-### A1, A2 — a sixth gate, asking *who* is asking (`56fdf2e`)
-
-The five interlocks all answer "may this action happen"; none can say "the
-operator at this terminal may drive the cryostat, the analysis script may not".
-`Command.source` had been carried end to end since the spool was written and
-used for nothing but a log line. This is what it was for.
-
-- `ipc.sources` is the ceiling, fixed for the process. `sources.json` beside the
-  status file is a runtime overlay, re-read every cycle, **may only ever
-  narrow**. A restart always returns to the audited config.
-- **Two ways to write the overlay** — a text editor, or the `source` command
-  (CLI `send source NAME on|off`, MATLAB `setSource`, and a checkbox in the
-  viewer beside the Panic menu). The command is **exempt from the policy it
-  edits**, which is what stops muting being a one-way door. See
-  [A2 gained a command](FEATURE_PLAN.md) — this reverses an argument the
-  original plan made, at Jeff's call.
-- **Muted is about listening, never about reading.** `status.json` is a file
-  anyone may open, so a muted client keeps every "getting" operation it had:
-  temperatures, the loop table, the marks, the chart.
-- Written non-empty, `default:` is **false** unless it says otherwise. A typo in
-  a source name has to fail closed.
-- Matched on the part before the first `/`, because the CLI stamps its pid in.
-- New module `lschart/ipc/sources.py`; read its docstring first.
-
-### P1, S3, S4 — the loop's gains (`5db2d9a`)
-
-- `PID?` per loop on the same slow cadence as `OUTMODE?`, published in
-  `links[].loops` as `p`/`i`/`d` and in aux as `{inst}.p{loop}`.
-- **`read_pid` is off by default and that is arithmetic, not caution** — see the
-  plan's "Where phase 3 differed". The examples turn it on at 2 s.
-- New `pid` command behind `ipc.allow_pid`, which is *not* a power gate: a loop
-  with range 0 stays inert however it is tuned. All three gains go together.
-- CLI `send pid P I D --loop N`, MATLAB `setPID`, and `selftest.m` prints the
-  gains, the gate states and the source policy.
-
-### K1–K4 — two ways to stop, one way back (`16a90e0`)
-
-- New `hold`: per closed 33x loop, **ramping off first** (rate kept), then the
-  setpoint moved to that loop's own bound sensor's temperature. Order matters.
-  A loop with no binding, not in closed loop, or whose sensor did not read is
-  skipped and named.
-- On the software loop, `HeaterSupervisor.panic_hold()` — `abort_ramp()` plus
-  `set_mode(MANUAL)` under one name. **The one seam `lschart` reaches into
-  `ltspm3` by**, duck-typed, so invariant 1 holds.
-- New `arm`, the way back, and deliberately **not** a panic action: it starts
-  the loop driving, so it passes every gate.
-- The viewer's Panic menu is three clicks and lives **outside** the command
-  group — in Qt a child of a disabled parent is disabled however firmly you
-  enable it, and these kinds are exempt from the source policy at the recorder.
-
-### A3, S6 — zero is not a permission (`ada3413`)
-
-`range 0` and `analog 0` are gated like every other value. Cutting a heater is
-not automatically the safe direction: it stops heating and can also crash the
-stage, and `ltspm3` always agreed — its supervisor commands a configured
-`safe_output_pct` on a fault, never zero.
-
-**The panic kinds are now the only exemptions anywhere in the system.** Both
-refusal messages name them, so a shut gate is a signpost rather than a wall.
-
-Consequence in the viewer: a shut gate now **disables** its control instead of
-just annotating it, which inverts a decision made when the exemption existed.
-Both halves of the old reasoning are gone.
-
-`CLAUDE.md` invariant 3 is rewritten: seven interlocks, both directions, and the
-exemption named properly.
-
-### After phase 3
-
-Two follow-on commits, neither in the plan.
-
-**`961bf96` — a failed status write is no longer silent.** `windows.md` named
-this as the weak spot behind the first of its three unverified Windows
-behaviours: `os.replace` over a status file another process has open can fail
-with a sharing violation, and the handling was a `DEBUG` line plus a counter
-nobody could read. A gap in the feed was indistinguishable from a hung recorder.
-Now the **edges** are WARNING (first failure, and recovery — not every cycle,
-which is how a signal gets buried) and the next file that *is* written carries
-`status_file.failures` and `status_file.last_error`. Still unverified on
-Windows; that needs the cryostat's own machine.
-
-**The `source` command** — see the A1/A2 section above and
-`FEATURE_PLAN.md`'s "A2 gained a command".
-
-## A config that contradicts itself — SETTLED
-
-**Resolved in `a11dfe9` after this was written: the comments were rewritten to
-say the 336 is writable, because it is. Kept here for the reasoning.**
-
-`config-ltspm3-heater.yaml` says one thing in its header and does another:
-
-| Its own comments say | The file actually sets |
-|---|---|
-| "the whole 336: `read_only` AND `allow_writes: false` … **Nothing here may touch it**" (lines 29–31) | `ls336.transport.read_only: false`, `ls336.allow_writes: true` |
-| "`ipc.allow_heater_range: false` — moot while the 336 is read-only" (line 32), and "LEFT OFF" again at line 224 | `ipc.allow_heater_range: true` |
-
-That is the config for the cryostat where **loop 2 holds THE CHONKE and heater 2
-is railed at 100%**. As written, a file command can raise a heater range on it,
-which is exactly what the comments promise cannot happen.
-
-Two readings, and only Jeff can say which:
-
-- the comments are the intent and the values drifted (the `LTSPM3 Actual
-  Heating` commit is the likely culprit) → set both to `false`;
-- a real heating run needed the 336 opened and the comments were never
-  updated → rewrite the comments and say why the 336 is writable.
-
-Do not guess. Nothing in this session changed those values.
-
-## State of the tree
-
-- `694 passed`, `ruff` clean, on `main`. Nothing is running.
-- Example configs: all three validate, all three now poll `PID?`.
-  **`examples/config-336-usb.yaml` moved to a 2 s cadence** — it did not
-  validate before this session, because `read_analog_outputs: true` had been
-  added without raising the poll to match. `tests/test_config.py` now checks
-  every shipped example loads and fits its own cadence.
-- Bring a recorder back with:
-
-  ```
-  .venv/bin/python -m lschart -c examples/config-336-usb-writable.yaml run
-  ```
-
-## What was verified, and how
-
-Nothing here touched hardware. Everything below is a live process.
-
-**This session (X1).** An armed sim recorder with the software loop closed:
-the table drew `sw | Sample | 96.209 | 95.997 | 63.1 | n/a | tracking` beneath
-the 336's four loops. `send hold` moved it to `idle`, mode `manual`, with both
-marks dark and the frozen 63.070% still in the output column; `send arm`
-returned it to `tracking` at the temperature it had drifted to. The row refused
-selection throughout while the instrument rows accepted it.
-
-**Earlier sessions, phase 3.**
-
-- **A1/A2**: a sim recorder refused the CLI by config with the remedy that needs
-  a restart, applied MATLAB, then refused MATLAB via `sources.json` with the
-  remedy that does not.
-- **P1**: `send pid 123 45 6` applied and verified; the loop table carried the
-  new gains; MATLAB's `setPID` landed and read back.
-- **K3/K4**: against a plain recorder, `hold` moved all four loops to their own
-  sensors and kept a 3 K/min rate while switching ramping off. Against a real
-  `ltspm3` software loop it froze the heater at 63.070% in `idle`/`manual`, and
-  `arm` returned it to `tracking`/`pid` at the temperature it had drifted to.
-- **A3**: `range 0` refused with the gate shut, the reply naming the way out;
-  `heaters_off` and `hold` both applied through that same shut gate.
-- **MATLAB R2025b** ran `selftest.m` end to end against a live recorder, and
-  separately muted and un-muted *itself* with `setSource` — reading
-  temperatures and the loop table throughout, which is the point of the
-  listening/reading split.
+```bash
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/curate.py --propose
+```
+
+```bash
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/measure.py --holds --verify
+```
+
+`measure.py` takes about 15 s and needs no arguments — it reads the archive and
+the committed manifest. `analysis/steps.py` **has no `__main__` any more**; it
+is the finder, the pole and the bars, and `measured.csv` superseded
+`steps.csv`.
+
+## Traps a new session should know
+
+- **`analysis/measured.csv` is what every fit reads.** `analysis/steps.csv` is
+  gone and is not regenerated. `fit_ode.load_rows()` is the single loader.
+- **The two graders diverge on one test, on purpose.** `ltspm3/tools/sweep.py`
+  puts the no-believable-pole guard on the plant's τ; `analysis/steps.py` keeps
+  the wall clock because invariant 1 forbids it a plant model, and refuses to
+  believe a pinned pole instead. Both say so at `MIN_SPAN_S`. Do not reconcile
+  them.
+- **`fit_ode` is still on its own error model.** `load_anchors` computes
+  `hypot(ANCHOR_SIGMA_K[era], max(0.3, 2·|settle_K|))`; switching it onto
+  Phase A's `sigma_T_inf` is Phase B steps 6–8, deliberately after the review.
+- **The manifest is the dataset.** A change to the finder or its constants
+  arrives as a `curate.py --propose` diff somebody reads. Do not let a
+  heuristic rediscover it per run.
+- **A long bash heredoc fails in this environment** (roughly 100 lines and up,
+  `unexpected EOF looking for matching quote`, even when the body is balanced).
+  Write the script to a file and run it.
