@@ -65,8 +65,11 @@ def evaluate():
     """The production fit, sampled onto the grid."""
     data, w = F.load_decimated()
     top = float(data[1].max())
+    # groups=, like plot_gain.py: the July-August anchors get a free power
+    # offset so the curve THIS EXPORTS describes the cryostat's present state
+    # rather than splitting the difference with a state it left in August.
     r = F.fit(N_LAM, N_CAP, data, F.load_anchors(t_max=top), F.load_taus(t_max=top),
-              weights=w, n_drift=N_DRIFT)
+              weights=w, n_drift=N_DRIFT, groups=F.anchor_groups(t_max=top))
     rows = [x for x in csv.DictReader(open(F.ANCHORS, newline="", encoding="utf-8"))
             if x.get("grade") and float(x["T_inf"]) <= top]
     tc_of, _, _ = coldplate_of(rows)

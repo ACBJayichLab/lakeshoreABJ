@@ -500,12 +500,56 @@ def test_the_mirrored_grader_constants_still_match_analysis_steps():
         encoding="utf-8")
     for name in ("NOISE_FLOOR_K", "NOISE_QUADRATIC", "MIN_REACH",
                  "MIN_AMPLITUDE_SIGMA", "MAX_SETTLE_K", "MAX_END_RATE_K_PER_H",
-                 "MIN_SPAN_S", "MIN_N"):
+                 "SETTLED_REMAINDER_K", "MIN_SPAN_S", "MIN_N"):
         found = re.search(rf"^{name}\s*=\s*([0-9.e-]+)\s*$", src, re.M)
         assert found, f"analysis/steps.py no longer defines {name} at module level"
         assert float(found.group(1)) == float(getattr(S, name)), (
             f"{name} has diverged: sweep.py says {getattr(S, name)}, "
             f"analysis/steps.py says {found.group(1)}")
+
+
+def test_a_finished_relaxation_is_graded_however_fast_it_was_still_moving():
+    """The 2026-09-05 rejection, as a test, with the measurement that settled it.
+
+    The 114.28 K rung read 0.71 K/h at the last sample -- over the bar -- after
+    running 4.7 time constants with 0.101 K left to go.  The cryostat then held
+    that same output for 69.9 h and came to rest at 114.396 K, so the
+    extrapolation the rate test threw away was right to 0.11 K.
+
+    Built from the numbers rather than from the log: a pole with tau = 512.8 s
+    sampled over 2396 s ending 0.101 K short of 114.28 K reproduces that dwell's
+    reach, remainder and end rate.
+    """
+    tau, span, remainder, T_inf = 512.8, 2396.0, 0.101, 114.28
+    amp = -remainder / math.exp(-span / tau)
+    samples = [(t, T_inf + amp * math.exp(-t / tau))
+               for t in range(0, int(span) + 1, 2)]
+    fit = S.fit_pole(samples)
+
+    assert fit.reach > S.MIN_REACH
+    assert fit.remainder_k < S.SETTLED_REMAINDER_K
+    assert fit.end_rate_k_per_h > S.MAX_END_RATE_K_PER_H   # the old bar rejects it
+    assert fit.grade() == "tau"
+    assert fit.shortfall() == ""
+
+
+def test_a_relaxation_cut_off_early_is_still_refused():
+    """The other half: reach alone must not be enough.
+
+    Same tau, stopped at 1.5 time constants, so it is still 1.2 K from its own
+    T_inf.  Nothing about the new remainder test may let that through -- it is
+    exactly the "cut off mid-flight" case the rate bar exists for.
+    """
+    tau, T_inf, amp = 512.8, 114.28, -5.4
+    span = 1.5 * tau
+    samples = [(t, T_inf + amp * math.exp(-t / tau))
+               for t in range(0, int(span) + 1, 2)]
+    fit = S.fit_pole(samples)
+
+    assert fit.remainder_k > S.SETTLED_REMAINDER_K
+    assert fit.end_rate_k_per_h > S.MAX_END_RATE_K_PER_H
+    assert fit.grade() == ""
+    assert "still moving" in fit.shortfall()
 
 
 def test_a_dwell_shorter_than_the_admission_floor_is_refused_not_clamped(capsys):

@@ -11,10 +11,18 @@ the complexity knob, and they are turned one at a time: a joint grid confounds
 the two and hides the fact that they are not equally constrained.
 
 The settled holds enter as extra residuals rather than as hard constraints.
-They deserve a margin: u=63.072% was held three times in one cooldown and
-landed 2.84 K apart, and the two cooldowns disagree by 3.2 K at matched power.
-So a recorder hold (same cooldown as the sweep) is worth +-1 K and a CD10 hold
-is worth +-3 K, and the fit is free to miss them by that much.
+They deserve a margin: u=63.072% was held three times and landed 2.84 K apart,
+and the July-August logs disagree with the September ones by about 2 K at
+matched power.  So a September hold is worth +-1 K and a ``fit_cd10`` hold is
+worth +-3 K, and the fit is free to miss them by that much.
+
+``fit_cd10`` is NOT a different cooldown -- cooldown 10 started 2026-07-15 and
+is still running.  It is the pre-Python chart-recorder half of this one, and
+the cryostat has drifted across it: at seven outputs where the two halves
+overlap the sample sits 1.8-2.9 K WARMER in September than it did in July and
+August, same sign every time.  That is what the per-group power offset below
+measures, and it is why group 0 -- the recent data -- is the reference: the
+shipped model has to describe the cryostat as it is now.
 
 Integration is exponential Euler: T += g*tau*(1 - exp(-dt/tau)) with
 tau = C/Lambda'.  It is exact for the linearised relaxation and unconditionally
@@ -56,8 +64,11 @@ ANCHORS = "analysis/steps.csv"
 FIT_CACHE_VERSION = 3
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
-#: extrapolation distance.  CD10 is a different cooldown from the sweep and
-#: disagrees with it by 3.2 K at matched power; the recorder is the same one.
+#: extrapolation distance.  Keyed on the source table: ``fit_cd10`` is the
+#: July-August half of this cooldown and sits about 2 K off the September half
+#: at matched power (see the module docstring), so it is given the wider bar.
+#: Everything else -- the sweep, the ladder, both recorder tables -- is the
+#: current state and shares the narrow one.
 ANCHOR_SIGMA_K = {"fit_recorder": 1.0, "fit_cd10": 3.0}
 ANCHOR_FLOOR_K = 0.3
 
@@ -292,12 +303,18 @@ def _rows(path=ANCHORS):
 
 
 def anchor_groups(path=ANCHORS, t_max=None):
-    """Which cooldown each anchor came from: 0 for the sweep's own, 1 for CD10.
+    """Which half of the cooldown each anchor came from: 0 recent, 1 fit_cd10.
 
-    The two are known to disagree by about 3 K at matched power -- different
-    contact, different radiation, a different parasitic load -- and no single
-    Lambda can satisfy both.  Fitted as one free power offset per cooldown,
-    that stops being an error and becomes a measurement; see `fit(groups=...)`.
+    One cooldown, two states.  The July-August logs disagree with the September
+    ones by 1.8-2.9 K at matched output, measured directly at seven overlapping
+    outputs, and no single Lambda can satisfy both.  Fitted as one free power
+    offset, that stops being an error and becomes a measurement; see
+    `fit(groups=...)`.
+
+    Group 0 is the reference and gets no offset, so the curve itself describes
+    the recent state -- which is the one the simulator and the loop have to
+    match.  PASS THIS to `fit()` for anything that ships; without it the
+    shipped curve splits the difference and is about 1 K wrong for both.
     """
     out = []
     for r in _rows(path):
@@ -620,8 +637,8 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     # knots a spline's extra smoothness buys nothing and its overshoot is one
     # more way for a nuisance term to reach somewhere it should not.
     # One free power offset per anchor group beyond the first.  Group 0 is the
-    # sweep's own cooldown and is the reference, so it gets no offset -- an
-    # offset on every group would be degenerate with Lambda's own level.
+    # recent state and is the reference, so it gets no offset -- an offset on
+    # every group would be degenerate with Lambda's own level.
     groups = np.zeros(len(aT), int) if groups is None else np.asarray(groups, int)
     n_group = int(groups.max()) if len(groups) else 0
 
@@ -696,10 +713,18 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
                         + ([np.array(TIER2_SEED)] if tier2 else [])
                         + ([np.zeros(n_drift)] if n_drift else [])
                         + ([np.zeros(n_group)] if n_group else []))
-    key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aQ,
+    # EVERY constant the objective reads goes in the key, not just the ones
+    # that were being tuned the day it was written.  ANCHOR_SHARE was not in
+    # here, so a study that varied it got the first run's answer back four
+    # times and the knob looked dead -- the same failure mode LAMBDA_SMOOTH_SHARE
+    # was caught by, one level up.
+    key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aQ, aS,
                     tauV, w_sweep, groups,
-                    np.array([n_drift, LAMBDA_SMOOTH_SHARE,
-                              LAMBDA_SMOOTH_SIGMA], float))
+                    np.array([n_drift, LAMBDA_SMOOTH_SHARE, LAMBDA_SMOOTH_SIGMA,
+                              ANCHOR_SHARE, ANCHOR_FLOOR_K, TAU_SHARE,
+                              TAU_SIGMA_FACTOR, SWEEP_SIGMA_REL, DRIFT_SHARE,
+                              DRIFT_SIGMA_W, CAP_SHAPE_SHARE, CAP_SHAPE_FACTOR,
+                              CAP_SHAPE_REF_K], float))
     hit = cache_load(key, len(p0))
     if hit is not None:
         x, nfev = hit

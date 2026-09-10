@@ -36,7 +36,8 @@ import math
 import numpy as np
 from scipy.optimize import minimize_scalar
 
-from _data import FIT_CD10, FIT_RECORDER, LADDER, SWEEP, open_table
+from _data import (FIT_CD10, FIT_RECORDER, FIT_RECORDER_POSTCAL, LADDER, SWEEP,
+                   open_table)
 
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
 
@@ -197,6 +198,10 @@ def analyse(path, label=None):
             "rms_sigma": rms / sigma,
             # |dT/dt| at the last sample, from the fitted pole
             "end_rate_k_per_h": 3600.0 * abs(A) / tau * math.exp(-span / tau),
+            # ...and how far it still had to travel, from the same pole.  This
+            # is settle_K without the last sample's noise in it; see
+            # SETTLED_REMAINDER_K.
+            "remainder_K": abs(A) * math.exp(-span / tau),
             "Coldplate": float(np.nanmean(Tc[a:b])),
         })
     return rows
@@ -205,6 +210,19 @@ def analyse(path, label=None):
 #: The question a dwell has to answer is "were you still moving when you
 #: ended", and this is the rate at which it was, in K/h, read off the fitted
 #: pole at the last sample.
+#:
+#: A RATE ALONE CANNOT ANSWER IT ON THIS CRYOSTAT, which is what
+#: SETTLED_REMAINDER_K below is for.  tau runs from a few seconds at 10 K to
+#: about 500 s at 115 K, a factor of 500, so the same K/h means opposite things
+#: at the two ends: at 70 K, 0.6 K/h is 0.04 K of travel left and a minute to
+#: do it in; at 115 K it is real movement still to come.  Read as a bar on its
+#: own it kept a 68 K dwell that had run 1.3 time constants and dropped a 70 K
+#: dwell that had run 5.3 and was within 0.04 K of its answer.
+#:
+#: The 2026-09-05 ladder settled that empirically.  Its 114.28 K rung was
+#: rejected here for 0.71 K/h; the cryostat then sat at that same output for
+#: 69.9 h and came to rest at 114.396 K.  The rejected extrapolation was right
+#: to 0.11 K.
 #:
 #: It replaces a test on total amplitude, which asked "did you move at all" and
 #: got the long holds exactly backwards.  A 22.8 h hold at 180 K that drifts
@@ -222,12 +240,45 @@ def analyse(path, label=None):
 #:     170 s at 116.89 K      31     K/h    cut off mid-relaxation, drop
 MAX_END_RATE_K_PER_H = 0.5
 
+#: ...and the other way to answer the same question, for a dwell that was
+#: DESIGNED rather than found: it ran at least MIN_REACH time constants and the
+#: fitted pole says this little is left to go.  Either test passing is enough.
+#:
+#: The remainder, not ``settle_K``.  They are the same distance measured two
+#: ways -- ``remainder_K`` is the fitted curve's own ``|A| exp(-span/tau)``,
+#: ``settle_K`` is ``T_inf`` minus the LAST SAMPLE -- and at 114 K one sample
+#: carries about 30 mK of noise, which is a third of the bar.  The 114.28 K
+#: rung reads 0.042 K one way and 0.101 K the other for that reason alone.  A
+#: threshold has to be applied to the smooth one.
+#:
+#: 0.15 K, and it is tied to something rather than chosen: it is half
+#: ``fit_ode.ANCHOR_FLOOR_K``, so an admitted dwell's extrapolation lands
+#: exactly at the smallest error bar the fit gives any anchor
+#: (``own = max(0.3, 2*settle)``).  A remainder the error model already covers
+#: cannot change an answer.  Measured, it also sits in a gap: the dwells this
+#: admits run 0.001-0.139 K, the ones it does not, 0.225 and 0.393.
+#:
+#: Both halves are needed.  Reach alone would admit a 70 s dwell whose fitted
+#: tau is 20 s because the fit had nothing but noise to work with; the
+#: remainder alone would admit a slow drift that has barely started.  Together
+#: they say "this relaxation is over", which is the only thing a steady point
+#: has to be true of, and they say it in units the plant sets rather than in
+#: K/h, which it does not.
+SETTLED_REMAINDER_K = 0.15
+
+
+def settled(r):
+    """Is this dwell's relaxation over?  Either test may answer yes."""
+    return (r["end_rate_k_per_h"] <= MAX_END_RATE_K_PER_H
+            or (r["reach"] >= MIN_REACH
+                and r["remainder_K"] <= SETTLED_REMAINDER_K))
+
 
 def grade(r):
     """'tau' if the time constant may be believed, 'steady' if only T_inf, else ''."""
     if abs(r["settle_K"]) > MAX_SETTLE_K:
         return ""
-    if r["end_rate_k_per_h"] > MAX_END_RATE_K_PER_H:
+    if not settled(r):
         return ""
     if (r["reach"] >= MIN_REACH and r["amp_sigma"] >= MIN_AMPLITUDE_SIGMA
             and r["rms_sigma"] < 8.0):
@@ -241,11 +292,15 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(
         description="fit every constant-heater dwell as a relaxation")
     # Defaulted, so `python analysis/steps.py` just works in a fresh clone.
-    # The three tables are versioned in reference/heater-calibration/ and are
-    # resolved by name, not by path -- see analysis/_data.py.
+    # They are versioned in reference/heater-calibration/ and are resolved by
+    # name, not by path -- see analysis/_data.py.  Order matters only for the
+    # dedup below, which keeps the FIRST sighting of a dwell: the region
+    # exports come first because they are the primary record of the runs they
+    # cover, and the flattened daily logs after.
     ap.add_argument("paths", nargs="*",
-                    default=[SWEEP, LADDER, FIT_RECORDER, FIT_CD10],
-                    help="input tables (default: the four versioned ones)")
+                    default=[SWEEP, LADDER, FIT_RECORDER_POSTCAL, FIT_RECORDER,
+                             FIT_CD10],
+                    help="input tables (default: the five versioned ones)")
     ap.add_argument("-o", "--out", default="analysis/steps.csv")
     a = ap.parse_args()
 

@@ -132,10 +132,18 @@ MIN_AMPLITUDE_SIGMA = 20.0
 #: value is a prediction of the model being fitted rather than a measurement.
 MAX_SETTLE_K = 2.0
 #: How fast the sample may still be moving when the dwell ends, in K/h, read
-#: off the fitted pole at the last sample.  This is the test that separates a
-#: settled hold from one cut off mid-relaxation; total amplitude gets that
-#: backwards for the long holds.
+#: off the fitted pole at the last sample.  This is one of the two tests that
+#: separate a settled hold from one cut off mid-relaxation; total amplitude
+#: gets that backwards for the long holds.
 MAX_END_RATE_K_PER_H = 0.5
+#: The other one, and the one a DESIGNED dwell passes: it ran at least
+#: MIN_REACH time constants and the fitted pole says this little is left to go.
+#: A rate in K/h cannot decide this on a plant whose tau spans 4 s to 500 s --
+#: the same K/h is a finished relaxation at one end and an unfinished one at
+#: the other.  Either test passing is enough.  Measured on the fitted curve and
+#: not on the last sample, which carries 30 mK of noise at 114 K.  See
+#: analysis/steps.py, which this mirrors, for where the number comes from.
+SETTLED_REMAINDER_K = 0.15
 
 #: A dwell shorter than this, or with fewer samples than MIN_N, is not graded by
 #: ``analysis/steps.py`` at all -- see the note at the top of this block.  MIN_N
@@ -269,12 +277,30 @@ class PoleFit:
         return 3600.0 * abs(self.amp) / self.tau_s * math.exp(-self.span_s / self.tau_s)
 
     @property
+    def remainder_k(self) -> float:
+        """How far the fitted pole still had to travel when the dwell ended.
+
+        ``settle_k`` is the same distance measured against the last SAMPLE, so
+        it carries that sample's noise; this one does not.  Both are reported.
+        """
+        if self.tau_s <= 0:
+            return 0.0
+        return abs(self.amp) * math.exp(-self.span_s / self.tau_s)
+
+    @property
     def amp_sigma(self) -> float:
         return abs(self.amp) / noise_k(self.mean_k)
 
     @property
     def rms_sigma(self) -> float:
         return self.rms_k / noise_k(self.mean_k)
+
+    def settled(self, *, min_reach: float = MIN_REACH,
+                max_end_rate: float = MAX_END_RATE_K_PER_H) -> bool:
+        """Is this dwell's relaxation over?  Either test may answer yes."""
+        return (self.end_rate_k_per_h <= max_end_rate
+                or (self.reach >= min_reach
+                    and self.remainder_k <= SETTLED_REMAINDER_K))
 
     def grade(self, *, min_reach: float = MIN_REACH,
               max_settle_k: float = MAX_SETTLE_K,
@@ -283,7 +309,7 @@ class PoleFit:
         ``T_inf`` may be, ``''`` if the dwell ended too early to be either."""
         if abs(self.settle_k) > max_settle_k:
             return ""
-        if self.end_rate_k_per_h > max_end_rate:
+        if not self.settled(min_reach=min_reach, max_end_rate=max_end_rate):
             return ""
         if (self.reach >= min_reach and self.amp_sigma >= MIN_AMPLITUDE_SIGMA
                 and self.rms_sigma < 8.0):
@@ -304,8 +330,9 @@ class PoleFit:
         why = []
         if abs(self.settle_k) > max_settle_k:
             why.append(f"{abs(self.settle_k):.2f} K still to go")
-        if self.end_rate_k_per_h > max_end_rate:
-            why.append(f"still moving {self.end_rate_k_per_h:.2f} K/h")
+        if not self.settled(min_reach=min_reach, max_end_rate=max_end_rate):
+            why.append(f"still moving {self.end_rate_k_per_h:.2f} K/h "
+                       f"after {self.reach:.1f} time constants")
         if why:
             return ", ".join(why)
         if self.amp_sigma < MIN_AMPLITUDE_SIGMA:

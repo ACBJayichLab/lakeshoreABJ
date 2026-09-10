@@ -64,8 +64,39 @@ SWEEP = "region_20260903-123832_complete_sweep_even_larger.csv"
 #: and needs no remap, unlike everything above.
 LADDER = "region_20260905-114532_many_tau_steps.csv"
 #: Flattened recorder and CD10 logs -- the dwells steps.py extracts from.
+#:
+#: ``fit_cd10`` is the EARLY part of this same cooldown -- cooldown 10 began on
+#: 2026-07-15 and is still running -- logged by the pre-Python chart recorder,
+#: so its heater column is reconstructed from the commands in the Notes rather
+#: than read back.  It is not a different cooldown, whatever an earlier
+#: revision of this file and of analysis/README.md said.  It IS a different
+#: STATE: at seven outputs where the two overlap the sample sits 1.8-2.9 K
+#: warmer in the September logs than it did in July and August, same sign every
+#: time, which is why fit_ode fits it a free power offset.
 FIT_RECORDER = "fit_recorder.csv"
 FIT_CD10 = "fit_cd10.csv"
+#: The recorder's own log from just after the 2026-09-04 12:07 Coldplate
+#: recalibration to 2026-09-09 16:14 -- 112.6 h, one segment, 2 s cadence.
+#:
+#: It is here for three holds that nothing else in this directory has, all of
+#: them settled to under 1.4 mK/h and all in the band the 43 h sweep walked
+#: straight through:
+#:
+#:     11.52 h at 62.347%   ->  96.516 K
+#:     69.94 h at 63.699%   -> 114.390 K
+#:     24.47 h at 64.015%   -> 118.609 K
+#:
+#: Those are the measurements that condemned the first fit: it reads them
+#: 4.35, 4.42 and 4.44 K low.  They also check the 2026-09-05 ladder, whose
+#: 114.28 K rung -- rejected by the old end-rate bar -- differs from the 69.9 h
+#: hold at the same output by 0.11 K.
+#:
+#: The 63.699 -> 64.015% step on 2026-09-08 is a clean 4 K relaxation with a
+#: full settle after it, which is a tau at 118 K measured rather than inferred.
+#:
+#: Entirely POST-cutover, so its Coldplate is on the corrected X186279 curve as
+#: the recorder wrote it and it needs no remap, unlike everything above.
+FIT_RECORDER_POSTCAL = "fit_recorder_postcal.csv"
 
 
 def resolve(name: str) -> str:
