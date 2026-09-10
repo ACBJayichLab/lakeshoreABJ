@@ -552,7 +552,7 @@ def test_a_relaxation_cut_off_early_is_still_refused():
     assert "still moving" in fit.shortfall()
 
 
-def test_a_short_dwell_with_a_real_transient_in_it_is_allowed(capsys):
+def test_a_short_dwell_with_a_real_transient_in_it_is_allowed(capsys, tmp_path):
     """The 2026-09-05 loss, the other way round -- and this is the fix, not the bug.
 
     These three rungs ran 46 s each on the day.  At 20-26 K tau is about 4 s, so
@@ -567,8 +567,15 @@ def test_a_short_dwell_with_a_real_transient_in_it_is_allowed(capsys):
     lives in ``settled()`` and applies only where the pole cannot be believed,
     so this must RUN.
     """
+    # --journal, explicitly.  A simulated run's status carries no recorder path,
+    # so default_journal_path falls back to "." and this test dropped a
+    # sweep-<stamp>.csv into whatever directory pytest was started from on every
+    # run -- hidden by the blanket *.csv in .gitignore, which is what made the
+    # strays self-renewing (AUDIT-2026-09-10 finding 3).  It also broke the
+    # house rule that a test must not depend on the working directory, in the
+    # write direction.
     rc = S.main(["--percents", "45.31,47.69,49.82", "--min-dwell", "45",
-                 "--simulate"])
+                 "--simulate", "--journal", str(tmp_path / "rehearsal.csv")])
     out, _ = capsys.readouterr()
     assert rc == 0
     assert "dwells graded" in out
