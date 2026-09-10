@@ -41,7 +41,6 @@ extends down there is a separate question that has not been asked yet.
 """
 from __future__ import annotations
 
-import csv
 import math
 import sys
 
@@ -213,7 +212,7 @@ def main():
               f"{1e3 * r['drift_w'].max():+.2f} mW over {hi and 43:.0f} h, "
               f"against an 800 mW heater")
 
-    rows = [x for x in csv.DictReader(open(F.ANCHORS, newline="", encoding="utf-8"))
+    rows = [x for x in F.load_rows()
             if x.get("grade") and _g(x, "T_inf") <= hi]
     tc_of, _, _ = coldplate_of(rows)
 

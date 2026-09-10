@@ -1,8 +1,11 @@
 # Thermal model refit — plan
 
-**Status: PHASE 0 DONE, manifest reviewed, first pause cleared. Phase A is next.**
+**Status: PHASE A DONE and awaiting review. Phase B is next, after the pause.**
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
 manifest) and the commit after it (the rewiring and the deletion).
+**Read AUDIT-2026-09-10.md finding 2 before Phase B** - Phase A fixes the hold
+half of it and not the jump half, and the audit's prescription as written would
+drop two holds Phase A shows are good anchors. See section 6.1.
 **Shape:** three phases, two hard pauses. Phase 0 → *pause* → Phase A → *pause* → Phase B.
 Update this Status line as phases land.
 
@@ -14,7 +17,8 @@ Update this Status line as phases land.
 | **done** | §5.4 — the fresh export past 2026-09-09 18:06. The transient is in `cd10_20260904_recorder.csv.gz` segment 0, recording continuous across it |
 | **done** | §5.2 the manifest — `reference/cooldown-10/segments.csv`, 315 windows. §5.3 `analysis/segments.py` + `analysis/curate.py` |
 | **done** | the rewiring. `_data.py`, `steps.py`, `plot_ladder.py`, `decimate.py` and `fit_ode.load_sweep` read the archive; the five old tables are deleted |
-| **next** | Phase A (§6). The manifest review is done and its one finding is fixed |
+| **done** | Phase A (§6) - `analysis/measure.py`, `analysis/measured.csv`, all four exit criteria met by `measure.py --verify`. Findings in §6.1 |
+| **next** | AUDIT-2026-09-10 finding 2, then Phase B (§7) |
 
 Everything in `analysis/` reads the archive. The five overlapping tables in
 `reference/heater-calibration/` are gone; only `sweep_decimated.csv.gz`
@@ -340,6 +344,11 @@ Output `analysis/measured.csv`, superseding `analysis/steps.csv`.
 > `plan_sweep.py:82`, `pid_tuning.py:108`, `plot_ode.py:49`,
 > `fit_lambda.py:46`). Route them through the loader while they are being
 > touched.
+>
+> **Done, and further than that.** All five now call `fit_ode.load_rows()`,
+> which is the old private `_rows` promoted — one loader for the anchor table
+> instead of five, and it resolves against `REPO_ROOT` rather than the working
+> directory, which is AUDIT-2026-09-10 finding 5's second item.
 
 ### Exit criteria
 
@@ -347,6 +356,91 @@ Output `analysis/measured.csv`, superseding `analysis/steps.csv`.
   temperatures (96.516, 114.390, 118.609 K).
 - The diurnal amplitude is a **measured number with a phase**, not an assumption.
 - Uncertainties are populated for every row and are not all equal.
+
+### 6.1 What Phase A found — read this at the pause
+
+Everything below is reproducible with `analysis/measure.py --holds --verify`.
+
+**Exit criteria: all four met.** The three hold temperatures reproduce to
+**−0.5, +2.3 and −17.9 mK** once the fitted drift is run back to the end of the
+hold, which is where §2.1's numbers were quoted; all three are inside their own
+2σ. τ at 118 K is **524.7 ± 4.5 s** against 525.
+
+**τ at 114 K was two different windows all along.** 513 s is the first **40
+minutes** of `pc-20260905-165509` — what the pre-archive region export
+contained — and the archive merges that rung into the hold that followed it,
+because the sweep tool left the heater there and nothing moved for three days.
+Fitted over all 70 h the same relaxation converges on **534.0 ± 6.0 s**. The
+40-minute window reads **4.0 % low at reach 4.7**, which is `fit_pole`'s own
+documented reach bias, measured rather than argued. `sigma_tau_s` is
+statistical and does **not** contain it.
+
+**A single pole is the wrong model for a hold, and it was costing kelvins.**
+Once a relaxation is over the exponential has only the cryostat's drift left to
+describe, and it describes it — returning τ of days and an asymptote the sample
+never reaches. Fitting level + drift + relaxation + a 24 h harmonic instead
+moves eight graded anchors, four of them past a kelvin:
+
+| hold | span | pole | Phase A | move | drift |
+|---|---|---|---|---|---|
+| `rec-20260828-141631` | 74.9 h | 150.423 | 148.889 | **−1.534** | +4.23 mK/h |
+| `pp-20260815-100312` | 16.6 h | 145.996 | 147.451 | **+1.455** | −4.96 mK/h |
+| `pp-20260723-112526` | 56.7 h | 99.966 | 98.858 | **−1.108** | +15.72 mK/h |
+| `pp-20260813-133702` | 9.8 h | 141.993 | 142.808 | +0.815 | −6.32 mK/h |
+| `pp-20260809-231502` | 32.9 h | 133.563 | 133.170 | −0.393 | +5.86 mK/h |
+
+These are anchors the fit has been reading for the whole campaign. `T_pole` is
+kept beside `T_inf` in `measured.csv` so the change stays auditable.
+
+**This is the hold half of AUDIT-2026-09-10 finding 2, and it changes the
+fix.** Two of the audit's seven ceiling-pinned anchors are
+`pp-20260813-133702` and `pp-20260815-100312` above — its −0.76 K and −1.36 K
+rows, and its worst example. The audit's prescription, "refuse any grade for a
+ceiling pin", would **drop both**, when what was wrong was the model and not
+the window. The bound test wants to be per-kind, or to run after a hold gets
+its proper fit. The jump half is untouched by Phase A and still needs the
+audit's fix: **8 τ-graded floor pins** at 5.4–25.1 K, all `jump`s.
+`measured.csv` reports every pin in `tau_pinned` and `flags` — reported, not
+refused, because grading is `steps.py`'s and reaches a fit through the
+manifest.
+
+**The diurnal amplitude is measured. Its phase is not.** Eight holds span a
+full day; amplitudes **3.9 to 69.2 mK, median 16.19**, and that median sets
+`sigma_long = 11.45 mK` on every row. But the peak hour comes back at 0.1, 2.1,
+8.3, 15.7, 19.4, 19.6, 22.4 and 22.9 — scattered over the whole 24 h. **So
+this is a bound on day-timescale wander, not a building cycle with a known
+clock, and Phase B must not model it as one.**
+
+**24 h, not 8 h, is where the harmonic becomes identifiable.** §5's `HOLD_MIN_S`
+docstring claims 8 h suffices because the cycle shows as curvature there. It
+does not survive contact with a free drift and a free exponential in the same
+model: fitted below a period the harmonic runs away, and the four shortest
+holds return 464, 306, 300 and 299 mK. So `HARMONIC_MIN_S = 86400`, and a
+shorter hold takes the cycle in its error bar instead of in its model.
+
+**The statistical bar has to carry the residual's autocorrelation.** The 218's
+noise is mostly slow wander, so the 70 h hold's 125,888 samples are worth
+**84** independent ones (an autocorrelation time near 3,000 s). Without that
+inflation its error on the mean is tens of microkelvin and it outvotes every
+other anchor for having sat still. `n_eff` and `act_s` are in the table so the
+claim is auditable. Two bugs found writing this: `pinv` was discarding the τ
+direction of a hold's covariance as numerically absent, publishing
+`sigma_tau_s` of **exactly 0.000** for six of seven τ-graded holds (the columns
+span seven orders of magnitude and are now normalised before the inverse); and
+the manifest's second-resolution `t_end` was dropping the last sample of 308 of
+312 windows, worth up to **0.50 K** of `T_inf` and 83 % of a τ — fixed by
+recording boundaries to the millisecond.
+
+**Anchor error bars now run 11.5 mK to 668 mK, median 14.2 mK**, over 149
+anchors — populated, and not all equal.
+
+**Still on fit_ode's own error model.** `load_anchors` continues to compute
+`hypot(ANCHOR_SIGMA_K[era], max(0.3, 2·|settle_K|))`; switching it onto
+`sigma_T_inf` is Phase B steps 6–8, deliberately after this review. But note
+that `settle_K` itself has changed for holds — it is now the drift across half
+the window rather than a pole's extrapolation — so `rec-20260828-141631`'s bar
+goes from 3.36 K to 0.32 K while its position moves 1.53 K. **The fit will
+move at Phase B step 1, and that is not a refactor failing to be inert.**
 
 > ### ⏸ PAUSE — review the measurement table before fitting anything to it.
 > Stage A is the direct measurement. If it is wrong, Stage B will fit it

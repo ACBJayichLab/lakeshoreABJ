@@ -41,7 +41,6 @@ Gains come out in PIDConfig's units -- kp in percent per kelvin, ti in seconds.
 """
 from __future__ import annotations
 
-import csv
 import sys
 
 import matplotlib
@@ -105,7 +104,7 @@ def plant():
     hi = float(data[1].max())
     anchors, taus = F.load_anchors(t_max=hi), F.load_taus(t_max=hi)
     r = F.fit(N_LAM, N_CAP, data, anchors, taus)
-    rows = [x for x in csv.DictReader(open(F.ANCHORS, newline="", encoding="utf-8"))
+    rows = [x for x in F.load_rows()
             if x.get("grade")
             and float(x["T_inf"]) <= hi]
     tc_of, _, _ = coldplate_of(rows)

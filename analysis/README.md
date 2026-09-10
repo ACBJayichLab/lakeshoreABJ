@@ -166,7 +166,7 @@ per-era power offset, and three plots. They knew it by
 `source.startswith("fit_cd10")`, and the failure mode of that was silent — an
 input rename would make every anchor `recent`, the offset would fit nothing, and
 the curve would come out about a kelvin wrong for both halves with no symptom.
-`steps.csv` carries `era` in {`prepython`, `recorder`, `postcal`},
+`measured.csv` carries `era` in {`prepython`, `recorder`, `postcal`},
 `segments.ERAS` is the map, and an era with no entry raises. The `prepython`
 set is 37 anchors, which is the old `fit_cd10` set exactly.
 
@@ -193,9 +193,11 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 # 0. is the manifest still what the finder proposes?   (~1 min)
 .venv/Scripts/python.exe analysis/curate.py --propose
 
-# 1. dwells -> steady points and time constants        (~1 min)
-#    no arguments: it reads the archive and the manifest's masks
-.venv/Scripts/python.exe analysis/steps.py
+# 1. the manifest's windows -> measurements with error bars   (~15 s)
+#    no arguments: it reads the archive and the committed manifest
+.venv/Scripts/python.exe analysis/measure.py
+.venv/Scripts/python.exe analysis/measure.py --holds     # drift, diurnal, baths
+.venv/Scripts/python.exe analysis/measure.py --verify    # REFIT_PLAN.md 6's gate
 
 # 2. the complexity ladder -> analysis/ladder.csv      (~15 min, 4 workers)
 .venv/Scripts/python.exe analysis/fit_ode.py
@@ -235,7 +237,8 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 
 | | |
 |---|---|
-| `steps.py` | every constant-heater dwell fitted as `T = T∞ + A e^(−t/τ)`. Gives `T∞` extrapolated, `τ` measured, and the extrapolation distance as an error bar. `archive_dwells()` is the **one** scan of the archive — `curate.py` builds the manifest from it and this module's own `__main__` writes `steps.csv` from it, so the two cannot come to disagree about which dwells exist. **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
+| `steps.py` | the finder, the pole and the bars — **no `__main__` any more**, see `measure.py`. `archive_dwells()` is the **one** scan of the archive and `curate.py` builds the manifest from it. `fit_pole` fits `T = T∞ + A e^(−t/τ)`; `pole_bounds` says what interval it searched τ on, because a τ *at* a bound is the search giving up and neither grader notices (AUDIT-2026-09-10 finding 2). **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
+| `measure.py` | **what a fit reads.** Measures the windows the manifest names and writes `measured.csv`: a jump keeps `fit_pole`'s numbers exactly, a hold gets level + drift + relaxation + a 24 h harmonic, and every row carries `sigma_T_inf` = statistical ⊕ extrapolation ⊕ the measured long-term fluctuation, plus `t_mid` and `days`. `--verify` checks REFIT_PLAN.md §6's exit criteria. **A single pole is the wrong model for a hold** and had four graded anchors 0.4–1.7 K out; `T_pole` is kept beside `T_inf` so that stays visible. |
 | `fit_ode.py` | integrates the ODE down the 8.8 h sweep and fits Λ and C as monotone cubics in (log T, log y). One curve's knots freed at a time. Writes `ladder.csv`. |
 | `decimate.py` | the sweep, thinned where nothing is happening and kept where it is. **16x fewer samples, 26x faster to fit, 0.8% different.** Writes `sweep_decimated.csv.gz` |
 | `bath.py` | the coldplate as a first-order lag driven by the heater, not as a bath. **tau = 175 s, 27.6 mK rms over a 2.30 K swing.** What makes the plant self-contained |

@@ -277,6 +277,15 @@ analysis/            EXPLORATORY, not shipped. Fits the thermal model from the
                        heuristic rediscovers per run, so a change to the dwell
                        finder or its constants arrives as a diff somebody has
                        to look at. `--propose` prints none on a clean tree.
+                     measure.py     measures the windows the manifest names and
+                       writes measured.csv, WHICH IS WHAT EVERY FIT READS. A
+                       jump keeps fit_pole's numbers; a hold gets level, drift,
+                       relaxation and a 24 h harmonic, because a single pole on
+                       a settled hold fits the cryostat's drift as a relaxation
+                       and put four graded anchors 0.4-1.7 K out. Every row
+                       carries an error bar with the residual's autocorrelation
+                       in it and the measured long-term fluctuation under it.
+                       `--verify` is REFIT_PLAN.md 6's exit gate.
 ```
 
 ## Conventions

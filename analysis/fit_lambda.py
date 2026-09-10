@@ -23,7 +23,7 @@ from scipy.optimize import least_squares
 
 import _data
 
-SRC = "analysis/steps.csv"
+SRC = "analysis/measured.csv"
 SIGMA = 5.670e-8
 #: Above this the only dwells are CD10's 07-16 ones, taken mid-cooldown with
 #: the cryostat still falling.  They relax cleanly, so steps.py grades them

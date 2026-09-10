@@ -66,7 +66,7 @@ R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
 #: -- the same hold whose approach the export cut off 3.3 h into is what made
 #: the opening anchor read 180.07 K instead of 180.563 K.
 SWEEP = "trace-sweep-20260902"
-ANCHORS = "analysis/steps.csv"
+ANCHORS = "analysis/measured.csv"
 
 #: Bump when anything about the parameterisation or the objective changes.
 #: It is part of the cache key, so bumping it invalidates every stored fit
@@ -323,7 +323,15 @@ def load_decimated(path=DECIMATED):
             np.sqrt(span / span.mean()))
 
 
-def _rows(path=ANCHORS):
+def load_rows(path=ANCHORS):
+    """The measurement table as plain dicts, resolved against the repository.
+
+    Public, and the only way anything reads that file.  Five plotting and
+    export modules used to open it with a bare ``open()`` relative to the
+    working directory while this module resolved it against ``REPO_ROOT``, so
+    run from anywhere but the repository root the fit loaded and the anchor
+    rows silently did not (AUDIT-2026-09-10.md, finding 5).
+    """
     with open_table(path) as fh:
         return list(csv.DictReader(fh))
 
@@ -343,7 +351,7 @@ def anchor_groups(path=ANCHORS, t_max=None):
     shipped curve splits the difference and is about 1 K wrong for both.
     """
     out = []
-    for r in _rows(path):
+    for r in load_rows(path):
         if not r.get("grade"):
             continue
         if t_max is not None and _f(r, "T_inf") > t_max:
@@ -369,7 +377,7 @@ def _era_sigma(row) -> float:
 def load_anchors(path=ANCHORS, t_max=None):
     """Every dwell whose steady state is usable, with its own error bar."""
     out = []
-    for r in _rows(path):
+    for r in load_rows(path):
         if not r.get("grade"):
             continue
         T = _f(r, "T_inf")
@@ -385,7 +393,7 @@ def load_anchors(path=ANCHORS, t_max=None):
 def load_taus(path=ANCHORS, t_max=None):
     """Dwells whose relaxation ran long enough for tau to mean something."""
     out = []
-    for r in _rows(path):
+    for r in load_rows(path):
         if r.get("grade") != "tau":
             continue
         T = _f(r, "T_inf")

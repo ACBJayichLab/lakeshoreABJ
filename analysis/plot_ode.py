@@ -7,7 +7,6 @@ to read a phenomenological fit.
 """
 from __future__ import annotations
 
-import csv
 import math
 import os
 import sys
@@ -46,7 +45,7 @@ def _g(r, k):
 
 def anchor_rows(t_max=None):
     """Settled dwells, from the relaxation fits in analysis/steps.py."""
-    rows = list(csv.DictReader(open(F.ANCHORS, newline="", encoding="utf-8")))
+    rows = F.load_rows()
     return [r for r in rows if r.get("grade")
             and (t_max is None or _g(r, "T_inf") <= t_max)]
 
@@ -191,7 +190,7 @@ def diagnostics_figure(fits, data, grid):
 
     a = ax[2]
     if os.path.exists(F.LADDER_CSV):
-        rows = list(csv.DictReader(open(F.LADDER_CSV, newline="", encoding="utf-8")))
+        rows = F.load_rows(F.LADDER_CSV)
         lam_rows = [r for r in rows if r["axis"] == "Lambda"]
         cap_rows = [r for r in rows if r["axis"] == "C"]
         a.semilogy([int(r["n_lam"]) for r in lam_rows],

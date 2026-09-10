@@ -186,10 +186,31 @@ def dwells(t, T, Tc, u, seg, stamps, min_span_s=0.0, min_n=MIN_N):
     return out
 
 
+#: The tau search runs from this many samples of the log's own cadence...
+POLE_TAU_MIN_SAMPLES = 2.0
+#: ...to this many times the dwell's span.  The upper end is deliberately loose
+#: so that a dwell which has NOT settled says so by returning a tau longer than
+#: itself, instead of being clipped into looking settled.
+POLE_TAU_SPAN_FACTOR = 20.0
+
+
+def pole_bounds(t):
+    """``(lo, hi)`` -- the interval :func:`fit_pole` searches tau on.
+
+    Exposed, and not inlined where it is used, because **a tau AT one of these
+    bounds is the search saying "outside what I can see" and neither grader
+    notices** (AUDIT-2026-09-10.md, finding 2).  Anything that wants to test
+    for that has to be able to ask what the bounds were, and a caller that
+    recomputes them from its own copy of the two factors is one edit away from
+    testing against the wrong number.
+    """
+    return (max(POLE_TAU_MIN_SAMPLES * float(np.median(np.diff(t))), 1.0),
+            POLE_TAU_SPAN_FACTOR * float(t[-1] - t[0]))
+
+
 def fit_pole(t, y):
     """T(t) = T_inf + A exp(-t/tau).  Returns (T_inf, A, tau, rms)."""
     t = t - t[0]
-    span = t[-1]
 
     def solve(tau):
         e = np.exp(-t / tau)
@@ -197,11 +218,7 @@ def fit_pole(t, y):
         coef, *_ = np.linalg.lstsq(M, y, rcond=None)
         return coef, float(np.sqrt(np.mean((M @ coef - y) ** 2)))
 
-    # tau anywhere from a couple of samples to several times the dwell: the
-    # upper end is deliberately loose so a dwell that has NOT settled says so
-    # by returning a tau longer than itself, instead of being clipped into
-    # looking settled
-    lo, hi = max(2.0 * np.median(np.diff(t)), 1.0), 20.0 * span
+    lo, hi = pole_bounds(t)
     r = minimize_scalar(lambda lt: solve(math.exp(lt))[1],
                         bounds=(math.log(lo), math.log(hi)), method="bounded")
     tau = math.exp(r.x)
@@ -380,45 +397,14 @@ def grade(r):
     return "steady"
 
 
-if __name__ == "__main__":
-    import argparse
-
-    ap = argparse.ArgumentParser(
-        description="fit every constant-heater dwell as a relaxation")
-    # No paths argument any more.  It read five overlapping tables and
-    # de-duplicated the result -- a region export is a slice of the log it came
-    # from, so passing both found every dwell twice and the survivor was
-    # decided by argument order.  The cooldown-10 archive does not overlap, so
-    # there is nothing to de-duplicate and nothing for an order to decide.
-    # `analyse(path)` is still here for a file that is not in the archive.
-    ap.add_argument("-o", "--out", default="analysis/steps.csv")
-    ap.add_argument("--no-masks", action="store_true",
-                    help="ignore the manifest's mask windows (to see what they buy)")
-    a = ap.parse_args()
-
-    masks: dict = {}
-    if not a.no_masks:
-        for m in S.by_kind("mask"):
-            masks.setdefault(m.file, []).append(m)
-    rows = archive_dwells(masks)
-    rows.sort(key=lambda r: r["T_inf"])
-
-    keep = [r for r in rows if r["grade"]]
-    taus = [r for r in rows if r["grade"] == "tau"]
-    print(f"{len(rows)} dwells -> {len(keep)} usable steady points, "
-          f"{len(taus)} with a believable tau\n")
-    print(f"{'T_inf':>8}{'u%':>8}{'P W':>8}{'tau s':>9}{'reach':>7}"
-          f"{'span s':>8}{'amp K':>8}{'rms mK':>8}{'settle K':>9}  grade")
-    for r in rows:
-        if not r["grade"]:
-            continue
-        print(f"{r['T_inf']:>8.2f}{r['u_pct']:>8.3f}{r['P_W']:>8.4f}"
-              f"{r['tau_s']:>9.1f}{r['reach']:>7.1f}{r['span_s']:>8.0f}"
-              f"{r['amp_K']:>8.2f}{1e3 * r['rms_K']:>8.1f}{r['settle_K']:>9.3f}"
-              f"  {r['grade']}")
-
-    with open(a.out, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
-        w.writeheader()
-        w.writerows(rows)
-    print("\nwrote", a.out)
+# No ``__main__``.  It wrote ``analysis/steps.csv`` -- every dwell in the
+# archive, fitted as a single pole -- and :mod:`measure` took that over in
+# Phase A of REFIT_PLAN.md, writing ``analysis/measured.csv`` instead.
+#
+# The move is not a rename.  A single pole is the wrong model for a hold and
+# was placing four graded anchors between 0.4 and 1.7 K away from where the
+# cryostat actually sat, so the table a fit reads cannot be built by this
+# module's grader alone.  What stays here is the finder, the pole and the
+# bars: :func:`dwells`, :func:`fit_pole`, :func:`pole_bounds`, :func:`grade`
+# and the constants ``ltspm3/tools/sweep.py`` mirrors.  :mod:`curate` turns
+# them into the manifest and :mod:`measure` measures what the manifest names.

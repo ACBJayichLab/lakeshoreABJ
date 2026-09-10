@@ -61,7 +61,7 @@ anchors including the new run, and nothing downstream has been refitted against
 them. In order:
 
 ```bash
-.venv/Scripts/python.exe analysis/steps.py          # 92 anchors, all four inputs
+.venv/Scripts/python.exe analysis/measure.py        # SUPERSEDES steps.py; 149 anchors off the archive
 .venv/Scripts/python.exe analysis/fit_ode.py        # ~15 min, the cache is keyed on the anchors
 .venv/Scripts/python.exe analysis/plot_gain.py
 .venv/Scripts/python.exe analysis/export_response.py --verify   # refreeze the simulator's table

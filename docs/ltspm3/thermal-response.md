@@ -72,7 +72,7 @@ that run was 120 K, chosen off a model that turned out to be 4.3 K low, and it
 finished with 5.7 K of headroom.
 
 The run is versioned as the manifest window `trace-ladder-20260905` in
-`reference/cooldown-10/`, so `python analysis/steps.py` on a fresh clone
+`reference/cooldown-10/`, so `python analysis/measure.py` on a fresh clone
 rebuilds every anchor including these -- 149 of them now, 147 inside 4-200 K.
 
 **The simulator has both versions.** `ltspm3/sim_response.py` is the two-pole
