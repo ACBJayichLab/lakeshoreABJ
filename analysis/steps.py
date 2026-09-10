@@ -36,8 +36,8 @@ import math
 import numpy as np
 from scipy.optimize import minimize_scalar
 
-from _data import (FIT_CD10, FIT_RECORDER, FIT_RECORDER_POSTCAL, LADDER, SWEEP,
-                   open_table)
+import segments as S
+from _data import open_table
 
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
 
@@ -171,40 +171,86 @@ def fit_pole(t, y):
     return float(coef[0]), float(coef[1]), tau, rms
 
 
+def _row(source, t_start, t_end, tt, yy, uu, cc):
+    """One dwell, fitted.  The only place these columns are computed."""
+    span = tt[-1] - tt[0]
+    T_inf, A, tau, rms = fit_pole(tt, yy)
+    sigma = noise_k(float(np.mean(yy)))
+    return {
+        "source": source,
+        "t_start": t_start,
+        "t_end": t_end,
+        "span_s": span,
+        "n": len(tt),
+        "u_pct": float(np.mean(uu)),
+        "P_W": power_w(float(np.mean(uu))),
+        "T_inf": T_inf,
+        "T_end": float(yy[-1]),
+        "settle_K": T_inf - float(yy[-1]),       # how far it still had to go
+        "T_lo": float(np.nanmin(yy)),
+        "T_hi": float(np.nanmax(yy)),
+        "tau_s": tau,
+        "reach": span / tau,
+        "amp_K": abs(A),
+        "amp_sigma": abs(A) / sigma,
+        "rms_K": rms,
+        "rms_sigma": rms / sigma,
+        # |dT/dt| at the last sample, from the fitted pole
+        "end_rate_k_per_h": 3600.0 * abs(A) / tau * math.exp(-span / tau),
+        # ...and how far it still had to travel, from the same pole.  This
+        # is settle_K without the last sample's noise in it; see
+        # SETTLED_REMAINDER_K.
+        "remainder_K": abs(A) * math.exp(-span / tau),
+        "Coldplate": float(np.nanmean(cc)),
+    }
+
+
 def analyse(path, label=None):
+    """Every dwell in one recorder-shaped CSV.  For a file off the archive."""
     t, T, Tc, u, seg, stamps = load(path)
-    rows = []
-    for a, b in dwells(t, T, Tc, u, seg, stamps):
-        tt, yy = t[a:b], T[a:b]
-        span = tt[-1] - tt[0]
-        T_inf, A, tau, rms = fit_pole(tt, yy)
-        sigma = noise_k(float(np.mean(yy)))
-        reach = span / tau
-        rows.append({
-            "source": label or path.replace("\\", "/").rsplit("/", 1)[-1],
-            "t_end": stamps[b - 1][:19],
-            "span_s": span,
-            "n": b - a,
-            "u_pct": float(np.mean(u[a:b])),
-            "P_W": power_w(float(np.mean(u[a:b]))),
-            "T_inf": T_inf,
-            "T_end": float(yy[-1]),
-            "settle_K": T_inf - float(yy[-1]),   # how far it still had to go
-            "tau_s": tau,
-            "reach": reach,
-            "amp_K": abs(A),
-            "amp_sigma": abs(A) / sigma,
-            "rms_K": rms,
-            "rms_sigma": rms / sigma,
-            # |dT/dt| at the last sample, from the fitted pole
-            "end_rate_k_per_h": 3600.0 * abs(A) / tau * math.exp(-span / tau),
-            # ...and how far it still had to travel, from the same pole.  This
-            # is settle_K without the last sample's noise in it; see
-            # SETTLED_REMAINDER_K.
-            "remainder_K": abs(A) * math.exp(-span / tau),
-            "Coldplate": float(np.nanmean(Tc[a:b])),
-        })
-    return rows
+    return [_row(label or path.replace("\\", "/").rsplit("/", 1)[-1],
+                 stamps[a][:19], stamps[b - 1][:19],
+                 t[a:b], T[a:b], u[a:b], Tc[a:b])
+            for a, b in dwells(t, T, Tc, u, seg, stamps)]
+
+
+def archive_dwells(masks_by_file=None):
+    """Every dwell in the cooldown-10 archive, fitted and graded.
+
+    The one scan.  ``curate`` builds the manifest from this and ``__main__``
+    below writes ``steps.csv`` from it, so the two cannot disagree about which
+    dwells exist -- which they would within a week if each had its own loop.
+
+    ``masks_by_file`` maps an archive table to the manifest's ``mask`` windows
+    in it.  A dwell is cut at a mask's edges and one lying inside a mask is
+    dropped; see ``curate``'s docstring for why that is an input here rather
+    than a filter afterwards.
+    """
+    masks_by_file = masks_by_file or {}
+    out = []
+    for file in S.TABLES:
+        table = S.read_table(file)
+        # A distinct segment id over a mask makes dwells() break at both of its
+        # edges -- it already refuses to run a dwell across a segment change,
+        # which is the same requirement -- and marks the masked rows so the
+        # dwell inside them can be dropped.
+        seg = table.segment.copy()
+        for i, m in enumerate(masks_by_file.get(file, []), start=1):
+            seg[table.slice(m.start, m.end)] = -i
+        ok = ~(np.isnan(table.epoch) | np.isnan(table.T) | np.isnan(table.u))
+        t, T, Tc, u, sg = (table.epoch[ok], table.T[ok], table.Tc[ok],
+                           table.u[ok], seg[ok])
+        stamps = [""] * len(t)               # dwells() only passes these along
+        for a, b in dwells(t, T, Tc, u, sg, stamps):
+            if sg[a] < 0:
+                continue                     # inside a mask
+            r = _row(file, S._iso(t[a]), S._iso(t[b - 1]),
+                     t[a:b], T[a:b], u[a:b], Tc[a:b])
+            r["file"] = file
+            r["era"] = S.era(file)
+            r["grade"] = grade(r)
+            out.append(r)
+    return out
 
 
 #: The question a dwell has to answer is "were you still moving when you
@@ -291,33 +337,22 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser(
         description="fit every constant-heater dwell as a relaxation")
-    # Defaulted, so `python analysis/steps.py` just works in a fresh clone.
-    # They are versioned in reference/heater-calibration/ and are resolved by
-    # name, not by path -- see analysis/_data.py.  Order matters only for the
-    # dedup below, which keeps the FIRST sighting of a dwell: the region
-    # exports come first because they are the primary record of the runs they
-    # cover, and the flattened daily logs after.
-    ap.add_argument("paths", nargs="*",
-                    default=[SWEEP, LADDER, FIT_RECORDER_POSTCAL, FIT_RECORDER,
-                             FIT_CD10],
-                    help="input tables (default: the five versioned ones)")
+    # No paths argument any more.  It read five overlapping tables and
+    # de-duplicated the result -- a region export is a slice of the log it came
+    # from, so passing both found every dwell twice and the survivor was
+    # decided by argument order.  The cooldown-10 archive does not overlap, so
+    # there is nothing to de-duplicate and nothing for an order to decide.
+    # `analyse(path)` is still here for a file that is not in the archive.
     ap.add_argument("-o", "--out", default="analysis/steps.csv")
+    ap.add_argument("--no-masks", action="store_true",
+                    help="ignore the manifest's mask windows (to see what they buy)")
     a = ap.parse_args()
 
-    # A region export is a slice of the log it was exported from, so passing
-    # both the sweep and fit_recorder.csv finds every dwell twice.  Dwell
-    # boundaries are set by the heater, which is the same in both, so the end
-    # timestamp identifies a dwell across files.
-    rows, seen = [], set()
-    for p in a.paths:
-        for r in analyse(p):
-            key = (r["t_end"], round(r["u_pct"], 2))
-            if key in seen:
-                continue
-            seen.add(key)
-            rows.append(r)
-    for r in rows:
-        r["grade"] = grade(r)
+    masks: dict = {}
+    if not a.no_masks:
+        for m in S.by_kind("mask"):
+            masks.setdefault(m.file, []).append(m)
+    rows = archive_dwells(masks)
     rows.sort(key=lambda r: r["T_inf"])
 
     keep = [r for r in rows if r["grade"]]

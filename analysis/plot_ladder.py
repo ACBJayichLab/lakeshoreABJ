@@ -28,8 +28,8 @@ their own panels on a shared clock.
 """
 from __future__ import annotations
 
-import csv
 import datetime as dt
+import math
 import sys
 
 import matplotlib
@@ -39,6 +39,12 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 sys.path.insert(0, "analysis")
 import _data as D  # noqa: E402
+import segments as _seg  # noqa: E402
+
+#: The programmed ladder as a MANIFEST WINDOW, not a region export -- same
+#: bounds to the second, same rows, and the archive carries the log's own
+#: precision rather than the export's.
+LADDER_WINDOW = "trace-ladder-20260905"
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/ladder_window.png"
 
@@ -76,19 +82,15 @@ RUNS = [
 
 def load():
     """Timestamp, sample, coldplate and output, as four parallel lists."""
+    w = _seg.load(LADDER_WINDOW)
     ts, sample, coldplate, u = [], [], [], []
-    with D.open_table(D.LADDER) as fh:
-        for row in csv.DictReader(fh):
-            try:
-                s = float(row["Sample"])
-                c = float(row["Coldplate"])
-                a = float(row["ls218.aout1"])
-            except (TypeError, ValueError):
-                continue  # a marked channel; the recorder still wrote the row
-            ts.append(dt.datetime.fromisoformat(row["Timestamp"]))
-            sample.append(s)
-            coldplate.append(c)
-            u.append(a)
+    for e, s, c, a in zip(w.epoch, w.T, w.Tc, w.u):
+        if math.isnan(s) or math.isnan(c) or math.isnan(a):
+            continue  # a marked channel; the recorder still wrote the row
+        ts.append(dt.datetime.fromtimestamp(e))
+        sample.append(float(s))
+        coldplate.append(float(c))
+        u.append(float(a))
     return ts, sample, coldplate, u
 
 
@@ -147,7 +149,7 @@ def main() -> None:
     ts, sample, coldplate, u = load()
     runs, other = split_runs(rungs(ts, u))
 
-    print(f"{D.resolve(D.LADDER)}")
+    print(f"{LADDER_WINDOW}  ({D.resolve(_seg.load(LADDER_WINDOW).table.file, D.ARCHIVE_DIR)})")
     print(f"  {len(ts)} rows, {ts[0]:%Y-%m-%d %H:%M:%S} -> {ts[-1]:%H:%M:%S} "
           f"({(ts[-1] - ts[0]).total_seconds() / 3600:.2f} h)")
     print(f"  sample {min(sample):.2f} - {max(sample):.2f} K, "
@@ -170,7 +172,7 @@ def main() -> None:
         describe("not a run", block)
 
     if len(runs) != 2:
-        print(f"\nplot_ladder: expected 2 ladder runs in {D.LADDER}, "
+        print(f"\nplot_ladder: expected 2 ladder runs in {LADDER_WINDOW}, "
               f"found {len(runs)}.")
         print("  The window may be wrong, or the export may be a different run.")
 

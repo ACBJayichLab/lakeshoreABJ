@@ -13,10 +13,10 @@ the two and hides the fact that they are not equally constrained.
 The settled holds enter as extra residuals rather than as hard constraints.
 They deserve a margin: u=63.072% was held three times and landed 2.84 K apart,
 and the July-August logs disagree with the September ones by about 2 K at
-matched power.  So a September hold is worth +-1 K and a ``fit_cd10`` hold is
+matched power.  So a September hold is worth +-1 K and a ``prepython`` hold is
 worth +-3 K, and the fit is free to miss them by that much.
 
-``fit_cd10`` is NOT a different cooldown -- cooldown 10 started 2026-07-15 and
+``prepython`` is NOT a different cooldown -- cooldown 10 started 2026-07-15 and
 is still running.  It is the pre-Python chart-recorder half of this one, and
 the cryostat has drifted across it: at seven outputs where the two halves
 overlap the sample sits 1.8-2.9 K WARMER in September than it did in July and
@@ -50,11 +50,22 @@ import numpy as np
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import least_squares
 
-from _data import SWEEP as SWEEP_NAME
+import segments as _seg
 from _data import open_table
 
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
-SWEEP = SWEEP_NAME
+
+#: The trajectory this fits, as a MANIFEST WINDOW rather than a file: the 43 h
+#: hand-walked sweep, 2026-09-02 16:01 -> 09-04 11:00, 4.9-192.6 K.
+#:
+#: It was ``region_20260903-123832_complete_sweep_even_larger.csv``, a region
+#: export, and the window has the same bounds to the second and the same rows.
+#: Two things are better for it being a window.  The export had been rounded
+#: before the Coldplate remap and its ``T_c`` is 1.2 mK rms off the log's own
+#: (41 mK at worst, where it had written 6.4000); and a window can be *widened*
+#: -- the same hold whose approach the export cut off 3.3 h into is what made
+#: the opening anchor read 180.07 K instead of 180.563 K.
+SWEEP = "trace-sweep-20260902"
 ANCHORS = "analysis/steps.csv"
 
 #: Bump when anything about the parameterisation or the objective changes.
@@ -64,12 +75,22 @@ ANCHORS = "analysis/steps.csv"
 FIT_CACHE_VERSION = 3
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
-#: extrapolation distance.  Keyed on the source table: ``fit_cd10`` is the
-#: July-August half of this cooldown and sits about 2 K off the September half
-#: at matched power (see the module docstring), so it is given the wider bar.
-#: Everything else -- the sweep, the ladder, both recorder tables -- is the
-#: current state and shares the narrow one.
-ANCHOR_SIGMA_K = {"fit_recorder": 1.0, "fit_cd10": 3.0}
+#: extrapolation distance.  Keyed on the ERA the anchor came from
+#: (``segments.ERAS``): ``prepython`` is the July-August half of this cooldown
+#: and sits about 2 K off the September half at matched power (see the module
+#: docstring), so it is given the wider bar.  ``recorder`` and ``postcal`` are
+#: the current state and share the narrow one.
+#:
+#: This used to be keyed on the input FILENAME, tested with
+#: ``source.startswith("fit_cd10")``.  Every era now has its own entry and a
+#: missing one raises, because the failure mode of the old test was silent: an
+#: input rename made every anchor ``recent``, the per-era offset fitted nothing,
+#: and the curve came out about a kelvin wrong for both halves with no symptom.
+#:
+#: REFIT_PLAN.md trap T3: the 3.0 on ``prepython`` IS the campaign drift,
+#: forgiven once.  It has to come down to 1.0 in the same commit that turns a
+#: drift ramp on, or the ramp fits a residual that has been priced out already.
+ANCHOR_SIGMA_K = {"prepython": 3.0, "recorder": 1.0, "postcal": 1.0}
 ANCHOR_FLOOR_K = 0.3
 
 #: Measured time constants (analysis/steps.py) enter as residuals in log tau.
@@ -253,13 +274,18 @@ def _ema(x, tau_s, dt_s):
     return out
 
 
+def sweep_window(window=SWEEP):
+    """The manifest ``Slice`` behind :func:`load_sweep`.
+
+    Separate because ``load_sweep`` returns the fit's own relative clock and
+    some callers -- ``decimate.write`` -- need the absolute one as well.
+    """
+    return _seg.load(window)
+
+
 def load_sweep(path=SWEEP, filter_tau_s=None):
-    with open_table(path) as fh:
-        rows = list(csv.DictReader(fh))
-    t = np.array([_f(r, "Time") for r in rows])
-    T = np.array([_f(r, "Sample") for r in rows])
-    Tc = np.array([_f(r, "Coldplate") for r in rows])
-    u = np.array([_f(r, "ls218.aout1") for r in rows])
+    s = sweep_window(path)
+    t, T, Tc, u = s.t, s.T, s.Tc, s.u
     ok = ~(np.isnan(t) | np.isnan(T) | np.isnan(Tc) | np.isnan(u))
     t, T, Tc, u = t[ok], T[ok], Tc[ok], u[ok]
     grid = np.arange(t[0], t[-1], STEP_S)
@@ -303,7 +329,7 @@ def _rows(path=ANCHORS):
 
 
 def anchor_groups(path=ANCHORS, t_max=None):
-    """Which half of the cooldown each anchor came from: 0 recent, 1 fit_cd10.
+    """Which half of the cooldown each anchor came from: 0 recent, 1 prepython.
 
     One cooldown, two states.  The July-August logs disagree with the September
     ones by 1.8-2.9 K at matched output, measured directly at seven overlapping
@@ -322,8 +348,22 @@ def anchor_groups(path=ANCHORS, t_max=None):
             continue
         if t_max is not None and _f(r, "T_inf") > t_max:
             continue
-        out.append(1 if r["source"].startswith("fit_cd10") else 0)
+        out.append(1 if (r.get("era") or "").strip() == "prepython" else 0)
     return np.array(out, dtype=int)
+
+
+def _era_sigma(row) -> float:
+    """``ANCHOR_SIGMA_K`` for one anchor's era.  Raises on an era it has no bar for."""
+    era = (row.get("era") or "").strip()
+    try:
+        return ANCHOR_SIGMA_K[era]
+    except KeyError:
+        raise SystemExit(
+            f"fit_ode: anchor from {row.get('source')!r} has era {era!r}, which "
+            f"ANCHOR_SIGMA_K has no bar for.  Re-run analysis/steps.py -- an "
+            f"anchor table written before the era column existed cannot be "
+            f"weighted, and defaulting it silently is how the per-era offset "
+            f"came to fit nothing.") from None
 
 
 def load_anchors(path=ANCHORS, t_max=None):
@@ -335,8 +375,7 @@ def load_anchors(path=ANCHORS, t_max=None):
         T = _f(r, "T_inf")
         if t_max is not None and T > t_max:
             continue
-        cool = ANCHOR_SIGMA_K["fit_cd10" if r["source"].startswith("fit_cd10")
-                              else "fit_recorder"]
+        cool = _era_sigma(r)
         own = max(ANCHOR_FLOOR_K, 2.0 * abs(_f(r, "settle_K")))
         out.append((T, _f(r, "Coldplate"), _f(r, "P_W"), math.hypot(cool, own)))
     a = np.array(out)

@@ -42,11 +42,9 @@ Usage::
 from __future__ import annotations
 
 import csv
-import math
 import os
 import sys
 
-import numpy as np
 
 import segments as S
 import steps
@@ -101,69 +99,35 @@ def _id(file: str, epoch: float) -> str:
     return f"{_tag(file)}-{dt.datetime.fromtimestamp(epoch):%Y%m%d-%H%M%S}"
 
 
-def _masked_segments(table: S.Table, masks: list) -> np.ndarray:
-    """``table.segment``, with each mask's rows given their own negative id.
-
-    A distinct id at a mask forces :func:`steps.dwells` to break at both of its
-    edges -- the finder already refuses to run a dwell across a segment change,
-    which is the same requirement -- and makes the masked rows identifiable
-    afterwards so the dwell inside them can be dropped.
-    """
-    seg = table.segment.copy()
-    for i, m in enumerate(masks, start=1):
-        rows = table.slice(m.start, m.end)
-        seg[rows] = -i
-    return seg
-
-
 def propose(masks_by_file: dict) -> list:
-    """One row per constant-heater dwell in the archive, graded and named."""
+    """One row per constant-heater dwell in the archive, graded and named.
+
+    The scan and the fit are :func:`steps.archive_dwells` -- deliberately not a
+    second loop here.  What this adds is the naming and the two judgements the
+    manifest records: which kind of window it is, and what a fit may do with it.
+    """
     out = []
-    for file in S.TABLES:
-        table = S.read_table(file)
-        seg = _masked_segments(table, masks_by_file.get(file, []))
-        ok = ~(np.isnan(table.epoch) | np.isnan(table.T) | np.isnan(table.u))
-        t, T, Tc, u, sg = (table.epoch[ok], table.T[ok], table.Tc[ok],
-                           table.u[ok], seg[ok])
-        stamps = [""] * len(t)               # dwells() only passes these along
-        for a, b in steps.dwells(t, T, Tc, u, sg, stamps):
-            if sg[a] < 0:
-                continue                     # inside a mask
-            tt, yy = t[a:b], T[a:b]
-            span = tt[-1] - tt[0]
-            T_inf, A, tau, rms = steps.fit_pole(tt, yy)
-            sigma = steps.noise_k(float(np.mean(yy)))
-            r = {
-                "span_s": span, "n": b - a,
-                "u_pct": float(np.mean(u[a:b])), "T_inf": T_inf,
-                "T_end": float(yy[-1]), "settle_K": T_inf - float(yy[-1]),
-                "tau_s": tau, "reach": span / tau, "amp_K": abs(A),
-                "amp_sigma": abs(A) / sigma, "rms_K": rms,
-                "rms_sigma": rms / sigma,
-                "end_rate_k_per_h": 3600.0 * abs(A) / tau * math.exp(-span / tau),
-                "remainder_K": abs(A) * math.exp(-span / tau),
-            }
-            grade = steps.grade(r)
-            if grade:
-                use, quality = grade, grade
-            elif abs(r["settle_K"]) > steps.MAX_SETTLE_K:
-                use, quality = "excluded", OVER_EXTRAPOLATED
-            else:
-                use, quality = "excluded", UNSETTLED
-            out.append({
-                "id": _id(file, tt[0]),
-                "kind": "hold" if span >= HOLD_MIN_S else "jump",
-                "file": file,
-                "t_start": S._iso(tt[0]),
-                "t_end": S._iso(tt[-1]),
-                "u_pct": round(r["u_pct"], 4),
-                "T_lo": round(float(np.nanmin(yy)), 4),
-                "T_hi": round(float(np.nanmax(yy)), 4),
-                "use": use,
-                "quality": quality,
-                "note": "",
-                "_fit": r,
-            })
+    for r in steps.archive_dwells(masks_by_file):
+        if r["grade"]:
+            use = quality = r["grade"]
+        elif abs(r["settle_K"]) > steps.MAX_SETTLE_K:
+            use, quality = "excluded", OVER_EXTRAPOLATED
+        else:
+            use, quality = "excluded", UNSETTLED
+        out.append({
+            "id": _id(r["file"], S._stamp(r["t_start"])),
+            "kind": "hold" if r["span_s"] >= HOLD_MIN_S else "jump",
+            "file": r["file"],
+            "t_start": r["t_start"],
+            "t_end": r["t_end"],
+            "u_pct": round(r["u_pct"], 4),
+            "T_lo": round(r["T_lo"], 4),
+            "T_hi": round(r["T_hi"], 4),
+            "use": use,
+            "quality": quality,
+            "note": "",
+            "_fit": r,
+        })
     return out
 
 

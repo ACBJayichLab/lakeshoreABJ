@@ -25,9 +25,10 @@ rather than assumed -- which also makes the curve self-consistent instead of
 being a family of curves indexed by a bath temperature nobody chose.
 
 Those two numbers used to read 5.7 and 8.5.  The 218 was carrying another
-thermometer's curve on input 2 until 2026-09-04, and reference/heater-calibration/
-has since been remapped; see analysis/README.md.  What went with it was the
-reason this model was declared undefined below ~12 K: the sample appeared to
+thermometer's curve on input 2 until 2026-09-04, and the pre-cutover half of
+reference/cooldown-10/ is built from remapped logs; see analysis/README.md.
+What went with it was the reason this model was declared undefined below
+~12 K: the sample appeared to
 settle COLDER than its own heat sink -- 4.88 K against 5.67 K at zero power --
 which no increasing Lambda can produce.  On the corrected curve the coldplate
 is at 4.67 K and the sample sits 0.21 K above it, an ordinary small parasitic
@@ -112,7 +113,7 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
     mU = np.array([_g(v, "u_pct") for v in rows])
     mP = 1e3 * np.array([_g(v, "P_W") for v in rows])
     mT = np.array([_g(v, "T_inf") for v in rows])
-    cd10 = np.array([v["source"].startswith("fit_cd10") for v in rows])
+    cd10 = np.array([(v.get("era") or "").strip() == "prepython" for v in rows])
 
     # CD10 is a different cooldown -- different contact, different radiation,
     # a different parasitic load -- and no single Lambda can satisfy both.  The

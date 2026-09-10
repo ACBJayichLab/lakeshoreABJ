@@ -21,6 +21,8 @@ import math
 import numpy as np
 from scipy.optimize import least_squares
 
+import _data
+
 SRC = "analysis/steps.csv"
 SIGMA = 5.670e-8
 #: Above this the only dwells are CD10's 07-16 ones, taken mid-cooldown with
@@ -43,9 +45,11 @@ def settled(rows):
     return [r for r in rows if r.get("grade") and f(r, "T_inf") <= T_MAX_K]
 
 
-def load(src):
-    rows = settled(list(csv.DictReader(open(SRC, newline="", encoding="utf-8"))))
-    g = sorted((r for r in rows if r["source"].startswith(src)),
+def load(era):
+    """The settled anchors from one era of the cooldown; see ``segments.ERAS``."""
+    with _data.open_table(SRC) as fh:
+        rows = settled(list(csv.DictReader(fh)))
+    g = sorted((r for r in rows if (r.get("era") or "").strip() == era),
                key=lambda r: f(r, "T_inf"))
     return (np.array([f(r, "T_inf") for r in g]),
             np.array([f(r, "Coldplate") for r in g]),
@@ -135,5 +139,9 @@ def report(src):
 
 
 if __name__ == "__main__":
-    for src in ("fit_cd10", "fit_recorder"):
-        report(src)
+    # One era at a time.  The two disagree by about 2 K at matched power and a
+    # joint fit here would split the difference and describe neither; the
+    # question this module asks -- can the settled points separate radiation
+    # from conduction -- is asked of one cryostat state or of nothing.
+    for era in ("prepython", "recorder", "postcal"):
+        report(era)

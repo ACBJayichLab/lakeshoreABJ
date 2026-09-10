@@ -96,7 +96,7 @@ the four 336 inputs, the heater output and both 336 loops are unaffected, and
 
 `analysis/` is the one place the Coldplate is more than a monitored channel:
 it is `T_c` in `Λ(T_s) = Q + Λ(T_c)`. Every fit in that directory was computed
-from pre-cutover values, and the inputs in `reference/heater-calibration/` have
+from pre-cutover values, and the tables in `reference/cooldown-10/` have
 now been remapped in place.
 
 That directory carried a standing caveat that **at zero power the sample
@@ -150,7 +150,7 @@ that rebuild it are in `data/coldplate-recal/README.txt`.
 |---|---|
 | `data/coldplate-recal/cd10/` | the 28 CD10 daily files, Coldplate remapped. **This is what the viewer should open** for anything before the cutover |
 | `data/coldplate-recal/recorder/` | the 16 pre-cutover recorder logs, 08-24 → the 09-04 archive. Three of them call input 2 `Cold Head`, which is the same thermometer under its old label |
-| `data/coldplate-recal/fit-inputs/` | the three `analysis/` tables. Already copied over `reference/heater-calibration/`, so `analysis/` reads the corrected `T_c` with no argument |
+| `data/coldplate-recal/fit-inputs/` | the three pre-archive `analysis/` tables. **Superseded** -- `analysis/` reads `reference/cooldown-10/`, built from `cd10/` and `recorder/` above, so the corrected `T_c` still arrives with no argument |
 
 The post-cutover `data/ltspm3-heater_2026-09-04.csv` is **not** in there and
 must not be: it was recorded on the right curve and remapping it would break

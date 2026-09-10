@@ -37,9 +37,12 @@ Run it::
 """
 from __future__ import annotations
 
+import os
 import sys
 
 import numpy as np
+
+from _data import DATA_DIR
 
 sys.path.insert(0, "analysis")
 
@@ -150,24 +153,32 @@ def write(path=None, data=None, **kw):
     that were dropped.  Averaging would look tidier and would be wrong: it
     would put a value in the record that the box never reported, and on a slew
     it would report the middle of a 8 K step as though it were measured.
+
+    ``Timestamp`` is written as well as ``Time``.  The relative clock is all a
+    single-record fit needs, but the campaign drift of ``REFIT_PLAN.md`` §2.3 is
+    a rate per DAY, and a table that only knows how far it is into its own run
+    cannot be placed on that axis at all.  It costs about 15 kB.
     """
     import csv
+    import datetime as dt
     import gzip
-    import os
 
     import fit_ode as F
     full = data if data is not None else F.load_sweep()
+    t0 = F.sweep_window().epoch[0]
     t, T, Tc, u = full
     idx, span = select(t, T, u, **kw)
     if path is None:
-        from _data import DATA_DIR
         path = os.path.join(DATA_DIR, OUT_NAME)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with gzip.open(path, "wt", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["Time", "span_s", "Sample", "Coldplate", "ls218.aout1"])
+        w.writerow(["Timestamp", "Time", "span_s", "Sample", "Coldplate",
+                    "ls218.aout1"])
         for k, sp in zip(idx, span):
-            w.writerow([f"{t[k]:.3f}", f"{sp:.3f}", f"{T[k]:.4f}",
+            stamp = dt.datetime.fromtimestamp(t0 + t[k])
+            w.writerow([stamp.isoformat(timespec="milliseconds"),
+                        f"{t[k]:.3f}", f"{sp:.3f}", f"{T[k]:.4f}",
                         f"{Tc[k]:.4f}", f"{u[k]:.4f}"])
     return path, len(idx), len(t)
 
@@ -208,12 +219,11 @@ def main() -> int:
               f"{1000 * np.abs(err[m]).max():>9.0f} mK max")
 
     if "--write" in sys.argv:
-        import os
         path, kept, was = write(data=full)
         print(f"\nwrote {path}  ({kept} of {was} rows, "
               f"{os.path.getsize(path) / 1024:.0f} kB)")
     else:
-        print("\n--write to save it to reference/heater-calibration/.")
+        print(f"\n--write to save it to {os.path.join(DATA_DIR, OUT_NAME)}.")
     return 0
 
 

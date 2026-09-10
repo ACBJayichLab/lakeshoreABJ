@@ -225,9 +225,13 @@ matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus
 docs/                recorder/ (generic) and ltspm3/ (one cryostat). Keep them apart.
 examples/            config-335-usb.yaml (coworker), config-336-usb.yaml (bench)
 reference/           Legacy MATLAB + 24 .xls chart-recorder logs, the 218 /
-                     335 / 336 vendor manuals, heater-calibration/ -- the
-                     gzipped tables analysis/ fits -- and sensor-curves/, the
-                     vendor .340 breakpoint tables. A log is meaningless
+                     335 / 336 vendor manuals, cooldown-10/ -- the ARCHIVE
+                     analysis/ fits: three non-overlapping tables that are the
+                     whole cooldown plus segments.csv, the manifest naming
+                     every window in them, which is the dataset and is reviewed
+                     as a diff (analysis/curate.py --propose) -- and
+                     sensor-curves/, the vendor .340 breakpoint tables. A log
+                     is meaningless
                      without knowing which curve was loaded when it was
                      written, and the 218 had the WRONG ONE on input 2 until
                      2026-09-04: X186276's, where the Coldplate is X186279.
@@ -243,9 +247,10 @@ data/                GITIGNORED. The recorder writes here; nothing in it is
                          (-o defaults here):
                          python -m lschart.tools.xls_to_csv "reference/logs/CD10/*.xls"
                        data/heater calibration steps/   the WORKING copies
-                         of what the fits read. The versioned originals are in
-                         reference/heater-calibration/; analysis/ reads those,
-                         not these. See tools/fit_table.py for how they are made.
+                         of the pre-archive fit inputs. SUPERSEDED: analysis/
+                         reads reference/cooldown-10/ now, and the five
+                         overlapping tables these were copies of are deleted.
+                         See tools/fit_table.py for how they are made.
                        data/coldplate-recal/             every pre-cutover log
                          re-read on the right Coldplate curve -- cd10/,
                          recorder/ and fit-inputs/. THIS is what to open for

@@ -71,10 +71,9 @@ That last row is the one to keep in mind when setting `--max-k`: the ceiling for
 that run was 120 K, chosen off a model that turned out to be 4.3 K low, and it
 finished with 5.7 K of headroom.
 
-The run is versioned at
-`reference/heater-calibration/region_20260905-114532_many_tau_steps.csv.gz` and
-is one of `analysis/steps.py`'s default inputs, so `python analysis/steps.py`
-on a fresh clone rebuilds all 92 anchors including these.
+The run is versioned as the manifest window `trace-ladder-20260905` in
+`reference/cooldown-10/`, so `python analysis/steps.py` on a fresh clone
+rebuilds every anchor including these -- 111 of them now, 109 inside 4-200 K.
 
 **The simulator has both versions.** `ltspm3/sim_response.py` is the two-pole
 model these legacy numbers describe, and the control harness is still calibrated
@@ -138,12 +137,13 @@ reproduces this; `data/` is gitignored, so the CSVs are derived, not stored.
 | `sample_monitor3`, `st2_monitor3` | 07-23 → 07-31 | 0 | no | constant 63.072%, ~98–100 K |
 | **`sample_monitor4`+`5`** | **08-08 → 08-20, 287 h** | **200** | **no** | the ladder: 60–70%, 99.6–170.8 K, 120 steps, **21 dwells > 3 h totalling 279 h** |
 
-**For fitting, load the flattened tables, not these logs.**
-`data/heater calibration steps/fit_cd10.csv` (298,617 rows, 857.9 h, 5 segments)
-and `fit_recorder.csv` (435,300 rows, 244.2 h, 4 segments) carry `Timestamp`,
-`t_s`, `segment`, the thermometers, `u_pct` and `note` -- and nothing else.
+**For fitting, load the archive, not these logs.**
+`reference/cooldown-10/` is three flattened tables carrying `Timestamp`, `t_s`,
+`segment`, the thermometers, `u_pct` and `note` -- and nothing else -- plus
+`segments.csv`, which names the windows inside them. This half of the cooldown
+is `cd10_20260715_prepython.csv.gz`, 298,617 rows, 857.9 h, 5 segments.
 **Fit each `segment` as its own trajectory**: they are split at the recording
-gaps, and CD10's are 65 h and 187 h long. The ladder is `fit_cd10.csv`
+gaps, and this table's are 65 h and 187 h long. The 08-08 ladder is its
 segment 4 -- 286.9 h, 103,282 rows, 60-70%, 99.6-170.8 K.
 
 `data/cd10/` holds the same data as 28 recorder-shaped daily files; that set is

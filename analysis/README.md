@@ -6,40 +6,98 @@ for a decision, not the decision.
 
 The outputs are gitignored — CSVs and PNGs are regenerated in a few minutes.
 **The inputs are not**: they live versioned in
-[`reference/heater-calibration/`](../reference/heater-calibration), gzipped,
-and everything here runs from a fresh clone with no setup beyond
+[`reference/cooldown-10/`](../reference/cooldown-10), gzipped, and everything
+here runs from a fresh clone with no setup beyond
 `pip install -e ".[analysis]"`.
 
 ## Where the inputs live, and why they are in the repo
 
-This repository gitignores derived data as a rule, and these three break it
-deliberately, because of what they are derived *from*:
+Everything is **the cooldown-10 archive**: three non-overlapping tables that
+between them are the whole of cooldown 10 — which began 2026-07-15 and is still
+running — and `segments.csv`, the manifest naming the windows inside them.
+Read [`reference/cooldown-10/README.md`](../reference/cooldown-10/README.md)
+first; it carries the provenance, the segment boundaries and the caveats.
 
 | | |
 |---|---|
-| `region_..._complete_sweep_even_larger.csv.gz` | the sweep, 2026-09-02 16:01 → 09-04 11:00. 43 h, 4.9–192.6 K, 2 s cadence, no gap over a minute. **Irreplaceable** — a run that happened once. |
-| `fit_recorder.csv.gz` | flattened from the recorder's own 2026-08/09 logs, which are *not* in the repo. Derived, but from a source a clone does not have, so primary in practice. |
-| `fit_cd10.csv.gz` | the one genuinely regenerable file, from the versioned `reference/logs/CD10/*.xls`. Committed anyway, so step one of the pipeline does not fail until somebody finds a two-command dance. |
-| `region_20260905-114532_many_tau_steps.csv.gz` | the **programmed ladder**, 2026-09-05 — 30 rungs in 4 h 17 min from `ltspm3.tools.sweep`, plus an aborted 13-rung attempt earlier that day. Irreplaceable in the same way as the sweep above. It is what filled 40–98 K, where the 43 h sweep left no settled point at all, and it showed the model **4.5 K low** through that band. Post-cutover, so its Coldplate needs no remap. |
-| `sweep_decimated.csv.gz` | the sweep again, adaptively thinned by `decimate.py` — 4,968 rows and 46 kB against 77,375 and 1.4 MB. Regenerable in twenty seconds, committed because it is what the production fit actually reads. |
+| `cd10_20260715_prepython.csv.gz` | 2026-07-15 → 08-20, 5 segments. The pre-Python chart recorder's half, via `xls_to_csv`. Its heater column is **reconstructed** from the `ANALOG` commands in the log's Notes, not read back. Coldplate remapped |
+| `cd10_20260824_recorder.csv.gz` | 2026-08-24 → 09-04 12:07, 4 segments. The Python recorder up to the calibration cutover, Coldplate remapped. **Contains the 43 h sweep** |
+| `cd10_20260904_recorder.csv.gz` | 2026-09-04 23:38 → 09-09, 2 segments. Post-cutover, the recorder's own numbers. **Contains the 09-05 ladder, the three long holds and the 09-09 transient** |
+| `segments.csv` | 239 named windows. **This is the dataset.** |
+| `sweep_decimated.csv.gz` | the sweep window adaptively thinned by `decimate.py` — 4,968 rows and 62 kB against 77,374 and 1.4 MB. Regenerable in twenty seconds, committed because it is what the expensive fit actually reads. It is the **one file left** in `reference/heater-calibration/`, which makes that directory a candidate for retirement — deliberately not done in passing |
 
-**The 8.8 h cut of the same run that used to be here is gone** (2026-09-04,
-Jeff). It saw only the middle: 2.2 h of the 22.8 h hold at 180 K and 0.4 h of
-the 13.9 h hold at 192 K, and those long holds are what pin the slow bath
-behaviour. It survives in git history and in the gitignored `data/`; it is not
-on the remote because the wide export contains it.
+These are derived and versioned anyway, which reverses this repository's usual
+rule, because of what they are derived *from*: recorder logs in the gitignored
+`data/`, which a fresh clone does not have. Gzipped because git stores the same
+compressed bytes either way, so plain CSV would only buy 79 MB in every working
+tree instead of 13 — including for coworkers who wanted the strip chart and
+nothing else. `analysis/_data.py` opens either transparently and resolves names
+against the repository rather than the working directory.
 
-The wide export ends **67 minutes before** the 12:07:16 2026-09-04 Coldplate
-recalibration, so it is entirely pre-cutover and internally consistent. (An
-earlier revision of this file claimed its tail crossed the cutover. That was
-wrong — 11:00 is before 12:07.)
+## Curate, do not discover — 2026-09-10
 
-Gzipped because git stores the same compressed bytes either way, so plain CSV
-would only buy 79 MB in every working tree instead of 13 — including for
-coworkers who wanted the strip chart and nothing else. `analysis/_data.py`
-opens either transparently, resolves names against the repository rather than
-the working directory, and when something really is missing it says which file
-and what to do.
+Until this landed, the fits **found** their own dataset: five overlapping tables
+(two region exports and three flattened logs, in which every dwell appeared two
+or three times) scanned for constant-heater dwells by a rule keyed on
+`steps.U_TOL_PCT`, deduplicated by end timestamp, and the survivor decided by
+argument order. Change the constant and the dataset changed with nothing in
+review to show it.
+
+Now the dataset is `reference/cooldown-10/segments.csv`, and a change to the
+finder arrives as a diff:
+
+```bash
+python analysis/curate.py --propose      # diff against the committed manifest
+python analysis/curate.py --propose -v   # ...with every window's grading numbers
+python analysis/segments.py              # validate it and print it
+python analysis/segments.py --tables     # the archive's segment structure
+```
+
+Three things in the manifest are a human's — the `mask` rows, the `trace` rows
+and the `note` column — and everything else is computed by `steps.py`'s finder
+and grader. **Masks are an input to the proposal, not an output**, so a dwell
+that would cross one is cut at its edge; that is what lets `--propose` be a
+regression check and still respect a judgement, and it means there is one
+mechanism for "do not use this" instead of a per-row override flag.
+
+The five old tables are **deleted**. What replacing them cost, measured:
+
+| | before | after |
+|---|---|---|
+| dwells found | 234 | 236 |
+| usable anchors | 111 | **111** (109 in 4–200 K, 36 with a believable τ) |
+| Λ12/C4/drift-3 fit `rms_k` | 0.2113, at `nfev = 300 = max_nfev` — an upper bound, not a fit | **0.2129**, converged in 182 |
+| `tau_137_s` / `mass_g` | 567.8 / 4.7965 | 568.2 / 4.7956 |
+
+103 of the 105 shared graded anchors reproduce to **3 nK**. Every difference is
+a boundary effect and every one favours the archive; each has a `note` on its
+row in the manifest. The two that matter:
+
+- **The sweep's opening hold.** The region export starts 3.3 h into it, so over
+  the 22.80 h it kept, the single-pole fit had only the drift to work with and
+  returned τ = 19 days at reach 0.1 and `T_inf` 180.07 K. The archive has the
+  approach as well: 26.10 h, τ = 1001 s, reach 94, **180.563 K**. That is
+  exactly the failure `steps.py`'s own docstring describes.
+- **The 09-09 hold at 64.015 %.** Nothing versioned reached past 16:16 that
+  day, so it was 24.47 h at 118.535 K. It is now 26.30 h at 118.570 K, cut at
+  18:06:04 by the one mask — and there is a **new** anchor after the transient,
+  2.67 h at 118.091 K, which is the only measurement anywhere of two settled
+  steady states at one heater output three hours apart.
+
+`T_c` also moves by **1.2 mK rms** (41 mK worst) because the region export had
+been rounded before the Coldplate remap — it wrote values like `6.4000` — where
+the archive carries the log's own precision. Every cached fit was invalidated
+by it.
+
+**The era is a column now, not a filename test.** Five places needed to know
+which side of the two boundaries an anchor fell on: `ANCHOR_SIGMA_K`, the
+per-era power offset, and three plots. They knew it by
+`source.startswith("fit_cd10")`, and the failure mode of that was silent — an
+input rename would make every anchor `recent`, the offset would fit nothing, and
+the curve would come out about a kelvin wrong for both halves with no symptom.
+`steps.csv` carries `era` in {`prepython`, `recorder`, `postcal`},
+`segments.ERAS` is the map, and an era with no entry raises. The `prepython`
+set is 37 anchors, which is the old `fit_cd10` set exactly.
 
 ## The model
 
@@ -61,8 +119,11 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 ## Order things must run in
 
 ```bash
+# 0. is the manifest still what the finder proposes?   (~1 min)
+.venv/Scripts/python.exe analysis/curate.py --propose
+
 # 1. dwells -> steady points and time constants        (~1 min)
-#    no arguments: it defaults to the three versioned tables
+#    no arguments: it reads the archive and the manifest's masks
 .venv/Scripts/python.exe analysis/steps.py
 
 # 2. the complexity ladder -> analysis/ladder.csv      (~15 min, 4 workers)
@@ -103,11 +164,13 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 
 | | |
 |---|---|
-| `steps.py` | every constant-heater dwell fitted as `T = T∞ + A e^(−t/τ)`. Gives `T∞` extrapolated, `τ` measured, and the extrapolation distance as an error bar. **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
+| `steps.py` | every constant-heater dwell fitted as `T = T∞ + A e^(−t/τ)`. Gives `T∞` extrapolated, `τ` measured, and the extrapolation distance as an error bar. `archive_dwells()` is the **one** scan of the archive — `curate.py` builds the manifest from it and this module's own `__main__` writes `steps.csv` from it, so the two cannot come to disagree about which dwells exist. **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
 | `fit_ode.py` | integrates the ODE down the 8.8 h sweep and fits Λ and C as monotone cubics in (log T, log y). One curve's knots freed at a time. Writes `ladder.csv`. |
 | `decimate.py` | the sweep, thinned where nothing is happening and kept where it is. **16x fewer samples, 26x faster to fit, 0.8% different.** Writes `sweep_decimated.csv.gz` |
 | `bath.py` | the coldplate as a first-order lag driven by the heater, not as a bath. **tau = 175 s, 27.6 mK rms over a 2.30 K swing.** What makes the plant self-contained |
 | `_data.py` | where the inputs live and how to open them; every reader here goes through it |
+| `segments.py` | the archive and the manifest. `read_table` for a whole table, `load(id)` for one named window, `check()` to validate the lot |
+| `curate.py` | proposes the manifest and diffs a proposal against the committed one. **The review artefact** |
 | `fit_lambda.py` | asks whether the settled points alone can separate `σ_r T⁴` from conduction. They cannot — see below. |
 | `diagram.py` | the model, with each ODE term on its arrow |
 | `plot_gain.py` | heater → steady temperature, on both a percent and a **power** axis. The watts one is the one to hand to somebody on a different cryostat with the same heater. |
@@ -154,22 +217,29 @@ calibration on input 2 — X186276's, where the Coldplate is X186279 — so the
 cold end read high by 12–13% of absolute temperature. Every fit in this
 directory was originally computed from those values.
 
-**The three tables in `reference/heater-calibration/` have since been remapped
-in place**, kelvin → resistance → kelvin, by
+**The remap was done on the LOGS**, kelvin → resistance → kelvin, by
 
 ```bash
-python -m lschart.tools.recalibrate --column Coldplate     --from reference/sensor-curves/X186276.340     --to   reference/sensor-curves/X186279.340     "reference/heater-calibration/*.gz" -o data/coldplate-recal/fit-inputs
+python -m lschart.tools.recalibrate --column Coldplate \
+  --from reference/sensor-curves/X186276.340 \
+  --to   reference/sensor-curves/X186279.340 \
+  "data/cd10/*.csv" -o data/coldplate-recal/cd10
 ```
 
-so `fit_lambda`, `fit_ode`, `plot_gain`, `plot_ode` and `steps` now read the
-corrected `T_c` with no argument and no code change. The as-logged tables are
-in git history at `72c3f32`. Only `Coldplate` moved; every other column is
+and the two pre-cutover archive tables are built from
+`data/coldplate-recal/`, so `fit_lambda`, `fit_ode`, `plot_gain`, `plot_ode`
+and `steps` read the corrected `T_c` with no argument and no code change. The
+third table is post-cutover and is the recorder's own numbers, untouched, so no
+table mixes two calibrations. Only `Coldplate` moved; every other column is
 byte-identical. See [cryostat.md](../docs/ltspm3/cryostat.md).
 
-**908 rows of `fit_cd10` came back blank rather than converted.** They were
-clamped at the top of the loaded table — the wrong curve rails at 330.324 K —
-and a clamped reading has no resistance behind it to convert. They are the
-first ninety minutes of the CD10 cooldown, at room temperature, and every
+The five pre-archive tables were remapped in place at the time, and are in git
+history at `72c3f32` as logged and at `6432128` as remapped.
+
+**908 rows of the pre-Python half came back blank rather than converted.** They
+were clamped at the top of the loaded table — the wrong curve rails at
+330.324 K — and a clamped reading has no resistance behind it to convert. They
+are the first ninety minutes of the cooldown, at room temperature, and every
 loader here already drops a NaN `T_c`.
 
 ### It settles the 0.79 K anomaly

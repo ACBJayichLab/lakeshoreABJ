@@ -1,7 +1,8 @@
 # Thermal model refit — plan
 
-**Status: Phase 0 part-done — the archive exists, the manifest does not.**
-Prerequisite work is committed at `da295af`.
+**Status: PHASE 0 DONE. Awaiting the manifest review — the first hard pause.**
+Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
+manifest) and the commit after it (the rewiring and the deletion).
 **Shape:** three phases, two hard pauses. Phase 0 → *pause* → Phase A → *pause* → Phase B.
 Update this Status line as phases land.
 
@@ -11,18 +12,28 @@ Update this Status line as phases land.
 |---|---|
 | **done** | §5.1 the archive — `reference/cooldown-10/`, three non-overlapping tables covering the whole cooldown, with a README carrying provenance, segment boundaries and caveats |
 | **done** | §5.4 — the fresh export past 2026-09-09 18:06. The transient is in `cd10_20260904_recorder.csv.gz` segment 0, recording continuous across it |
-| **next** | §5.2 the manifest, §5.3 `analysis/segments.py` + `analysis/curate.py` |
-| **then** | rewire `_data.py`, `steps.py`, `plot_ladder.py`, `decimate.py` and `fit_ode.load_sweep` onto the archive; verify anchors reproduce to 1 mK; **only then** delete the old tables |
+| **done** | §5.2 the manifest — `reference/cooldown-10/segments.csv`, 239 windows. §5.3 `analysis/segments.py` + `analysis/curate.py` |
+| **done** | the rewiring. `_data.py`, `steps.py`, `plot_ladder.py`, `decimate.py` and `fit_ode.load_sweep` read the archive; the five old tables are deleted |
+| **next** | **a human reads the manifest and agrees with it.** Then Phase A (§6) |
 
-**Nothing in `analysis/` has been rewired yet** — it still reads the five
-overlapping tables in `reference/heater-calibration/`, and every number in this
-document was produced with those. The archive is additive so far, and the tree
-is green. Do the rewiring and the deletion together, in that order, or the
-`SWEEP`/`LADDER` constants lose their files.
+Everything in `analysis/` reads the archive. The five overlapping tables in
+`reference/heater-calibration/` are gone; only `sweep_decimated.csv.gz`
+remains there, regenerated, which makes that directory a candidate for
+retirement — deliberately not done in passing.
 
-The order matters because `load_sweep` currently reads a region export that the
-deletion removes; its replacement is a manifest window, so the loader has to
-exist first.
+**Every fit number in this document below was produced with the OLD tables**,
+and they still hold: the rewiring was measured against them and moves the
+Λ12/C4/drift-3 fit from `rms_k` 0.2113 to 0.2129, τ(137 K) from 567.8 to
+568.2 s, and the implied mass from 4.7965 to 4.7956 g. What moved is `T_c`, by
+1.2 mK rms — the region export had been rounded before the Coldplate remap —
+and two anchor boundaries the exports had cut. See `analysis/README.md`,
+"Curate, do not discover".
+
+Also worth knowing before Phase B: the pre-rewire fit stopped at
+`nfev = 300 = max_nfev` and the post-rewire one converged in 182. The
+production preset was hitting the cap, so the "before" rms above was an upper
+bound rather than a fit — the same problem the README records for three rungs
+of the ladder.
 
 ---
 
@@ -252,11 +263,34 @@ Export a fresh window covering **2026-09-09 18:06**. Nothing versioned reaches
 past 16:16 that day, so the transient of §2.5 is currently unfittable and
 untestable. Cheap now, impossible later.
 
-### Exit criteria
+### Exit criteria — met, except the review
 
-- `curate.py --propose` on a clean tree reports **no diff**.
-- Anchor count and every graded `T_inf` reproduce `da295af`'s within 1 mK.
-- The manifest has been read by a human and its `excluded` rows agreed.
+- ✅ `curate.py --propose` on a clean tree reports **no diff**.
+- ✅ Anchor count and every graded `T_inf` reproduce `da295af`'s within 1 mK:
+  **111 usable anchors, 109 in 4–200 K, 36 with a believable τ**, all unchanged,
+  and 103 of the 105 shared graded anchors agree to **3 nK**. The other two, and
+  the six rows that exist on one side only, are boundary effects — the archive
+  has more of the same dwell where a region export cut it — and each has a
+  `note` on its row. They are enumerated in `analysis/README.md`.
+- ⏸ **The manifest has not been read by a human yet.** That is the pause.
+
+Two things turned up doing it that were not in the plan.
+
+**The middle archive table had been built without `--rename`.** The 218's
+inputs 2 and 3 were relabelled at the 2026-08-26 part-roll, so 83,215 of its
+461,849 rows carried the cold end as `Cold Head` with `Coldplate` blank — four
+half-empty columns, and any fit reading `Coldplate` silently lost the first two
+days. Rebuilt; the diff against the old bytes is exactly the fold. The
+prepython table reproduces byte-identically, which says the README's commands
+are otherwise right.
+
+**`ANCHOR_SIGMA_K` and the per-era offset were keyed on a filename.** Five
+places tested `source.startswith("fit_cd10")`, whose failure mode is silent: an
+input rename makes every anchor `recent`, the offset fits nothing, and the curve
+comes out about a kelvin wrong for both halves with no symptom. `steps.csv`
+carries an `era` column now, `segments.ERAS` is the map, and an era with no
+`ANCHOR_SIGMA_K` entry raises. The `prepython` set is 37 anchors, which is the
+old `fit_cd10` set exactly — so the rewiring is verified, not assumed.
 
 > ### ⏸ PAUSE — do not start Phase A until the manifest is approved.
 > Phases A and B are cheap to redo and expensive to redo *against the wrong
@@ -327,9 +361,10 @@ it bisectable.
    and ignores its caller, and `ladder()` uses `data` only on the serial path —
    so with records they would silently fit different things. Assert the two
    paths produce the same cache key for one rung.
-4. **`decimate.py` emits an absolute timestamp.** `sweep_decimated.csv.gz` has
-   only a relative `Time`, and Phase B needs absolute time. Regenerate and
-   commit (~15 kB).
+4. ~~**`decimate.py` emits an absolute timestamp.**~~ **DONE in Phase 0's
+   rewiring** — the table had to be regenerated anyway for the corrected `T_c`,
+   and doing it twice would have been silly. `Timestamp` is beside `Time`;
+   it cost 16 kB, 46 → 62 kB.
 5. **`analysis/drift.py` — the gate.** Records the +0.167 K/day regression
    (currently written down nowhere in the repository) and runs the **coverage
    report**: for each proposed drift-knot interval, the anchor count and

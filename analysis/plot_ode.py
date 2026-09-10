@@ -119,7 +119,7 @@ def trajectory_figure(fits, data, grid, best):
     # finite differences only inside ONE cooldown -- the two disagree by 3.2 K
     # at matched power, and differencing across that boundary manufactures
     # conductances that belong to neither
-    same = [r for r in srows if not r["source"].startswith("fit_cd10")]
+    same = [r for r in srows if (r.get("era") or "").strip() != "prepython"]
     Ts = np.array([_g(r, "T_inf") for r in same])
     # difference Lambda, not Q: the coldplate moves 2.9 K across these dwells,
     # so dQ/dT alone attributes that motion to the link

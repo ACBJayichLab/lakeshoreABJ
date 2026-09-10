@@ -54,6 +54,34 @@ TABLES = (
     "cd10_20260904_recorder.csv",
 )
 
+#: Which era of the cooldown a table is, as a WORD.
+#:
+#: The three boundaries are real events -- the pre-Python chart recorder giving
+#: way to the Python one, and the 2026-09-04 12:07 Coldplate recalibration --
+#: and five places in ``analysis/`` need to know which side of them an anchor
+#: fell on: the per-era power offset, ``ANCHOR_SIGMA_K``, and three plots.
+#:
+#: They used to know it by ``source.startswith("fit_cd10")``, a test on a
+#: filename.  That is the kind of coupling that breaks silently: rename the
+#: input and every anchor becomes ``recorder``, the offset fits nothing, and the
+#: only symptom is a curve about a kelvin wrong for both halves.  So it is a
+#: named column in ``steps.csv`` now, and a table that is not in this map is an
+#: error rather than a default.
+ERAS = {
+    "cd10_20260715_prepython.csv": "prepython",
+    "cd10_20260824_recorder.csv": "recorder",
+    "cd10_20260904_recorder.csv": "postcal",
+}
+
+
+def era(file: str) -> str:
+    try:
+        return ERAS[file]
+    except KeyError:
+        raise SystemExit(
+            f"segments: {file!r} has no era.  Every archive table needs one -- "
+            f"see segments.ERAS; five places in analysis/ read it.") from None
+
 #: What a window can be.  ``kind`` is what the window *is*; ``use`` below is
 #: what a fit may do with it, and the two are separate because the second is a
 #: judgement that can change without the data changing.
@@ -215,33 +243,52 @@ def read_table(file: str) -> Table:
     manifest addresses rows by absolute time, so silently removing some would
     make a window's boundaries mean something different from what was written
     down.  Callers drop their own NaNs.
+
+    **Two passes, and not one into ``csv.DictReader``.**  The middle table is
+    461,849 rows of 12 columns, and a list of that many dicts is most of a
+    gigabyte -- which the ODE ladder would then pay four times over, once per
+    worker process, to fit a 77,000-row window out of it.  Counting the rows
+    first and filling preallocated arrays second costs a second decompression
+    and holds 45 MB.
     """
     if file in _CACHE:
         return _CACHE[file]
+
     with open_table(file, ARCHIVE_DIR) as fh:
-        rows = list(csv.DictReader(fh))
-    if not rows:
-        raise SystemExit(f"segments: {file} is empty")
+        reader = csv.reader(fh)
+        header = next(reader, None)
+        if header is None:
+            raise SystemExit(f"segments: {file} is empty")
+        n = sum(1 for _ in reader)
+    if not n:
+        raise SystemExit(f"segments: {file} has a header and no rows")
 
-    def num(key):
-        out = np.empty(len(rows))
-        for i, r in enumerate(rows):
-            try:
-                out[i] = float(r[key])
-            except (TypeError, ValueError, KeyError):
-                out[i] = math.nan
-        return out
+    names = [c for c in (SAMPLE, COLDPLATE, HEATER, *AUX) if c in header]
+    for required in ("Timestamp", "segment", SAMPLE, HEATER):
+        if required not in header:
+            raise SystemExit(f"segments: {file} has no {required!r} column")
+    at = {c: header.index(c) for c in [*names, "Timestamp", "segment", "note"]
+          if c in header}
+    epoch = np.empty(n)
+    segment = np.empty(n)
+    chan = {c: np.empty(n) for c in names}
+    note = [""] * n
+    cols = [(chan[c], at[c]) for c in names]
 
-    epoch = np.array([_stamp(r["Timestamp"]) for r in rows])
-    names = [c for c in (SAMPLE, COLDPLATE, HEATER, *AUX) if c in rows[0]]
-    table = Table(
-        file=file,
-        epoch=epoch,
-        t=epoch - epoch[0],
-        segment=num("segment"),
-        chan={c: num(c) for c in names},
-        note=[(r.get("note") or "").strip() for r in rows],
-    )
+    with open_table(file, ARCHIVE_DIR) as fh:
+        reader = csv.reader(fh)
+        next(reader)
+        for i, row in enumerate(reader):
+            epoch[i] = _stamp(row[at["Timestamp"]])
+            segment[i] = float(row[at["segment"]])
+            for arr, j in cols:
+                text = row[j]
+                arr[i] = float(text) if text else math.nan
+            if "note" in at and row[at["note"]]:
+                note[i] = row[at["note"]].strip()
+
+    table = Table(file=file, epoch=epoch, t=epoch - epoch[0],
+                  segment=segment, chan=chan, note=note)
     _CACHE[file] = table
     return table
 
