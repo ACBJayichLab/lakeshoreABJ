@@ -186,12 +186,79 @@ def dwells(t, T, Tc, u, seg, stamps, min_span_s=0.0, min_n=MIN_N):
     return out
 
 
+#: How close to a search bound counts as sitting ON it.  5 %, far tighter than
+#: the factor of two between adjacent candidate taus and loose enough to
+#: survive the optimiser stopping just inside its bracket.
+POLE_PIN_TOL = 0.05
+
 #: The tau search runs from this many samples of the log's own cadence...
 POLE_TAU_MIN_SAMPLES = 2.0
 #: ...to this many times the dwell's span.  The upper end is deliberately loose
 #: so that a dwell which has NOT settled says so by returning a tau longer than
 #: itself, instead of being clipped into looking settled.
 POLE_TAU_SPAN_FACTOR = 20.0
+
+
+def pole_floor(r) -> bool:
+    """Is this dwell's tau sitting on the bottom of the search interval?
+
+    Then it is not a measurement.  The floor is two samples of the log's own
+    cadence, so a result there says "faster than I can see" -- and the archive
+    has 48 graded dwells at exactly 4.0 s, 8 of them graded ``tau``, at 5.4 to
+    25.1 K where the plant's own time constant runs from under 0.1 s to 3.4 s.
+    Those eight were entering ``fit_ode``'s objective as time-constant
+    residuals of nine sigma in log tau, pulling C(T) at precisely the cold end
+    REFIT_PLAN.md says has the least leverage to spare.
+
+    The steady state of a fast relaxation is still real, so a floor pin keeps
+    its ``steady``.  It loses only its ``tau``.
+
+    **It loses only its tau even when there was no resolvable transient
+    either**, and that is a deliberate departure from
+    AUDIT-2026-09-10.md finding 2, which proposes refusing any grade there on
+    the grounds that such a pole was fitted to noise.  Sometimes it was.  But a
+    dwell that is genuinely finished is ALSO flat and also has no transient,
+    and it is the best kind of anchor there is --
+    ``test_a_flat_dwell_is_steady_but_carries_no_believable_tau`` pins exactly
+    that case, 600 s flat to 0.5 mK at 42 K, and the refusal breaks it.
+
+    Nothing in this window separates the two.  What separates them is the
+    plant's tau at that temperature: 600 s of flat at 42 K is many time
+    constants, 200 s of flat at 147 K is a third of one.  ``MIN_SPAN_S``
+    already catches the short version and misses the archive's two real cases,
+    at 147.1 and 170.4 K over 200 s and 330 s -- which is finding 1's
+    conclusion arriving again, that a wall clock is standing in for a plant
+    clock.  This module has no plant model and should not import one, so the
+    two are reported rather than refused: ``measure.py`` gives them
+    ``sigma_tau_s`` of 214 % and 103 % of tau, which is the honest signal.
+    """
+    return r["tau_s"] <= r["tau_lo"] * (1.0 + POLE_PIN_TOL)
+
+
+def pole_ceiling(r) -> bool:
+    """Is this dwell's tau sitting on the top of the search interval?
+
+    Then the exponential has degenerated to a straight line, and ``reach``,
+    ``remainder_K`` and ``end_rate_k_per_h`` -- all read off that tau -- mean
+    nothing.  46 dwells in the archive are here and 7 of them are graded.
+
+    **Reported, not refused, and that is a deliberate difference from the floor
+    case.**  AUDIT-2026-09-10.md finding 2 proposes refusing every ceiling pin.
+    Measured against the archive that would drop five windows that are settled
+    -- three long holds drifting under 4 mK/h, and two dwells at 4.8 and 5.1 K
+    where the plant's tau is under a tenth of a second -- to catch two that are
+    doubtful.  A straight-line slope cannot separate them either: all seven
+    graded ceiling pins drift under 0.5 K/h, so a slope bar changes no verdict
+    at all.  What actually separates a settled drift from a truncated
+    relaxation is the plant's tau at that temperature, and this module has no
+    plant model and should not import one.
+
+    So the pin is recorded and the judgement is left to the manifest, where it
+    is a human's and shows up in review.  Phase A's ``measure.py`` fits these
+    windows with level and drift instead of a pole, which is what makes two of
+    them anchors worth keeping -- REFIT_PLAN.md section 6.1.
+    """
+    return r["tau_s"] >= r["tau_hi"] * (1.0 - POLE_PIN_TOL)
 
 
 def pole_bounds(t):
@@ -230,6 +297,11 @@ def _row(source, t_start, t_end, tt, yy, uu, cc):
     """One dwell, fitted.  The only place these columns are computed."""
     span = tt[-1] - tt[0]
     T_inf, A, tau, rms = fit_pole(tt, yy)
+    # The interval the search ran on, carried on the row so that grade() can
+    # tell a measurement from the search giving up.  A caller recomputing these
+    # from its own copy of the two factors is one edit away from testing
+    # against the wrong number.
+    tau_lo, tau_hi = pole_bounds(tt - tt[0])
     sigma = noise_k(float(np.mean(yy)))
     return {
         "source": source,
@@ -245,6 +317,8 @@ def _row(source, t_start, t_end, tt, yy, uu, cc):
         "T_lo": float(np.nanmin(yy)),
         "T_hi": float(np.nanmax(yy)),
         "tau_s": tau,
+        "tau_lo": tau_lo,
+        "tau_hi": tau_hi,
         "reach": span / tau,
         "amp_K": abs(A),
         "amp_sigma": abs(A) / sigma,
@@ -392,7 +466,7 @@ def grade(r):
     if not settled(r):
         return ""
     if (r["reach"] >= MIN_REACH and r["amp_sigma"] >= MIN_AMPLITUDE_SIGMA
-            and r["rms_sigma"] < 8.0):
+            and r["rms_sigma"] < 8.0 and not pole_floor(r)):
         return "tau"
     return "steady"
 

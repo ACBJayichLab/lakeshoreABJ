@@ -500,7 +500,9 @@ def test_the_mirrored_grader_constants_still_match_analysis_steps():
         encoding="utf-8")
     for name in ("NOISE_FLOOR_K", "NOISE_QUADRATIC", "MIN_REACH",
                  "MIN_AMPLITUDE_SIGMA", "MAX_SETTLE_K", "MAX_END_RATE_K_PER_H",
-                 "SETTLED_REMAINDER_K", "MIN_SPAN_S", "MIN_N"):
+                 "SETTLED_REMAINDER_K", "MIN_SPAN_S", "MIN_N",
+                 # AUDIT-2026-09-10 finding 2: the bound test, both sides
+                 "POLE_PIN_TOL", "POLE_TAU_MIN_SAMPLES", "POLE_TAU_SPAN_FACTOR"):
         found = re.search(rf"^{name}\s*=\s*([0-9.e-]+)\s*$", src, re.M)
         assert found, f"analysis/steps.py no longer defines {name} at module level"
         assert float(found.group(1)) == float(getattr(S, name)), (

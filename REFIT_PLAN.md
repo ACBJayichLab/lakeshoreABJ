@@ -3,9 +3,8 @@
 **Status: PHASE A DONE and awaiting review. Phase B is next, after the pause.**
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
 manifest) and the commit after it (the rewiring and the deletion).
-**Read AUDIT-2026-09-10.md finding 2 before Phase B** - Phase A fixes the hold
-half of it and not the jump half, and the audit's prescription as written would
-drop two holds Phase A shows are good anchors. See section 6.1.
+**AUDIT-2026-09-10 finding 2 is half done** - the floor half is fixed and the
+ceiling half is a judgement left for the review. See section 6.2.
 **Shape:** three phases, two hard pauses. Phase 0 → *pause* → Phase A → *pause* → Phase B.
 Update this Status line as phases land.
 
@@ -18,7 +17,8 @@ Update this Status line as phases land.
 | **done** | §5.2 the manifest — `reference/cooldown-10/segments.csv`, 315 windows. §5.3 `analysis/segments.py` + `analysis/curate.py` |
 | **done** | the rewiring. `_data.py`, `steps.py`, `plot_ladder.py`, `decimate.py` and `fit_ode.load_sweep` read the archive; the five old tables are deleted |
 | **done** | Phase A (§6) - `analysis/measure.py`, `analysis/measured.csv`, all four exit criteria met by `measure.py --verify`. Findings in §6.1 |
-| **next** | AUDIT-2026-09-10 finding 2, then Phase B (§7) |
+| **done** | AUDIT-2026-09-10 finding 2, floor half - a tau at the search floor is no longer graded `tau`. 45 → **37** tau anchors, 149 unchanged. §6.2 |
+| **next** | finding 2's ceiling half needs a decision (§6.2), then Phase B (§7) |
 
 Everything in `analysis/` reads the archive. The five overlapping tables in
 `reference/heater-calibration/` are gone; only `sweep_decimated.csv.gz`
@@ -441,6 +441,70 @@ that `settle_K` itself has changed for holds — it is now the drift across half
 the window rather than a pole's extrapolation — so `rec-20260828-141631`'s bar
 goes from 3.36 K to 0.32 K while its position moves 1.53 K. **The fit will
 move at Phase B step 1, and that is not a refactor failing to be inert.**
+
+### 6.2 AUDIT-2026-09-10 finding 2 — the floor is fixed, the ceiling is a question
+
+`fit_pole` searches τ on `[2 × cadence, 20 × span]` and a result *at* either
+end is the search saying "outside what I can see". `steps.pole_bounds` is
+exposed and `steps.pole_floor` / `pole_ceiling` name the two cases;
+`ltspm3/tools/sweep.py` mirrors them and the mirror test now covers
+`POLE_PIN_TOL`, `POLE_TAU_MIN_SAMPLES` and `POLE_TAU_SPAN_FACTOR`.
+
+**The floor half is done.** A floor-pinned dwell no longer grades `tau` — τ of
+two samples' cadence is not a time constant, and the plant's own τ at 5–25 K
+runs from under 0.1 s to 3.4 s. The manifest diff is **8 verdict changes, all
+`tau` → `steady`**, nothing added and nothing lost, and `load_taus` goes 45 →
+37 with the lowest surviving τ now 5.1 s instead of 4.0. The steady state of a
+fast relaxation is still real, so those 8 stay anchors; 149 is unchanged.
+
+**The audit's noise-pole clause was not applied, and should not be.** It
+proposes refusing any grade for a floor pin whose amplitude is under
+`MIN_AMPLITUDE_SIGMA`, on the grounds that such a pole was fitted to noise.
+Sometimes it was — but a dwell that is genuinely *finished* is also flat and
+also has no transient, and it is the best kind of anchor there is.
+`test_a_flat_dwell_is_steady_but_carries_no_believable_tau` pins that case
+deliberately (600 s flat to 0.5 mK at 42 K) and the clause breaks it. Nothing
+inside the window separates the two; what separates them is the plant's τ at
+that temperature, which is finding **1**'s conclusion arriving again. The
+archive's two real cases are `pp-20260815-095502` (200 s at 147.1 K) and
+`pp-20260817-211021` (330 s at 170.4 K), both past `MIN_SPAN_S`, and
+`measured.csv` gives them `sigma_tau_s` of **214 %** and **103 %** of τ, which
+is the honest signal available without a plant model.
+
+**The ceiling half needs a decision, and here is the evidence for it.** The
+audit proposes refusing any grade for a ceiling pin. Measured over all 46
+ceiling-pinned dwells in the archive:
+
+- 7 are graded. Refusing them all would drop **three long holds drifting under
+  4 mK/h** (`pc-20260909-212001`, `pp-20260813-133702`, `pp-20260815-100312`)
+  and **two dwells at 4.84 and 5.14 K** where the plant's τ is under a tenth
+  of a second — five windows that are settled — to catch two that are doubtful
+  (`pp-20260808-155602`, 840 s at 99.4 K; `rec-20260901-222818`, 232 s at
+  170.6 K).
+- Two of those three holds are the audit's own −0.76 K and −1.36 K rows, and
+  §6.1 shows the problem was the **model**, not the window: fitted with level
+  and drift they are anchors at 142.808 and 147.451 K.
+- **A slope bar cannot separate them.** All seven graded ceiling pins drift
+  under 0.5 K/h — the largest is −0.460 — so a `MAX_END_RATE_K_PER_H` test on
+  a straight-line fit changes no verdict at all. The other 39 ceiling pins are
+  already `excluded` and stay so at any threshold between 0.5 and 0.8 K/h.
+
+So the discriminator is again the plant's τ, and again `steps.py` has no plant
+model and should not import one. **Three ways out, for whoever reviews this:**
+
+1. Refuse a ceiling pin only for a window shorter than `curate.HOLD_MIN_S`,
+   moving the test to where the hold/jump split already lives. Catches both
+   doubtful cases, keeps all five good ones — and is a wall clock again.
+2. Grade a hold on `measure.py`'s level-and-drift fit rather than on a pole.
+   Architecturally the right answer and the largest change: grading for a hold
+   would move out of `steps.py`.
+3. Leave it reported. `measured.csv` carries `tau_pinned` and `flags` on every
+   row, so nothing is hidden, and the two doubtful anchors carry `sigma_tau_s`
+   of 8,660 % and 15,394 % of τ.
+
+Phase B does not depend on this being settled first. Its τ residuals read
+`load_taus`, which the floor fix has already cleaned, and no ceiling pin is
+graded `tau`.
 
 > ### ⏸ PAUSE — review the measurement table before fitting anything to it.
 > Stage A is the direct measurement. If it is wrong, Stage B will fit it

@@ -161,6 +161,23 @@ MIN_SPAN_S = 60.0
 #: lasted.  Latent at the live 2 s cadence, where MIN_REACH usually binds first.
 MIN_N = 15
 
+#: How close to the tau search's own bounds counts as sitting ON one.
+#:
+#: A tau at a bound is the search reporting that the time constant is outside
+#: what the dwell can see, and it is not a measurement -- but `reach`,
+#: `remainder_k` and `end_rate_k_per_h` are all computed from it and read as
+#: if it were.  See `PoleFit.tau_floor` / `tau_ceiling`, and
+#: ``analysis/steps.py``, which this mirrors and which carries the archive's
+#: 48 floor cases and 46 ceiling cases.  AUDIT-2026-09-10.md finding 2.
+POLE_PIN_TOL = 0.05
+
+#: The tau search runs from this many samples of the live cadence...
+POLE_TAU_MIN_SAMPLES = 2.0
+#: ...to this many times the dwell's span.  Deliberately far past the dwell's
+#: own length, so a dwell that has NOT settled can say so by returning a tau
+#: longer than itself instead of being clipped into looking finished.
+POLE_TAU_SPAN_FACTOR = 20.0
+
 #: How far the reported heater may wander from what was commanded before this
 #: concludes somebody else is driving.  NOT the DAC resolution: the 218's
 #: ``AOUT?`` readback flickers between adjacent codes at some values, which is
@@ -269,6 +286,11 @@ class PoleFit:
     n: int
     t_end: float
     mean_k: float
+    #: The interval the tau search ran on.  Carried so that grade() can tell a
+    #: measurement from the search giving up; see `tau_floor`.  Defaulted so
+    #: that a PoleFit built by hand in a test still constructs.
+    tau_lo: float = 0.0
+    tau_hi: float = math.inf
 
     @property
     def reach(self) -> float:
@@ -304,6 +326,29 @@ class PoleFit:
     def rms_sigma(self) -> float:
         return self.rms_k / noise_k(self.mean_k)
 
+    @property
+    def tau_floor(self) -> bool:
+        """Is tau sitting on the bottom of the search interval?
+
+        Then it is not a measurement: the floor is two samples of cadence, so a
+        result there says "faster than I can see", and the dwell loses its
+        ``tau`` and keeps its ``steady``.  Mirrors ``analysis/steps.py``'s
+        ``pole_floor``, which carries the reasoning, the archive's 48 cases,
+        and why a floor pin with no transient is still graded ``steady``.
+        """
+        return self.tau_lo > 0.0 and self.tau_s <= self.tau_lo * (1.0 + POLE_PIN_TOL)
+
+    @property
+    def tau_ceiling(self) -> bool:
+        """Is tau sitting on the top of it?  Then the pole is a straight line.
+
+        Recorded and NOT refused, exactly as in ``analysis/steps.py`` -- see
+        ``pole_ceiling`` there for the measurement that decided it.  The
+        journal prints it so an operator can see which rungs it applies to.
+        """
+        return (math.isfinite(self.tau_hi)
+                and self.tau_s >= self.tau_hi * (1.0 - POLE_PIN_TOL))
+
     def settled(self, *, min_reach: float = MIN_REACH,
                 max_end_rate: float = MAX_END_RATE_K_PER_H) -> bool:
         """Is this dwell's relaxation over?  Either test may answer yes.
@@ -330,7 +375,7 @@ class PoleFit:
         if not self.settled(min_reach=min_reach, max_end_rate=max_end_rate):
             return ""
         if (self.reach >= min_reach and self.amp_sigma >= MIN_AMPLITUDE_SIGMA
-                and self.rms_sigma < 8.0):
+                and self.rms_sigma < 8.0 and not self.tau_floor):
             return "tau"
         return "steady"
 
@@ -418,8 +463,8 @@ def fit_pole(samples, *, max_points: int = 800) -> PoleFit:
 
     gaps = sorted(b - a for a, b in zip(ts, ts[1:]))
     dt = gaps[len(gaps) // 2] if gaps else 1.0
-    lo = max(2.0 * dt, 1.0)
-    hi = 20.0 * span
+    lo = max(POLE_TAU_MIN_SAMPLES * dt, 1.0)
+    hi = POLE_TAU_SPAN_FACTOR * span
     if hi <= lo:
         hi = lo * 10.0
 
@@ -442,7 +487,8 @@ def fit_pole(samples, *, max_points: int = 800) -> PoleFit:
     tau = math.exp((a + b) / 2.0)
     t_inf, amp, rms = _solve(ts, ys, tau)
     return PoleFit(t_inf=t_inf, amp=amp, tau_s=tau, rms_k=rms, span_s=span,
-                   n=len(pts), t_end=ys[-1], mean_k=sum(ys) / len(ys))
+                   n=len(pts), t_end=ys[-1], mean_k=sum(ys) / len(ys),
+                   tau_lo=lo, tau_hi=hi)
 
 
 # -- what a link has to provide --------------------------------------------
