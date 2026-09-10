@@ -107,6 +107,17 @@ AUX = ("Magnet", "RAD SHIELD", "THE CHONKE", "1st Stage", "2nd Stage")
 #: rather than a rounding.  One cadence of the coarsest table.
 EDGE_TOL_S = 8.0
 
+#: Slack at both edges of a window, so a boundary written down as text selects
+#: the sample it was taken from.
+#:
+#: ``_iso`` truncates to the millisecond and every archive stamp round-trips
+#: through that exactly today -- but "exactly" is a property of these three
+#: tables' stamps, not a guarantee, and a boundary half a millisecond high
+#: silently drops the endpoint rather than failing.  1 ms against the tightest
+#: cadence in the archive, 590 ms, so it cannot reach a neighbouring sample by
+#: a factor of 590.
+SLICE_TOL_S = 0.001
+
 
 def _stamp(text: str) -> float:
     """ISO timestamp -> unix seconds.  The archive's clock is local, naive."""
@@ -114,7 +125,18 @@ def _stamp(text: str) -> float:
 
 
 def _iso(epoch: float) -> str:
-    return _dt.datetime.fromtimestamp(epoch).isoformat(timespec="seconds")
+    """Unix seconds -> the manifest's timestamp, to the MILLISECOND.
+
+    Not to the second, and the three extra digits are not decoration.  A
+    window's boundaries are what a fit reads, and a stamp truncated to the
+    second lands *before* the sample it was taken from -- so slicing the window
+    back out of its table returned one row fewer than the dwell that was
+    graded, on 308 of the archive's 312 dwells.  One tail row moves a graded
+    anchor's ``T_inf`` by up to **0.50 K** and a fitted tau by 83 %, which is
+    larger than the whole error budget of the refit.  See
+    ``Table.slice``/``SLICE_TOL_S`` for the other half.
+    """
+    return _dt.datetime.fromtimestamp(epoch).isoformat(timespec="milliseconds")
 
 
 @dataclass(frozen=True)
@@ -177,9 +199,9 @@ class Table:
         return self.chan[HEATER]
 
     def slice(self, start: float, end: float) -> slice:
-        """Rows with ``start <= epoch <= end``, as a slice."""
-        a = int(np.searchsorted(self.epoch, start, "left"))
-        b = int(np.searchsorted(self.epoch, end, "right"))
+        """Rows with ``start <= epoch <= end``, as a slice, within ``SLICE_TOL_S``."""
+        a = int(np.searchsorted(self.epoch, start - SLICE_TOL_S, "left"))
+        b = int(np.searchsorted(self.epoch, end + SLICE_TOL_S, "right"))
         return slice(a, b)
 
     def segments(self):
