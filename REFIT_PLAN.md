@@ -489,8 +489,8 @@ ceiling-pinned dwells in the archive:
   a straight-line fit changes no verdict at all. The other 39 ceiling pins are
   already `excluded` and stay so at any threshold between 0.5 and 0.8 K/h.
 
-So the discriminator is again the plant's τ, and again `steps.py` has no plant
-model and should not import one. **Three ways out, for whoever reviews this:**
+So the discriminator is again the plant's τ. **Four ways out, and the argument
+between them is in [AUDIT-2026-09-10-REPLY.md](AUDIT-2026-09-10-REPLY.md):**
 
 1. Refuse a ceiling pin only for a window shorter than `curate.HOLD_MIN_S`,
    moving the test to where the hold/jump split already lives. Catches both
@@ -501,6 +501,18 @@ model and should not import one. **Three ways out, for whoever reviews this:**
 3. Leave it reported. `measured.csv` carries `tau_pinned` and `flags` on every
    row, so nothing is hidden, and the two doubtful anchors carry `sigma_tau_s`
    of 8,660 % and 15,394 % of τ.
+4. **Recompute `reach` against the plant's τ instead of the fitted one.** This
+   is the one to pick. It separates the seven perfectly against the existing
+   `MIN_REACH = 3.0` — the five settled ones score 18 to 6,771 and the two
+   doubtful ones 1.93 and 0.38 — introduces no new constant, and is finding
+   **1**'s own prescription. `analysis/` can now do it without breaking
+   invariant 1, because `measured.csv` itself carries the plant clock: 37 τ
+   anchors over 25.8–247.6 K, from windows that resolved their own transients
+   and so are a set disjoint from the ceiling pins being tested. It costs one
+   round of iteration — grade, build τ(T), then settle the pins — which
+   "curate, do not discover" contains, because the output is a committed
+   manifest and not a fixed point rediscovered per run. The reply's §4 has the
+   coverage caveat below 25.8 K and why the verdict is insensitive to it.
 
 Phase B does not depend on this being settled first. Its τ residuals read
 `load_taus`, which the floor fix has already cleaned, and no ceiling pin is
