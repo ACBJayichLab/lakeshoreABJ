@@ -72,8 +72,8 @@ event: about 5 mW at 0.67 W, or 0.7 % of delivered power, worth 3.6 K at
 
 ## What this session did
 
-Nine commits, `39dd52a..c58b264`, **merged to `main`**, and three after them on a
-branch. 915 passing, ruff clean, `curate.py --propose` reports no diff,
+Nine commits, `39dd52a..c58b264`, **merged to `main`**, and seven after them on
+a branch. 915 passing, ruff clean, `curate.py --propose` reports no diff,
 `measure.py --verify` meets all four exit criteria.
 
 | | |
@@ -88,7 +88,10 @@ branch. 915 passing, ruff clean, `curate.py --propose` reports no diff,
 | `c58b264` | the sweep tool's guard moved onto the **plant's** τ |
 | `821c85e` | **option 4** — the `analysis/` grader's guard moved onto the plant's τ as well, on a clock it MEASURES. 149 → 136 anchors, 37 τ unchanged. §6.3 |
 | `ac69d7e` | **Phase B steps 1-3 and 5** — the types, the plumbing proved inert, and the drift gate |
-| `b38ecbe` | **Phase B step 6** — the measured seed, which converges where the old one did not and lands 14.5 % better |
+| `b38ecbe` | **Phase B step 6** — the measured seed, which converges in 149 evaluations where the old one takes 1157 |
+| `ee1bacf` | self-correction: the seed's gauge search deleted (it railed, and its 9-knot answer landed the fit in the worse basin), three counts fixed |
+| `1d45c99` | `REVIEW-2026-09-10.md`, and the `FIT_CACHE_VERSION` bump it exposed |
+| `73f0200` | `analysis/plot_review.py` — four figures, one of which **qualified step 6b's headline** |
 
 ## Where the refit stands
 
