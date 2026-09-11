@@ -116,6 +116,7 @@ loaded from `config-ltspm3-armed.yaml`, not built in the test:
 | compressor (T_c +2 K over 1 h) | tracks until railed at the floor, then faults |
 | crash | §3.5 |
 | quiet hold, 1 h | §3.6 |
+| **model wrong on purpose**: plant K ×0.8 and ×1.2, τ ×0.7 and ×1.3, Λ offset ±0.3 K, C ×0.95 — controller unchanged | every row above still passes; **no false fault**; a 5 K/min sweep with C ×0.95 stays under `fault_mw` |
 
 ## Exit gate
 

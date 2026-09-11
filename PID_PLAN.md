@@ -95,7 +95,18 @@ is valid at a hold **and during a sweep**, which a kelvin check is not.
 
 **Band** `σ_Q` (exported with the table): `δP` = 0.7 % of P(u) · drift ±25 %
 of 0.281 mW/day × days since fit · 14.2 mK × Λ′ · diurnal 16 mK × Λ′ ·
-coldplate 27.6 mK × Λ′(T_c).
+coldplate 27.6 mK × Λ′(T_c) · **`σ_C × |dT_s/dt|`** — at 5 K/min and 118 K
+the dynamic term is ~70 mW, so a 5 % error in C is 3.5 mW and the band must
+widen during a sweep or every sweep warns.
+
+**What the fit must get right, and how right.** Steady-state Λ(T) is what
+the residual needs: 0.3 K at 118 K is 0.5 mW, and the pre-refit table's
+4.3 K miss is 7 mW — a permanent false residual the size of a fault. C(T)
+enters only through the dynamic term: 5 %. The controller itself is
+forgiving — K within 20 %, τ within 30 % — and below 30 K τ does not enter
+at all because the loop's delay floor binds. The low-temperature
+short-timescale misfit therefore matters nowhere: τ is unmeasurable there,
+unused there, and C is millijoules per kelvin.
 
 | residual | typical | warn | fault |
 |---|---|---|---|

@@ -17,9 +17,9 @@ never seen them, or nothing proceeds.** Settle first, before regenerating:
 
 | deliverable | where | test |
 |---|---|---|
-| band constants: `DELTA_P_FRAC`, `DRIFT_W_PER_DAY` ± spread, `DRIFT_T0`, `SIGMA_TINF_K`, `DIURNAL_K`, `TC_RMS_K`, `TAU_BATH_S`, the `T_c` locus | `export_response.py` → `model/_fitted_table.py`, in the cache key | `test_fitted_table.py` asserts each is present and in range |
+| band constants: `DELTA_P_FRAC`, `DRIFT_W_PER_DAY` ± spread, `DRIFT_T0`, `SIGMA_TINF_K`, `DIURNAL_K`, `TC_RMS_K`, `TAU_BATH_S`, the `T_c` locus, **`SIGMA_C_FRAC`** (from the τ residuals; the model-free and fitted C differ by 3.5 %) | `export_response.py` → `model/_fitted_table.py`, in the cache key | `test_fitted_table.py` asserts each is present and in range |
 | `missing_power_w(T_s, dT_dt, T_c, u, t)` | `model/fitted_response.py` | < 1 mW at every settled anchor the fit was given; −4.9 ± 2 mW across the 09-10 window |
-| `sigma_q_w(T_s, u, t)` | same | monotone in `t` after `DRIFT_T0`; 3σ at 118 K, day 0, between 4 and 8 mW |
+| `sigma_q_w(T_s, u, t, dT_dt=0)` | same | monotone in `t` after `DRIFT_T0`; 3σ at 118 K, day 0, settled, between 4 and 8 mW; at 5 K/min it grows by `SIGMA_C_FRAC × C × 0.083 K/s` |
 | `analysis/pid_tuning.py` on `production_inputs()`; delay from the filter config; rows with the fit's cache key in `note` | `analysis/` | prints rows every 10 K over the table's range |
 | `analysis/allan.py` | `analysis/` | reproduces the 2026-09-10/11 open-loop hold: 8.3 / 7.6 / 4.3 / 6.3 mK at 4 / 60 / 600 / 3600 s |
 
