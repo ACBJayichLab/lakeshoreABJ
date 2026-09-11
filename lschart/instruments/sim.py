@@ -14,7 +14,7 @@ A response is anything with this shape::
 
 :class:`FirstOrderResponse` is the default and is intentionally boring -- one pole
 onto a linear steady state.  The calibrated LTSPM3 model lives in
-:mod:`ltspm3.sim_response`, which builds a cryostat around this same class.
+:mod:`ltspm3.model.sim_response`, which builds a cryostat around this same class.
 
 Faults are injected explicitly -- see :meth:`SimulatedCryostat.inject`.
 """
@@ -156,7 +156,7 @@ class SimulatedCryostat:
         #: K per K.  Empty by default: on an unknown cryostat we have no business
         #: inventing a correlation, and cross-channel corroboration should see
         #: nothing rather than something fictitious.  The LTSPM3 numbers,
-        #: measured from the reference logs, are in :mod:`ltspm3.sim_response`.
+        #: measured from the reference logs, are in :mod:`ltspm3.model.sim_response`.
         self._aux_coupling = dict(aux_coupling) if aux_coupling else {}
         self._response_ref_k = self.response.temperature
         self._stuck_values: dict[str, float] = {}

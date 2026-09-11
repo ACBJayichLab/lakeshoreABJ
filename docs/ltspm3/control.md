@@ -73,7 +73,7 @@ difference amplifies exactly that.
 means something physical: it is a bound on how much heater the integrator can
 ask for.
 
-**Feedforward and the simulator import the same curve.** `ltspm3/thermal_response.py` is the
+**Feedforward and the simulator import the same curve.** `ltspm3/model/thermal_response.py` is the
 single copy of `P(pct)` and `T(P)`, so the model the controller assumes and the
 model the simulator implements cannot drift apart. Testing against a simulator that
 silently agreed with a wrong feedforward would prove nothing.

@@ -4,7 +4,7 @@
 Next is step 7. Steps 1-3 were refactors and are proved inert; step 6 is the
 first thing that moves a curve, and it made the production fit CONVERGE.
 **Nothing has regenerated the shipped table yet** —
-`ltspm3/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
+`ltspm3/model/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
 manifest) and the commit after it (the rewiring and the deletion).
 **AUDIT-2026-09-10 findings 1 and 2 are now done in BOTH graders.** The sweep
@@ -81,7 +81,7 @@ nothing in review to show it. **Phase 0 fixed this** — the dataset is
 rest of §2 is the reasoning that motivated the work and is left as it was
 written.
 
-**Definition of done.** All three rows above green; `ltspm3/_fitted_table.py`
+**Definition of done.** All three rows above green; `ltspm3/model/_fitted_table.py`
 regenerated; `SUPERSEDED_NOTE` cleared; full suite and `ruff` clean; the docs
 corrected. Nothing in `lschart/` or `ltspm3/control/` touched.
 
@@ -199,7 +199,7 @@ state at constant power that `Λ(T_s) − Λ(T_c)` cannot see.
    must reproduce today's numbers to the last digit.
 5. **Invariant 1 holds throughout.** `analysis/` imports neither `lschart` nor
    `ltspm3` and is imported by neither. It reads CSVs and nothing else.
-6. `ltspm3/control/` is not touched. `ltspm3/_fitted_table.py` is *generated*,
+6. `ltspm3/control/` is not touched. `ltspm3/model/_fitted_table.py` is *generated*,
    never hand-edited.
 
 ---
@@ -226,7 +226,7 @@ Read this before starting; it is the foundation the phases assume.
   fit's answer back five times and the knob looked dead. Every objective
   constant is in the key now.
 
-Not done: the refit itself. `ltspm3/_fitted_table.py` is untouched and still
+Not done: the refit itself. `ltspm3/model/_fitted_table.py` is untouched and still
 carries its `SUPERSEDED_NOTE`.
 
 ---

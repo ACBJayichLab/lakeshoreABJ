@@ -33,7 +33,7 @@ hazard**: the stage is cooling, the readback is unchanged, `status.json`
 reports `control: null`.
 
 **What the model can and cannot model.** Everything in `analysis/` and in
-`ltspm3/fitted_response.py` takes `Q = P(u)` from the 218's readback and
+`ltspm3/model/fitted_response.py` takes `Q = P(u)` from the 218's readback and
 assumes the circuit delivers it. That assumption is the model's input, not a
 term in it — and Jeff's finding is that **the circuit does not always deliver
 it**. The consequence is not confined to the event window. Delivered watts
@@ -150,7 +150,7 @@ have settled, not anchors shown to be wrong.**
 
 [REFIT_PLAN.md](REFIT_PLAN.md) §7 has each one. Two commits, `ac69d7e` and
 `b38ecbe`. **Nothing has regenerated the shipped table** —
-`ltspm3/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
+`ltspm3/model/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
 
 - **Steps 1–3, the refactors, proved inert two ways.** `Record` and `Anchors`
   types, `production_inputs()`, `FitSpec`, per-record integration, `N_eff`.

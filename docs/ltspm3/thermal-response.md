@@ -75,9 +75,9 @@ The run is versioned as the manifest window `trace-ladder-20260905` in
 `reference/cooldown-10/`, so `python analysis/measure.py` on a fresh clone
 rebuilds every anchor including these -- 149 of them now, 147 inside 4-200 K.
 
-**The simulator has both versions.** `ltspm3/sim_response.py` is the two-pole
+**The simulator has both versions.** `ltspm3/model/sim_response.py` is the two-pole
 model these legacy numbers describe, and the control harness is still calibrated
-against it. `ltspm3/fitted_response.py` integrates the fitted ODE from a frozen
+against it. `ltspm3/model/fitted_response.py` integrates the fitted ODE from a frozen
 table, needs no scipy, and is what `ltspm3.tools.sweep --simulate` rehearses
 against — because a sweep is the one thing that crosses the whole range, and the
 two models disagree by up to 17 K in the middle of it. Regenerate the table with
@@ -207,7 +207,7 @@ an offset.
 
 ## Why the model is in two stages
 
-`ltspm3/thermal_response.py` deliberately keeps **`P(pct)`** and **`T(P)`** apart, and both
+`ltspm3/model/thermal_response.py` deliberately keeps **`P(pct)`** and **`T(P)`** apart, and both
 the simulator and the feedforward import that one curve so they cannot drift.
 
 Lumping them into a single `T ∝ pct^n` fit — the previous model, n = 5 from two
@@ -224,7 +224,7 @@ power law only extrapolates beyond them.
 
 | Module | |
 |---|---|
-| `ltspm3/thermal_response.py` | the one measured `P(pct)` / `T(P)` curve |
-| `ltspm3/sim_response.py` | two-pole calibrated model + measured cross-channel coupling |
+| `ltspm3/model/thermal_response.py` | the one measured `P(pct)` / `T(P)` curve |
+| `ltspm3/model/sim_response.py` | two-pole calibrated model + measured cross-channel coupling |
 
 `sim.speedup` accelerates the thermal response but **not** the controller.

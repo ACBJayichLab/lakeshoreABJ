@@ -3,7 +3,7 @@
 The 218's analog output is a voltage into a stable 75.5 ohm heater, so power goes
 as pct**2 exactly and temperature-independently.  Everything uncertain lives in
 T(P), where heat capacity and conductance both vary with temperature.  Keeping
-those separate is the point of `ltspm3/thermal_response.py`; these tests hold the line.
+those separate is the point of `ltspm3/model/thermal_response.py`; these tests hold the line.
 """
 
 import math
@@ -12,8 +12,8 @@ import pytest
 
 from ltspm3.control.dither import SigmaDeltaDither
 from ltspm3.control.feedforward import Feedforward, FeedforwardConfig
-from ltspm3.sim_response import ResponseParams
-from ltspm3.thermal_response import MEASURED_CURVE, SteadyStateCurve, fit_thermal_exponent
+from ltspm3.model.sim_response import ResponseParams
+from ltspm3.model.thermal_response import MEASURED_CURVE, SteadyStateCurve, fit_thermal_exponent
 
 
 # -- the exactly-known half -------------------------------------------------

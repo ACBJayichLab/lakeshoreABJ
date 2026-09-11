@@ -20,7 +20,7 @@ from ltspm3.control.tuning import (
     identify_first_order,
     imc_pi,
 )
-from ltspm3.sim_response import ResponseParams
+from ltspm3.model.sim_response import ResponseParams
 
 
 # -- the tuning rule --------------------------------------------------------

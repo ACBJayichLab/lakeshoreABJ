@@ -15,7 +15,7 @@ curves the ODE is made of::
 
     C(T) dT/dt = Q(u) - [Lambda(T) - Lambda(T_c)]
 
-``ltspm3/fitted_response.py`` interpolates that table and integrates it.  The
+``ltspm3/model/fitted_response.py`` interpolates that table and integrates it.  The
 generated module is checked in -- it is small, it is the only way a fresh clone
 gets a calibrated simulator without installing scipy, and it carries its own
 provenance so a stale one is visible rather than merely wrong.
@@ -46,7 +46,7 @@ sys.path.insert(0, "analysis")
 import fit_ode as F  # noqa: E402
 from plot_gain import N_CAP, N_DRIFT, N_LAM, coldplate_of  # noqa: E402
 
-OUT = "ltspm3/_fitted_table.py"
+OUT = "ltspm3/model/_fitted_table.py"
 
 #: Points on the log grid.  300 is a 0.35% spacing over 4.9-195 K, which the
 #: --verify pass shows is four orders of magnitude finer than the fit's own
@@ -133,7 +133,7 @@ def verify(r, g) -> None:
 #: in none of the files that ship the table, so a `--simulate` rehearsal or a
 #: re-plan next month inherited the error with nothing on screen to say so.
 #:
-#: It lives here rather than being pasted into ltspm3/_fitted_table.py because
+#: It lives here rather than being pasted into ltspm3/model/_fitted_table.py because
 #: that file is generated: a hand-edited warning is deleted by the next refit,
 #: which is precisely the moment somebody is relying on it.
 SUPERSEDED_NOTE = """\

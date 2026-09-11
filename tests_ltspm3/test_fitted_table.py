@@ -22,7 +22,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = ROOT / "analysis" / "export_response.py"
-TABLE = ROOT / "ltspm3" / "_fitted_table.py"
+TABLE = ROOT / "ltspm3" / "model" / "_fitted_table.py"
 
 HEAD = 'SUPERSEDED_NOTE = """'
 
@@ -60,7 +60,7 @@ def test_the_generated_table_and_the_generator_agree_about_the_caveat():
         return
     for line in (ln for ln in note.split("\n") if ln.strip()):
         assert line in header, (
-            f"ltspm3/_fitted_table.py's header is missing a line of "
+            f"ltspm3/model/_fitted_table.py's header is missing a line of "
             f"SUPERSEDED_NOTE -- a refit probably regenerated it and dropped "
             f"the caveat:\n  {line!r}")
 

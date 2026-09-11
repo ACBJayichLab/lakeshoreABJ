@@ -18,7 +18,7 @@ from lschart.config import AppConfig
 
 from .config import ControlConfig  # noqa: F401  -- registers `control:`
 from .control.supervisor import HeaterSupervisor
-from .sim_response import LTSPM3_AUX_COUPLING, ResponseParams, ThermalModel
+from .model.sim_response import LTSPM3_AUX_COUPLING, ResponseParams, ThermalModel
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def simulated_rig(**kw):
 
     Re-exported here so tests and tools have one obvious import for it.
     """
-    from .sim_response import ltspm3_cryostat
+    from .model.sim_response import ltspm3_cryostat
 
     return ltspm3_cryostat(**kw)
 

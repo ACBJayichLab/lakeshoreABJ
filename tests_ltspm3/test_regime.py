@@ -14,7 +14,7 @@ import pytest
 from ltspm3.control import LoopMode, SupervisorConfig, SupervisorState
 from ltspm3.control.feedforward import Feedforward, FeedforwardConfig
 from ltspm3.control.pid import PID, PIDConfig
-from ltspm3.sim_response import ResponseParams
+from ltspm3.model.sim_response import ResponseParams
 
 
 def cooler_off(**kw):

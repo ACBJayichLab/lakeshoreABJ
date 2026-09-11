@@ -815,7 +815,7 @@ class SimLink:
     abort paths -- and on ``model="fitted"`` it also proves the timing, because
     then the plant is the same fitted ODE the plan's dwells were sized from.
 
-    ``model="legacy"`` is :mod:`ltspm3.sim_response`'s two-pole response, kept
+    ``model="legacy"`` is :mod:`ltspm3.model.sim_response`'s two-pole response, kept
     because the control harness is calibrated against it and because a rehearsal
     that disagrees between the two is worth looking at.  Its steady state is out
     by up to 17 K in the middle of the range and its tau is one flat 620 s, so
@@ -829,7 +829,7 @@ class SimLink:
         from lschart.instruments.sim import Sim218, SimulatedCryostat
         from lschart.transport import LoopbackTransport
 
-        from ..sim_response import LTSPM3_AUX_COUPLING
+        from ..model.sim_response import LTSPM3_AUX_COUPLING
 
         class _Clock:
             t = 0.0
@@ -843,7 +843,7 @@ class SimLink:
         self.coldplate = coldplate
         self.model = model
         if model == "fitted":
-            from ..fitted_response import FittedResponse
+            from ..model.fitted_response import FittedResponse
 
             response = FittedResponse(start_pct=start_pct)
             #: The plan's per-rung caps came from this same model, so they
@@ -851,7 +851,7 @@ class SimLink:
             #: against it.
             self.tau_fast_s = None
         elif model == "legacy":
-            from ..sim_response import ResponseParams, ThermalModel
+            from ..model.sim_response import ResponseParams, ThermalModel
 
             params = ResponseParams()
             response = ThermalModel(params, start_k=params.steady_state(start_pct))

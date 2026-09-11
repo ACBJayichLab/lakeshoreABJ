@@ -55,7 +55,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..thermal_response import (
+from ..model.thermal_response import (
     MEASURED_CURVE,
     REF_PCT,
     REF_RISE_K,
@@ -70,7 +70,7 @@ __all__ = ["Feedforward", "FeedforwardConfig", "MEASURED_CURVE", "fit_thermal_ex
 
 @dataclass
 class FeedforwardConfig:
-    """The measured steady-state curve.  See :mod:`ltspm3.thermal_response`."""
+    """The measured steady-state curve.  See :mod:`ltspm3.model.thermal_response`."""
 
     enabled: bool = True
     t_bath_k: float = T_BATH_K

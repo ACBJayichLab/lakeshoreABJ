@@ -48,7 +48,7 @@ class ResponseParams:
     ref_pct: float = 63.076        # the operating point the cryostat actually sat at
     ref_rise: float = 95.6         # T_ss - T_bath there: 99.60 K absolute
     #: Measured steady-state points, shared with the feedforward via
-    #: ltspm3.thermal_response so the two cannot silently disagree.  Set to () to fall
+    #: ltspm3.model.thermal_response so the two cannot silently disagree.  Set to () to fall
     #: back to the pure power law -- which is how model mismatch between the
     #: response and the controller's idea of it gets injected in tests.
     calibration: tuple = MEASURED_CURVE

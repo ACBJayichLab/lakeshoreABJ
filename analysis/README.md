@@ -491,7 +491,7 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 | `plot_ode.py` | trajectory, residual, Λ, dΛ/dT, C, τ, and the ladder |
 | `pid_tuning.py` | SIMC PI gains scheduled against T, on the loop *as configured* |
 | `settling.py` | why a settle takes 20–30 min, and what a 10 K/min sweep needs |
-| `export_response.py` | evaluates the production fit once and freezes Q(T), Λ′(T), C(T) and T_c(T) onto a 300-point log grid as `ltspm3/_fitted_table.py`, so the simulator has the real model without scipy. **Q is exported evaluated, not as Λ**: Λ is 2.38 W where Q is 8 mW, and reconstructing the difference from two interpolated Λ costs five significant figures. `--verify` reports the grid error. Re-run after any refit. |
+| `export_response.py` | evaluates the production fit once and freezes Q(T), Λ′(T), C(T) and T_c(T) onto a 300-point log grid as `ltspm3/model/_fitted_table.py`, so the simulator has the real model without scipy. **Q is exported evaluated, not as Λ**: Λ is 2.38 W where Q is 8 mW, and reconstructing the difference from two interpolated Λ costs five significant figures. `--verify` reports the grid error. Re-run after any refit. |
 | `plan_sweep.py` | where to put the rungs of the **next** sweep, and what each will cost. Inverts the fitted steady state for `u(T)` and reads `τ(T) = C/Λ′` off the same fit, then applies `steps.py`'s grader backwards to say how long each dwell has to run. Writes `sweep_plan.csv`, which `ltspm3/tools/sweep.py` runs. |
 
 ## What came out

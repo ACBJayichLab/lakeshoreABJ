@@ -10,7 +10,7 @@ from ltspm3.control import (
 )
 from lschart.instruments import LS218
 from lschart.instruments.sim import Sim218, SimulatedCryostat
-from ltspm3.sim_response import LTSPM3_AUX_COUPLING, ResponseParams, ThermalModel
+from ltspm3.model.sim_response import LTSPM3_AUX_COUPLING, ResponseParams, ThermalModel
 from lschart.transport import LoopbackTransport
 
 

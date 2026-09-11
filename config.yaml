@@ -196,7 +196,7 @@ control:
     # Measured 3.16 (lumped n = 6.32, R^2 = 0.996) over 24 settled heater
     # steps in cd10 monitor4/5.  Supersedes the old two-point n = 5.0.
     thermal_exponent: 3.158
-    # Leave `calibration` unset to use the measured curve in ltspm3/thermal_response.py.
+    # Leave `calibration` unset to use the measured curve in ltspm3/model/thermal_response.py.
 
   guard:
     valid_min_k: 1.0

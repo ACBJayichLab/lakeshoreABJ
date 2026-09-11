@@ -13,7 +13,7 @@ import random
 
 import pytest
 
-from ltspm3.fitted_response import (
+from ltspm3.model.fitted_response import (
     FittedResponse,
     T_MAX_K,
     T_MIN_K,
