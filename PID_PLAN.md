@@ -57,7 +57,9 @@ document disagree, this table wins until the document is corrected.**
 | **premise** | **warn at 1 K, fault at 5 K**; the equivalent for the PID **in watts, informed by the fit** | `max_error_k` 1.0 K holds, then ramps down after 180 s | the 09-10 event (3.6 K, −4.9 mW) becomes a **warning**. Faults are for a lost sensor, a runaway heater or compressor, a strange transient (§3.4) |
 | **unattended** | a weekend realistically; **no reason not to run indefinitely** | never run armed | a week is the stage-5 gate, not the design life |
 | **failure** | **graceful** — the PID crashing while the cryostat is fine should just disengage | the poller catches a supervisor exception and keeps logging, but **does not disengage** the loop | §7.4 |
-| **filter** | measurement filter **20 s**, dead time about one cycle | 60 s, and `pid_tuning.py` assumes 3 s dead time | `filter.tau: 20`; `TAU_FILTER_S = 20`, `DEAD_TIME_S = 2` |
+| **filter** | first 20 s, then proposed **5 s exponential**; dead time about one cycle | 60 s exponential behind a **median-5**, which alone is two cycles (4 s) of delay; `pid_tuning.py` assumes 3 s | `filter.tau: 5`; the tuner **derives** the dead time from the filter config instead of a constant (§7.1) |
+| **loop speed** | the closed-loop time constant should take input from the system's | two fixed seconds, 1800 and 300, at every temperature | two **ratios** to the plant's τ(T), floored at the loop's own delay (§7.1) |
+| **wiring** | **definitely fine** | — | decision closed; the ceiling may rise to 100 % one measured rung at a time |
 | **monitor** | **report only** by default. Eventually hold or ramp down, **only when armed** | does not exist | the acting version lives in the supervisor, because a ramp-down exists only there (§3.4, §7.3) |
 | **viewer** | warnings and faults shown, **late phase** | nothing | Phase 5 |
 | **separation** | the PID stays separate from the broader `lschart` | invariant 1 | §2 |
@@ -131,7 +133,7 @@ the mapping, and the one rename it justifies.
 Beneath all of it the **guard** has its own state for the sensor: `unknown`,
 `ok`, `suspect`, `fault`, `recovering`.
 
-**The rename:** `SupervisorState.HOLDING` becomes **`FROZEN`**. Two things
+**The rename (agreed 2026-09-11):** `SupervisorState.HOLDING` becomes **`FROZEN`**. Two things
 called "hold" — the tuner's phase, which is Jeff's "holding steady", and the
 supervisor's state, which is "frozen pending clarity" — break the one-word
 one-concept rule in `docs/style.md`, and the collision is exactly where a
@@ -292,9 +294,19 @@ and shields cold. Outside that it must say so, not cry anomaly:
 
 No code in `control/`. Each is small and each is a trap left open.
 
-1. **Mask the 09-10 fault window — 11:33 to the repair, and no more.** Jeff
-   asked why this is necessary if the model's margin has to cover such events
-   anyway. The two are different jobs. The band (§3.2) is the *monitor's*
+1. **Extend the archive past the 09-10 event, and mask 11:33 → the repair
+   in the same export.** Jeff asked whether the fit data was not already
+   extracted. It is, up to a point: the third archive table
+   (`cd10_20260904_recorder.csv.gz`) ends at **2026-09-09 23:59:59** and the
+   cooldown is still running, so the table is re-exported to extend as the
+   recorder writes — that is how the 09-09 transient got in. The 09-10 event
+   is **not in the archive yet**. The next export crosses it, and is needed
+   anyway for two things: the post-repair hold is an anchor the refit wants,
+   and the event is the monitor's test case (§6.3). The mask row goes in with
+   that export, not before.
+
+   Jeff also asked why a mask is necessary if the model's margin has to cover
+   such events anyway. The two are different jobs. The band (§3.2) is the *monitor's*
    margin for judging the future; the mask is about the *fit's inputs*.
    During those three and a half hours the readback said 64.016 % and the
    sample got about 5 mW less than that — the window's `Q` is **wrong**, not
@@ -361,9 +373,8 @@ true before a ladder goes up there, and only the third is software:
 
 1. **The heater is rated 0.15 A into 75 Ω, 1.68 W** (Jeff, 2026-09-11), so
    100 % of the 218's output — 1.63 W — is inside it and the ceiling may
-   rise all the way, one measured rung at a time. **The wiring is the open
-   question**: the 09-10 fault was a wiring fault at 0.67 W, and nothing says
-   the leads, the connector or the feedthrough share the heater's rating.
+   rise all the way, one measured rung at a time. **The wiring is fine**
+   (Jeff, 2026-09-11) — the 09-10 fault was a connection, not a rating.
 2. **The rest of the cryostat tolerates it.** THE CHONKE's loop is railed at
    100 % holding 290 K today; a 300 K sample radiating onto a 40 K shield
    loads the cooler. The 1st and 2nd stage channels are the evidence, and
@@ -441,17 +452,48 @@ one.
 
 ### 7.1 Numbers from the model, through config
 
-- `filter.tau: 20`.
+- **`filter.tau: 5`.** Jeff's proposal, and the right one. The exponential
+  filter buys almost nothing at any length — `filters.py`'s own docstring and
+  `noise.md` measured it: the 218's noise is mostly slow wander, and a
+  low-pass removes wander only by removing the measurement. What the filter
+  chain is *for* is the median-5 ahead of it, which kills the single-sample
+  glitch, and the spike test behind it. 5 s (alpha 0.33 per 2 s sample) keeps
+  the chain's shape and stops paying 60 s of lag for a smoothing that was not
+  happening. The noise-driven jitter it lets through is the quiet-hold test's
+  job to bound (§7.2), not the filter's.
+- **The tuner derives the loop's delay from the filter config** instead of a
+  constant: median-5 is two cycles of group delay, the zero-order hold half a
+  cycle, the exponential τ/2 by the half rule — about **7 s** at 2 s cadence
+  with the 5 s filter, not the "about one cycle" a person would guess, and
+  not `pid_tuning.py`'s 3 s. `TuningConfig` gets `cadence_s` and reads the
+  filter's fields; nothing is stated twice.
+- **`τ_cl` takes its input from the plant's τ(T)** — Jeff's question, and the
+  answer is yes, it should and it did not. Two fixed seconds (1800 hold, 300
+  move) are wrong at both ends: 300 s asks a 10 K plant (τ 0.1 s) to be
+  slower than its own filter, and asks a 180 K plant (τ 600 s) for a 2×
+  speed-up. Replace them with **two ratios**: `hold_speed` = τ_cl/τ, default
+  **3** (the hold loop is slower than the plant, so noise is never
+  amplified), and `move_speed`, default **0.5**, each floored at `4 × delay`
+  (SIMC's robustness floor, with margin). Then `Kp = 1/(speed · K(T))` —
+  the proportional gain is the inverse plant gain over the speed-up, one
+  line a person can check — and `Ti = τ(T)`. The plan's earlier "60 s in
+  MOVE" becomes this floor, about 28 s, and applies below ~30 K where the
+  plant is faster than the loop.
+- **A 5 K/min sweep at high temperature is a feedforward problem, not a
+  gain problem.** With `move_speed` 0.5 the PI alone lags a ramp by
+  `rate × 0.5 × τ`, 22 K at 118 K. The loop should not be asked to close
+  that: `pid.py` already carries velocity feedforward (`vff`,
+  `max_velocity_ff_pct`), and the model gives it exactly — `du/dt =
+  (dT/dt)/K(T)`. With K good to ~5 % the PI is left tracking a 0.25 K/min
+  residual and lags about a kelvin. So `max_velocity_ff_pct` is set from the
+  one rate through the model's gain, and the bench of §7.5 measures the lag
+  at 5 K/min with and without it.
 - `TuningConfig.schedule` from `pid_tuning.py`, rows every ~10 K over the
   measured range, replacing `PROVISIONAL_SCHEDULE` (four rows, three at
   τ = 620 s; measured τ is 36 s at 40 K, 166 s at 60 K, 440 s at 100 K).
 - `FeedforwardConfig.calibration` from the fitted steady state **at today's
   date**, every 0.5 % over the measured range. The CD10 curve it replaces has
   no point between 43 % and 63 % and was 17 K wrong in the middle.
-- `tuning.py` learns the filter: SIMC's half rule with `tau_filter` and
-  `dead_time` as `TuningConfig` fields, so the schedule carries the plant's
-  own τ and the loop's lags are stated once. (The first draft proposed hiding
-  the filter in the rows; with `control/` open, the honest form wins.)
 
 ### 7.2 One rate limit — and why it cannot be a constant in percent
 
@@ -486,10 +528,9 @@ which needs the model and not the sensor. Where the model has no opinion it
 falls back to the percent floor. From 118 K to base that is about 23 minutes
 at 5 K/min against 44 today. Rule 1 holds: this only ever lowers the heater.
 
-**MOVE gets a shorter `τ_cl`.** With a 20 s filter, `move_tau_cl_s` of 60 s
-is a phase margin the 60 s filter never allowed; the closed-loop lag on a
-5 K/min ramp drops from 25 K to 5 K. `max_ramp_error_k` is retired with the
-kelvin premise check (§7.3): during a ramp the watt residual is the check.
+**The ramp's lag is feedforward's job** (§7.1), not a shorter `τ_cl`'s.
+`max_ramp_error_k` is retired with the kelvin premise check (§7.3): during a
+ramp the watt residual is the check.
 
 **Rates by mode — one hard rate, and a quiet hold that is tested rather
 than limited.** Jeff's instinct is that holding steady should not need fast
@@ -649,23 +690,18 @@ absolute mK target up there would be a target for the thermometer.
 
 ## 11. Decisions for Jeff
 
-1. **The wiring's rating.** The heater is good to 1.68 W (§5.3). Are the
-   leads, connector and feedthrough good for the 1.0–1.3 W that 300 K
-   plausibly needs, given that the 09-10 fault was in the wiring at 0.67 W?
-2. **`move_tau_cl_s` from 300 s to 60 s.** `τ_cl` is the one knob of the
-   tuning: the time constant the closed loop is *asked* to have. Asking for
-   60 s with a 60 s measurement filter in the loop was not safe — the filter
-   is as slow as the request and the margin goes. With a 20 s filter it is.
-   On a 5 K/min ramp the loop lags its setpoint by `rate × τ_cl`: 25 K at
-   300 s, 5 K at 60 s. Yes or no.
-3. **`HOLDING` → `FROZEN`** (§2.1). A status schema bump the viewer and
-   MATLAB follow. Yes or no.
+1. **Loop speed as two ratios** (§7.1): `hold_speed` 3, `move_speed` 0.5,
+   floored at four times the loop's own delay, in place of two fixed seconds.
+   Yes, or different ratios.
+2. **The 5 s filter** (§7.1): the plan agrees with the proposal. Confirm, and
+   whether the median-5 ahead of it stays (it is the glitch killer and costs
+   4 s of delay) or drops to median-3.
 
 Settled 2026-09-11: report-only monitor, acting version in the supervisor and
 only when armed; `control/` open under the eight rules; the end-rate grading
-question was already moot; the heater is rated 1.68 W; a rising coldplate is
-not a fault, authority exhausted is; one hard rate with the quiet hold tested;
-`ltspm3/model/` done.
+question was already moot; the heater is rated 1.68 W and the wiring is fine;
+a rising coldplate is not a fault, authority exhausted is; one hard rate with
+the quiet hold tested; `ltspm3/model/` done; `HOLDING` → `FROZEN`.
 
 ---
 
