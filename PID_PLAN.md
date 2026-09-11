@@ -461,6 +461,22 @@ one.
   the chain's shape and stops paying 60 s of lag for a smoothing that was not
   happening. The noise-driven jitter it lets through is the quiet-hold test's
   job to bound (§7.2), not the filter's.
+
+  **Or remove it from the chain altogether — Jeff's follow-up, and the plan
+  says yes, with one caveat about how.** Nothing downstream needs the
+  smoothing: the derivative is a regressed slope, the integral is its own
+  low-pass, and the proportional term's jitter is sub-code everywhere once
+  `τ_cl` is floored at four delays — at 10 K the floor makes `Kp` about
+  0.01 %/K, at 118 K in `move` it is 0.15 %/K on 27 mK of noise, 0.004 %, less
+  than half a DAC code, and the plant's 525 s pole averages it away. What the
+  low-pass *also* does today is structural: its value is the **spike-test
+  reference**, the thing `reseed` restarts from, and what `primed` and
+  `is_stale` test. So the removal is "`tau: 0` means pass-through, and the
+  median's output becomes the reference", default off, rather than deleting
+  the class — the four lines of `ExponentialFilter` cost nothing and a
+  different cryostat may want them, while the priming and staleness logic
+  keeps one place to live. Delay drops to about 5 s: two cycles of median,
+  half a cycle of hold.
 - **The tuner derives the loop's delay from the filter config** instead of a
   constant: median-5 is two cycles of group delay, the zero-order hold half a
   cycle, the exponential τ/2 by the half rule — about **7 s** at 2 s cadence
@@ -693,9 +709,9 @@ absolute mK target up there would be a target for the thermometer.
 1. **Loop speed as two ratios** (§7.1): `hold_speed` 3, `move_speed` 0.5,
    floored at four times the loop's own delay, in place of two fixed seconds.
    Yes, or different ratios.
-2. **The 5 s filter** (§7.1): the plan agrees with the proposal. Confirm, and
-   whether the median-5 ahead of it stays (it is the glitch killer and costs
-   4 s of delay) or drops to median-3.
+2. **The low-pass off by default** (§7.1): `tau: 0` as pass-through, the
+   median's output as the spike reference. Confirm, and whether the median-5
+   stays (the glitch killer, 4 s of delay) or drops to median-3.
 
 Settled 2026-09-11: report-only monitor, acting version in the supervisor and
 only when armed; `control/` open under the eight rules; the end-rate grading
