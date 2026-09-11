@@ -1,7 +1,10 @@
 # Software PID — plan from here to "well functioning"
 
-**Status: PHASE 0 NOT STARTED.** Rewritten 2026-09-11 after Jeff's answers to
-the first draft's questions (§1); first draft at `7684b4f`.
+**Status: PHASE 0 NOT STARTED; `ltspm3/model/` exists (§2, done 2026-09-11).**
+Rewritten 2026-09-11 after Jeff's answers to the first draft's questions (§1);
+first draft at `7684b4f`. Second round of answers folded in the same day:
+the states (§2.1), the compressor case (§3.4), the heater rating (§5.3),
+rates by mode (§7.2).
 Update this line as phases land, the way `REFIT_PLAN.md` does.
 
 **What this plan is.** The route from the tree as it stands — 915 tests
@@ -58,6 +61,9 @@ document disagree, this table wins until the document is corrected.**
 | **monitor** | **report only** by default. Eventually hold or ramp down, **only when armed** | does not exist | the acting version lives in the supervisor, because a ramp-down exists only there (§3.4, §7.3) |
 | **viewer** | warnings and faults shown, **late phase** | nothing | Phase 5 |
 | **separation** | the PID stays separate from the broader `lschart` | invariant 1 | §2 |
+| **heater** | rated **0.15 A into 75 Ω, 1.68 W** | 100 % of the 218's output is 1.63 W | the ceiling may rise to 100 % in measured rungs; the *wiring* is what faulted on 09-10 and is the remaining question (§5.3) |
+| **compressor** | a rising coldplate is **not a fault in itself**; hold the setpoint until the environment makes it impossible, then fault and ramp down | `δT_c` was a fault trigger in the first draft | `δT_c` warns only; the fault is **authority exhausted** — railed at the band with the error past 5 K (§3.4) |
+| **rates by mode** | holding steady should not need fast moves; moving to a setpoint does. Open to one rate if the hold loop does not make noisy fast moves | one limiter for both | one hard rate; hold quietness comes from the tuning and is **tested**, not limited (§7.2) |
 
 ---
 
@@ -95,16 +101,49 @@ analysis/                PRODUCES model/_fitted_table.py.  Imports neither
                          package; reads the archive and nothing else.
 ```
 
-**Moving `thermal_response.py`, `fitted_response.py`, `_fitted_table.py` and
-`sim_response.py` into `ltspm3/model/`** is a package move with import
-updates — cheap, and it makes "the model" a directory rather than four files a
-reader has to know about. Decision 3 in §11; the plan assumes yes.
+**`ltspm3/model/` exists — done 2026-09-11.** Ten importing files, three
+path strings and the living documents moved with it; the dated audits keep
+their text. 915 passed after the move.
 
 **The one rule of the layout:** `control/` and `monitor.py` both read
 `model/` and neither reads the other. The supervisor's in-loop check (§7.3)
 and the monitor's out-of-loop check call the **same two functions** in
 `model/`, so they cannot disagree about what typical means — only about what
 to do, which is the point of having both.
+
+### 2.1 The states, in the operator's words
+
+Jeff's mental model has three things: **holding steady**, **moving towards a
+setpoint**, and — less core — **a steady ramp of temperature**. The code has
+four layered enums, and one word is used for two different things. Here is
+the mapping, and the one rename it justifies.
+
+| Jeff's word | `mode` | `state` | `phase` | ramp | what the loop is doing |
+|---|---|---|---|---|---|
+| **holding steady** | `pid` | `tracking` | `hold` | none | at setpoint, slow quiet gains (`hold_tau_cl_s`), error under 0.10 K for 120 s |
+| **moving to a setpoint** | `pid` | `tracking` | `move` | running, at the one rate | the setpoint is being *ramped* from where the sample is to where it is wanted; fast gains (`move_tau_cl_s`) |
+| **steady ramp** | `pid` | `tracking` | `move` | running, at a commanded rate | `sweep_to(kelvin, rate)` — the same mechanism as above with the rate chosen |
+| *(not in Jeff's list)* | `pid` | **`holding`** | any | any | **output frozen pending clarity** — a SUSPECT reading or a warn-level anomaly. This is not "holding steady"; it is the loop refusing to move until it can trust its inputs |
+| *(fault)* | `pid` | `ramping_down` | — | — | the fault response, §7.2 |
+| *(fault, done)* | `pid` | `locked_out` | — | — | needs `ack` |
+| *(disengaged)* | `off` / `manual` | `idle` | — | — | a hold, a panic, or never armed |
+
+Beneath all of it the **guard** has its own state for the sensor: `unknown`,
+`ok`, `suspect`, `fault`, `recovering`.
+
+**The rename:** `SupervisorState.HOLDING` becomes **`FROZEN`**. Two things
+called "hold" — the tuner's phase, which is Jeff's "holding steady", and the
+supervisor's state, which is "frozen pending clarity" — break the one-word
+one-concept rule in `docs/style.md`, and the collision is exactly where a
+person reading the viewer would draw the wrong conclusion. `phase` keeps
+`hold` / `move` because those are Jeff's words. `status.json` carries the
+state string, so the viewer's and MATLAB's mappings change with it; the
+schema version bumps. Phase 3, its own commit.
+
+**What the phases decide.** The phase selects the gains *and*, from Phase 3,
+which premise check applies (§3.4): in `hold` the kelvin thresholds are live;
+in `move` the error is the ramp's lag by design and only the watt residual
+judges.
 
 ---
 
@@ -175,7 +214,26 @@ and strange transients. Typical slow cryostat changes never fault, and the
 |---|---|---|---|---|---|
 | **typical** | nothing | inside `n_warn·σ_Q` | inside band | OK | inside |
 | **warn** | alarm in `plant.json` / `status.json`; loop keeps tracking | beyond `n_warn·σ_Q` for `warn_after_s` | beyond band | SUSPECT | outside |
-| **fault** | armed: hold, then ramp down at the kelvin rate (§7.2), then lock out. Unarmed: alarm only | beyond `fault_mw` for `fault_after_s` | rising past `tc_fault_k` or at a rate no locus explains | FAULT | never — these inform, they do not fault |
+| **fault** | armed: freeze, then ramp down at the kelvin rate (§7.2), then lock out. Unarmed: alarm only | beyond `fault_mw` for `fault_after_s` | **never by itself** (Jeff, 2026-09-11) | FAULT | never — these inform, they do not fault |
+| **fault** — authority exhausted | as above | — | — | — | in `hold` phase, output **railed** at the band's floor or ceiling **and** the error past `fault_error_k` (5 K) for `fault_after_s` |
+
+**The compressor case, as Jeff wants it.** The coldplate starts rising. `δT_c`
+warns. The loop does its job: it takes heat out to hold the setpoint, and the
+sample stays put while there is heat to take out. That is not a fault and
+nothing ramps down. When the heater reaches the band's floor and the sample
+rises anyway, the environment has made the setpoint impossible; the error
+grows past 5 K, the loop faults, and the ramp-down runs — from wherever the
+output is, which may already be zero, in which case it is a lock-out with the
+alarm saying why. The same path serves a cooldown started with the loop
+armed. `δQ` stays quiet throughout, because the sample is doing exactly what
+the physics says at the new coldplate temperature (trap P3), and that is now
+correct behaviour rather than a gap.
+
+**A lost sensor** is the guard's FAULT, unchanged. **A runaway heater** — a
+short, a wiring change, a circuit delivering more than commanded — is `δQ`
+large and positive. **A strange transient** is the guard's slew and
+curvature tests, plus `δQ` if it carries power. Those three, and authority
+exhausted, are the complete list of things that fault.
 
 **Kelvin equivalents, so the thresholds mean the same thing to a person.**
 Jeff's 1 K / 5 K at the local slope Λ′(T):
@@ -234,10 +292,20 @@ and shields cold. Outside that it must say so, not cry anomaly:
 
 No code in `control/`. Each is small and each is a trap left open.
 
-1. **Mask the 09-10 fault window.** The sample has been flat at 118.33 K on
-   64.010 % since 16:00 on 09-10. Archive the stretch and give 11:33 → the
-   repair one `mask` row with a paragraph, as `mask-20260909-180604` has.
-   REFIT_PLAN §0.4: do not archive a half-event.
+1. **Mask the 09-10 fault window — 11:33 to the repair, and no more.** Jeff
+   asked why this is necessary if the model's margin has to cover such events
+   anyway. The two are different jobs. The band (§3.2) is the *monitor's*
+   margin for judging the future; the mask is about the *fit's inputs*.
+   During those three and a half hours the readback said 64.016 % and the
+   sample got about 5 mW less than that — the window's `Q` is **wrong**, not
+   noisy, by the full size of the `δP` bar that this very event is the
+   measurement of. Fitting through it would let the curve absorb a known
+   error and then quote a bar sized from the same error, which is circular.
+   And it is the monitor's **test case** (§6.3): a window the fit was trained
+   on cannot also be the event the monitor must catch. A mask is a manifest
+   row with a paragraph, the data stays in the archive, and the dwell finder
+   cuts at its edge. **The settled hold after the repair, 64.010 % from 16:00
+   onward, is a legitimate anchor and is admitted, not masked.**
 2. **Put the repair on the record.** Nothing in the log says what changed at
    ~15:00 on 09-10 except the readback moving 64.016 → 64.010 and the sample
    recovering 3 K in an hour. Add a manifest row the way `era` records the
@@ -291,8 +359,11 @@ adding radiation, **300 K plausibly needs 1.0–1.3 W, which is 80–90 % of the
 218's output** into the 75.5 Ω heater (1.63 W at 100 %). Three things must be
 true before a ladder goes up there, and only the third is software:
 
-1. **The heater and its wiring are rated for it.** The 09-10 fault was a
-   wiring fault at 0.67 W. This is Jeff's call (§11 decision 1).
+1. **The heater is rated 0.15 A into 75 Ω, 1.68 W** (Jeff, 2026-09-11), so
+   100 % of the 218's output — 1.63 W — is inside it and the ceiling may
+   rise all the way, one measured rung at a time. **The wiring is the open
+   question**: the 09-10 fault was a wiring fault at 0.67 W, and nothing says
+   the leads, the connector or the feedthrough share the heater's rating.
 2. **The rest of the cryostat tolerates it.** THE CHONKE's loop is railed at
    100 % holding 290 K today; a 300 K sample radiating onto a 40 K shield
    loads the cooler. The 1st and 2nd stage channels are the evidence, and
@@ -420,6 +491,21 @@ is a phase margin the 60 s filter never allowed; the closed-loop lag on a
 5 K/min ramp drops from 25 K to 5 K. `max_ramp_error_k` is retired with the
 kelvin premise check (§7.3): during a ramp the watt residual is the check.
 
+**Rates by mode — one hard rate, and a quiet hold that is tested rather
+than limited.** Jeff's instinct is that holding steady should not need fast
+moves while moving to a setpoint does, and he is open to a single rate if the
+hold loop does not make noisy fast moves. The plan takes the single rate,
+because the thing that keeps a hold quiet is not the limiter: it is
+`hold_tau_cl_s` of 1800 s, the 20 s filter, and a derivative taken from a
+regressed slope rather than a difference. A limiter tight enough to matter
+in `hold` would also be the thing that fights a real disturbance. So: **one
+`max_rate_k_per_min`**, and a test on the fitted plant at every bench
+temperature that a `hold`-phase loop fed the measured noise (`1.36e-6·T²`,
+lag-1 0.51) never commands more than **0.02 %/min** over an hour — a tenth of
+the old trim limiter, so a hold that gets noisy is a failing test and not a
+limit being hit. If that test cannot be made to pass by tuning, a second
+number `hold_max_rate_k_per_min` goes in, and the plan says so here.
+
 ### 7.3 Premise checks in watts
 
 `max_error_k` / `anomaly_hold_s` are replaced by the two-level scheme of §3.4:
@@ -428,9 +514,12 @@ kelvin premise check (§7.3): during a ramp the watt residual is the check.
 |---|---|---|
 | `warn_error_k` | 1.0 | tracking error above this → alarm, keep tracking |
 | `warn_sigma` | 3 | `δQ` beyond this many `σ_Q` → alarm |
-| `fault_mw` | 8 (then set by §6.3) | `δQ` beyond this for `fault_after_s` → hold, ramp down, lock out |
-| `tc_fault_k` | from the replay | coldplate beyond its locus by this → the same |
+| `fault_mw` | 8 (then set by §6.3) | `δQ` beyond this for `fault_after_s` → freeze, ramp down, lock out |
+| `fault_error_k` | 5.0 | in `hold` phase, **railed** at the band and the error past this for `fault_after_s` → the same. Authority exhausted (§3.4) |
 | `fault_after_s` | 180 | the existing anomaly hold, reused |
+
+In `move` phase the kelvin checks are off — the error is the ramp's lag by
+design — and `δQ` alone judges. The coldplate residual never faults.
 
 The supervisor's `_check_model` calls `model.missing_power_w` and
 `model.sigma_q_w` — the same two functions the monitor calls — and drops the
@@ -560,22 +649,23 @@ absolute mK target up there would be a target for the thermometer.
 
 ## 11. Decisions for Jeff
 
-1. **The heater ceiling for 300 K.** §5.3: plausibly 80–90 % and 1.0–1.3 W
-   into a heater whose wiring faulted at 0.67 W. Is the heater and its wiring
-   rated for that, and what is the ceiling you are willing to raise
-   `max_output_pct` toward?
-2. **One rate.** §7.2's proposal: `max_rate_k_per_min: 5.0` the only rate,
-   heater percent derived through the model's gain with a 0.20 %/min floor,
-   ramp-down through the inverse curve at the same rate. Yes, or keep any of
-   the eight?
-3. **`ltspm3/model/`.** Move the four model files into a package (§2). Cheap;
-   yes unless you object.
-4. **`move_tau_cl_s`** from 300 s to 60 s with the 20 s filter (§7.2). It is
-   what makes a 5 K/min sweep track inside a few kelvin.
+1. **The wiring's rating.** The heater is good to 1.68 W (§5.3). Are the
+   leads, connector and feedthrough good for the 1.0–1.3 W that 300 K
+   plausibly needs, given that the 09-10 fault was in the wiring at 0.67 W?
+2. **`move_tau_cl_s` from 300 s to 60 s.** `τ_cl` is the one knob of the
+   tuning: the time constant the closed loop is *asked* to have. Asking for
+   60 s with a 60 s measurement filter in the loop was not safe — the filter
+   is as slow as the request and the margin goes. With a 20 s filter it is.
+   On a 5 K/min ramp the loop lags its setpoint by `rate × τ_cl`: 25 K at
+   300 s, 5 K at 60 s. Yes or no.
+3. **`HOLDING` → `FROZEN`** (§2.1). A status schema bump the viewer and
+   MATLAB follow. Yes or no.
 
 Settled 2026-09-11: report-only monitor, acting version in the supervisor and
 only when armed; `control/` open under the eight rules; the end-rate grading
-question was already moot.
+question was already moot; the heater is rated 1.68 W; a rising coldplate is
+not a fault, authority exhausted is; one hard rate with the quiet hold tested;
+`ltspm3/model/` done.
 
 ---
 
