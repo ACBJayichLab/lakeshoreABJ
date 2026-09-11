@@ -73,12 +73,11 @@ def model(hi_k: float = 190.0, n: int = 4000):
     The production fit -- the one ``plot_gain.py`` draws -- on the adaptively
     decimated sweep, cached, so this costs seconds after the first run.
     """
-    data, w = F.load_decimated()
-    top = float(data[1].max())
-    # groups=, as export_response.py and plot_gain.py: plan the next ladder
+    rec, anchors, taus = F.production_inputs()
+    top = float(rec.T.max())
+    # groups=True, as export_response.py and plot_gain.py: plan the next ladder
     # against the cryostat as it is now, not against a July-September average.
-    r = F.fit(N_LAM, N_CAP, data, F.load_anchors(t_max=top), F.load_taus(t_max=top),
-              weights=w, n_drift=N_DRIFT, groups=F.anchor_groups(t_max=top))
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, groups=True)
     rows = [x for x in F.load_rows()
             if x.get("grade") and float(x["T_inf"]) <= top]
     tc_of, _, _ = coldplate_of(rows)

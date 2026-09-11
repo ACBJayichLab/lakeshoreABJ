@@ -1,6 +1,9 @@
 # Thermal model refit — plan
 
-**Status: PHASE A DONE, and option 4 with it. Phase B is next.**
+**Status: PHASE A DONE with option 4; PHASE B steps 1-3 and 5 DONE.**
+Next is step 6, the seeding. Steps 1-3 were refactors and are proved inert;
+step 5 is a gate and changes no curve. **Nothing has refitted the model yet** —
+`ltspm3/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
 manifest) and the commit after it (the rewiring and the deletion).
 **AUDIT-2026-09-10 findings 1 and 2 are now done in BOTH graders.** The sweep
@@ -23,7 +26,9 @@ Update this Status line as phases land.
 | **done** | AUDIT-2026-09-10 finding 2, floor half - a tau at the search floor is no longer graded `tau`. 45 → **37** tau anchors, 149 unchanged. §6.2 |
 | **done** | AUDIT-2026-09-10-REJOINDER step 1 - the sweep tool's `settled()` guard runs on `MIN_REACH × tau_pred_s` where the plan carries a prediction, a ceiling pin has to answer to it too, `MIN_SPAN_S` is labelled a proxy in both graders, and the audit's synthetic case is a test. Commissioning corrected |
 | **done** | §6.2 **option 4** / rejoinder step 2 — `steps.plant_clock` measures τ(T) from the 37 τ anchors and `steps.long_enough` puts the guard on it, in `analysis/` as well as in the sweep tool. **149 → 136 anchors**, 37 τ unchanged *by construction*. §6.3 |
-| **next** | **Phase B** (§7). Read traps T1–T10 and §6.1's last paragraph first |
+| **done** | Phase B **steps 1, 2, 3** — the refactors, proved inert two ways: the production 12/4 path bit-identical on a forced refit, and the full-grid 9/4, 3/4 and tier2 paths bit-identical against the pre-refactor `fit_ode.py` taken from git. §7 |
+| **done** | Phase B **step 5** — `analysis/drift.py`. The drift is a **power**: 0.281 mW/day, three bands agreeing to ±25 % where K/day spans 5.6×. Coverage says **affine**. §7 step 5 |
+| **next** | Phase B **step 6** (seeding from Phase A), then 7–10. Read traps T1–T10 and §6.1's last paragraph first |
 | **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
 | **then** | rejoinder step 5 - finding 5's leftovers |
 
@@ -638,41 +643,94 @@ it bisectable.
 
 **Steps 1–4 are refactors and must be bit-identical. Prove it before step 5.**
 
-1. **Types and loaders.** A `Record` (its own clock, `T0`, weights, absolute
-   `t0`, name) and an `Anchors` carrying `t_abs` and `source`. `steps.csv`
-   already has `t_end` for every graded row — the anchors have a clock on disk;
-   `load_anchors` simply never reads it. Add `production_inputs()` so the ladder
-   cannot compute different things on its two paths. Bump `FIT_CACHE_VERSION`.
-   *Prove inert:* `rms_k`, `tau_137_s`, `mass_g`, `anchor_k` identical.
-2. **Multi-record plumbing at R = 1.** `N_eff` replacing the scalar `len(t)` at
-   all five prior-weight sites; per-record `integrate`, `opening_hold` and
-   `np.gradient`; `knot_range()` over all records *and* anchors. Still identical.
-3. **`_worker`/`ladder` unification.** `_worker` re-loads `load_sweep()` itself
-   and ignores its caller, and `ladder()` uses `data` only on the serial path —
-   so with records they would silently fit different things. Assert the two
-   paths produce the same cache key for one rung.
+1. ~~**Types and loaders.**~~ **DONE.** `Record` (own clock, `T0`, weights,
+   absolute `t0`, name) and `Anchors` (`t_abs`, `group`, `source`).
+   `production_inputs()` replaces three identical five-line blocks in
+   `plot_gain`, `export_response` and `plan_sweep`, and with them the `t_max =
+   float(data[1].max())` cut that was open-coded five times.
+   `FIT_CACHE_VERSION` 3 → 4.
+   - **`t_abs` comes from `t_mid`, not `t_end`.** This plan predates Phase A.
+     A hold's level is now quoted at its window's midpoint, so dating the
+     anchor by its end would put the 70 h hold 35 h from the moment it
+     describes — the rejoinder asks for exactly this convention.
+   - `anchor_groups()` is now `load_anchors().group` rather than its own copy
+     of the "is this row an anchor" filter. Three loops had to agree on which
+     rows exist; a `t_max` drifting in one of them would have misaligned
+     `groups` against `aT` by a row and mis-assigned every offset after it.
+   - **`aTc` was missing from the cache key.** It enters the objective through
+     `lam(pl, aTc)`, so a Coldplate remap — which happened on 2026-09-04 — did
+     not invalidate a stored fit. Added.
+2. ~~**Multi-record plumbing at R = 1.**~~ **DONE**, with one deliberate
+   omission. `N_eff` replaces `len(t)` at all five prior-weight sites;
+   `integrate`, `opening_hold` and `np.gradient` all run per record and
+   concatenate; `knot_range()` exists.
+   - **`knot_range()` does NOT cover the anchors, and cannot here.** This step
+     has to be inert and that is not: the coldest anchor is
+     `rec-20260824-171059` at **4.7516 K**, below the sweep's own 4.8985 K, so
+     including it moves `T_lo` from 4.6536 to 4.5140 K and every geomspaced
+     knot with it. That anchor is the one §6.3's plant clock **recovered** —
+     the assumption that the records bracket the anchors was true when this
+     plan was written and option 4 made it false. The switch is wired and off;
+     turning it on belongs with step 6, where the seeding moves anyway.
+   - `n_drift` with more than one record **raises**, pointing at T2. One block
+     of time knots cannot serve two clocks, and T2 says the answer is two
+     terms with separate priors, which is step 8.
+3. ~~**`_worker`/`ladder` unification.**~~ **DONE.** `FitSpec` is the small
+   picklable description both paths build their inputs from; `_worker` carries
+   a spec instead of re-deciding. The assertion the step asks for is in
+   `ladder()` and **is not vacuous even though both paths now run the same
+   code**: it keys one rung in this process and the same rung *in a worker
+   process* and compares, because a worker is a fresh interpreter with its own
+   working directory and `_data.resolve` searches the CWD as well as
+   `REPO_ROOT`. A worker resolving a different `measured.csv` is
+   AUDIT-2026-09-10 finding 5 with a process boundary in it. `fit(key_only=True)`
+   returns the key from the line that computes it, so there is no second
+   implementation to keep in step.
 4. ~~**`decimate.py` emits an absolute timestamp.**~~ **DONE in Phase 0's
    rewiring** — the table had to be regenerated anyway for the corrected `T_c`,
    and doing it twice would have been silly. `Timestamp` is beside `Time`;
    it cost 16 kB, 46 → 62 kB.
-5. **`analysis/drift.py` — the gate.** Records the +0.167 K/day regression
-   (currently written down nowhere in the repository) and runs the **coverage
-   report**: for each proposed drift-knot interval, the anchor count and
-   temperature ratio inside it. A knot interval whose anchors do not span
-   temperature cannot tell time from Λ — they are the same parameter there.
-   Current coverage, which decides the knot count:
+5. ~~**`analysis/drift.py` — the gate.**~~ **DONE**, and it changed the answer
+   to "in what units". `python analysis/drift.py` reproduces everything below.
+
+   **A drift in K/day is not a property of the cryostat.** It is the underlying
+   change times the *local gain*, and the gain runs 2 to 14 K/% across the
+   band, so the same cause reads six times bigger at the warm end. Three
+   independent output bands, de-overlapped so no anchor is counted twice:
+
+   | band % | n | days | T range | K/% | K/W | K/day | **mW/day** |
+   |---|---|---|---|---|---|---|---|
+   | 52.0–53.5 | 9 | 50.0 | 27.2–32.0 K | 2.04 | 118.7 | 0.0334 | **0.281** |
+   | 62.9–64.4 | 9 | 48.5 | 98.4–118.6 K | 11.52 | 555.1 | 0.1862 | **0.335** |
+   | 65.2–66.7 | 30 | 25.4 | 129.2–148.9 K | 13.67 | 634.4 | 0.1413 | **0.223** |
+
+   **K/day spans 5.6×; mW/day agrees to ±25 %.** So the campaign drift is a
+   *power*, and `fit_ode`'s existing drift term is already right to enter as
+   watts at the heater's own node — step 8's ramp must do the same and must
+   **not** be a temperature offset.
+
+   Median **+0.281 mW/day**, against §2.3's independently measured **+0.27
+   mW/day** in a band this table does not reuse. Over the ~20 days between the
+   two eras' centroids that is 5.6 mW, against the **4.60 mW** the 12/4 fit
+   measures as its own `group_w` offset. Three routes, one number.
+
+   The gain column is §2.3's independent check and passes: 11.5 K/% at
+   98–119 K and 13.7 at 129–149 K, against the fit's 13–15.
+
+   **Coverage: affine is earned, three linspaced knots are not.** The test is
+   ≥ 5 anchors in each of two clumps ≥ 3× apart in T, reported at the most
+   *balanced* passing split rather than the first one found.
 
    ```
-   days  0-30   n=20   22.5-148.8 K   ratio  6.6
-   days 30-39   n=21    8.4-170.6 K   ratio 20.3
-   days 39-55   n=68    4.9-192.4 K   ratio 39.6
+   affine     days  0.0-55.3   n=136   4.8-247.6 K   EARNED  (68 near 17 K, 68 near 135 K)
+   3 knots    days  0.0-27.7   n= 12  22.5-247.6 K   NO      no split 3x apart with 5 either side
+              days 27.7-55.3   n=124   4.8-192.4 K   ok      (62 near 15 K, 62 near 133 K)
    ```
 
-   All three pass a 4:1 bar — but the first 39 days contain **one** anchor below
-   15 K, so the leverage there is thin. **Default to affine: one slope, one
-   gauge.** Earn extra knots only at named epochs that pass the coverage test on
-   a robust metric (≥ 5 anchors in each of two separated decades), never by
-   `linspace`.
+   The failing interval is the thin early leverage this plan already warned
+   about, now measured rather than estimated. **Default to affine: one slope,
+   one gauge.** Earn extra knots only at named epochs that pass this test — a
+   recalibration, a repair — never by `linspace`.
 6. **Seeding from Phase A.** Λ by direct inversion of the settled points, C from
    `τ·Λ′`, replacing the power-law seed in `build()`. Add `--seed-only`, which
    prints both without running `least_squares` — a one-second sanity check on a

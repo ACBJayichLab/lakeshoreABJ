@@ -198,12 +198,9 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
 
 
 def main():
-    data, w = F.load_decimated()
-    hi = float(data[1].max())
-    anchors, taus = F.load_anchors(t_max=hi), F.load_taus(t_max=hi)
-    groups = F.anchor_groups(t_max=hi)
-    r = F.fit(N_LAM, N_CAP, data, anchors, taus, weights=w, n_drift=N_DRIFT,
-              groups=groups)
+    rec, anchors, taus = F.production_inputs()
+    hi = float(rec.T.max())
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, groups=True)
     print(f"  Lambda {N_LAM} knots, C {N_CAP}, drift {N_DRIFT}: "
           f"rms {r['rms_k']:.3f} K, opening hold {r['hold_max_k']:.2f} K "
           f"over {r['hold_h']:.1f} h")

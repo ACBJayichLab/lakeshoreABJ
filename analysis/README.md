@@ -249,6 +249,54 @@ note.** `pp-20260808-155602` is the rejoinder's named row, decided at 0.63 —
 checkable against the shipped table at that temperature the two agree to 2.2 %.
 `rec-20260828-130841` is the closest call in the archive at 0.86.
 
+## The drift is a power, not a temperature — 2026-09-10
+
+`analysis/drift.py`, REFIT_PLAN.md Phase B step 5. The refit exists because the
+cryostat drifts and the model treats 55 days of anchors as simultaneous; this
+is the gate that says how much, and where a drift knot may go.
+
+**A drift quoted in K/day is not a property of the cryostat.** It is the
+underlying change times the *local gain*, which runs 2 K/% at 30 K to 14 K/% at
+145 K. Three independent output bands, de-overlapped so no anchor is counted
+twice:
+
+| band % | n | days | T range | K/% | K/W | K/day | **mW/day** |
+|---|---|---|---|---|---|---|---|
+| 52.0–53.5 | 9 | 50.0 | 27.2–32.0 K | 2.04 | 118.7 | 0.0334 | **0.281** |
+| 62.9–64.4 | 9 | 48.5 | 98.4–118.6 K | 11.52 | 555.1 | 0.1862 | **0.335** |
+| 65.2–66.7 | 30 | 25.4 | 129.2–148.9 K | 13.67 | 634.4 | 0.1413 | **0.223** |
+
+**K/day spans 5.6×. mW/day agrees to ±25 %.** The drift is a power, so it
+belongs at the heater's own node — which is where `fit_ode`'s existing
+within-record drift term already puts it, and where the campaign ramp has to go
+too. A temperature offset would be wrong at both ends of the band by construction.
+
+Three routes to the same number: **+0.281 mW/day** median here, **+0.27 mW/day**
+from §2.3's band (which this table does not reuse), and the 12/4 fit's own
+per-era `group_w` offset of **4.60 mW** across the ~20 days separating the two
+eras' centroids, against 0.281 × 20 = 5.6 mW.
+
+The regression is deliberately **unweighted**. The anchors' bars are dominated
+by `ANCHOR_SIGMA_K`, which is 3.0 K for `prepython` and 1.0 for the rest — an
+era label, not a measurement — so weighting by them would down-weight exactly
+the old half of the campaign that carries the date leverage, and the drift
+would come back small for a reason that has nothing to do with the cryostat.
+
+**Coverage decides the knot count, and it says affine.** A knot interval whose
+anchors do not span temperature cannot tell "the cryostat got warmer" from "Λ
+is lower here" — both lift every anchor in the interval equally. The test is
+≥ 5 anchors in each of two clumps ≥ 3× apart in T, reported at the most
+balanced passing split:
+
+```
+affine     days  0.0-55.3   n=136   4.8-247.6 K   EARNED  (68 near 17 K, 68 near 135 K)
+3 knots    days  0.0-27.7   n= 12  22.5-247.6 K   NO      no split 3x apart with 5 either side
+           days 27.7-55.3   n=124   4.8-192.4 K   ok      (62 near 15 K, 62 near 133 K)
+```
+
+A bare max/min ratio passes the failing interval at 11.0 and separates nothing,
+which is why the test is not a ratio.
+
 ## The model
 
 Everything the sample touches sinks at the coldplate — structure, wiring and
@@ -280,6 +328,11 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 .venv/Scripts/python.exe analysis/measure.py
 .venv/Scripts/python.exe analysis/measure.py --holds     # drift, diurnal, baths
 .venv/Scripts/python.exe analysis/measure.py --verify    # REFIT_PLAN.md 6's gate
+
+# 1b. is the cryostat drifting, and may a drift knot go there?   (~5 s)
+#     REFIT_PLAN.md Phase B step 5's gate.  Reads the anchors and nothing else.
+.venv/Scripts/python.exe analysis/drift.py
+.venv/Scripts/python.exe analysis/drift.py --knots 3      # would 3 knots earn it?
 
 # 2. the complexity ladder -> analysis/ladder.csv      (~15 min, 4 workers)
 .venv/Scripts/python.exe analysis/fit_ode.py

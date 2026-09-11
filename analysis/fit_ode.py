@@ -45,12 +45,14 @@ import json
 import math
 import os
 from bisect import bisect_right
+from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import least_squares
 
 import segments as _seg
+from _data import REPO_ROOT as _REPO_ROOT
 from _data import open_table
 
 R_OHM, V_FS, GAIN = 75.5, 10.0, 1.11
@@ -72,7 +74,11 @@ ANCHORS = "analysis/measured.csv"
 #: It is part of the cache key, so bumping it invalidates every stored fit
 #: at once -- which is the point: the input digest catches changed DATA and
 #: cannot possibly catch changed CODE.
-FIT_CACHE_VERSION = 3
+#:
+#: 4: REFIT_PLAN.md Phase B step 1.  The objective is unchanged and was proved
+#: so -- see :func:`production_inputs` -- but the refactor is exactly the kind
+#: of change the input digest cannot see, which is what this number is for.
+FIT_CACHE_VERSION = 4
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
 #: extrapolation distance.  Keyed on the ERA the anchor came from
@@ -323,6 +329,132 @@ def load_decimated(path=DECIMATED):
             np.sqrt(span / span.mean()))
 
 
+@dataclass(frozen=True)
+class Record:
+    """One trajectory the ODE is integrated down, with its own clock.
+
+    A bare ``(t, T, Tc, u)`` tuple was enough while there was exactly one, and
+    REFIT_PLAN.md Phase B is about there being several: the 43 h sweep, the
+    post-recalibration trace, and whatever else earns a ``trace`` row in the
+    manifest.  Three things the tuple could not carry are what make that
+    possible.
+
+    ``w`` -- the per-sample weight, normalised to unit mean square here rather
+    than inside :func:`fit`, so that ``sum(w**2) == len(t)`` for every record
+    and the prior shares stay balanced against the total the same way they were
+    against one record's ``len(t)``.  A uniform grid gets ones, which normalise
+    to ones, so this is inert on the existing path.
+
+    ``t0`` -- the ABSOLUTE unix second of ``t[0]``.  ``t`` stays relative
+    because the integrator wants it that way and because two records have no
+    common origin, but the campaign drift of REFIT_PLAN.md section 2.3 is a
+    function of wall-clock date and cannot be written without this.  It is the
+    one field that exists purely for step 8.
+
+    ``name`` -- so a residual, a cache key or a diagnostic can say which record
+    it came from.  With one record that is decoration; with three it is the
+    difference between a number and a number you can act on.
+    """
+
+    name: str
+    t: np.ndarray
+    T: np.ndarray
+    Tc: np.ndarray
+    u: np.ndarray
+    w: np.ndarray
+    t0: float = math.nan
+
+    def __post_init__(self):
+        w = np.asarray(self.w, float)
+        rms = math.sqrt(float(np.mean(w ** 2)))
+        object.__setattr__(self, "w", w / rms if rms > 0 else w)
+
+    @classmethod
+    def from_tuple(cls, data, weights=None, name="sweep", t0=math.nan):
+        """Accept the ``(t, T, Tc, u)`` five call sites still pass."""
+        if isinstance(data, Record):
+            if weights is not None:
+                raise SystemExit(
+                    f"fit_ode: Record {data.name!r} already carries its own "
+                    f"weights and a separate weights= was passed as well.  One "
+                    f"of the two would be silently dropped, and it is the kind "
+                    f"that only shows up as a fit that is subtly wrong -- put "
+                    f"the weights on the Record.")
+            return data
+        t, T, Tc, u = data
+        w = np.ones(len(t)) if weights is None else np.asarray(weights, float)
+        return cls(name=name, t=np.asarray(t, float), T=np.asarray(T, float),
+                   Tc=np.asarray(Tc, float), u=np.asarray(u, float), w=w, t0=t0)
+
+    def __len__(self) -> int:
+        return len(self.t)
+
+    @property
+    def T0(self) -> float:
+        """The integrator's initial condition: this record's first sample."""
+        return float(self.T[0])
+
+    @property
+    def t_abs(self) -> np.ndarray:
+        return self.t0 + self.t
+
+    def as_tuple(self):
+        return self.t, self.T, self.Tc, self.u
+
+
+@dataclass(frozen=True)
+class Anchors:
+    """Settled dwells as steady-state residuals, with the clock they were measured on.
+
+    ``t_abs`` is the whole point of the type and it comes from ``t_mid``, the
+    midpoint of the window, NOT from ``t_end`` as REFIT_PLAN.md step 1 assumed
+    when it was written.  Phase A changed what a level means: a hold is fitted
+    with level and drift and the level is quoted at the midpoint, because that
+    is where a linear drift's error is smallest.  Anchoring the campaign ramp
+    on the end of a 70 h window would put the anchor 35 h away from the
+    temperature it reports.  AUDIT-2026-09-10-REJOINDER.md asks for exactly
+    this convention to be honoured here.
+
+    ``group`` is carried but **not applied unless asked** -- see
+    ``fit(groups=)``.  Defaulting it on would silently give the ladder,
+    ``plot_ode`` and ``pid_tuning`` a per-era power offset none of them has
+    today, which is a change to three fits wearing a refactor's clothes.
+    Retiring :func:`anchor_groups` in favour of it is step 8.
+    """
+
+    T: np.ndarray
+    Tc: np.ndarray
+    Q: np.ndarray
+    sigma: np.ndarray
+    t_abs: np.ndarray
+    group: np.ndarray
+    source: tuple = ()
+    #: Heater output in percent.  Not used by the objective -- ``Q`` is what
+    #: enters it -- and carried because the campaign drift is measured at
+    #: FIXED OUTPUT, which is a statement about ``u`` and not about watts.
+    #: See :mod:`drift`.
+    u: np.ndarray = None
+
+    @classmethod
+    def from_tuple(cls, a, groups=None):
+        if isinstance(a, Anchors):
+            return a
+        T, Tc, Q, sigma = (np.asarray(v, float) for v in a)
+        g = (np.zeros(len(T), int) if groups is None
+             else np.asarray(groups, int))
+        return cls(T=T, Tc=Tc, Q=Q, sigma=sigma,
+                   t_abs=np.full(len(T), math.nan), group=g,
+                   u=np.full(len(T), math.nan))
+
+    def __len__(self) -> int:
+        return len(self.T)
+
+    @property
+    def days(self) -> np.ndarray:
+        """Days from the earliest anchor -- the axis the campaign drift runs on."""
+        return (self.t_abs - np.nanmin(self.t_abs)) / 86400.0
+
+
 def load_rows(path=ANCHORS):
     """The measurement table as plain dicts, resolved against the repository.
 
@@ -349,15 +481,15 @@ def anchor_groups(path=ANCHORS, t_max=None):
     the recent state -- which is the one the simulator and the loop have to
     match.  PASS THIS to `fit()` for anything that ships; without it the
     shipped curve splits the difference and is about 1 K wrong for both.
+
+    Reads :func:`load_anchors` rather than looping over the table again.  It
+    used to have its own copy of the "is this row an anchor" filter, as did
+    :func:`load_taus`, and three loops that must agree on which rows exist is
+    two too many -- a ``t_max`` or a grade test drifting in one of them would
+    misalign ``groups`` against ``aT`` by one row and mis-assign every offset
+    after it, silently.
     """
-    out = []
-    for r in load_rows(path):
-        if not r.get("grade"):
-            continue
-        if t_max is not None and _f(r, "T_inf") > t_max:
-            continue
-        out.append(1 if (r.get("era") or "").strip() == "prepython" else 0)
-    return np.array(out, dtype=int)
+    return load_anchors(path, t_max).group
 
 
 def _era_sigma(row) -> float:
@@ -374,20 +506,54 @@ def _era_sigma(row) -> float:
             f"came to fit nothing.") from None
 
 
-def load_anchors(path=ANCHORS, t_max=None):
-    """Every dwell whose steady state is usable, with its own error bar."""
-    out = []
+def _anchor_epoch(row) -> float:
+    """When this anchor's level was true, in unix seconds.
+
+    ``t_mid``, and the choice matters for step 8.  Phase A quotes a hold's
+    level at the MIDPOINT of its window with the drift beside it, because a
+    drifting hold has no single temperature and the midpoint is where a linear
+    drift's error is smallest.  Dating it by ``t_end`` instead -- which is what
+    REFIT_PLAN.md step 1 said, written before Phase A existed -- would put the
+    70 h hold's anchor 35 h away from the moment it describes.
+    """
+    text = (row.get("t_mid") or "").strip()
+    if not text:
+        return math.nan
+    try:
+        return _seg._stamp(text)
+    except ValueError:
+        return math.nan
+
+
+def load_anchors(path=ANCHORS, t_max=None) -> Anchors:
+    """Every dwell whose steady state is usable, with its own error bar.
+
+    Returns an :class:`Anchors`.  It was a bare four-tuple and no caller
+    unpacked it, so this is a widening rather than a break; ``fit`` still
+    accepts the tuple through :meth:`Anchors.from_tuple`.
+    """
+    T, Tc, Q, sigma, when, group, ids, u = [], [], [], [], [], [], [], []
     for r in load_rows(path):
         if not r.get("grade"):
             continue
-        T = _f(r, "T_inf")
-        if t_max is not None and T > t_max:
+        Ti = _f(r, "T_inf")
+        if t_max is not None and Ti > t_max:
             continue
         cool = _era_sigma(r)
         own = max(ANCHOR_FLOOR_K, 2.0 * abs(_f(r, "settle_K")))
-        out.append((T, _f(r, "Coldplate"), _f(r, "P_W"), math.hypot(cool, own)))
-    a = np.array(out)
-    return a[:, 0], a[:, 1], a[:, 2], a[:, 3]
+        T.append(Ti)
+        Tc.append(_f(r, "Coldplate"))
+        Q.append(_f(r, "P_W"))
+        sigma.append(math.hypot(cool, own))
+        when.append(_anchor_epoch(r))
+        group.append(1 if (r.get("era") or "").strip() == "prepython" else 0)
+        ids.append((r.get("id") or r.get("source") or "").strip())
+        u.append(_f(r, "u_pct"))
+    return Anchors(T=np.array(T, float), Tc=np.array(Tc, float),
+                   Q=np.array(Q, float), sigma=np.array(sigma, float),
+                   t_abs=np.array(when, float),
+                   group=np.array(group, int), source=tuple(ids),
+                   u=np.array(u, float))
 
 
 def load_taus(path=ANCHORS, t_max=None):
@@ -402,6 +568,110 @@ def load_taus(path=ANCHORS, t_max=None):
         out.append((T, _f(r, "tau_s")))
     a = np.array(out)
     return a[:, 0], a[:, 1]
+
+
+def load_record(window=SWEEP) -> Record:
+    """One manifest ``trace`` as a :class:`Record`, on the full 2 s grid."""
+    s = sweep_window(window)
+    t, T, Tc, u = load_sweep(window)
+    ok = ~np.isnan(s.epoch)
+    t0 = float(s.epoch[ok][0]) if ok.any() else math.nan
+    return Record.from_tuple((t, T, Tc, u), name=window, t0=t0)
+
+
+def _decimated_t0(path=DECIMATED) -> float:
+    """The decimated table's first absolute timestamp, in unix seconds.
+
+    Its own ``Timestamp`` column, and NOT the manifest window it was written
+    from: resolving the window means reading a 460,000-row archive table, which
+    is the twenty seconds the decimated grid exists to avoid.  That column is
+    there for this -- REFIT_PLAN.md Phase B step 4 added it and nothing had
+    read it until now.
+    """
+    with open_table(path) as fh:
+        row = next(csv.DictReader(fh), None)
+    text = (row or {}).get("Timestamp", "").strip()
+    if not text:
+        raise SystemExit(
+            f"fit_ode: {path} has no Timestamp on its first row.  The absolute "
+            f"clock is what the campaign drift is a function of; regenerate it "
+            f"with analysis/decimate.py --write.")
+    return _seg._stamp(text)
+
+
+def load_decimated_record(path=DECIMATED, name=SWEEP) -> Record:
+    """The thinned sweep as a :class:`Record`, weights and absolute clock included."""
+    data, w = load_decimated(path)
+    return Record.from_tuple(data, weights=w, name=name, t0=_decimated_t0(path))
+
+
+def as_records(data, weights=None) -> list:
+    """``data`` as a list of :class:`Record`, however it was passed.
+
+    One record, a list of them, or the bare ``(t, T, Tc, u)`` tuple five call
+    sites still use.  The ambiguity worth being careful about is that a tuple
+    of four arrays and a list of four Records look alike to ``len()`` and to
+    nothing else, so the test is on the element type.
+    """
+    if isinstance(data, Record):
+        return [Record.from_tuple(data, weights=weights)]
+    if isinstance(data, (list, tuple)) and data and isinstance(data[0], Record):
+        if weights is not None:
+            raise SystemExit(
+                "fit_ode: weights= with a list of Records.  Each record "
+                "carries its own; a single array cannot mean anything across "
+                "several clocks.")
+        return list(data)
+    return [Record.from_tuple(data, weights=weights)]
+
+
+def knot_range(records, anchors=None, taus=None):
+    """``(T_lo, T_hi)`` for :func:`build` -- where the curves get freedom.
+
+    Over every record, because with more than one trajectory the knots have to
+    span all of them or the second record is fitted on an extrapolation.
+
+    **``anchors`` and ``taus`` are accepted and are OFF by default, and that is
+    a deliberate stop.** REFIT_PLAN.md step 2 lists covering them here as part
+    of the inert plumbing, and it is not inert any more: the coldest anchor is
+    ``rec-20260824-171059`` at **4.7516 K**, below the sweep's own 4.8985 K, so
+    including it moves ``T_lo`` from 4.6536 to 4.5140 K and every geomspaced
+    knot with it.  That anchor did not exist when the plan was written -- it is
+    the one section 6.3's plant clock RECOVERED -- so the assumption that the
+    records always bracket the anchors was true then and is false now.
+
+    Turning it on is a real change to the curve at the cold end and belongs
+    with step 6, where the seeding moves anyway and the effect can be measured
+    against something rather than smuggled in beside a refactor.
+    """
+    lo = min(float(r.T.min()) for r in records)
+    hi = max(float(r.T.max()) for r in records)
+    if anchors is not None and len(anchors):
+        lo, hi = min(lo, float(anchors.T.min())), max(hi, float(anchors.T.max()))
+    if taus is not None and len(taus[0]):
+        lo = min(lo, float(np.min(taus[0])))
+        hi = max(hi, float(np.max(taus[0])))
+    return 0.95 * lo, 1.05 * hi
+
+
+def production_inputs(decimated=True, t_max=None):
+    """``(record, anchors, taus)`` -- the ONE definition of what a fit reads.
+
+    Three call sites built this by hand in five identical lines each
+    (``plot_gain``, ``export_response``, ``plan_sweep``), and the ladder built
+    a fourth version in two places that were already drifting apart -- see
+    :func:`_worker`.  Every one of them ends with the same subtle step: the
+    anchors and the taus are cut at the record's own ``T.max()``, because the
+    fit has nothing to say above the hottest sample it ever saw and an anchor
+    up there would be extrapolation weighted as measurement.  That cut being
+    open-coded five times is how the two ladder paths came to disagree.
+
+    ``t_max`` defaults to the record's own maximum, which is what every caller
+    passed.  Pass one explicitly only to ask a deliberately different question.
+    """
+    rec = load_decimated_record() if decimated else load_record()
+    hi = float(rec.T.max()) if t_max is None else t_max
+    return rec, load_anchors(t_max=hi), load_taus(t_max=hi)
 
 
 class LogLog:
@@ -604,7 +874,14 @@ TIER2_SEED = (0.0, 0.0)
 #: it is derived, it is keyed on a digest of the inputs, and a stale entry
 #: cannot survive a change to the sweep, the anchors or the taus because all
 #: three are in the key.  Delete the directory to force a refit.
-CACHE_DIR = os.path.join("analysis", ".fit_cache")
+#:
+#: Resolved against ``REPO_ROOT`` and not against the working directory, which
+#: is AUDIT-2026-09-10 finding 5 one more time.  ``load_rows`` was fixed and
+#: this was not, so running a script from inside ``analysis/`` created
+#: ``analysis/analysis/.fit_cache`` and quietly refitted everything from
+#: scratch against a second cache -- no error, no warning, just a quarter of an
+#: hour and a directory nobody expected.  Found doing exactly that.
+CACHE_DIR = os.path.join(_REPO_ROOT, "analysis", ".fit_cache")
 
 
 def cache_key(n_lam, n_cap, tier2, max_nfev, *arrays) -> str:
@@ -646,7 +923,7 @@ def cache_store(key: str, x, nfev: int) -> None:
 
 
 def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
-        tier2=False, weights=None, n_drift=0, groups=None):
+        tier2=False, weights=None, n_drift=0, groups=None, key_only=False):
     """Fit Lambda and C to a sweep.
 
     ``weights`` is the per-sample weight of the sweep residual, and exists for
@@ -657,25 +934,45 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     uniform grid -- which is what keeps the anchor, tau and shape shares below
     balanced against the sweep the same way they were.
     """
-    t, T, Tc, u = data if data is not None else load_sweep()
-    aT, aTc, aQ, aS = anchors if anchors is not None else load_anchors()
+    recs = as_records(data if data is not None else load_sweep(), weights)
+    anc = Anchors.from_tuple(anchors if anchors is not None else load_anchors())
     tauT, tauV = taus if taus is not None else load_taus()
-    lam, cap, pl0, pc0 = build(n_lam, n_cap, 0.95 * T.min(), 1.05 * T.max())
+    # The flat concatenations.  Every residual and every reported metric runs
+    # over these, so with one record they are the arrays this function has
+    # always used and nothing downstream can tell the difference.
+    t = np.concatenate([r.t for r in recs])
+    T = np.concatenate([r.T for r in recs])
+    Tc = np.concatenate([r.Tc for r in recs])
+    u = np.concatenate([r.u for r in recs])
+    aT, aTc, aQ, aS = anc.T, anc.Tc, anc.Q, anc.sigma
+    lam, cap, pl0, pc0 = build(n_lam, n_cap, *knot_range(recs))
     n = len(pl0)
-    if weights is None:
-        w_sweep = np.ones(len(t))
-    else:
-        w_sweep = np.asarray(weights, float)
-        w_sweep = w_sweep / math.sqrt(float(np.mean(w_sweep ** 2)))
-    w_anchor = math.sqrt(ANCHOR_SHARE * len(t) / len(aT))
+    # Normalised in Record.__post_init__ now, and to the same thing: a uniform
+    # grid is ones, whose mean square is already 1.
+    w_sweep = np.concatenate([r.w for r in recs])
+
+    #: The sample count every prior share is measured against.
+    #:
+    #: It was ``len(t)`` for the one record there was.  With several it has to
+    #: be the total, or the anchors' share of "the sweep" would mean a
+    #: different absolute weight depending on how many trajectories happened to
+    #: be loaded.  Each record's weights are unit mean square, so this is also
+    #: ``sum(w**2)`` -- the two agree exactly, which is what makes it inert.
+    #:
+    #: It does NOT decide the records' weight relative to EACH OTHER.  That is
+    #: ``RECORD_SHARE`` and REFIT_PLAN.md trap T5, and it is step 7: normalising
+    #: by time alone lets 106 h of three settled holds outvote the 43 h sweep on
+    #: the strength of sitting still.
+    N_eff = sum(len(r) for r in recs)
+    w_anchor = math.sqrt(ANCHOR_SHARE * N_eff / len(aT))
     logT = np.log(T)
 
     pT = np.geomspace(T.min(), T.max(), 12)
     ref = np.array([CAP_SHAPE_REF_K])
     p_target = np.log(mix_c(pT) / mix_c(ref)[0])
-    w_shape = (math.sqrt(CAP_SHAPE_SHARE * len(t) / len(pT))
+    w_shape = (math.sqrt(CAP_SHAPE_SHARE * N_eff / len(pT))
                / math.log(CAP_SHAPE_FACTOR))
-    w_tau = (math.sqrt(TAU_SHARE * len(t) / max(len(tauT), 1))
+    w_tau = (math.sqrt(TAU_SHARE * N_eff / max(len(tauT), 1))
              / math.log(TAU_SIGMA_FACTOR))
     log_tau = np.log(tauV)
 
@@ -686,17 +983,42 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     # One free power offset per anchor group beyond the first.  Group 0 is the
     # recent state and is the reference, so it gets no offset -- an offset on
     # every group would be degenerate with Lambda's own level.
-    groups = np.zeros(len(aT), int) if groups is None else np.asarray(groups, int)
+    # ``groups=True`` means "use the anchors' own era column", which is what
+    # step 8 will make the only behaviour.  ``None`` still means OFF, and it
+    # has to: the ladder, ``plot_ode`` and ``pid_tuning`` all pass nothing, and
+    # switching them on here would change three fits under cover of a
+    # refactor.  See Anchors.group.
+    if groups is None:
+        groups = np.zeros(len(aT), int)
+    elif groups is True:
+        groups = anc.group
+    else:
+        groups = np.asarray(groups, int)
+    if len(groups) != len(aT):
+        raise SystemExit(
+            f"fit_ode: {len(groups)} group labels for {len(aT)} anchors.  They "
+            f"are positional, so a mismatch mis-assigns every offset after the "
+            f"first gap -- use groups=True, or production_inputs().")
     n_group = int(groups.max()) if len(groups) else 0
 
-    dk = np.linspace(t[0], t[-1], n_drift) if n_drift else np.zeros(0)
-    w_drift = (math.sqrt(DRIFT_SHARE * len(t) / max(n_drift, 1))
+    if n_drift and len(recs) > 1:
+        raise SystemExit(
+            "fit_ode: n_drift with more than one record.  The drift knots are "
+            "in TIME and there is only one block of them, so several records "
+            "would share a clock they do not have.  REFIT_PLAN.md trap T2 says "
+            "there have to be TWO terms -- a per-record short-timescale wander "
+            "and one campaign ramp, with separate priors, because they have "
+            "opposite signs -- and building that is step 8, not this one.")
+    dk = np.linspace(recs[0].t[0], recs[0].t[-1], n_drift) if n_drift else np.zeros(0)
+    w_drift = (math.sqrt(DRIFT_SHARE * N_eff / max(n_drift, 1))
                / DRIFT_SIGMA_W)
 
     def drift_of(p):
+        """Per record, in watts, or ``None``.  One record while T2 is open."""
         if not n_drift:
             return None
-        return np.interp(t, dk, p[len(p) - n_tail:len(p) - n_group])
+        knots = p[len(p) - n_tail:len(p) - n_group]
+        return [np.interp(r.t, dk, knots) for r in recs]
 
     def unpack2(p):
         f = 1.0 / (1.0 + math.exp(-p[-2]))
@@ -709,7 +1031,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     # a knot by the neighbours, so sampling there measures the parameterisation
     # rather than the curve.  Midpoints in log T see what is actually drawn.
     rough_T = np.exp(0.5 * (np.log(lam.knots[:-1]) + np.log(lam.knots[1:])))
-    w_rough = (math.sqrt(LAMBDA_SMOOTH_SHARE * len(t) / max(len(rough_T) - 2, 1))
+    w_rough = (math.sqrt(LAMBDA_SMOOTH_SHARE * N_eff / max(len(rough_T) - 2, 1))
                / LAMBDA_SMOOTH_SIGMA
                if LAMBDA_SMOOTH_SHARE and len(rough_T) > 2 else 0.0)
     rough_lx = np.log(rough_T)
@@ -729,12 +1051,27 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         return q[groups]
 
     def run(p):
+        """The modelled T for every record, concatenated in record order.
+
+        Each record is integrated on ITS OWN clock and from ITS OWN first
+        sample.  Integrating a concatenation would step across the join with
+        whatever ``dt`` the two ends happened to differ by and carry the first
+        record's final temperature into the second's initial condition -- an
+        ODE integrated across a gap converges on a number anyway, which is the
+        same trap ``segments.load`` refuses for a window spanning one.
+        """
         pl, pc = split_p(p)
         q = drift_of(p)
-        if not tier2:
-            return integrate(lam, cap, pl, pc, t, Tc, u, T[0], q_extra=q)
-        f, g = unpack2(p[:-n_tail] if n_tail else p)
-        return integrate2(lam, cap, pl, pc, f, g, t, Tc, u, T[0])
+        out = []
+        for i, rc in enumerate(recs):
+            if not tier2:
+                out.append(integrate(lam, cap, pl, pc, rc.t, rc.Tc, rc.u,
+                                     rc.T0, q_extra=None if q is None else q[i]))
+            else:
+                f, g = unpack2(p[:-n_tail] if n_tail else p)
+                out.append(integrate2(lam, cap, pl, pc, f, g, rc.t, rc.Tc,
+                                      rc.u, rc.T0))
+        return np.concatenate(out) if len(out) > 1 else out[0]
 
     def resid(p):
         pl, pc = split_p(p)
@@ -765,13 +1102,23 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     # here, so a study that varied it got the first run's answer back four
     # times and the knob looked dead -- the same failure mode LAMBDA_SMOOTH_SHARE
     # was caught by, one level up.
-    key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aQ, aS,
+    # aTc was missing from this list, which meant a remap of the anchors' own
+    # coldplate column -- exactly the thing that happened on 2026-09-04 -- did
+    # not invalidate a stored fit.  It enters the objective through
+    # ``lam(pl, aTc)`` and belongs in the key beside the rest.
+    key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aTc, aQ, aS,
                     tauV, w_sweep, groups,
                     np.array([n_drift, LAMBDA_SMOOTH_SHARE, LAMBDA_SMOOTH_SIGMA,
                               ANCHOR_SHARE, ANCHOR_FLOOR_K, TAU_SHARE,
                               TAU_SIGMA_FACTOR, SWEEP_SIGMA_REL, DRIFT_SHARE,
                               DRIFT_SIGMA_W, CAP_SHAPE_SHARE, CAP_SHAPE_FACTOR,
                               CAP_SHAPE_REF_K], float))
+    if key_only:
+        # Returned from HERE rather than recomputed by a helper, so that the
+        # key a caller checks is the key this function will use, by
+        # construction.  A second implementation is a second thing to keep in
+        # step, and the whole point of the check is that two paths had drifted.
+        return key
     hit = cache_load(key, len(p0))
     if hit is not None:
         x, nfev = hit
@@ -792,8 +1139,17 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     # does: rms over TIME, not over samples.  Unweighted these agree exactly on
     # a uniform grid, which is why this was invisible before.
     wsq = w_sweep ** 2
-    hold = opening_hold(t, u)
-    moving = np.abs(np.gradient(T, t)) > 2e-3          # > 7.2 K/h
+    # Both of these are PER RECORD and then concatenated, and neither may be
+    # computed on the flat arrays.  `opening_hold` reads u[0] and would call
+    # the second record's opening a continuation of the first's; `np.gradient`
+    # would straddle the join and report a slew of (T2 - T1) / (t2 - t1) across
+    # a boundary where the two clocks have no relation at all.
+    holds = [opening_hold(r.t, r.u) for r in recs]
+    hold = np.concatenate(holds)
+    moving = np.concatenate([np.abs(np.gradient(r.T, r.t)) > 2e-3
+                             for r in recs])           # > 7.2 K/h
+    hold_h = sum((r.t[m][-1] - r.t[m][0]) / 3600.0
+                 for r, m in zip(recs, holds) if m.any())
     return {
         "tier2": tier2, "split": split, "mass_ratio": mass_ratio,
         "rms_moving_k": float(np.sqrt(np.mean(err[moving] ** 2))),
@@ -801,8 +1157,11 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         "frac_moving": float(np.mean(moving)),
         "hold_k": float(np.sqrt(np.mean(err[hold] ** 2))),
         "hold_max_k": float(np.max(np.abs(err[hold]))),
-        "hold_h": float((t[hold][-1] - t[hold][0]) / 3600.0),
+        "hold_h": float(hold_h),
+        "records": tuple(r.name for r in recs),
+        "n_record": len(recs),
         "n_lam": n_lam, "n_cap": n_cap, "npar": len(x), "nfev": nfev,
+        "key": key,
         "n_drift": n_drift, "drift_w": drift_w, "drift_t": dk,
         "n_group": n_group, "group_w": group_w,
         "drift_mw": float(1e3 * np.abs(drift_w).max()) if n_drift else 0.0,
@@ -868,7 +1227,50 @@ def _line(d):
             f"{d['tau_137_s']:>9.0f}{d['nfev']:>6}{d['secs']:>7.1f}")
 
 
-def _worker(job):
+@dataclass(frozen=True)
+class FitSpec:
+    """Everything needed to reproduce one fit, small enough to pickle.
+
+    This exists because the ladder had **two ways of deciding what to fit**,
+    and they were not the same one.  ``_worker`` called ``load_sweep()`` and
+    ``load_anchors()`` itself and ignored everything its caller had prepared;
+    ``ladder()`` used its ``data`` argument only on the serial path and only
+    for ``t_max`` on the parallel one.  Today those happen to agree, because
+    ``__main__`` passes the full-grid sweep, which is what the worker reloads
+    -- so the bug is latent rather than live.  Hand the ladder the DECIMATED
+    grid, or weights, or a drift term, and the four parallel rungs would have
+    quietly fitted a different model from the serial ones and printed them in
+    the same table.
+
+    A spec is the fix: both paths build their inputs from the same small
+    description through :func:`production_inputs`, and a worker carries the
+    description rather than the data.  Keeping it small is still what lets the
+    worker re-read the table instead of having 77,375 samples pickled to it
+    per rung, which was the original and correct reason ``_worker`` reloaded.
+    """
+
+    n_lam: int
+    n_cap: int
+    decimated: bool = False
+    t_max: float | None = None
+    n_drift: int = 0
+    groups: bool = False
+    tier2: bool = False
+    max_nfev: int = 300
+
+    def run(self, key_only=False):
+        rec, anchors, taus = production_inputs(self.decimated, self.t_max)
+        return fit(self.n_lam, self.n_cap, rec, anchors, taus,
+                   max_nfev=self.max_nfev, tier2=self.tier2,
+                   n_drift=self.n_drift,
+                   groups=True if self.groups else None, key_only=key_only)
+
+    def key(self) -> str:
+        """The cache key :meth:`run` will use, without paying for the fit."""
+        return self.run(key_only=True)
+
+
+def _worker(spec):
     """One rung, in its own process.
 
     Returns only what the table needs.  A fit dict carries two spline objects
@@ -876,28 +1278,49 @@ def _worker(job):
     pipe costs more than some of the arithmetic that made them.
     """
     import time
-    n_lam, n_cap, t_max = job
     t0 = time.time()
-    r = fit(n_lam, n_cap, load_sweep(), load_anchors(t_max=t_max),
-            load_taus(t_max=t_max))
-    return _summary(r, "", time.time() - t0)
+    return _summary(spec.run(), "", time.time() - t0)
 
 
-def ladder(rows, data, anchors, title, out=None, taus=None, workers=None):
+def _worker_key(spec):
+    """``spec.key()`` evaluated in a worker process.  See :func:`ladder`."""
+    return spec.key()
+
+
+def ladder(rows, title, out=None, workers=None, base=None):
+    """One row per rung.  ``base`` is the :class:`FitSpec` the knots vary on."""
     import time
     axis = title.split()[2].rstrip(",")
     workers = LADDER_WORKERS if workers is None else workers
+    base = base or FitSpec(0, 0)
+    specs = [replace(base, n_lam=a, n_cap=b) for a, b in rows]
     print(f"\n{title}")
     print(_HEAD)
     got = []
-    if workers > 1 and len(rows) > 1:
+    if workers > 1 and len(specs) > 1:
         from concurrent.futures import ProcessPoolExecutor
-        t_max = float(data[1].max())
         wall = time.time()
         with ProcessPoolExecutor(max_workers=workers) as pool:
+            # REFIT_PLAN.md Phase B step 3 asks for this assertion, and it has
+            # content even now that both paths run the same code: a worker is a
+            # fresh interpreter with its own working directory, and
+            # `_data.resolve` searches relative to the CWD as well as to
+            # REPO_ROOT.  A worker that resolved a different `measured.csv`
+            # would fit different anchors and say nothing -- which is
+            # AUDIT-2026-09-10 finding 5 with a process boundary in it.  One
+            # round trip, no fitting.
+            here = specs[0].key()
+            there = pool.submit(_worker_key, specs[0]).result()
+            if here != there:
+                raise SystemExit(
+                    f"fit_ode: the ladder's two paths disagree about what they "
+                    f"are fitting -- this process keys rung {rows[0]} as {here} "
+                    f"and a worker keys it as {there}.  They resolve their "
+                    f"inputs differently; check the working directory and "
+                    f"_data.resolve before trusting any row of this table.")
             # map keeps the results in the order the rungs were given, so the
             # table still reads top to bottom however the workers finish.
-            done = list(pool.map(_worker, [(a, b, t_max) for a, b in rows]))
+            done = list(pool.map(_worker, specs))
         for d in done:
             d["axis"] = axis
             got.append(d)
@@ -906,10 +1329,9 @@ def ladder(rows, data, anchors, title, out=None, taus=None, workers=None):
         print(f"  {len(rows)} rungs on {workers} workers: "
               f"{time.time() - wall:.0f} s wall, {serial:.0f} s of fitting")
     else:
-        for n_lam, n_cap in rows:
+        for spec in specs:
             t0 = time.time()
-            d = _summary(fit(n_lam, n_cap, data, anchors, taus), axis,
-                         time.time() - t0)
+            d = _summary(spec.run(), axis, time.time() - t0)
             got.append(d)
             print(_line(d), flush=True)
     if out is not None:
@@ -921,20 +1343,20 @@ LADDER_CSV = "analysis/ladder.csv"
 
 
 if __name__ == "__main__":
-    data = load_sweep()
-    hi = float(data[1].max())
-    anchors, taus = load_anchors(t_max=hi), load_taus(t_max=hi)
-    print(f"sweep   {len(data[0])} samples at {STEP_S:.0f} s, "
-          f"{data[0][-1] / 3600:.1f} h, {data[1].min():.1f}-{data[1].max():.1f} K")
-    print(f"anchors {len(anchors[0])} settled dwells, "
-          f"{anchors[0].min():.1f}-{anchors[0].max():.1f} K")
+    # The ladder is the complexity study and is deliberately the PLAIN fit:
+    # full grid, no weights, no drift term and no per-era offset.  Adding any
+    # of them here would confound the thing the ladder exists to separate.
+    base = FitSpec(0, 0, decimated=False)
+    rec, anchors, taus = production_inputs(base.decimated, base.t_max)
+    print(f"sweep   {len(rec)} samples at {STEP_S:.0f} s, "
+          f"{rec.t[-1] / 3600:.1f} h, {rec.T.min():.1f}-{rec.T.max():.1f} K")
+    print(f"anchors {len(anchors)} settled dwells, "
+          f"{anchors.T.min():.1f}-{anchors.T.max():.1f} K")
     print(f"taus    {len(taus[0])} measured, "
           f"{taus[0].min():.1f}-{taus[0].max():.1f} K")
     rows = []
-    ladder(LADDER_LAMBDA, data, anchors,
-           "freedom in Lambda, C held at 4 knots", rows, taus)
-    ladder(LADDER_CAP, data, anchors,
-           "freedom in C, Lambda held at 9 knots", rows, taus)
+    ladder(LADDER_LAMBDA, "freedom in Lambda, C held at 4 knots", rows, base=base)
+    ladder(LADDER_CAP, "freedom in C, Lambda held at 9 knots", rows, base=base)
     with open(LADDER_CSV, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
