@@ -78,7 +78,14 @@ ANCHORS = "analysis/measured.csv"
 #: 4: REFIT_PLAN.md Phase B step 1.  The objective is unchanged and was proved
 #: so -- see :func:`production_inputs` -- but the refactor is exactly the kind
 #: of change the input digest cannot see, which is what this number is for.
-FIT_CACHE_VERSION = 4
+#:
+#: 5: the seed changed -- step 6, and then the gauge search was deleted.  THE
+#: SEED IS NOT IN THE KEY beyond the ``seed_measured`` flag, so changing how it
+#: is computed leaves entries that are reachable and wrong.  It caught me out
+#: once: after deleting the gauge search, two comparison rows came back in zero
+#: seconds carrying the answer the old seed had found.  A stale hit does not
+#: look like an error, it looks like a fast run.
+FIT_CACHE_VERSION = 5
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
 #: extrapolation distance.  Keyed on the ERA the anchor came from

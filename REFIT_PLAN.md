@@ -784,52 +784,46 @@ it bisectable.
    546 K/W at 76 K and reads 620 K/W at 130 K, against the 639 K/W the two
    September holds measure between them.
 
-   **What it is worth, and the more important thing it revealed:**
-
-   | preset | seed | `rms_k` | `anchor_k` | `mass_g` | τ(137) | `nfev` |
-   |---|---|---|---|---|---|---|
-   | 12/4 | power law | 0.2025 | 1.5426 | 4.7877 | 567.1 | **300** |
-   | 12/4 | measured | **0.2010** | 1.5420 | 4.7879 | 567.0 | **300** |
-   | 20/4 | power law | 0.1579 | 1.5237 | 4.7892 | 566.5 | **300** |
-   | 20/4 | measured | **0.1513** | 1.5301 | 4.7965 | 568.3 | **300** |
-
-   Better rms for the same budget — 0.7 % at 12 knots, **4.2 % at 20** — and
-   the dynamics do not move, which is what a better starting point should do.
-   But **every one of these stops at `nfev = 300 = max_nfev`**, so none of them
-   is a converged fit. Which turned out to be the real finding:
+   **What it is worth is in 6b**, because measuring it turned up something
+   larger than a better starting point.
 
 6b. **`max_nfev = 300` was a truncation, and the seed was choosing the wrong
    local minimum.** §7's preamble suspected the first; the second was not
-   suspected at all. On the production 20/4 preset, run out to convergence:
+   suspected at all. Both production presets, run out to convergence on a
+   clean cache:
 
-   | `max_nfev` | seed | **cost** | `rms_k` | `anchor_k` | `mass_g` | τ(137) | `nfev` |
-   |---|---|---|---|---|---|---|---|
-   | 300 | power law | | 0.1579 | 1.5237 | 4.7892 | 566.5 | **300 — cut** |
-   | 300 | measured | | 0.1513 | 1.5301 | 4.7965 | 568.3 | **300 — cut** |
-   | 1000 | power law | | 0.1584 | 1.5241 | 4.7888 | 566.5 | **1000 — still cut** |
-   | 3000 | power law | **1163.0** | 0.1585 | 1.5244 | 4.7887 | 566.6 | 1157 ✓ |
-   | 3000 | measured | **994.6** | **0.1499** | 1.5479 | 4.8059 | 571.3 | **562 ✓** |
+   | preset | seed | cap | **cost** | `rms_k` | `anchor_k` | `mass_g` | τ(137) | `nfev` |
+   |---|---|---|---|---|---|---|---|---|
+   | 12/4 | power law | 300 | 1366.46 | 0.2025 | 1.5426 | 4.7877 | 567.1 | 300 **cut** |
+   | 12/4 | power law | 1500 | 1364.96 | 0.2081 | 1.5428 | 4.7866 | 567.3 | 539 ✓ |
+   | 12/4 | **measured** | 300 | **1252.25** | 0.1869 | 1.5481 | 4.7705 | 559.4 | **128** ✓ |
+   | 12/4 | **measured** | 1500 | **1252.25** | 0.1869 | 1.5481 | 4.7705 | 559.4 | **128** ✓ |
+   | 20/4 | power law | 300 | 1164.29 | 0.1579 | 1.5237 | 4.7892 | 566.5 | 300 **cut** |
+   | 20/4 | power law | 1500 | 1163.02 | 0.1585 | 1.5244 | 4.7887 | 566.6 | 1157 ✓ |
+   | 20/4 | **measured** | 300 | **994.64** | 0.1499 | 1.5479 | 4.8059 | 571.3 | **149** ✓ |
+   | 20/4 | **measured** | 1500 | **994.64** | 0.1499 | 1.5479 | 4.8059 | 571.3 | **149** ✓ |
 
-   `cost` is `0.5·Σr²`, the thing `least_squares` actually minimises, and it is
-   reported now because it is the only column that can adjudicate: `rms_k` and
-   `anchor_k` are two weighted *parts* of it and here they move in opposite
-   directions.
+   `cost` is `0.5·Σr²` — what `least_squares` actually minimises — and it is on the
+   row because `rms_k` and `anchor_k` are two *weighted parts* of it and they move
+   in opposite directions here.
 
-   **The two seeds converge to different optima, and the measured one is 14.5 %
-   better.** Not a tolerance, a different answer: 994.6 against 1163.0, found
-   in 562 evaluations against 1157. So the objective is multi-modal and the
-   power-law seed has been landing in the worse basin for the whole campaign —
-   every production number this repository has quoted is from there.
+   **The two seeds converge to different optima.** The measured one is **8.3 %
+   better at 12 knots and 14.5 % at 20**, and gets there **4.2× and 7.8× faster**
+   (128 vs 539, 149 vs 1157). The objective is multi-modal and the power-law seed
+   had been landing in the worse basin for the whole campaign, so every production
+   number this repository has quoted comes from there.
 
-   `MAX_NFEV` is **1500**, past where both seeds converge, so a comparison
-   between them is between two converged fits rather than between a fit and a
-   truncation. Free for the ladder rungs that already stopped at 76–138.
+   **`MAX_NFEV` 300 → 1500.** 300 was a truncation: neither seed had converged
+   there. With the gauge search gone the shipped path no longer needs the
+   headroom — it converges in 128–149 — so 1500 is there so that a comparison
+   *against* the old seed is between two converged fits rather than between a fit
+   and a truncation, and it costs nothing on rungs that stop earlier.
 
-   Worth noticing: the better optimum has a **higher** `anchor_k`, 1.524 →
-   1.548, with `rms_k` and the opening hold both improving. That is §1's
-   tension — the model as posed cannot satisfy the trajectory and the holds at
-   once — showing up in the shape of the basin rather than in a weight study,
-   and it is what steps 7 and 8 exist to fix.
+   Note the better optimum has a **higher** `anchor_k` with a lower `rms_k`. That
+   is REFIT_PLAN §1's tension — the model as posed cannot satisfy the trajectory
+   and the holds at once — appearing in the shape of the basin rather than in a
+   weight study.
+
 7. **Add the post-recal trace**, drop anchors falling inside a fitted record's
    span (trap T4), set `RECORD_SHARE` explicitly (trap T5). Still `groups=`, no
    campaign drift. **Report how much of the 2.5 K the trajectory alone
