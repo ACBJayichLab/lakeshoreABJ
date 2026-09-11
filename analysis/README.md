@@ -367,6 +367,17 @@ headroom — it converges in 128–149 — so 1500 is there so that a comparison
 *against* the old seed is between two converged fits rather than between a fit
 and a truncation, and it costs nothing on rungs that stop earlier.
 
+**The plots qualify this.** `analysis/plot_review.py` draws the two optima as
+curves and above ~7 K they coincide: max difference in dΛ/dT is 0.5–0.8 % over
+25–192 K, 2.7 % over 10–25 K, and **928 % over 4.7–7 K**. Decomposing the
+cost, 42 % of the gain comes from the 140 sweep samples below 10 K (2.8 % of
+them), where the measured-seed conductance carries a spike the anchors do not
+show. So the seed is worth having for **convergence and reproducibility**, and
+the two optima are the same model wherever the model is used; it is **not**
+established that the winner is right below 10 K rather than merely lower.
+`T_lo = 4.6536 K` is below the coldest sample AND the coldest anchor, so the
+lowest Λ knot sits where there is no data — settle that before regenerating.
+
 Note the better optimum has a **higher** `anchor_k` with a lower `rms_k`. That
 is REFIT_PLAN §1's tension — the model as posed cannot satisfy the trajectory
 and the holds at once — appearing in the shape of the basin rather than in a
@@ -418,6 +429,10 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 #     REFIT_PLAN.md Phase B step 5's gate.  Reads the anchors and nothing else.
 .venv/Scripts/python.exe analysis/drift.py
 .venv/Scripts/python.exe analysis/drift.py --knots 3      # would 3 knots earn it?
+
+# 1b2. the four review figures -> analysis/review-*.png            (~2 min)
+#      one per decision; REVIEW-2026-09-10.md says what each is for
+.venv/Scripts/python.exe analysis/plot_review.py
 
 # 1c. Lambda and C read straight off the anchors, no fit at all    (~2 s)
 #     The model-free reading.  A sanity check on a fifteen-minute fit, and

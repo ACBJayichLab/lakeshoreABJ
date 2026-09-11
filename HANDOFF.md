@@ -182,6 +182,22 @@ The other thing to look at rather than take on trust is the choice to take C's
 *shape* from the τ anchors rather than from Debye — a single Debye magnitude
 put τ(137 K) at 804 s where the anchors there say 607.
 
+## The plots changed one conclusion — look before trusting §6b
+
+`python analysis/plot_review.py` writes four PNGs into `analysis/`, one per
+decision. `review-3-basins.png` is the one that mattered: the two optima step
+6b calls "different" are **the same curve above ~7 K**. Max difference in
+dΛ/dT is 0.5–0.8 % over 25–192 K and **928 % over 4.7–7 K**, and 42 % of the
+cost gain comes from the 140 sweep samples below 10 K — where the measured-seed
+conductance carries a spike the anchors do not show.
+
+So the measured seed is worth having for **convergence and reproducibility**
+(149 evaluations against 1157), and the two optima are the same model wherever
+the model is used. Whether the winner is *right* below 10 K is open, and
+`T_lo = 4.6536 K` sits below the coldest sample **and** the coldest anchor —
+the lowest Λ knot is in a region with no data of either kind. **Settle that
+before regenerating the shipped table.**
+
 ## Then, in order
 
 1. **Mask the 09-10 fault window** once the sample is flat (the note above).
