@@ -578,13 +578,13 @@ moved. That is the non-circularity claim of §6.2 turned into an assertion.
 
 | | |
 |---|---|
-| dropped | 13 — 2 ceiling pins, **11 from the `amp_sigma` branch** |
+| dropped | 14 — 2 ceiling pins, **12 from the `amp_sigma` branch** |
 | recovered | 1 — `rec-20260824-171059`, 57 s at 4.75 K, which is 11 τ |
-| relabelled `unsettled` → `unresolved` | 24, all already excluded |
+| relabelled `unsettled` → `unresolved` | 17, all already excluded |
 
 **The plan predicted two. It scored only the ceiling pins.** The wall clock was
 standing in for the plant clock on the amplitude branch too, and there it was
-letting through warm short dwells: all eleven are 128.8–180.5 K, 70 s to
+letting through warm short dwells: all twelve are 128.8–180.5 K, 70 s to
 1641 s, under three of the plant's time constants with no transient of their
 own to argue otherwise. Two are AUDIT-2026-09-10-REPLY.md §1's own examples —
 200 s at 147.1 K and 330 s at 170.4 K, which it called "a third of a τ" and
@@ -748,16 +748,27 @@ it bisectable.
    maximum — the scatter inside a bin *is* the campaign drift and a median is
    the right summary of it.
 
-   **The level is a gauge and the search for it was wrong twice.** Trap T1 says
-   an added constant is a null direction of the data. It is a null direction of
-   the roughness penalty too — the penalty acts on `log(dΛ/dT)` and
-   `d(Λ+c)/dT = dΛ/dT` — so the first `_gauge_level` measured a quantity that
-   is invariant to its own argument and duly returned the top of its grid,
-   9.68 W against a curve that spans 0.97. What is left is pure discretisation:
-   the parameterisation interpolates **log Λ** between knots, so a constant
-   moves the curve *between* them. Searched through the real `LogLog`, the
-   answer is 1.28 W at 9 knots, 0.16 at 12 and **0.026 at 20** — shrinking with
-   knot count, which is what a discretisation artefact should do.
+   **The level is a gauge, it is not searched, and two attempts to search it
+   were both wrong.** Trap T1 says an added constant is a null direction of the
+   data. It is one for the roughness penalty too — the penalty acts on
+   `log(dΛ/dT)` and `d(Λ+c)/dT = dΛ/dT` — so the first `_gauge_level` measured
+   a quantity invariant to its own argument and returned the top of its grid,
+   9.68 W against a curve spanning 0.97. The second searched the genuine
+   residue (the parameterisation interpolates **log Λ** between knots, so a
+   constant moves the curve *between* them) through the real `LogLog`. That was
+   defensible, and measuring it killed it:
+
+   | gauge | cost | `nfev` |
+   |---|---|---|
+   | 0 | **994.64** | **149** |
+   | 0.0175 — what the search returned at 20 knots | 994.64 | 566 |
+   | 2.4121 — what it returned at 9 knots, railed at 3× the span | **1163.02** | 561 |
+
+   A zero gauge reaches the same optimum **3.8× faster**, and the 9-knot answer
+   lands the fit in the *worse* basin — exactly where the power-law seed was
+   stuck, destroying step 6's whole benefit. `_gauge_level` is **deleted**; Λ is
+   seeded on the anchors' own `Λ(T_c) = 0`. Do not reintroduce a search over a
+   null direction without running that table.
 
    **C from `τ·Λ′`, and a single Debye magnitude was not good enough.** The
    first version fitted one factor to the Debye mix and reconstructed τ(137 K)

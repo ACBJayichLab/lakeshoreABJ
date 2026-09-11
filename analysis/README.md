@@ -223,19 +223,19 @@ top of the data. `curate.py --plant` prints all 97 with their margins.
 |---|---|---|
 | anchors | 149 | **136** |
 | with a believable τ | 37 | **37** — unchanged, by construction |
-| verdict changes | | 13 dropped, **1 recovered** |
-| `quality` relabelled `unsettled` → `unresolved` | | 24, all already excluded |
+| verdict changes | | **14 dropped, 1 recovered** (net −13) |
+| `quality` relabelled `unsettled` → `unresolved` | | 17, all already excluded |
 
 The one recovered anchor is `rec-20260824-171059`, 57 s at 4.75 K: a ceiling pin
 the 60 s clock had refused, which on the plant's clock ran 11 time constants.
 It is the sixteen rungs again, and it is the reason to be confident this change
-is not simply a stricter bar — the same test that drops 13 warm windows keeps a
+is not simply a stricter bar — the same test that drops 14 warm windows keeps a
 cold one the wall clock could not.
 
 **What was dropped, and it is not what the plan expected.** `REFIT_PLAN.md`
 §6.2 predicted two verdict changes, having measured only the ceiling pins. Two
-of the thirteen are those (`pp-20260808-155602`, `rec-20260901-222818`); the
-other eleven come from the `amp_sigma` branch, which the plan did not score
+of the fourteen are those (`pp-20260808-155602`, `rec-20260901-222818`); the
+other twelve come from the `amp_sigma` branch, which the plan did not score
 because the wall clock was standing in for the plant clock there too. Every one
 is a warm dwell — 128.8 to 180.5 K, spans 70 s to 1641 s — that ran under three
 of the plant's time constants with no transient of its own to prove otherwise.
@@ -317,16 +317,24 @@ It agrees with the fit to a few percent, from two methods sharing no machinery:
 
 **Two things went wrong getting there and both are worth keeping.**
 
-*The level of Λ is a gauge, and the first attempt to choose it measured a
-quantity invariant to its own argument.* Trap T1 says an added constant is a
-null direction of the data. It is a null direction of the roughness penalty
-too — the penalty acts on `log(dΛ/dT)`, and `d(Λ+c)/dT = dΛ/dT`. The search
-duly returned the top of whatever grid it was handed: 9.68 W, against a curve
-spanning 0.97 W. What is genuinely left is discretisation — the
-parameterisation interpolates **log Λ** between knots, so a constant moves the
-curve *between* them — and searched through the real `LogLog` the answer is
-1.28 W at 9 knots, 0.16 at 12, 0.026 at 20. Shrinking with knot count is what
-a discretisation artefact should do, and is how you can tell it is one.
+*The level of Λ is a gauge, two attempts to choose it were wrong, and the
+second was actively harmful.* Trap T1 says an added constant is a null
+direction of the data; it is one for the roughness penalty too, since the
+penalty acts on `log(dΛ/dT)` and `d(Λ+c)/dT = dΛ/dT`. The first search duly
+returned the top of whatever grid it was handed — 9.68 W against a curve
+spanning 0.97. The second searched the genuine residue (the parameterisation
+interpolates **log Λ** between knots, so a constant moves the curve *between*
+them) through the real `LogLog`, which was defensible. Measuring it killed it:
+
+| gauge | cost | `nfev` |
+|---|---|---|
+| 0 | **994.64** | **149** |
+| 0.0175 — the search's answer at 20 knots | 994.64 | 566 |
+| 2.4121 — its answer at 9 knots, railed at 3× the span | **1163.02** | 561 |
+
+Zero reaches the same optimum 3.8× faster, and the 9-knot answer drops the fit
+into the *worse* basin — the one the power-law seed was stuck in. The search is
+deleted; Λ is seeded on the anchors' own `Λ(T_c) = 0`.
 
 **And the seed was choosing which local minimum the fit landed in.** That is
 worth more than the 4 % of rms it was supposed to buy. On 20/4 with the drift

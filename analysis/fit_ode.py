@@ -874,22 +874,34 @@ def measured_lambda(anchors, gauge=True):
     converges in two or three passes because ``Lambda`` at 5-7 K is a percent
     of ``Q``, which is the same reason the baseline was ignorable to begin with.
 
-    **The LEVEL is a gauge**, and this function does not choose it -- it
-    returns the ``Lambda(T_c) = 0`` reading, which is what the anchors
-    literally say.  Trap T1: only differences of ``Lambda`` enter the anchor
-    residual, the integrator and the tau residual, so an added constant is an
-    exact null direction of the likelihood.
+    **The LEVEL is a gauge and is NOT chosen here.**  What comes back is the
+    ``Lambda(T_c) = 0`` reading, which is what the anchors literally say.  Trap
+    T1: only differences of ``Lambda`` enter the anchor residual, the
+    integrator and the tau residual, so an added constant is an exact null
+    direction of the likelihood.
 
-    It is a null direction of the roughness penalty too, and that took a wrong
-    turn to establish.  The penalty acts on ``log(dLambda/dT)``, and
-    ``d(Lambda + c)/dT = dLambda/dT`` -- so in the continuum the constant is
-    invisible to it as well, and a search for "the level the prior likes" is
-    degenerate.  It duly returned the top of whatever grid it was given.  The
-    residue of sensitivity is pure discretisation: the parameterisation
-    interpolates **log Lambda** between knots, and a constant changes log
-    Lambda non-uniformly, so it moves the curve BETWEEN the knots and hence
-    ``Lambda'``.  :func:`_gauge_level` searches that, through the real
-    :class:`LogLog`, which is small and honest rather than large and imaginary.
+    **Two attempts to choose it better were both wrong, and the second was
+    worse than useless.**  The penalty acts on ``log(dLambda/dT)`` and
+    ``d(Lambda + c)/dT = dLambda/dT``, so the constant is invisible to the
+    prior as well and a search for "the level the prior likes" is degenerate --
+    the first version duly returned the top of whatever grid it was handed,
+    9.68 W against a curve spanning 0.97.  The second searched the residue,
+    which is real but pure discretisation (the parameterisation interpolates
+    **log Lambda** between knots, so a constant moves the curve between them),
+    through the actual :class:`LogLog`.  That was defensible and still wrong,
+    because it was measured:
+
+        gauge      cost     nfev     (production 20/4, run to convergence)
+        0.0000   994.64      149
+        0.0175   994.64      566     <- what the search returned at 20 knots
+        2.4121  1163.02      561     <- what it returned at 9 knots
+
+    A zero gauge reaches the same optimum **3.8x faster**, and the 9-knot
+    answer -- which railed at its grid edge, 3x the span -- lands the fit in
+    the WORSE basin, exactly where the old power-law seed was stuck.  So a
+    search over a null direction bought nothing at best and destroyed step 6's
+    entire benefit at worst.  It is gone.  Do not reintroduce one without
+    running that table.
     """
     o = np.argsort(anchors.T)
     T, Tc, Q = anchors.T[o], anchors.Tc[o], anchors.Q[o]
@@ -919,45 +931,6 @@ def measured_lambda(anchors, gauge=True):
     # successive differences and a repeated value is log(0).
     bL = bL + np.arange(len(bL)) * 1e-12
     return bT, bL
-
-
-def _gauge_level(bT, bL, knots):
-    """The additive constant on ``Lambda`` that the roughness penalty prefers.
-
-    Only discretisation makes this a question at all -- see
-    :func:`measured_lambda` -- so the search runs through the real
-    :class:`LogLog` on the real knots and scores the real penalty:
-    ``log(dLambda/dT)``'s second difference in ``log T``, at midpoints between
-    knots, exactly as ``fit``'s ``r_rough`` does.  Anything cheaper measures a
-    quantity the constant is invariant to and returns whatever the grid's edge
-    happened to be, which is what the first version of this did.
-    """
-    ll = LogLog(knots)
-    mid = np.exp(0.5 * (np.log(knots[:-1]) + np.log(knots[1:])))
-    lx = np.log(mid)
-    if len(mid) < 3:
-        return 0.0
-
-    def rough(level):
-        y = bL + level
-        if np.any(y <= 0):
-            return np.inf
-        fn = PchipInterpolator(np.log(bT), np.log(y), extrapolate=True)
-        try:
-            p = _seed(knots, lambda T: np.exp(fn(np.log(np.asarray(T, float)))))
-        except (ValueError, FloatingPointError):
-            return np.inf
-        if not np.all(np.isfinite(p)):
-            return np.inf
-        g = np.log(np.maximum(ll.slope(p, mid), 1e-30))
-        d2 = ((g[2:] - g[1:-1]) / (lx[2:] - lx[1:-1])
-              - (g[1:-1] - g[:-2]) / (lx[1:-1] - lx[:-2]))
-        return float(np.sqrt(np.mean(d2 ** 2)))
-
-    span = float(bL[-1] - bL[0])
-    grid = np.concatenate([[0.0], np.geomspace(1e-3 * span, 3.0 * span, 40)])
-    scores = [rough(g) for g in grid]
-    return float(grid[int(np.argmin(scores))])
 
 
 def measured_capacity(taus, lam_of):
@@ -1045,7 +1018,6 @@ def build(n_lam, n_cap, T_lo, T_hi, anchors=None, taus=None):
         # derivative is what tau multiplies and it does not depend on the level.
         cT, cC = measured_capacity(taus if taus is not None else load_taus(),
                                    PchipInterpolator(bT, bL, extrapolate=True))
-        bL = bL + _gauge_level(bT, bL, kl)
         lam_of = PchipInterpolator(np.log(bT), np.log(bL), extrapolate=True)
         lam_fn = lambda T: np.exp(lam_of(np.log(np.asarray(T, float))))  # noqa: E731
         return (LogLog(kl), LogLog(kc),
@@ -1585,8 +1557,6 @@ def seed_report(n_lam=20, n_cap=4, decimated=True) -> int:
     """
     rec, anchors, taus = production_inputs(decimated)
     bT, bL = measured_lambda(anchors)
-    kl = np.geomspace(*knot_range([rec]), n_lam)
-    level = _gauge_level(bT, bL, kl)
     lam_of = PchipInterpolator(bT, bL, extrapolate=True)
     slope = lam_of.derivative()
     cT, cC = measured_capacity(taus, lam_of)
@@ -1597,9 +1567,10 @@ def seed_report(n_lam=20, n_cap=4, decimated=True) -> int:
     print(f"{len(anchors)} anchors -> {len(bT)} bins; "
           f"{len(taus[0])} taus -> {len(cT)} bins over "
           f"{cT[0]:.1f}-{cT[-1]:.1f} K")
-    print(f"gauge level {level:.4f} W on {n_lam} knots -- a DISCRETISATION "
-          f"artefact only,\n  since Lambda's level is a null direction of both "
-          f"the data and the prior (trap T1)")
+    print("Lambda is on the anchors' own gauge, Lambda(T_c) = 0, and the level "
+          "is NOT searched:\n  it is a null direction of the data and of the "
+          "prior, and searching it cost 3.8x the\n  iterations for the same "
+          "optimum -- see measured_lambda.")
     print(f"C({CAP_SHAPE_REF_K:.0f} K) = {c137:.4f} J/K "
           f"= {c137 / c_ref:.3f} g of the Debye mix\n")
     print(f"{'T K':>9}{'Lambda W':>11}{'dL/dT W/K':>12}{'K/W':>9}"

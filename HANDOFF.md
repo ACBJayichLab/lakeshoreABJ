@@ -111,7 +111,7 @@ The three things worth a reviewer's attention:
   It is a bound on day-timescale wander, not a building cycle, and Phase B must
   not model it as one.
 
-## Option 4 is done — and it cost 13 anchors, not 2
+## Option 4 is done — and it cost 14 anchors, not 2
 
 [REFIT_PLAN.md](REFIT_PLAN.md) **§6.3** is the write-up;
 `analysis/curate.py --propose --plant` reproduces every number in it.
@@ -126,7 +126,7 @@ the set building the clock is disjoint from the set tested against it, and
 The three things worth a reviewer's attention:
 
 - **§6.2 predicted two verdict changes because it scored only the ceiling
-  pins.** Eleven of the thirteen come from the `amp_sigma` branch, where the
+  pins.** Twelve of the fourteen come from the `amp_sigma` branch, where the
   wall clock was standing in for the plant clock just as badly. All eleven are
   128.8–180.5 K and ran under three of the plant's time constants.
 - **One anchor is recovered** — `rec-20260824-171059`, 57 s at 4.75 K, which is
@@ -138,7 +138,7 @@ The three things worth a reviewer's attention:
 
 Fit effect, Λ12/C4/drift-3: `rms_k` 0.1999 → 0.2025, `anchor_k` 1.5674 →
 1.5426, `mass_g` 4.7903 → 4.7877. Both runs hit `nfev = 300 = max_nfev`, so
-both are upper bounds. The 13 dropped anchors had a median residual of 1.476 K
+both are upper bounds. The 14 dropped anchors had a median residual of 1.476 K
 against 0.229 K for those kept — but two of them fitted to under 0.13 K, and
 that is the honest shape: **the guard removes anchors that cannot be shown to
 have settled, not anchors shown to be wrong.**
@@ -170,11 +170,17 @@ have settled, not anchors shown to be wrong.**
   this repository has quoted comes from the worse basin. `MAX_NFEV` 300 → 1500;
   300 was a truncation, not a budget.
 
-Two things a reviewer should look at rather than take on trust: the gauge-level
-argument in `measured_lambda` (the first version measured a quantity invariant
-to its own argument and returned the top of its grid), and the choice to take
-C's *shape* from the τ anchors rather than from Debye (a single Debye magnitude
-put τ(137 K) at 804 s where the anchors say 607).
+- **Λ's level is a gauge and is not searched, after two attempts that were.**
+  The second was defensible and still wrong: measured, a zero gauge reaches the
+  same optimum in **149** evaluations against 566, and the value the search
+  returned at 9 knots (2.41 W, railed at 3× the span) lands the fit in the
+  *worse* basin — undoing step 6 entirely. Deleted. The table is in
+  `measured_lambda`'s docstring; do not reintroduce a search over a null
+  direction without re-running it.
+
+The other thing to look at rather than take on trust is the choice to take C's
+*shape* from the τ anchors rather than from Debye — a single Debye magnitude
+put τ(137 K) at 804 s where the anchors there say 607.
 
 ## Then, in order
 
