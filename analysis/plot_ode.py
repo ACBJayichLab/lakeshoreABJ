@@ -244,7 +244,7 @@ def main():
     data = F.load_sweep()
     hi = float(data[1].max())
     anchors, taus = F.load_anchors(t_max=hi), F.load_taus(t_max=hi)
-    print(f"  {len(anchors[0])} settled dwells, {len(taus[0])} measured taus")
+    print(f"  {len(anchors)} settled dwells, {len(taus[0])} measured taus")
     fits = []
     for (nl, nc), c in zip(LEVELS, COLORS):
         r = F.fit(nl, nc, data, anchors, taus)
