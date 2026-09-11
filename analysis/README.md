@@ -297,6 +297,73 @@ affine     days  0.0-55.3   n=136   4.8-247.6 K   EARNED  (68 near 17 K, 68 near
 A bare max/min ratio passes the failing interval at 11.0 and separates nothing,
 which is why the test is not a ratio.
 
+## Λ and C without a fit — 2026-09-10
+
+`analysis/fit_ode.py --seed-only`, REFIT_PLAN.md Phase B step 6. Every number
+it prints comes from `Λ(T_s) − Λ(T_c) = Q` at a settled dwell and `C = τ·dΛ/dT`
+at a measured relaxation. **No ODE is integrated anywhere**, which makes it both
+a two-second sanity check on a fifteen-minute fit and the closest thing here to
+a model-free reading of the cryostat. It is also what the fit is now seeded
+from, in place of a hand-calibrated power law.
+
+It agrees with the fit to a few percent, from two methods sharing no machinery:
+
+| | model-free | converged fit |
+|---|---|---|
+| C(137 K) | 1.006 J/K = **4.960 g** of the Debye mix | **4.79 g** |
+| τ(137 K) | ~610 s | 567 s |
+| Λ(186 K) − Λ(8.7 K) | 0.752 W | 0.778 W (the old seed's calibration) |
+| local resistance at 130 K | 620 K/W | 639 K/W between the two September holds |
+
+**Two things went wrong getting there and both are worth keeping.**
+
+*The level of Λ is a gauge, and the first attempt to choose it measured a
+quantity invariant to its own argument.* Trap T1 says an added constant is a
+null direction of the data. It is a null direction of the roughness penalty
+too — the penalty acts on `log(dΛ/dT)`, and `d(Λ+c)/dT = dΛ/dT`. The search
+duly returned the top of whatever grid it was handed: 9.68 W, against a curve
+spanning 0.97 W. What is genuinely left is discretisation — the
+parameterisation interpolates **log Λ** between knots, so a constant moves the
+curve *between* them — and searched through the real `LogLog` the answer is
+1.28 W at 9 knots, 0.16 at 12, 0.026 at 20. Shrinking with knot count is what
+a discretisation artefact should do, and is how you can tell it is one.
+
+**And the seed was choosing which local minimum the fit landed in.** That is
+worth more than the 4 % of rms it was supposed to buy. On 20/4 with the drift
+term and the per-era offset, run out to convergence:
+
+| `max_nfev` | seed | **cost** | `rms_k` | `anchor_k` | `mass_g` | τ(137) | `nfev` |
+|---|---|---|---|---|---|---|---|
+| 300 | power law | | 0.1579 | 1.5237 | 4.7892 | 566.5 | **300 — cut** |
+| 300 | measured | | 0.1513 | 1.5301 | 4.7965 | 568.3 | **300 — cut** |
+| 1000 | power law | | 0.1584 | 1.5241 | 4.7888 | 566.5 | **1000 — still cut** |
+| 3000 | power law | **1163.0** | 0.1585 | 1.5244 | 4.7887 | 566.6 | 1157 ✓ |
+| 3000 | measured | **994.6** | **0.1499** | 1.5479 | 4.8059 | 571.3 | **562 ✓** |
+
+`cost` is `0.5·Σr²` — what `least_squares` minimises — and it is on the row now
+because it is the only column that can adjudicate here: `rms_k` and `anchor_k`
+are two weighted *parts* of it and they move in opposite directions.
+
+**The two seeds converge to different optima and the measured one is 14.5 %
+better**, in half the evaluations. The objective is multi-modal, and the
+power-law seed had been landing in the worse basin for the whole campaign.
+`MAX_NFEV` is 1500 now — past where both converge, so a comparison is between
+two fits rather than between a fit and a truncation — and it costs nothing on
+the ladder rungs that already stop at 76–138.
+
+The better optimum has a *higher* `anchor_k` with a lower `rms_k` and a better
+opening hold. That is REFIT_PLAN.md §1's tension in the shape of the basin.
+
+*A single magnitude on the Debye shape is not good enough for C.* Fitting one
+factor to the mix reconstructed τ(137 K) as **804 s where the τ anchors there
+say 607** — 32 % out, because a median ratio taken over 25–192 K lands its
+error wherever C departs from Debye most, and that is not where you want it.
+The shape now comes from the τ anchors over 28.4–192.4 K and falls back to the
+Debye mix outside, scaled to match at the join. Below 25 K there is no τ to
+read C from, C falls three orders of magnitude, and the shape prior holds it to
+that mix regardless — so that is the right division of labour rather than a
+compromise.
+
 ## The model
 
 Everything the sample touches sinks at the coldplate — structure, wiring and
@@ -333,6 +400,11 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 #     REFIT_PLAN.md Phase B step 5's gate.  Reads the anchors and nothing else.
 .venv/Scripts/python.exe analysis/drift.py
 .venv/Scripts/python.exe analysis/drift.py --knots 3      # would 3 knots earn it?
+
+# 1c. Lambda and C read straight off the anchors, no fit at all    (~2 s)
+#     The model-free reading.  A sanity check on a fifteen-minute fit, and
+#     what the fit is now SEEDED from -- REFIT_PLAN.md Phase B step 6.
+.venv/Scripts/python.exe analysis/fit_ode.py --seed-only
 
 # 2. the complexity ladder -> analysis/ladder.csv      (~15 min, 4 workers)
 .venv/Scripts/python.exe analysis/fit_ode.py

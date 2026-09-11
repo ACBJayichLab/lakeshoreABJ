@@ -828,9 +828,230 @@ def _seed(knots, fn):
     return np.concatenate(([ly[0]], np.log(np.maximum(np.diff(ly), 1e-6))))
 
 
-def build(n_lam, n_cap, T_lo, T_hi):
+#: Seed Lambda and C from the anchors rather than from a power law.
+#:
+#: REFIT_PLAN.md Phase B step 6.  **The first thing in Phase B that changes an
+#: answer**, so it is a switch and not a rewrite: ``fit(seed_measured=False)``
+#: is the old seed, the flag is in the cache key, and the two can be run side
+#: by side.  What it is worth is in ``analysis/README.md``.
+SEED_MEASURED = True
+
+#: Evaluation budget for ``least_squares``.
+#:
+#: **300 was not a budget, it was a truncation.**  Measured on the production
+#: 20/4 preset: with the old power-law seed the fit is still going at 300 AND
+#: at 1000, so every production number this repository has quoted was an upper
+#: bound rather than a fit -- which section 7's preamble suspected and this
+#: confirms.  With ``SEED_MEASURED`` it terminates on its own at **562**.
+#:
+#: 1500, then: past where BOTH seeds converge -- the measured one at 562 and
+#: the power law at 1157 -- so a comparison between them is a comparison of
+#: two converged fits and not of one fit and one truncation.  And it is
+#: free for the fits that already converged -- the ladder's rungs stop at 76 to
+#: 138 and a cap they never reach costs nothing.  Raising it only spends time
+#: on a fit that was being cut off.
+MAX_NFEV = 1500
+
+#: Anchors per bin when the measured seed reduces them to a curve.  Enough that
+#: a bin's median is not one anchor, few enough that 136 anchors still give
+#: more bins than Lambda has knots.
+SEED_BIN_N = 6
+
+
+def measured_lambda(anchors, gauge=True):
+    """``(T, Lambda)`` read straight off the settled anchors -- no fit in it.
+
+    At steady state ``Lambda(T_s) - Lambda(T_c) = Q``, with no heat capacity
+    anywhere in the statement, so every settled dwell IS a point on Lambda.
+    That is REFIT_PLAN.md principle 1, and until now nothing used it except as
+    a residual -- the fit started from a power law and had to discover this.
+
+    Two things have to be dealt with to turn the anchors into a curve.
+
+    ``T_c`` is not constant, so the equation gives ``Lambda(T) - Lambda(T_c)``
+    against a moving baseline.  Solved by iterating: take ``Lambda = Q``,
+    interpolate it at each anchor's own ``T_c``, add that back, repeat.  It
+    converges in two or three passes because ``Lambda`` at 5-7 K is a percent
+    of ``Q``, which is the same reason the baseline was ignorable to begin with.
+
+    **The LEVEL is a gauge**, and this function does not choose it -- it
+    returns the ``Lambda(T_c) = 0`` reading, which is what the anchors
+    literally say.  Trap T1: only differences of ``Lambda`` enter the anchor
+    residual, the integrator and the tau residual, so an added constant is an
+    exact null direction of the likelihood.
+
+    It is a null direction of the roughness penalty too, and that took a wrong
+    turn to establish.  The penalty acts on ``log(dLambda/dT)``, and
+    ``d(Lambda + c)/dT = dLambda/dT`` -- so in the continuum the constant is
+    invisible to it as well, and a search for "the level the prior likes" is
+    degenerate.  It duly returned the top of whatever grid it was given.  The
+    residue of sensitivity is pure discretisation: the parameterisation
+    interpolates **log Lambda** between knots, and a constant changes log
+    Lambda non-uniformly, so it moves the curve BETWEEN the knots and hence
+    ``Lambda'``.  :func:`_gauge_level` searches that, through the real
+    :class:`LogLog`, which is small and honest rather than large and imaginary.
+    """
+    o = np.argsort(anchors.T)
+    T, Tc, Q = anchors.T[o], anchors.Tc[o], anchors.Q[o]
+    lam = Q.copy()
+    for _ in range(4):
+        lam = Q + np.interp(Tc, T, lam)
+    # Bin in log T and take medians: several anchors sit within millikelvin of
+    # each other at different dates and different powers, and the campaign
+    # drift is exactly the spread between them.  A median is the right summary
+    # of a quantity whose scatter is the thing being fitted later.
+    nbin = max(int(len(T) / SEED_BIN_N), 4)
+    edges = np.geomspace(T[0], T[-1] * (1 + 1e-9), nbin + 1)
+    idx = np.clip(np.searchsorted(edges, T, "right") - 1, 0, nbin - 1)
+    bT, bL = [], []
+    for b in range(nbin):
+        m = idx == b
+        if m.any():
+            bT.append(float(np.median(T[m])))
+            bL.append(float(np.median(lam[m])))
+    bT, bL = np.array(bT), np.array(bL)
+    # Lambda is an integral of a positive conductance, so it increases.  The
+    # medians can still step down where two bins straddle an era; a running
+    # maximum is the least-assuming repair and leaves a monotone curve the
+    # LogLog parameterisation can actually hold.
+    bL = np.maximum.accumulate(bL)
+    # Strictly increasing, not merely non-decreasing: `_seed` takes the log of
+    # successive differences and a repeated value is log(0).
+    bL = bL + np.arange(len(bL)) * 1e-12
+    return bT, bL
+
+
+def _gauge_level(bT, bL, knots):
+    """The additive constant on ``Lambda`` that the roughness penalty prefers.
+
+    Only discretisation makes this a question at all -- see
+    :func:`measured_lambda` -- so the search runs through the real
+    :class:`LogLog` on the real knots and scores the real penalty:
+    ``log(dLambda/dT)``'s second difference in ``log T``, at midpoints between
+    knots, exactly as ``fit``'s ``r_rough`` does.  Anything cheaper measures a
+    quantity the constant is invariant to and returns whatever the grid's edge
+    happened to be, which is what the first version of this did.
+    """
+    ll = LogLog(knots)
+    mid = np.exp(0.5 * (np.log(knots[:-1]) + np.log(knots[1:])))
+    lx = np.log(mid)
+    if len(mid) < 3:
+        return 0.0
+
+    def rough(level):
+        y = bL + level
+        if np.any(y <= 0):
+            return np.inf
+        fn = PchipInterpolator(np.log(bT), np.log(y), extrapolate=True)
+        try:
+            p = _seed(knots, lambda T: np.exp(fn(np.log(np.asarray(T, float)))))
+        except (ValueError, FloatingPointError):
+            return np.inf
+        if not np.all(np.isfinite(p)):
+            return np.inf
+        g = np.log(np.maximum(ll.slope(p, mid), 1e-30))
+        d2 = ((g[2:] - g[1:-1]) / (lx[2:] - lx[1:-1])
+              - (g[1:-1] - g[:-2]) / (lx[1:-1] - lx[:-2]))
+        return float(np.sqrt(np.mean(d2 ** 2)))
+
+    span = float(bL[-1] - bL[0])
+    grid = np.concatenate([[0.0], np.geomspace(1e-3 * span, 3.0 * span, 40)])
+    scores = [rough(g) for g in grid]
+    return float(grid[int(np.argmin(scores))])
+
+
+def measured_capacity(taus, lam_of):
+    """``(T, C)`` from ``C = tau * dLambda/dT`` -- C measured, not assumed.
+
+    With ``Lambda`` known a measured time constant stops being a check on C and
+    becomes a measurement of it, which is REFIT_PLAN.md principle 1's other
+    half and step 6's instruction, taken literally.
+
+    **A single magnitude on the Debye SHAPE is not good enough, and that was
+    measured rather than assumed.**  The first version of this fitted one
+    factor to the mix and reconstructed ``tau = C/Lambda'`` at 137 K as 804 s
+    where the tau anchors there say 607 -- 32 % out, because a median ratio
+    over 25-192 K is dominated by wherever the real C departs from Debye most,
+    and it lands that error at the temperature the fit is judged on.  So the
+    shape comes from the data where there are taus.
+
+    Outside their 25.8-192.4 K the Debye mix takes over, scaled to match at the
+    nearest measured point.  That is the right division of labour: below 25 K
+    there is no tau to read C from, C falls by three orders of magnitude, and
+    the shape prior (``CAP_SHAPE_FACTOR``) is going to hold it to that mix
+    anyway.
+
+    Medians in log-T bins, and monotone by running maximum: tau near 137 K
+    scatters 433 to 850 s across dwells, which is what a single pole does on a
+    body with internal gradients rather than an error to average away.
+    """
+    tT, tV = taus
+    c_ref = mix_c(np.array([CAP_SHAPE_REF_K]))[0]
+    if len(tT) < 4:
+        grid = np.geomspace(5.0, 200.0, 12)
+        return grid, mix_c(grid) / c_ref
+    o = np.argsort(tT)
+    T, C = tT[o], tV[o] * lam_of.derivative()(tT[o])
+    good = np.isfinite(C) & (C > 0)
+    T, C = T[good], C[good]
+    nbin = max(int(len(T) / 3), 4)
+    edges = np.geomspace(T[0], T[-1] * (1 + 1e-9), nbin + 1)
+    idx = np.clip(np.searchsorted(edges, T, "right") - 1, 0, nbin - 1)
+    bT, bC = [], []
+    for b in range(nbin):
+        m = idx == b
+        if m.any():
+            bT.append(float(np.median(T[m])))
+            bC.append(float(np.median(C[m])))
+    bT, bC = np.array(bT), np.maximum.accumulate(np.array(bC))
+    bC = bC * (1.0 + np.arange(len(bC)) * 1e-12)
+    return bT, bC
+
+
+def _capacity_seed(bT, bC):
+    """``C(T)`` over the whole knot range: measured inside, Debye outside."""
+    c_ref = mix_c(np.array([CAP_SHAPE_REF_K]))[0]
+    lo_scale = bC[0] / (mix_c(np.array([bT[0]]))[0] / c_ref)
+    hi_scale = bC[-1] / (mix_c(np.array([bT[-1]]))[0] / c_ref)
+    inside = PchipInterpolator(np.log(bT), np.log(bC), extrapolate=False)
+
+    def at(T):
+        T = np.atleast_1d(np.asarray(T, float))
+        out = np.exp(inside(np.log(T)))
+        cold = T < bT[0]
+        hot = T > bT[-1]
+        if cold.any():
+            out[cold] = lo_scale * mix_c(T[cold]) / c_ref
+        if hot.any():
+            out[hot] = hi_scale * mix_c(T[hot]) / c_ref
+        return out
+    return at
+
+
+def build(n_lam, n_cap, T_lo, T_hi, anchors=None, taus=None):
+    """Knots and their seeds.  Measured from the anchors when they are given.
+
+    REFIT_PLAN.md Phase B step 6.  The fallback below is the original seed and
+    is kept for callers with no anchors to hand -- and as the thing the
+    measured seed is compared against.
+    """
     kl = np.geomspace(T_lo, T_hi, n_lam)
     kc = np.geomspace(T_lo, T_hi, n_cap)
+    c_ref = mix_c(np.array([CAP_SHAPE_REF_K]))[0]
+
+    if anchors is not None and len(anchors) >= 4:
+        bT, bL = measured_lambda(anchors)
+        # C is measured on the Lambda' the ANCHORS give, before the gauge: the
+        # derivative is what tau multiplies and it does not depend on the level.
+        cT, cC = measured_capacity(taus if taus is not None else load_taus(),
+                                   PchipInterpolator(bT, bL, extrapolate=True))
+        bL = bL + _gauge_level(bT, bL, kl)
+        lam_of = PchipInterpolator(np.log(bT), np.log(bL), extrapolate=True)
+        lam_fn = lambda T: np.exp(lam_of(np.log(np.asarray(T, float))))  # noqa: E731
+        return (LogLog(kl), LogLog(kc),
+                _seed(kl, lam_fn),
+                _seed(kc, _capacity_seed(cT, cC)))
+
     # Seed Lambda on the top settled hold rather than on its absolute value:
     # what the data fixes is the DIFFERENCE Lambda(180.6) - Lambda(8.5) = 0.778 W,
     # and a seed that gets the difference wrong starts the integration with a
@@ -840,10 +1061,11 @@ def build(n_lam, n_cap, T_lo, T_hi):
     a_lam = 0.778 / (shape(180.6) - shape(8.5))
     # C ~ 1 J/K at 137 K, which is a few grams of copper and sapphire, and
     # shaped like the Debye mix so the fit starts where the prior wants it
-    c_ref = mix_c(np.array([CAP_SHAPE_REF_K]))[0]
     return (LogLog(kl), LogLog(kc),
             _seed(kl, lambda T: a_lam * shape(T)),
             _seed(kc, lambda T: 1.00 * mix_c(T) / c_ref))
+
+
 
 
 def opening_hold(t, u):
@@ -922,8 +1144,9 @@ def cache_store(key: str, x, nfev: int) -> None:
     os.replace(tmp, os.path.join(CACHE_DIR, key + ".json"))
 
 
-def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
-        tier2=False, weights=None, n_drift=0, groups=None, key_only=False):
+def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
+        tier2=False, weights=None, n_drift=0, groups=None, key_only=False,
+        seed_measured=SEED_MEASURED):
     """Fit Lambda and C to a sweep.
 
     ``weights`` is the per-sample weight of the sweep residual, and exists for
@@ -945,7 +1168,9 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     Tc = np.concatenate([r.Tc for r in recs])
     u = np.concatenate([r.u for r in recs])
     aT, aTc, aQ, aS = anc.T, anc.Tc, anc.Q, anc.sigma
-    lam, cap, pl0, pc0 = build(n_lam, n_cap, *knot_range(recs))
+    lam, cap, pl0, pc0 = build(n_lam, n_cap, *knot_range(recs),
+                               anchors=anc if seed_measured else None,
+                               taus=(tauT, tauV))
     n = len(pl0)
     # Normalised in Record.__post_init__ now, and to the same thing: a uniform
     # grid is ones, whose mean square is already 1.
@@ -1108,7 +1333,8 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     # ``lam(pl, aTc)`` and belongs in the key beside the rest.
     key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aTc, aQ, aS,
                     tauV, w_sweep, groups,
-                    np.array([n_drift, LAMBDA_SMOOTH_SHARE, LAMBDA_SMOOTH_SIGMA,
+                    np.array([n_drift, seed_measured,
+                              LAMBDA_SMOOTH_SHARE, LAMBDA_SMOOTH_SIGMA,
                               ANCHOR_SHARE, ANCHOR_FLOOR_K, TAU_SHARE,
                               TAU_SIGMA_FACTOR, SWEEP_SIGMA_REL, DRIFT_SHARE,
                               DRIFT_SIGMA_W, CAP_SHAPE_SHARE, CAP_SHAPE_FACTOR,
@@ -1131,6 +1357,12 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
     split, mass_ratio = (unpack2(x[:-n_tail] if n_tail else x) if tier2
                          else (float("nan"),) * 2)
     model = run(x)
+    # The objective's own value at the solution, 0.5*sum(r^2), which is what
+    # least_squares actually minimises.  Reported because rms_k and anchor_k
+    # are two WEIGHTED PARTS of it and can move in opposite directions -- two
+    # seeds converging to different local minima is decided by this number and
+    # by nothing else on the row.
+    cost = 0.5 * float(np.dot(resid(x), resid(x)))
     drift_w = (x[len(x) - n_tail:len(x) - n_group] if n_drift
                else np.zeros(0))
     group_w = x[len(x) - n_group:] if n_group else np.zeros(0)
@@ -1161,7 +1393,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=300,
         "records": tuple(r.name for r in recs),
         "n_record": len(recs),
         "n_lam": n_lam, "n_cap": n_cap, "npar": len(x), "nfev": nfev,
-        "key": key,
+        "key": key, "cost": cost,
         "n_drift": n_drift, "drift_w": drift_w, "drift_t": dk,
         "n_group": n_group, "group_w": group_w,
         "drift_mw": float(1e3 * np.abs(drift_w).max()) if n_drift else 0.0,
@@ -1256,7 +1488,7 @@ class FitSpec:
     n_drift: int = 0
     groups: bool = False
     tier2: bool = False
-    max_nfev: int = 300
+    max_nfev: int = MAX_NFEV
 
     def run(self, key_only=False):
         rec, anchors, taus = production_inputs(self.decimated, self.t_max)
@@ -1342,7 +1574,58 @@ def ladder(rows, title, out=None, workers=None, base=None):
 LADDER_CSV = "analysis/ladder.csv"
 
 
+def seed_report(n_lam=20, n_cap=4, decimated=True) -> int:
+    """Print Lambda and C as the anchors give them, with no ``least_squares``.
+
+    REFIT_PLAN.md Phase B step 6.  A one-second sanity check on a
+    fifteen-minute fit, and the closest thing in this repository to a
+    model-free reading of the cryostat: every number below comes from
+    ``Lambda(T_s) - Lambda(T_c) = Q`` at a settled dwell and ``C = tau
+    dLambda/dT`` at a measured relaxation, with no ODE integrated anywhere.
+    """
+    rec, anchors, taus = production_inputs(decimated)
+    bT, bL = measured_lambda(anchors)
+    kl = np.geomspace(*knot_range([rec]), n_lam)
+    level = _gauge_level(bT, bL, kl)
+    lam_of = PchipInterpolator(bT, bL, extrapolate=True)
+    slope = lam_of.derivative()
+    cT, cC = measured_capacity(taus, lam_of)
+    cap_at = _capacity_seed(cT, cC)
+    c_ref = mix_c(np.array([CAP_SHAPE_REF_K]))[0]
+    c137 = float(cap_at(CAP_SHAPE_REF_K)[0])
+
+    print(f"{len(anchors)} anchors -> {len(bT)} bins; "
+          f"{len(taus[0])} taus -> {len(cT)} bins over "
+          f"{cT[0]:.1f}-{cT[-1]:.1f} K")
+    print(f"gauge level {level:.4f} W on {n_lam} knots -- a DISCRETISATION "
+          f"artefact only,\n  since Lambda's level is a null direction of both "
+          f"the data and the prior (trap T1)")
+    print(f"C({CAP_SHAPE_REF_K:.0f} K) = {c137:.4f} J/K "
+          f"= {c137 / c_ref:.3f} g of the Debye mix\n")
+    print(f"{'T K':>9}{'Lambda W':>11}{'dL/dT W/K':>12}{'K/W':>9}"
+          f"{'C J/K':>9}{'tau s':>9}  C from")
+    for T, L in zip(bT, bL):
+        g = float(slope(T))
+        C = float(cap_at(T)[0])
+        how = "taus" if cT[0] <= T <= cT[-1] else "Debye"
+        print(f"{T:>9.2f}{L:>11.4f}{g:>12.5f}{1.0 / g if g else float('nan'):>9.1f}"
+              f"{C:>9.4f}{C / g if g else float('nan'):>9.1f}  {how}")
+    print("\nLambda is quoted on the anchors' own gauge, Lambda(T_c) = 0.  "
+          "K/W is 1/Lambda',\n  the local thermal resistance, and tau is "
+          "C/Lambda' -- both independent of the gauge.")
+    return 0
+
+
 if __name__ == "__main__":
+    import argparse
+
+    _ap = argparse.ArgumentParser(description="the ODE fit and its ladder")
+    _ap.add_argument("--seed-only", action="store_true",
+                     help="print Lambda and C read off the anchors, and stop")
+    _a = _ap.parse_args()
+    if _a.seed_only:
+        raise SystemExit(seed_report())
+
     # The ladder is the complexity study and is deliberately the PLAIN fit:
     # full grid, no weights, no drift term and no per-era offset.  Adding any
     # of them here would confound the thing the ladder exists to separate.

@@ -1,8 +1,9 @@
 # Thermal model refit — plan
 
-**Status: PHASE A DONE with option 4; PHASE B steps 1-3 and 5 DONE.**
-Next is step 6, the seeding. Steps 1-3 were refactors and are proved inert;
-step 5 is a gate and changes no curve. **Nothing has refitted the model yet** —
+**Status: PHASE A DONE with option 4; PHASE B steps 1-3, 5 and 6 DONE.**
+Next is step 7. Steps 1-3 were refactors and are proved inert; step 6 is the
+first thing that moves a curve, and it made the production fit CONVERGE.
+**Nothing has regenerated the shipped table yet** —
 `ltspm3/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
 manifest) and the commit after it (the rewiring and the deletion).
@@ -28,7 +29,8 @@ Update this Status line as phases land.
 | **done** | §6.2 **option 4** / rejoinder step 2 — `steps.plant_clock` measures τ(T) from the 37 τ anchors and `steps.long_enough` puts the guard on it, in `analysis/` as well as in the sweep tool. **149 → 136 anchors**, 37 τ unchanged *by construction*. §6.3 |
 | **done** | Phase B **steps 1, 2, 3** — the refactors, proved inert two ways: the production 12/4 path bit-identical on a forced refit, and the full-grid 9/4, 3/4 and tier2 paths bit-identical against the pre-refactor `fit_ode.py` taken from git. §7 |
 | **done** | Phase B **step 5** — `analysis/drift.py`. The drift is a **power**: 0.281 mW/day, three bands agreeing to ±25 % where K/day spans 5.6×. Coverage says **affine**. §7 step 5 |
-| **next** | Phase B **step 6** (seeding from Phase A), then 7–10. Read traps T1–T10 and §6.1's last paragraph first |
+| **done** | Phase B **step 6** — Λ and C seeded from the anchors, `fit_ode.py --seed-only`. The model-free C(137 K) = 4.96 g against the fit's 4.79. And **6b**: the production fit did not converge from the old seed in 1000 evaluations and converges from this one in 562, so `MAX_NFEV` is 1500 — and the two seeds converge to DIFFERENT optima, the measured one 14.5 % better on the objective. §7 steps 6, 6b |
+| **next** | Phase B **step 7** (the post-recal trace, T4, T5), then 8–10. Read traps T1–T10 and §6.1's last paragraph first |
 | **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
 | **then** | rejoinder step 5 - finding 5's leftovers |
 
@@ -49,7 +51,11 @@ Also worth knowing before Phase B: the pre-rewire fit stopped at
 `nfev = 300 = max_nfev` and the post-rewire one converged in 182. The
 production preset was hitting the cap, so the "before" rms above was an upper
 bound rather than a fit — the same problem the README records for three rungs
-of the ladder.
+of the ladder. **Step 6b settled this**: the 20/4 preset does not converge from
+the old seed until 1157 evaluations, converges from the measured seed in
+562, and the two land on DIFFERENT optima — the measured one 14.5 % better on
+the objective. `MAX_NFEV` is now 1500. Every fit number written above this
+line predates that.
 
 ---
 
@@ -84,7 +90,8 @@ corrected. Nothing in `lschart/` or `ltspm3/control/` touched.
 ## 2. Why — the reasoning, with the numbers
 
 A session picking this up cold should be able to re-derive every number here.
-All of them came from `analysis/steps.csv` and the recorder logs in `data/`.
+All of them came from `analysis/measured.csv` (then called `steps.csv`) and the
+recorder logs in `data/`.
 
 ### 2.1 The shipped model is 4.4 K low, and three independent holds say so
 
@@ -731,11 +738,87 @@ it bisectable.
    about, now measured rather than estimated. **Default to affine: one slope,
    one gauge.** Earn extra knots only at named epochs that pass this test — a
    recalibration, a repair — never by `linspace`.
-6. **Seeding from Phase A.** Λ by direct inversion of the settled points, C from
-   `τ·Λ′`, replacing the power-law seed in `build()`. Add `--seed-only`, which
-   prints both without running `least_squares` — a one-second sanity check on a
-   fifteen-minute fit, and the closest thing to a model-free reading of the
-   cryostat.
+6. ~~**Seeding from Phase A.**~~ **DONE.** `fit_ode.py --seed-only` prints Λ and
+   C with no `least_squares` anywhere, and `SEED_MEASURED` (in the cache key,
+   so both seeds can be run side by side) makes it the fit's starting point.
+
+   **Λ by direct inversion**, `Λ(T_s) − Λ(T_c) = Q` at every settled dwell,
+   with `T_c` folded in by iterating (it converges in two passes, because Λ at
+   5–7 K is a percent of Q). Medians in 22 log-T bins, monotone by running
+   maximum — the scatter inside a bin *is* the campaign drift and a median is
+   the right summary of it.
+
+   **The level is a gauge and the search for it was wrong twice.** Trap T1 says
+   an added constant is a null direction of the data. It is a null direction of
+   the roughness penalty too — the penalty acts on `log(dΛ/dT)` and
+   `d(Λ+c)/dT = dΛ/dT` — so the first `_gauge_level` measured a quantity that
+   is invariant to its own argument and duly returned the top of its grid,
+   9.68 W against a curve that spans 0.97. What is left is pure discretisation:
+   the parameterisation interpolates **log Λ** between knots, so a constant
+   moves the curve *between* them. Searched through the real `LogLog`, the
+   answer is 1.28 W at 9 knots, 0.16 at 12 and **0.026 at 20** — shrinking with
+   knot count, which is what a discretisation artefact should do.
+
+   **C from `τ·Λ′`, and a single Debye magnitude was not good enough.** The
+   first version fitted one factor to the Debye mix and reconstructed τ(137 K)
+   as **804 s where the τ anchors there say 607** — 32 % out, because a median
+   ratio over 25–192 K lands its error wherever C departs from Debye most.
+   Taking the shape from the τ anchors where they exist (28.4–192.4 K, 9 bins)
+   and falling back to Debye outside gives τ(137 K) ≈ 610 s.
+
+   **The model-free reading agrees with the fit.** C(137 K) = **1.006 J/K =
+   4.960 g** of the mix, against the converged fit's **4.79 g** — 3.5 % apart,
+   from two methods sharing no machinery. Λ(186) − Λ(8.7) = 0.752 W against the
+   0.778 W the old seed was hand-calibrated to. Local resistance peaks near
+   546 K/W at 76 K and reads 620 K/W at 130 K, against the 639 K/W the two
+   September holds measure between them.
+
+   **What it is worth, and the more important thing it revealed:**
+
+   | preset | seed | `rms_k` | `anchor_k` | `mass_g` | τ(137) | `nfev` |
+   |---|---|---|---|---|---|---|
+   | 12/4 | power law | 0.2025 | 1.5426 | 4.7877 | 567.1 | **300** |
+   | 12/4 | measured | **0.2010** | 1.5420 | 4.7879 | 567.0 | **300** |
+   | 20/4 | power law | 0.1579 | 1.5237 | 4.7892 | 566.5 | **300** |
+   | 20/4 | measured | **0.1513** | 1.5301 | 4.7965 | 568.3 | **300** |
+
+   Better rms for the same budget — 0.7 % at 12 knots, **4.2 % at 20** — and
+   the dynamics do not move, which is what a better starting point should do.
+   But **every one of these stops at `nfev = 300 = max_nfev`**, so none of them
+   is a converged fit. Which turned out to be the real finding:
+
+6b. **`max_nfev = 300` was a truncation, and the seed was choosing the wrong
+   local minimum.** §7's preamble suspected the first; the second was not
+   suspected at all. On the production 20/4 preset, run out to convergence:
+
+   | `max_nfev` | seed | **cost** | `rms_k` | `anchor_k` | `mass_g` | τ(137) | `nfev` |
+   |---|---|---|---|---|---|---|---|
+   | 300 | power law | | 0.1579 | 1.5237 | 4.7892 | 566.5 | **300 — cut** |
+   | 300 | measured | | 0.1513 | 1.5301 | 4.7965 | 568.3 | **300 — cut** |
+   | 1000 | power law | | 0.1584 | 1.5241 | 4.7888 | 566.5 | **1000 — still cut** |
+   | 3000 | power law | **1163.0** | 0.1585 | 1.5244 | 4.7887 | 566.6 | 1157 ✓ |
+   | 3000 | measured | **994.6** | **0.1499** | 1.5479 | 4.8059 | 571.3 | **562 ✓** |
+
+   `cost` is `0.5·Σr²`, the thing `least_squares` actually minimises, and it is
+   reported now because it is the only column that can adjudicate: `rms_k` and
+   `anchor_k` are two weighted *parts* of it and here they move in opposite
+   directions.
+
+   **The two seeds converge to different optima, and the measured one is 14.5 %
+   better.** Not a tolerance, a different answer: 994.6 against 1163.0, found
+   in 562 evaluations against 1157. So the objective is multi-modal and the
+   power-law seed has been landing in the worse basin for the whole campaign —
+   every production number this repository has quoted is from there.
+
+   `MAX_NFEV` is **1500**, past where both seeds converge, so a comparison
+   between them is between two converged fits rather than between a fit and a
+   truncation. Free for the ladder rungs that already stopped at 76–138.
+
+   Worth noticing: the better optimum has a **higher** `anchor_k`, 1.524 →
+   1.548, with `rms_k` and the opening hold both improving. That is §1's
+   tension — the model as posed cannot satisfy the trajectory and the holds at
+   once — showing up in the shape of the basin rather than in a weight study,
+   and it is what steps 7 and 8 exist to fix.
 7. **Add the post-recal trace**, drop anchors falling inside a fitted record's
    span (trap T4), set `RECORD_SHARE` explicitly (trap T5). Still `groups=`, no
    campaign drift. **Report how much of the 2.5 K the trajectory alone
