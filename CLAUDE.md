@@ -19,29 +19,37 @@ the code is, and it is the detail that goes stale — edit it there, not here.
 | [`matlab/README.md`](matlab/README.md) | MATLAB's half of the file protocol |
 | [`README.md`](README.md) | The front door, for a new user |
 | [`HANDOFF.md`](HANDOFF.md) | Point-in-time status. Goes stale by design; older ones are archived under their own date |
-| [`PID_PLAN.md`](PID_PLAN.md) | The route from here to a working software PID, and the **typical band**: the thermal characterisation used to say whether the cryostat is behaving normally, in watts at the sample node. Phases 0-4 touch nothing in `control/`. [`REFIT_PLAN.md`](REFIT_PLAN.md) is the thermal model it stands on |
+| [`PID_PLAN.md`](PID_PLAN.md) | The route from here to a working software PID. Jeff's requirements of 2026-09-11 in §1, the software model (where `model/`, `control/` and the monitor live) in §2, and the **typical band**: the thermal characterisation used to warn and fault in watts at the sample node. [`REFIT_PLAN.md`](REFIT_PLAN.md) is the thermal model it stands on |
 | `AUDIT-*.md` | Point-in-time audits, findings with nothing fixed. `AUDIT-2026-09-10-REPLY.md` is the argument for the two parts of that one's finding 2 that were deliberately NOT applied; `AUDIT-2026-09-10-REJOINDER.md` concedes both, and says the live sweep tool is where the fix still has to land |
 
 **Keep the split when you write.** Anything true of any Lake Shore cryostat belongs
 in `docs/recorder/`; anything calibrated to LTSPM3 belongs in `docs/ltspm3/`. A
 generic document that mentions THE CHONKE is in the wrong file.
 
-## Priorities (Jeff, 2026-08-24)
+## Priorities (Jeff, 2026-09-11)
 
-**The viewer and the MATLAB interface are the priority. The software PID is not.**
+**One program, two halves: a person watching their cryostat, and a safe
+software PID.** Neither outranks the other any more.
 
-`ltspm3` is complete and tested and should be left alone unless it breaks. New
-effort goes to `lschart`: the strip-chart viewer, the MATLAB file interface,
-and Windows deployment. Read that as a standing instruction, not a phase
-ordering — resist "while I am in here" improvements to `control/`.
+Until 2026-09-11 this section said the software PID was complete and off
+limits and that the viewer, MATLAB and Windows deployment came first. The
+viewer and the MATLAB interface exist and are exercised end to end; the
+recorder has run on the cryostat's own Windows machine since 2026-08-24. The
+monitoring half is in service and stays in service.
 
-The viewer and the MATLAB interface now exist and are exercised end to end (the
-MATLAB half against a real MATLAB R2025b, the viewer against a live recorder).
-**Windows deployment is what is left.** The test suite now runs there on every
-push — see [install](docs/recorder/install.md#continuous-integration) — which
-is not the same thing as the deployment being tested: CI proves the code runs
-on Windows, not that a recorder survives a week on the cryostat's own machine
-with its own COM port, its own drivers and its own power management.
+The software PID has never closed a loop on the cryostat, and the numbers it
+would run on have been contradicted by the September characterisation.
+[`PID_PLAN.md`](PID_PLAN.md) is the route from here to a working one, and it
+records Jeff's requirements of 2026-09-11: 4 to 300 K, 5 K/min, one rate
+limit, warn at a kelvin and fault at five, a 20 s filter, graceful failure,
+and the thermal model used to say whether the cryostat is behaving typically.
+
+**`ltspm3/control/` is therefore open to change — under the eight rules of
+[safety](docs/ltspm3/safety.md), one rule-scoped commit at a time, each
+reviewed against the rule it touches.** The instinct the old instruction
+protected is still right: no "while I am in here" changes, and nothing lands
+in `control/` without a test on the virtual-clock harness and a line in
+`PID_PLAN.md` saying which step it is.
 
 ## The invariants
 

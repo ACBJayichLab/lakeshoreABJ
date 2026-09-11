@@ -1,428 +1,587 @@
 # Software PID — plan from here to "well functioning"
 
-**Status: PHASE 0 NOT STARTED.** Written 2026-09-11 against `bec8906`.
+**Status: PHASE 0 NOT STARTED.** Rewritten 2026-09-11 after Jeff's answers to
+the first draft's questions (§1); first draft at `7684b4f`.
 Update this line as phases land, the way `REFIT_PLAN.md` does.
 
 **What this plan is.** The route from the tree as it stands — 915 tests
 passing, a loop that has never closed on the cryostat, and a controller whose
 numbers the September campaign has since contradicted — to a software PID that
-holds and sweeps the LTSPM3 sample **and can say, from the thermal response
-characterisation, whether the cryostat is behaving typically or not.** That
-second clause is Jeff's ask of 2026-09-11 and it shapes the whole plan: the
-model is not only what the controller is tuned from, it is the reference the
-cryostat is judged against.
+holds and sweeps the LTSPM3 sample over its whole range **and judges, from the
+thermal response characterisation, whether the cryostat is behaving typically.**
+The model is not only what the controller is tuned from; it is the reference
+the cryostat is warned and faulted against.
 
 **What this plan is not.** It does not restate [REFIT_PLAN.md](REFIT_PLAN.md)
 (the thermal model) or [docs/ltspm3/commissioning.md](docs/ltspm3/commissioning.md)
-(the staged way onto the hardware). It points into both and adds what neither
-has: the *typical band*, the monitor that applies it, and the order in which
-the loop's numbers get replaced.
+(the staged way onto the hardware). It points into both.
 
-**Shape:** five phases. Phases 0–4 touch **nothing in `ltspm3/control/`** —
-they are bookkeeping, `analysis/`, a new tool, config, tests and procedure at
-the cryostat. Phase 5 is the one `control/` change and needs Jeff's explicit go
-(§10, decision 2). The standing instruction in `CLAUDE.md` holds throughout.
+**The standing instruction changed.** Until 2026-09-11 `CLAUDE.md` said the
+software PID was complete and off limits and the viewer came first. Jeff's
+restatement: **the goal is one program that supports both a person watching
+their cryostat and a safe software PID.** `ltspm3/control/` is open to change
+under the eight rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped
+commit at a time, each reviewed against the rule it touches. §2 says where
+everything lives.
 
 ### Where a new session picks up
 
 | | |
 |---|---|
-| **now** | Phase 0 (§3) — the fault window, the repair on the record, the `note` command, two stale comments |
-| **then** | Phase 1 (§4) — finish the refit (REFIT_PLAN §7 steps 7–10) **and export the typical band with the table** |
-| **then** | Phase 2 (§5) — `ltspm3/tools/monitor.py`, graded against the archive's two real events |
-| **then** | Phase 3 (§6) — the loop's schedule and feedforward from the model, through config only; bench on `FittedResponse` |
-| **then** | Phase 4 (§7) — commissioning stage 3 close-out, stage 4, stage 5, with the monitor as the independent judge |
-| **decide** | Phase 5 (§8) — fold the residual into the supervisor, or leave it outside for good |
+| **now** | Phase 0 (§4) — the fault window, the repair on the record, the `note` command, two stale comments |
+| **then** | Phase 1 (§5) — finish the refit, export the typical band beside the table, **and extend the characterisation toward 300 K** |
+| **then** | Phase 2 (§6) — `ltspm3/monitor.py`, report-only, graded against the archive's two real events |
+| **then** | Phase 3 (§7) — the loop: numbers from the model, one rate limit, warn/fault in watts, filter-aware tuning, crash → disengage |
+| **then** | Phase 4 (§8) — commissioning stage 3 close-out, stage 4, stage 5, the up-range ladder as stage 6 |
+| **late** | Phase 5 (§9) — warnings and faults in the viewer |
 
 ---
 
-## 1. The goal
+## 1. Requirements — Jeff, 2026-09-11
 
-Three rows, all green at once, with nothing retuned between them:
+Recorded here because they supersede numbers in `config.yaml`, in
+`SupervisorConfig`'s defaults and in three documents. **Where this table and a
+document disagree, this table wins until the document is corrected.**
 
-| | target | evidence | where it stands 2026-09-11 |
+| | requirement | today | consequence |
 |---|---|---|---|
-| **hold** | Allan deviation within 2× of the measurement floor at the operating point (thermal-response.md: 4.1 mK @ 60 s, 2.5 mK @ 600 s near 96 K) over ≥ 6 h | commissioning C6 | never closed |
-| **sweep** | 0.5 K/min over ≥ 10 K, tracking error inside `max_error_k` + allowance, no anomaly hold at either end, no overshoot above 5 % of the move | commissioning 4d, C5 | never closed |
-| **typical** | the monitor flags **both** archive events (09-09 18:06, 09-10 11:33) and flags **nothing** across the three post-recal holds, the 09-05 ladder, or the 43 h sweep | §5.3 replay | does not exist |
-
-**Definition of done.** All three rows green; `PROVISIONAL_SCHEDULE` no longer
-the schedule in force; feedforward on the fitted steady state; the monitor
-running beside the recorder and writing `plant.json`; a week at stage 5 with
-no unexplained hold; `HANDOFF.md` carrying the commissioning log.
+| **range** | **4 to 300 K** | measured 4.7–180.6 K; ceiling 70 % ≈ 192 K predicted | the characterisation must be extended upward, and the heater ceiling with it (§5.3). Below ~5 K the heater has no authority: "holding 4 K" is output zero |
+| **hold** | slow wander **below the 10 s averaged noise floor** | open loop at 118 K: 26.7 mK rms, Allan 8.3 mK @ 4 s, 7.6 @ 60 s, 4.3 @ 600 s, **6.3 @ 3600 s** (rising again = wander) | the figure of merit is `σ_y(τ) ≤ σ_y(10 s)` for every `τ` from 10 s to the length of the run (§3.5) |
+| **sweep** | **5 K/min** is a reasonable limit; 0.5 is excessively conservative | default 0.5, max 5.0 | 5 K/min at 118 K is 0.38 %/min of heater, **above the 0.20 %/min trim limiter**, and lags the setpoint by `r·τ_cl` = 25 K in MOVE. §7.2 resolves both |
+| **rate limits** | **simplify — fewer of them** | eight: `max_step_pct`, `max_rate_pct_per_min`, `rate_k_per_min`, `max_rate_k_per_min`, `approach_rate_k_per_min`, two ramp-down rates and a knee | **one** kelvin rate, converted to heater percent through the model's local gain (§7.2) |
+| **trim limiter** | 0.20 %/min is fine, "a very generous maximum" | 0.20 | kept — as the **floor** the derived percent limit may not go under when the model has no opinion |
+| **ramp-down** | at the same limit, **5 K/min** | 1.0 %/min above 40 %, 2.0 below | expressed in kelvin through the model's inverse curve, open loop, so it works with the sensor lost (§7.2) |
+| **premise** | **warn at 1 K, fault at 5 K**; the equivalent for the PID **in watts, informed by the fit** | `max_error_k` 1.0 K holds, then ramps down after 180 s | the 09-10 event (3.6 K, −4.9 mW) becomes a **warning**. Faults are for a lost sensor, a runaway heater or compressor, a strange transient (§3.4) |
+| **unattended** | a weekend realistically; **no reason not to run indefinitely** | never run armed | a week is the stage-5 gate, not the design life |
+| **failure** | **graceful** — the PID crashing while the cryostat is fine should just disengage | the poller catches a supervisor exception and keeps logging, but **does not disengage** the loop | §7.4 |
+| **filter** | measurement filter **20 s**, dead time about one cycle | 60 s, and `pid_tuning.py` assumes 3 s dead time | `filter.tau: 20`; `TAU_FILTER_S = 20`, `DEAD_TIME_S = 2` |
+| **monitor** | **report only** by default. Eventually hold or ramp down, **only when armed** | does not exist | the acting version lives in the supervisor, because a ramp-down exists only there (§3.4, §7.3) |
+| **viewer** | warnings and faults shown, **late phase** | nothing | Phase 5 |
+| **separation** | the PID stays separate from the broader `lschart` | invariant 1 | §2 |
 
 ---
 
-## 2. What "typical" means, and in what units
+## 2. Where it lives — the software model
 
-### 2.1 Watts, not kelvin
+Three packages, one direction of dependency, unchanged. What is new is naming
+the **model** as a thing with an address, because three phases of this plan
+read it and one writes it.
+
+```
+lschart/                 GENERIC.  Recorder, viewer, file interface.  Knows no
+                         cryostat, no model, no PID.  Never imports ltspm3.
+                         The viewer shows warnings and faults (Phase 5) by
+                         reading plant.json -- a file, not an import.
+
+ltspm3/                  THE LTSPM3 CRYOSTAT.  Imports lschart, never the reverse.
+  model/                 THE CHARACTERISATION.  One place for every number that
+                         describes the cryostat: thermal_response.py (the CD10
+                         curve), fitted_response.py + _fitted_table.py (the ODE,
+                         GENERATED by analysis/), sim_response.py (the two-pole
+                         fake), and -- new -- the typical band (§3.2) and the
+                         two residual functions (§3.1).  Stdlib only.
+  control/               THE SOFTWARE PID.  supervisor, pid, tuning, guard,
+                         coherence, feedforward, ramp, filters, dither.  Reads
+                         model/ for feedforward, the schedule, the rate
+                         conversion and (Phase 3) the watt residual.  Bound by
+                         the eight rules; changed one rule-scoped commit at a time.
+  monitor.py             THE JUDGE, outside the loop.  A separate process like
+                         the viewer: no port, reads the recorder's files,
+                         applies model/'s band, writes plant.json.  Report only.
+                         Runs whether or not the loop is armed.
+  tools/                 replay, steptest, sweep.  Procedures, not services.
+
+analysis/                PRODUCES model/_fitted_table.py.  Imports neither
+                         package; reads the archive and nothing else.
+```
+
+**Moving `thermal_response.py`, `fitted_response.py`, `_fitted_table.py` and
+`sim_response.py` into `ltspm3/model/`** is a package move with import
+updates — cheap, and it makes "the model" a directory rather than four files a
+reader has to know about. Decision 3 in §11; the plan assumes yes.
+
+**The one rule of the layout:** `control/` and `monitor.py` both read
+`model/` and neither reads the other. The supervisor's in-loop check (§7.3)
+and the monitor's out-of-loop check call the **same two functions** in
+`model/`, so they cannot disagree about what typical means — only about what
+to do, which is the point of having both.
+
+---
+
+## 3. What "typical" means
+
+### 3.1 Watts, not kelvin
 
 Everything the characterisation measured about *disturbances* came out as a
 **power at the sample node**:
 
 | what | size | source |
 |---|---|---|
-| campaign drift | **+0.281 mW/day**, three bands agreeing to ±25 % where K/day spans 5.6× | REFIT_PLAN §7 step 5 |
+| campaign drift | **+0.281 mW/day**, three bands agreeing to ±25 % where K/day spans 5.6× | `analysis/drift.py` |
 | the 09-10 heater-circuit fault | **−4.9 mW** step at 0.67 W (0.7 %) | HANDOFF 2026-09-10 |
 | per-era offset July → September | 4.6–5.6 mW | REFIT_PLAN §2.3 |
 
-The same disturbances in kelvin are 40× different across the band, because the
-local gain runs 0.3 K/% at 10 K to 13.9 K/% at 180 K. A "typical" band in
-kelvin is therefore wrong at one end or the other; a band in **milliwatts** is
-one number for the whole range. So the monitor's primary residual is
+The same disturbances in kelvin are 40× different across the band, because
+the local gain runs 0.35 K/% at 10 K to 13.3 K/% at 118 K (fitted table,
+evaluated today). A band in kelvin is wrong at one end or the other; a band in
+**milliwatts** is one number for the whole range. So the primary residual is
 
 ```
 δQ(t) = C(T_s)·dT_s/dt + [Λ(T_s) − Λ(T_c)] − P(u) − D(t)      [W]
 ```
 
-the power the model cannot account for, with `D(t)` the fitted campaign drift
-run to today's date. At a settled hold the first term vanishes and this is the
-steady-state check; during a transient it is the dynamic one, with the same
-units and the same band. `analysis/fit_ode.py` already computes every term;
-`ltspm3/fitted_response.py` carries Λ′, C and `T_c(T_s)` frozen, stdlib only.
+the power the model cannot account for, `D(t)` the fitted campaign drift run
+to today's date. At a settled hold the first term vanishes and this is the
+steady-state check. **During a sweep it does not vanish, and the residual is
+still valid** — which a check in kelvin cannot be, since a 5 K/min ramp lags
+its setpoint by tens of kelvin by design (§7.2). This is the decisive reason
+the premise checks move to watts.
 
-### 2.2 The band
+`model/` gains two functions, stdlib only:
+`missing_power_w(T_s, dT_dt, T_c, u, t)` and `sigma_q_w(T_s, u, t)`.
 
-"Typical" is `|δQ| < n·σ_Q`, where `σ_Q` is built from what the campaign
-measured and **exported beside the table** (§1):
+### 3.2 The band
+
+`σ_Q` is built from what the campaign measured and **exported beside the
+table** by `analysis/export_response.py`:
 
 | term | value today | why it is in the band |
 |---|---|---|
-| `δP` | **0.7 % of P(u)** — the one measured size of the circuit's margin | REFIT_PLAN T10. Power-side, scales with P |
-| drift uncertainty | ±25 % of 0.281 mW/day × days since the fit | §7 step 5's spread across bands |
-| `sigma_T_inf` → watts | median 14.2 mK × Λ′(T) | Phase A's per-anchor bar, converted at the local slope |
+| `δP` | **0.7 % of P(u)** — the one measured size of the circuit's margin | REFIT_PLAN T10. Power-side, scales with P. Revisited at the repair boundary (§4 item 2) |
+| drift uncertainty | ±25 % of 0.281 mW/day × days since `DRIFT_T0` | the spread across bands |
+| `sigma_T_inf` → watts | median 14.2 mK × Λ′(T) | Phase A's per-anchor bar at the local slope |
 | diurnal bound | 16 mK median, 69 mK max × Λ′(T) | measured amplitude, unknown phase — a bound, not a cycle |
 | `T_c` locus | 27.6 mK rms × Λ′(T_c) | `analysis/bath.py` |
 
-`n` is a config number, not a constant in code. Start at 3.
+### 3.3 Four residuals, not one
 
-### 2.3 Four residuals, not one
+`δQ` alone cannot separate the 09-10 event from the 09-09 one — both moved
+the sample at a fixed readback. The archive says what distinguishes them:
 
-`δQ` alone cannot separate the 09-10 event from the 09-09 one — both moved the
-sample at a fixed readback. The archive says what distinguishes them:
-
-| residual | typical | what it caught |
+| residual | typical | what it catches |
 |---|---|---|
-| **`δQ`** missing power at the sample | ±n·σ_Q | 09-10: −4.9 mW step, cold head unmoved |
-| **`δT_c`** coldplate against its locus `T_c_inf(Q)` with a 175 s pole | 28 mK rms | 09-09: cold-head channels **stepped**, sample followed at τ ≈ 2,200–3,700 s |
-| **`τ` ratio** observed/`tau_s(T)` on any step the recorder sees | 0.88–1.03 measured 50–114 K | a τ far off means C or Λ′ is not this cryostat's — cooler state, vacuum, a wire |
+| **`δQ`** missing power at the sample | `n·σ_Q` | 09-10: −4.9 mW step, cold head unmoved. A **runaway heater** is this residual, large and positive |
+| **`δT_c`** coldplate against its locus `T_c_inf(Q)` with a 175 s pole; the 1st and 2nd stage beside it | 28 mK rms | 09-09: cold-head channels **stepped**, sample followed. A **compressor failure** is this residual — the coldplate leaves its locus and keeps going — and **not** `δQ`, which stays small because the sample is doing exactly what the physics says at the new `T_c` |
+| **`τ` ratio** observed/`tau_s(T)` on any step the recorder sees | 0.88–1.03 measured 50–114 K | dynamics that are not this cryostat's: cooler state, vacuum, a wire |
 | **noise** rms over a settled window against `1.36e-6·T²`, floor 1.8 mK | within 2× | a sensor or a bus, not the cryostat |
 
-Each gets a verdict: **typical / atypical / no opinion**, with the reason in
-words. "No opinion" is the important one — see 2.4.
+### 3.4 Warn and fault — two levels, and what each is for
 
-### 2.4 Where the model has no opinion
+Jeff's rule: **faults are for a lost sensor, a runaway heater or compressor,
+and strange transients. Typical slow cryostat changes never fault, and the
+09-10 event should have warned.**
 
-The model has data over 4.7–195 K, from a cryostat with the cooler running and
-shields cold. Outside that it must say so, not cry anomaly:
+| level | what happens | `δQ` | `δT_c` | guard | τ / noise |
+|---|---|---|---|---|---|
+| **typical** | nothing | inside `n_warn·σ_Q` | inside band | OK | inside |
+| **warn** | alarm in `plant.json` / `status.json`; loop keeps tracking | beyond `n_warn·σ_Q` for `warn_after_s` | beyond band | SUSPECT | outside |
+| **fault** | armed: hold, then ramp down at the kelvin rate (§7.2), then lock out. Unarmed: alarm only | beyond `fault_mw` for `fault_after_s` | rising past `tc_fault_k` or at a rate no locus explains | FAULT | never — these inform, they do not fault |
 
-- **T outside 4.7–195 K** — the table clamps there by design.
-- **Output below ~28 %** — the heater has no authority against the cooler, so
-  K and τ are undefined, not small.
+**Kelvin equivalents, so the thresholds mean the same thing to a person.**
+Jeff's 1 K / 5 K at the local slope Λ′(T):
+
+| T | Λ′ | 1 K ≡ | 5 K ≡ | note |
+|---|---|---|---|---|
+| 20 K | 19.2 mW/K | 19 mW | 96 mW | |
+| 40 K | 4.8 | 4.8 | 24 | |
+| 60 K | 2.3 | 2.3 | 11 | |
+| 118 K | 1.65 | **1.7** | **8.3** | the 09-10 event, −4.9 mW, sits between: a **warning**, as required |
+| 180 K | 1.9 | 1.9 | 9.4 | |
+
+So the thresholds are **stated in watts** — `warn` at `n_warn·σ_Q`, `fault` at
+`fault_mw` — and the table above is how the plan checks they are "roughly
+equivalent" to 1 K and 5 K. `fault_mw` starts at 8 mW. **Both are then set by
+the replay of §6.3**: nothing in the archive may fault, both events must
+warn. `n_warn` starts at 3.
+
+Everything in this table is config in `SupervisorConfig` and the monitor's
+own section — invariant 7 — and none of it is a constant in code.
+
+### 3.5 The hold figure of merit
+
+Jeff's threshold: slow wander below the 10 s averaged noise floor. As a
+measurement: over any settled closed-loop run of length `L`,
+
+```
+σ_y(τ) ≤ σ_y(10 s)     for every τ in [10 s, L/4]
+```
+
+with `σ_y` the Allan deviation of the sample channel. Open loop today at 118 K
+this fails at 3600 s (6.3 mK against about 8 mK at 10 s is a pass; the 2.6 mK/h
+linear drift over a day is not). At 290 K the noise floor is 109 mK rms, so the
+bar is far looser up there — that is the measurement, not the loop.
+Commissioning C6 measures it; `analysis/` gets a small `allan.py` so the same
+code grades the open-loop archive and the closed-loop runs.
+
+### 3.6 Where the model has no opinion
+
+The model has data over 4.7–180.6 K, from a cryostat with the cooler running
+and shields cold. Outside that it must say so, not cry anomaly:
+
+- **T outside the table** — clamps by design. Today 4.7–195 K; §5.3 extends it.
+- **Output below ~28 %** — the heater has no authority against the cooler,
+  so K and τ are undefined, not small.
 - **Below ~25 K, `τ` ratio** — τ is seconds against a 2 s cadence; the steady
   state is real and the dynamics unmeasurable. `δQ` still applies.
-- **Cooler off, or a cooldown in progress** — the coldplate residual will say
-  so first; the monitor should downgrade `δQ` to no-opinion while `δT_c` is
-  atypical, rather than report two alarms for one cause.
-- **Inside a mask window** or within a settle time of a heater move — the
-  first 3τ(T) after any change in `u` is transient by design.
+- **Cooler off, or a cooldown in progress** — `δT_c` says so first; while it is
+  atypical, `δQ` downgrades to no-opinion rather than a second alarm for one
+  cause.
+- **Inside a mask window** or within `3·τ(T)` of a heater move.
 
 ---
 
-## 3. Phase 0 — bookkeeping, this week
+## 4. Phase 0 — bookkeeping, this week
 
-No code in `control/`. Each item is small and each is a trap left open.
+No code in `control/`. Each is small and each is a trap left open.
 
-1. **Mask the 09-10 fault window.** The sample has been flat at 118.34 K on
+1. **Mask the 09-10 fault window.** The sample has been flat at 118.33 K on
    64.010 % since 16:00 on 09-10. Archive the stretch and give 11:33 → the
    repair one `mask` row with a paragraph, as `mask-20260909-180604` has.
    REFIT_PLAN §0.4: do not archive a half-event.
 2. **Put the repair on the record.** Nothing in the log says what changed at
    ~15:00 on 09-10 except the readback moving 64.016 → 64.010 and the sample
-   recovering 3 K in an hour. Jeff knows; the manifest does not. Add a row the
-   way `era` records the recalibration — REFIT_PLAN T10 asks for exactly this
-   — and it becomes the boundary at which `δP` may be revisited.
-3. **A `note` command kind** through the spool, writing into the CSV's empty
-   `Notes` column. It is `lschart`, generic, passes only `accept_commands` and
-   the source policy, moves nothing. Both September events are unattributable
-   on the day for want of it. MATLAB gets `note()` in `LakeShore.m`.
+   recovering 3 K in an hour. Add a manifest row the way `era` records the
+   recalibration — REFIT_PLAN T10 asks for it — and it becomes the boundary
+   at which `δP` may be revisited.
+3. **A `note` command kind** through the spool, into the CSV's empty `Notes`
+   column. Generic `lschart`, passes `accept_commands` and the source policy,
+   moves nothing. Both September events are unattributable for want of it.
+   MATLAB gets `note()`.
 4. **Two stale comments.** `config.yaml` names `lschart.tools.steptest`; the
    tool is `ltspm3.tools.steptest`. `config-ltspm3-heater.yaml`'s dated
-   cryostat block still reads 2026-08-31 (AUDIT-2026-09-09 finding 7).
+   cryostat block still reads 2026-08-31.
+5. **Correct the documents §1 supersedes**: commissioning's decision on
+   `MAX_END_RATE_K_PER_H` (moot — the manifest already grades all four rungs
+   `tau`), the 96 K Allan figures quoted as the hold target, and the
+   "leave `control/` alone" sentences in `running.md` and `REFIT_PLAN.md` §9.
 
 **Exit gate:** `curate.py --propose` clean with the new rows; `send note "..."`
-lands in the CSV; the two files corrected.
+lands in the CSV; the documents corrected.
 
 ---
 
-## 4. Phase 1 — finish the refit, and export the band with it
+## 5. Phase 1 — the model: finish the refit, export the band, extend the range
 
-This is [REFIT_PLAN.md](REFIT_PLAN.md) §7 steps 7–10, unchanged, and its gate
-is unchanged: **leave-one-epoch-out predicts the three post-recal holds inside
-0.5 K having never seen them, or nothing proceeds.** The two open questions
-named in `HANDOFF.md` are settled *before* regenerating — the below-10 K basin
-(`T_lo` sits where there is no data) and `δP` carried as a power-side bar.
+### 5.1 The refit
 
-What this plan **adds** to step 10:
+[REFIT_PLAN.md](REFIT_PLAN.md) §7 steps 7–10, unchanged, gate unchanged:
+**leave-one-epoch-out predicts the three post-recal holds inside 0.5 K having
+never seen them, or nothing proceeds.** The two open questions in `HANDOFF.md`
+are settled *before* regenerating — the below-10 K basin and `δP` as a
+power-side bar.
 
-- `analysis/export_response.py` writes, beside `TABLE`, the constants of §2.2:
-  `DELTA_P_FRAC`, `DRIFT_W_PER_DAY` and its spread, `DRIFT_T0` (the date the
-  drift is zero at), `SIGMA_TINF_K`, `DIURNAL_K`, `TC_RMS_K`, and the `T_c`
-  locus with its `TAU_BATH_S`. Generated, never hand-edited, in the cache key.
-- `ltspm3/fitted_response.py` gains `missing_power_w(T_s, dT_dt, T_c, u, t)`
-  and `sigma_q_w(T_s, u, t)` — the two functions §2.1 and §2.2 define, stdlib
-  only, with the drift evaluated at wall-clock `t`.
-- `analysis/pid_tuning.py` migrated onto `production_inputs()` (it fits its
-  own unweighted 9/4 model today) and printing rows in the form §5.1 needs.
+### 5.2 What this plan adds to step 10
+
+- `export_response.py` writes the constants of §3.2 beside `TABLE`, plus
+  `DRIFT_T0` and the `T_c` locus with `TAU_BATH_S`. Generated, in the cache key.
+- `model/` gains `missing_power_w` and `sigma_q_w`.
+- `analysis/pid_tuning.py` onto `production_inputs()`, `TAU_FILTER_S = 20`,
+  `DEAD_TIME_S = 2`, printing rows in the form §7.1 needs.
+- `analysis/allan.py` (§3.5).
 
 **Exit gate:** REFIT_PLAN §1's three rows green; `SUPERSEDED_NOTE` cleared;
-`test_fitted_response.py`'s eight pins **regenerated, not loosened** (T8);
-`missing_power_w` returns under 1 mW at every settled anchor the fit was given.
+`test_fitted_response.py`'s eight pins **regenerated, not loosened**;
+`missing_power_w` under 1 mW at every settled anchor the fit was given.
+
+### 5.3 Extending to 300 K — a hardware decision first
+
+Nothing above 180.6 K has ever been measured. The fitted curve predicts about
+192 K at the 70 % ceiling (0.80 W) and clamps at 195 K. Extrapolating Λ′ and
+adding radiation, **300 K plausibly needs 1.0–1.3 W, which is 80–90 % of the
+218's output** into the 75.5 Ω heater (1.63 W at 100 %). Three things must be
+true before a ladder goes up there, and only the third is software:
+
+1. **The heater and its wiring are rated for it.** The 09-10 fault was a
+   wiring fault at 0.67 W. This is Jeff's call (§11 decision 1).
+2. **The rest of the cryostat tolerates it.** THE CHONKE's loop is railed at
+   100 % holding 290 K today; a 300 K sample radiating onto a 40 K shield
+   loads the cooler. The 1st and 2nd stage channels are the evidence, and
+   `δT_c` is the monitor's way of watching them.
+3. **`max_output_pct` is raised in steps, never past the highest rung
+   measured settled**, exactly as the ceiling has been kept below 70 % so far.
+
+Then the ladder itself is commissioning stage 6 (§8.3): `plan_sweep.py`
+upward from 64 %, each rung a `jump` window, `curate.py --propose` the diff,
+refit, re-export. The plan's own predicted τ up there is 600 s and falling
+slowly; expect an hour a rung.
+
+**The 4 K end costs nothing.** The heater has no authority below ~28 %, so
+holding at base is output zero and the loop's job is to *stay* at zero — the
+band's floor already allows it and the fitted table already covers 4.7 K up.
 
 ---
 
-## 5. Phase 2 — the plant monitor
+## 6. Phase 2 — the monitor
 
-`ltspm3/tools/monitor.py`. A **separate process**, like the viewer: it holds no
-port, reads the recorder's CSV tail and `status.json`, and writes
-`plant.json` beside `status.json` — arrays not objects, `SCHEMA_VERSION`, the
-same `os.replace` discipline — plus a `plant_YYYY-MM-DD.csv` of every residual
-per cycle so the verdicts can be audited a month later.
+`ltspm3/monitor.py`. A **separate process**, like the viewer: no port, reads
+the recorder's CSV tail and `status.json`, writes `plant.json` beside
+`status.json` — arrays not objects, `SCHEMA_VERSION`, `os.replace` — plus a
+`plant_YYYY-MM-DD.csv` of every residual per cycle so a verdict can be
+audited a month later.
 
-### 5.1 What it computes, per recorder row
+### 6.1 What it computes
 
 `δQ`, `δT_c`, the noise rms over a trailing settled window, and — when `u`
-changes and then holds — a `fit_pole` on the response against `tau_s(T)`. Each
-with its band from §2.2, each with a verdict from §2.3, each with the reason.
-A rolling verdict needs persistence: a single cycle out of band is noise, and
-`atypical_after_s` (config) is how long before it is reported, exactly as
-`fault_after_s` works in the guard.
+changes and then holds — a pole fit against `tau_s(T)`. Each with its band,
+each with a verdict (typical / warn / fault-level / no opinion) and the reason
+in words. Persistence before reporting: `warn_after_s`, as `fault_after_s`
+works in the guard. It reads `control` from `status.json`: when the loop is
+armed the monitor is the second opinion, and where it disagrees with the
+supervisor that is a finding.
 
-It reads `control` from `status.json` too. When the loop is armed the monitor
-is the second opinion: the supervisor holds on `max_error_k` in kelvin, the
-monitor reports `δQ` in watts, and they should agree about *when* and disagree
-about *why* only in the ways §2.3 predicts.
+### 6.2 What it may do
 
-### 5.2 What it may do
+**Report. Only report.** Jeff, decision 1: the acting version belongs in the
+supervisor because a ramp-down exists only there and "only when armed" is
+exactly what the supervisor knows. The monitor never sends a command. Its
+value is that it runs *now*, unarmed, over a cryostat the loop has never
+touched — and that it is the reference implementation the supervisor's
+in-loop check (§7.3) is tested against.
 
-Report, always. **Act, only if configured to**: `monitor.on_atypical: hold`
-sends `hold` through the spool, which passes exactly the gates a typed `hold`
-passes and reaches `panic_hold()` by the seam that already exists. Default
-`report`. A monitor that can freeze the heater on a model's say-so is a client
-like any other and gets no exemption — the panic kinds already bypass the
-power gates by *kind*, which is what makes this safe to allow.
+### 6.3 The test on genuine data
 
-### 5.3 The test on genuine data
-
-`python -m ltspm3.tools.monitor --replay reference/cooldown-10/` runs the whole
-archive and prints every verdict change with its time. The acceptance test,
-pinned in `tests_ltspm3/`:
+`python -m ltspm3.monitor --replay reference/cooldown-10/` runs the archive
+and prints every verdict change with its time. Pinned in `tests_ltspm3/`:
 
 | window | must |
 |---|---|
-| 2026-09-09 18:06 | `δT_c` atypical within 30 min; `δQ` no-opinion or typical (the cause was upstream) |
-| 2026-09-10 11:33 | `δQ` atypical within 30 min, magnitude −5 ± 2 mW; `δT_c` typical |
+| 2026-09-09 18:06 | `δT_c` **warn** within 30 min; `δQ` typical or no-opinion |
+| 2026-09-10 11:33 | `δQ` **warn** within 30 min, −5 ± 2 mW; `δT_c` typical; **not fault-level** |
 | the three post-recal holds | typical throughout, `δQ` within ±1 mW of the drift line |
-| `trace-ladder-20260905`, 30 rungs | no atypical verdict; 27 of 30 rungs return a τ ratio, all 0.85–1.10 above 40 K |
-| `trace-sweep-20260902`, 43 h | no atypical verdict outside its masked windows |
-| the 09-04 12:07 recalibration boundary | no verdict change — the remap is exact, and if it is not, this is where it shows |
+| `trace-ladder-20260905`, 30 rungs | no warn; 27 of 30 rungs return a τ ratio, all 0.85–1.10 above 40 K |
+| `trace-sweep-20260902`, 43 h | no warn outside its masked windows |
+| the 09-04 12:07 recalibration boundary | no verdict change |
+| **the whole archive** | **zero fault-level verdicts** — this is what sets `fault_mw` and `tc_fault_k` |
 
-**False-alarm budget: under one atypical verdict per week on a settled hold.**
-Every verdict change in the replay gets read by a person once, the way the
-manifest was; that is the review pause of this phase.
+**False-alarm budget: under one warning per week on a settled hold.** Every
+verdict change in the replay gets read by a person once. That reading is this
+phase's pause.
 
-**Exit gate:** the table above green in `pytest`; the monitor running beside
-the live recorder for 72 h with its `plant.json` open in `status` / MATLAB
-(`LakeShore.m` gains `plant()`); the residual after the 09-10 repair sitting
-inside the band, which is the first evidence the repair holds.
-
----
-
-## 6. Phase 3 — the loop's numbers, from the model, through config
-
-Nothing here edits `control/`. Both tables the controller runs on are already
-config fields.
-
-### 6.1 The schedule
-
-`TuningConfig.schedule` replaces `PROVISIONAL_SCHEDULE` — four rows, three at
-τ = 620 s — with rows from `analysis/pid_tuning.py` every ~10 K over 30–190 K.
-Measured τ runs 36 s at 40 K, 246 s at 70 K, 489 s at 110 K; below about
-100 K the shipped rows are wrong by up to an order of magnitude in both Ti and
-Kp.
-
-`pid_tuning.py` already knows the loop is not the plant: the 60 s measurement
-filter and ~3 s of dead time are comparable to τ below 60 K, and it applies
-SIMC's half rule. The shipped `tuning.py` is IMC on the plant alone,
-`Kp = τ/(K·τ_cl)`, `Ti = τ`. **The two are made identical by what goes in
-the rows, with no code change:** put `τ_eff = τ + 30 s` in each row's `tau_s`
-and add `θ = 33 s` to both `hold_tau_cl_s` and `move_tau_cl_s`. Then IMC's
-`Kp` is SIMC's `Kc` exactly, and IMC's `Ti = τ_eff` equals SIMC's
-`min(τ_eff, 4(τ_c+θ))` everywhere in range, because `4(τ_c+θ)` is 1,332 s
-even in MOVE and no `τ_eff` here exceeds 650 s. `pid_tuning.py` prints the
-rows in that form and says so in the note field. `min_ti_s: 60` will clamp
-below ~30 K, where `τ_eff` is ~31 s — that is the filter being the plant, and
-it is correct.
-
-### 6.2 Feedforward
-
-`FeedforwardConfig.calibration` takes a `(pct, kelvin)` table. Export one from
-the fitted steady state **at today's date** (the drift moves it 0.28 mW/day,
-which is ~0.2 K/day at 114 K), at every 0.5 % from 28 % to 70 %. The CD10
-ten-knot curve it replaces has no point between 43 % and 63 % and was 17 K
-wrong in the middle. Re-export whenever the schedule is; `plan_sweep --as-of`
-already has the date plumbing.
-
-### 6.3 `response_lag_s`
-
-620 s everywhere over-allows ramp error at low T, which is benign but makes
-the anomaly premise check meaningless down there. Set it to `tau_s(T)` at the
-intended operating point in each armed config, and say in the comment which
-point. A scheduled version is a `control/` change and is **not** done here.
-
-### 6.4 Bench on the fitted plant
-
-The control harness (`tests_ltspm3/conftest.py`) runs on `sim_response` — one
-τ, 620 s. Add a second fixture on `FittedResponse` and run the existing hold /
-sweep / glitch / fault scenarios at **30, 60, 100, 140 and 180 K** with the §6.1
-schedule and §6.2 table loaded from a real config file, not constructed in
-the test. The point is not that they pass at 137 K, where the two models
-agree; it is 30 K and 60 K, where the loop is filter-limited and the old rows
-were an order of magnitude off.
-
-**Exit gate:** at all five temperatures in simulation — no overshoot above
-5 % of a 3 K move, a 0.5 K/min sweep inside `max_error_k` + allowance with no
-anomaly hold at either end, a glitch that freezes and recovers, a fault that
-ramps down and latches. `python -m ltspm3 -c config-ltspm3-armed.yaml check`
-prints a band bracketing the present output. The monitor's replay (§5.3) is
-still green with the new table.
+**Exit gate:** the table green in `pytest`; the monitor beside the live
+recorder for 72 h; the residual after the 09-10 repair inside the band.
 
 ---
 
-## 7. Phase 4 — onto the cryostat
+## 7. Phase 3 — the loop
 
-This is [commissioning.md](docs/ltspm3/commissioning.md), which is not
-restated. What changes is that **the monitor runs alongside from stage 3 on**
-and its `plant.json` is part of every gate.
+Now `control/` changes, **one rule-scoped commit each**, in this order, each
+with the eight rules re-read against it. The bench of §7.5 runs after every
+one.
 
-### 7.1 Stage 3 close-out
+### 7.1 Numbers from the model, through config
+
+- `filter.tau: 20`.
+- `TuningConfig.schedule` from `pid_tuning.py`, rows every ~10 K over the
+  measured range, replacing `PROVISIONAL_SCHEDULE` (four rows, three at
+  τ = 620 s; measured τ is 36 s at 40 K, 166 s at 60 K, 440 s at 100 K).
+- `FeedforwardConfig.calibration` from the fitted steady state **at today's
+  date**, every 0.5 % over the measured range. The CD10 curve it replaces has
+  no point between 43 % and 63 % and was 17 K wrong in the middle.
+- `tuning.py` learns the filter: SIMC's half rule with `tau_filter` and
+  `dead_time` as `TuningConfig` fields, so the schedule carries the plant's
+  own τ and the loop's lags are stated once. (The first draft proposed hiding
+  the filter in the rows; with `control/` open, the honest form wins.)
+
+### 7.2 One rate limit — and why it cannot be a constant in percent
+
+**The collision.** 5 K/min and 0.20 %/min are both "fine" and are
+incompatible above 50 K:
+
+| T | K/% | 5 K/min needs | plant lag `5·τ/60` | closed-loop lag, MOVE `τ_cl` 300 s |
+|---|---|---|---|---|
+| 10 K | 0.35 | **14.3 %/min** | 0 K | 25 K |
+| 40 K | 3.9 | 1.3 %/min | 3 K | 25 K |
+| 60 K | 9.3 | 0.54 %/min | 14 K | 25 K |
+| 118 K | 13.3 | **0.38 %/min** | 44 K | 25 K |
+| 180 K | 11.8 | 0.43 %/min | 50 K | 25 K |
+
+Two things follow, and they are the two changes in this step.
+
+**One kelvin rate, converted through the model.** `max_rate_k_per_min: 5.0`
+becomes the only rate in the config. The heater limiter derives its percent
+rate as `max_rate_k_per_min / K(T)` from `model/`, floored at
+`min_rate_pct_per_min: 0.20` (Jeff's "generous maximum" becomes the floor the
+derivation may not go under where the model has no opinion). Setpoint ramps,
+the approach after a fault and the fault ramp-down all use the same number.
+Retired: `max_step_pct` (it is rate × cycle), `max_rate_pct_per_min`,
+`rate_k_per_min`, `approach_rate_k_per_min`, `rampdown_pct_per_min`,
+`rampdown_knee_pct`, `rampdown_below_knee_pct_per_min`. Eight numbers → two.
+
+**The ramp-down goes through the model's inverse curve, open loop.** A fault
+may mean the sensor is gone (rule 3), so a kelvin-rate descent cannot close on
+the sample. Instead the supervisor walks `u(t) = percent_for(T_target(t))`
+with `T_target` falling at the kelvin rate from the last trusted temperature,
+which needs the model and not the sensor. Where the model has no opinion it
+falls back to the percent floor. From 118 K to base that is about 23 minutes
+at 5 K/min against 44 today. Rule 1 holds: this only ever lowers the heater.
+
+**MOVE gets a shorter `τ_cl`.** With a 20 s filter, `move_tau_cl_s` of 60 s
+is a phase margin the 60 s filter never allowed; the closed-loop lag on a
+5 K/min ramp drops from 25 K to 5 K. `max_ramp_error_k` is retired with the
+kelvin premise check (§7.3): during a ramp the watt residual is the check.
+
+### 7.3 Premise checks in watts
+
+`max_error_k` / `anomaly_hold_s` are replaced by the two-level scheme of §3.4:
+
+| field | value | means |
+|---|---|---|
+| `warn_error_k` | 1.0 | tracking error above this → alarm, keep tracking |
+| `warn_sigma` | 3 | `δQ` beyond this many `σ_Q` → alarm |
+| `fault_mw` | 8 (then set by §6.3) | `δQ` beyond this for `fault_after_s` → hold, ramp down, lock out |
+| `tc_fault_k` | from the replay | coldplate beyond its locus by this → the same |
+| `fault_after_s` | 180 | the existing anomaly hold, reused |
+
+The supervisor's `_check_model` calls `model.missing_power_w` and
+`model.sigma_q_w` — the same two functions the monitor calls — and drops the
+CD10-curve comparison and `model_trust_k` (15 K, which is three 09-10 events).
+The kelvin `warn_error_k` stays because a person thinks in kelvin; it never
+faults. **Rule 4 is rewritten** in `safety.md` in the same commit: the
+premise is now "the watts add up", not "the error is under a kelvin".
+
+### 7.4 Crash → disengage
+
+The poller already catches a supervisor exception and keeps logging. It does
+not disengage. After the catch: `panic_hold()` — `OFF`, output frozen where
+it is, nothing written — and `status.control.state = "crashed"` with the
+exception's first line, until `acknowledge()` + `arm()`. Rules 6 and 7. A test
+raises inside `step()` on a virtual clock and asserts the recorder's next
+frame is written, the output unchanged, the state `crashed`, and `arm` refused
+until `ack`.
+
+### 7.5 Bench on the fitted plant, whole range
+
+The harness (`tests_ltspm3/conftest.py`) runs on `sim_response`, one τ. Add a
+fixture on `FittedResponse` and run hold / 5 K/min sweep / glitch / fault /
+crash at **10, 30, 60, 100, 140 and 180 K**, with §7.1's tables loaded from a
+real config file. The point is 10 and 30 K, where the loop is filter-limited
+and the old rows were an order of magnitude off, and 180 K, where the band is
+lopsided against the ceiling.
+
+**Exit gate, all six temperatures:** a 3 K move with no overshoot above 5 %;
+a 5 K/min sweep of ≥ 10 K with no fault and the `δQ` check quiet; a glitch
+that freezes and recovers; a fault that ramps down at the kelvin rate through
+the inverse curve and latches; a crash that disengages. `check` prints one
+rate and a band bracketing the present output. §6.3's replay still green.
+
+---
+
+## 8. Phase 4 — onto the cryostat
+
+[commissioning.md](docs/ltspm3/commissioning.md), not restated. The monitor
+runs alongside from stage 3 on and `plant.json` is part of every gate.
+
+### 8.1 Stage 3 close-out
 
 | | | gate |
 |---|---|---|
-| **W1** | twenty distinct writes, `AOUT?` at 0/25/50/80/150/300 ms, `write_settle_s` set with margin and the evidence in `HANDOFF.md` | the 09-05 sweep verified 30 writes by readback, which says the retry loop copes and says nothing about freshness. Invariant 5 |
-| **W2** | `send analog 70.5` refused; `analog 0` refused with `allow_analog_output: false`; `heaters_off` reaches the box | zero refusals in the whole command history |
-| **circuit** | the repair recorded (§3 item 2); `δQ` inside its band for 72 h at fixed output | the loop's premise checks would have ramped the heater to zero on the 09-10 event, correctly. It cannot hold unattended until the circuit is trusted |
+| **W1** | twenty distinct writes, `AOUT?` at 0/25/50/80/150/300 ms, `write_settle_s` set with margin and the evidence in `HANDOFF.md` | the 09-05 sweep verified 30 writes by readback — the retry loop copes — and says nothing about freshness. Invariant 5 |
+| **W2** | `send analog 70.5` refused; `analog 0` refused with the gate closed; `heaters_off` reaches the box | zero refusals in the whole command history |
+| **circuit** | the repair recorded (§4 item 2); `δQ` inside its band for 72 h | a flat hold is weak evidence (trap P8); it is the evidence available |
 
-### 7.2 Stage 4, attended
+### 8.2 Stage 4, attended, and stage 5
 
-4a → 4d as written, with two additions. Before arming, `plant.json` reads
-typical on all four residuals for the preceding hour — arm into a cryostat the
-model recognises. At every gate, the monitor's verdict is recorded beside the
-supervisor's state; where they disagree, that is a finding, not noise.
+4a → 4d as written, with a third config file `config-ltspm3-armed.yaml` so
+neither the read-only nor the heater config ever grows a `control:` section
+by accident. `operating_point_pct` re-centred on the output that holds the
+chosen temperature today (64.010 % holds 118.3 K); `authority_pct` narrowed
+as commissioning 0.3 says. Before arming, `plant.json` reads typical on all
+four residuals for the preceding hour. **4d becomes a 5 K/min sweep**, the
+requirement, not 0.5.
 
-The armed config is a **third file**, `config-ltspm3-armed.yaml`, so that
-neither the read-only nor the heater config ever grows a `control:` section by
-accident. `operating_point_pct` re-centred on the output that holds the chosen
-temperature today (64.010 % holds 118.3 K); `authority_pct` narrowed as
-commissioning 0.3 says; the §6 tables loaded.
+Stage 5: a week unattended is the gate; indefinite is the design. Ends with
+the §3.5 figure and every warning explained.
 
-### 7.3 Stage 5
+### 8.3 Stage 6 — the up-range ladder
 
-A week unattended. Ends with the C6 stability figure and a monitor log with
-every atypical verdict explained. Any unexplained one drops back a stage.
-
----
-
-## 8. Phase 5 — fold the residual into the supervisor, or do not
-
-The supervisor's `_check_model` compares the filtered temperature with
-`feedforward.kelvin_for(u)` against `model_trust_k` of 15 K. That is the
-right idea in the wrong units and on the wrong curve: 15 K is three times the
-09-10 event at 114 K and forty times it at 30 K. Replacing it with `δQ`
-against `σ_Q`, and taking the expected value from the fitted steady state, is
-about twenty lines in `control/supervisor.py` and a `model_trust_mw` field in
-`SupervisorConfig`.
-
-**It is the only `control/` change in this plan, and it is not made without
-Jeff's go.** The case against making it at all: the monitor already does this
-outside the loop, can send `hold` through the spool, and works when the loop
-is not armed — which is most of the cryostat's life so far. The case for: the
-supervisor's own status would carry the number the viewer and MATLAB already
-read, with no second process to keep alive.
+After §5.3's hardware decision. Rungs upward from 64 % with the ceiling
+raised one measured rung at a time; each rung is a `jump` window and a
+refit input; the monitor's `δT_c` and the stage channels are the watch on the
+cooler. Stops where Jeff says, or where `δT_c` says the cooler is losing.
 
 ---
 
-## 9. Traps
+## 9. Phase 5 — warnings and faults in the viewer
+
+Late, by request. The viewer reads `plant.json` as it reads `status.json`: a
+row per residual in the loop table's style, the verdict coloured by
+`theme.py`'s exceptional pairs and contrast-checked, the reason in the hover.
+No import of `ltspm3` — it is a file. MATLAB gets `plant()`.
+
+---
+
+## 10. Traps
 
 **P1 · A band in kelvin is wrong at one end.** Gain spans 40×; every threshold
-the monitor applies is in watts at the sample node, converted to kelvin only
-for display.
+is in watts at the sample node, converted to kelvin only for display.
 
 **P2 · The circuit fault and a missing load path look identical in `δQ`.**
-REFIT_PLAN §2.5 and T10. `δT_c` is what separates "something at the sample"
-from "something at the cold head"; report both, and let the person decide.
+`δT_c` separates "at the sample" from "at the cold head"; report both.
 
-**P3 · "Typical" drifts.** `D(t)` moves 0.281 mW/day, so a band that is right
-today is 8 mW off in a month if the date is not in it. Every export carries
-`DRIFT_T0`; the monitor evaluates at wall-clock time; a config that pins a
-schedule pins the date it was made.
+**P3 · A compressor failure is a coldplate event, not a `δQ` event.** With
+`T_c` measured and the model right, the sample follows the physics and `δQ`
+stays small while the cryostat warms. The fault criterion for it is `δT_c`
+and the stage channels. A monitor watching only `δQ` would call a compressor
+failure typical.
 
-**P4 · No opinion is not typical.** Outside 4.7–195 K, below 28 %, during the
-first 3τ after a move, with the cooler off: the monitor says it cannot judge.
-A green light there is a lie.
+**P4 · "Typical" drifts.** 0.281 mW/day; a band right today is 8 mW off in a
+month without the date in it. Every export carries `DRIFT_T0`.
 
-**P5 · `T_c` is an input, not a state.** `fit_ode` reads the coldplate from the
-log and that is exact for fitting. For prediction the monitor has the
-measured `T_c` too, so `δQ` uses it directly; only `δT_c` needs `bath.py`'s
-locus, and only to judge the coldplate itself.
+**P5 · No opinion is not typical.** Outside the table, below 28 %, within
+`3·τ` of a move, cooler off: say so. A green light there is a lie.
 
-**P6 · The monitor inherits the naive-timestamp fold.** It reads the recorder's
-CSV, so on 2026-11-01 02:00 its clock runs backwards for an hour
-(AUDIT-2026-09-10 finding 4). Take `t` from the recorder's monotonic `Time`
-column, as `fit_table` still needs to; do it in the monitor from day one.
+**P6 · The monitor inherits the naive-timestamp fold** (AUDIT-2026-09-10
+finding 4). Take `t` from the recorder's monotonic `Time` column from day one.
 
-**P7 · The schedule is a paste, and pastes rot.** Rows in `TuningConfig` do not
-know which fit made them. `pid_tuning.py` prints the fit's cache key and date
-into each row's `note`; a test compares the config's rows to a fresh export
-and fails when they diverge by more than the fit's own error.
+**P7 · Pastes rot.** Schedule rows carry the fit's cache key and date in
+`note`; a test compares the config's rows to a fresh export.
 
 **P8 · A flat hold is not evidence the circuit is fine.** 64.016 % held flat
-for 25 hours before 11:33 on 09-10. Only `δQ` sitting on the drift line for
-days at a *changing* `u` says the watts arrive; §7.1's 72 h at fixed output is
-the weakest test that is still worth running, not a proof.
+for 25 hours before 11:33. Only `δQ` on the drift line across *changing* `u`
+says the watts arrive.
 
-**P9 · The filter is the plant below 60 K.** With `filter.tau: 60` the loop's
-dominant lag at 30 K is the instrument's. §6.1's rows encode that; do not
-"fix" a slow loop down there by shortening `tau_cl` — shorten `filter.tau` if
-anything, and only after C1's low-temperature noise check says the floor is
-what the model claims.
+**P9 · A kelvin rate in percent is a function of temperature.** 5 K/min is
+0.38 %/min at 118 K and 14 %/min at 10 K. Any constant percent limit is
+either a brake at the cold end or no limit at the warm one.
 
-**P10 · Phases 0–4 do not touch `control/`.** If a step seems to need to, it is
-either config (invariant 7 says every limit already lives there), a tool, or
-Phase 5 arriving early. Stop and say which.
+**P10 · The ramp-down must not need the sensor.** Rule 3 says a fault may be
+the sensor. The inverse-curve descent is open loop for that reason; a
+kelvin-rate descent closed on the sample would stall on a lost reading.
 
----
+**P11 · Nothing above 180.6 K is measured.** The table clamps at 195 K. Every
+number about 300 K in this plan is an extrapolation and says so; the ladder
+of §8.3 is what replaces it.
 
-## 10. Decisions for Jeff
-
-1. **May the monitor send `hold`?** §5.2 defaults to report-only. Enabling it
-   is one config line; the question is whether a model verdict should ever
-   freeze the heater without a person.
-2. **Phase 5 at all?** §8. The alternative is to leave `_check_model` as it
-   is and let the monitor own the judgement permanently.
-3. **SIMC through the schedule rows** (§6.1, no code change) or a `tuning.py`
-   that knows about the filter (cleaner, a `control/` change). The plan takes
-   the first.
-4. **`MAX_END_RATE_K_PER_H`** — commissioning still lists this as open: four
-   good warm rungs thrown out at 0.51–0.71 K/h. It changes what the archive
-   keeps, so it is a manifest diff to read, not a tidy-up.
+**P12 · Above 195 K the sensor noise is the loop's floor.** 109 mK rms at
+290 K. The hold criterion is relative to the 10 s floor for this reason; an
+absolute mK target up there would be a target for the thermometer.
 
 ---
 
-## 11. Out of scope
+## 11. Decisions for Jeff
 
-The viewer, the MATLAB interface and Windows deployment remain `CLAUDE.md`'s
-standing priority and are not displaced by this plan; §3's `note` command
-and §5's `plant()` in `LakeShore.m` are the only places it touches them, and
-both are additive. Fixing the heater circuit is hardware and Jeff's. Nothing
-in phases 0–3 arms a heater or moves an output.
+1. **The heater ceiling for 300 K.** §5.3: plausibly 80–90 % and 1.0–1.3 W
+   into a heater whose wiring faulted at 0.67 W. Is the heater and its wiring
+   rated for that, and what is the ceiling you are willing to raise
+   `max_output_pct` toward?
+2. **One rate.** §7.2's proposal: `max_rate_k_per_min: 5.0` the only rate,
+   heater percent derived through the model's gain with a 0.20 %/min floor,
+   ramp-down through the inverse curve at the same rate. Yes, or keep any of
+   the eight?
+3. **`ltspm3/model/`.** Move the four model files into a package (§2). Cheap;
+   yes unless you object.
+4. **`move_tau_cl_s`** from 300 s to 60 s with the 20 s filter (§7.2). It is
+   what makes a 5 K/min sweep track inside a few kelvin.
+
+Settled 2026-09-11: report-only monitor, acting version in the supervisor and
+only when armed; `control/` open under the eight rules; the end-rate grading
+question was already moot.
+
+---
+
+## 12. Out of scope
+
+Fixing or re-rating the heater circuit is hardware and Jeff's. The viewer,
+MATLAB and Windows deployment continue as the monitoring half of the same
+program; this plan touches them only additively (§4 item 3, §9). Nothing in
+phases 0–3 arms a heater or moves an output.
