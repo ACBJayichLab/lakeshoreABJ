@@ -19,6 +19,7 @@ the code is, and it is the detail that goes stale — edit it there, not here.
 | [`matlab/README.md`](matlab/README.md) | MATLAB's half of the file protocol |
 | [`README.md`](README.md) | The front door, for a new user |
 | [`HANDOFF.md`](HANDOFF.md) | Point-in-time status. Goes stale by design; older ones are archived under their own date |
+| [`PID_PLAN.md`](PID_PLAN.md) | The route from here to a working software PID, and the **typical band**: the thermal characterisation used to say whether the cryostat is behaving normally, in watts at the sample node. Phases 0-4 touch nothing in `control/`. [`REFIT_PLAN.md`](REFIT_PLAN.md) is the thermal model it stands on |
 | `AUDIT-*.md` | Point-in-time audits, findings with nothing fixed. `AUDIT-2026-09-10-REPLY.md` is the argument for the two parts of that one's finding 2 that were deliberately NOT applied; `AUDIT-2026-09-10-REJOINDER.md` concedes both, and says the live sweep tool is where the fix still has to land |
 
 **Keep the split when you write.** Anything true of any Lake Shore cryostat belongs
