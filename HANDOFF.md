@@ -1,4 +1,4 @@
-# Handoff — 2026-09-10 (Phase A of the refit, and two audits answered)
+# Handoff — 2026-09-10 (Phase A, option 4, and half of Phase B)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
 refit's own state is [REFIT_PLAN.md](REFIT_PLAN.md). This goes stale.
@@ -72,7 +72,7 @@ event: about 5 mW at 0.67 W, or 0.7 % of delivered power, worth 3.6 K at
 
 ## What this session did
 
-Nine commits, `39dd52a..c58b264`, **merged to `main`**, and one after them on a
+Nine commits, `39dd52a..c58b264`, **merged to `main`**, and three after them on a
 branch. 915 passing, ruff clean, `curate.py --propose` reports no diff,
 `measure.py --verify` meets all four exit criteria.
 
@@ -86,7 +86,9 @@ branch. 915 passing, ruff clean, `curate.py --propose` reports no diff,
 | `1296f70` | `AUDIT-2026-09-10-REPLY.md` — the two parts of the audit's finding 2 that were not applied, and why |
 | `595d87a` | (Jeff) the rejoinder: both conceded, and the live sweep tool is where the fix still had to land |
 | `c58b264` | the sweep tool's guard moved onto the **plant's** τ |
-| *(branch)* | **option 4** — `analysis/`'s guard moved onto the plant's τ as well, on a clock it MEASURES. 149 → 136 anchors, 37 τ unchanged. §6.3 |
+| `821c85e` | **option 4** — the `analysis/` grader's guard moved onto the plant's τ as well, on a clock it MEASURES. 149 → 136 anchors, 37 τ unchanged. §6.3 |
+| `ac69d7e` | **Phase B steps 1-3 and 5** — the types, the plumbing proved inert, and the drift gate |
+| `b38ecbe` | **Phase B step 6** — the measured seed, which converges where the old one did not and lands 14.5 % better |
 
 ## Where the refit stands
 
@@ -141,13 +143,62 @@ against 0.229 K for those kept — but two of them fitted to under 0.13 K, and
 that is the honest shape: **the guard removes anchors that cannot be shown to
 have settled, not anchors shown to be wrong.**
 
+## Phase B: steps 1–3, 5 and 6 are done
+
+[REFIT_PLAN.md](REFIT_PLAN.md) §7 has each one. Two commits, `ac69d7e` and
+`b38ecbe`. **Nothing has regenerated the shipped table** —
+`ltspm3/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
+
+- **Steps 1–3, the refactors, proved inert two ways.** `Record` and `Anchors`
+  types, `production_inputs()`, `FitSpec`, per-record integration, `N_eff`.
+  Bit-identical on the production path with a forced refit, and on the
+  full-grid and tier2 paths against the pre-refactor `fit_ode.py` pulled out of
+  git and run side by side.
+- **Step 5, `analysis/drift.py`.** **The campaign drift is a power, not a
+  temperature.** K/day spans 5.6× across three independent output bands;
+  mW/day agrees to ±25 %. Median **+0.281 mW/day** against §2.3's independent
+  +0.27 and the fit's own 4.60 mW per-era offset. Coverage says **affine** —
+  three linspaced knots fail because days 0–27.7 hold 12 anchors and no cold
+  clump.
+- **Step 6, the seed, and it found more than it was looking for.**
+  `fit_ode.py --seed-only` is a model-free reading — Λ from `Λ(T_s) − Λ(T_c) =
+  Q`, C from `τ·Λ′`, no ODE anywhere — and it agrees with the fit to a few
+  percent. **But the seed was choosing which local minimum the fit landed in:**
+  run to convergence, the power-law seed reaches cost 1163.0 in 1157
+  evaluations and the measured seed 994.6 in 562. **14.5 % better on the
+  objective — a different answer, not a tolerance.** Every production number
+  this repository has quoted comes from the worse basin. `MAX_NFEV` 300 → 1500;
+  300 was a truncation, not a budget.
+
+Two things a reviewer should look at rather than take on trust: the gauge-level
+argument in `measured_lambda` (the first version measured a quantity invariant
+to its own argument and returned the top of its grid), and the choice to take
+C's *shape* from the τ anchors rather than from Debye (a single Debye magnitude
+put τ(137 K) at 804 s where the anchors say 607).
+
 ## Then, in order
 
 1. **Mask the 09-10 fault window** once the sample is flat (the note above).
-2. **Phase B** (§7). Read traps T1–T10 first, and §6.1's last paragraph —
-   **the fit will move at step 1, and that is not a refactor failing to be
-   inert**, because `settle_K` for a hold now means the drift across half the
-   window rather than a pole's extrapolation.
+2. **Phase B step 7**, and it needs two things built first:
+   - **A `trace` row for the post-recalibration record.** There is none. The
+     manifest has `trace-sweep-20260902` and `trace-ladder-20260905` and
+     nothing covering 2026-09-04 23:38 → 09-09 18:06, which is where the three
+     holds are. A `trace` row is **the human's** under "curate, do not
+     discover" — a dwell finder cannot know which stretch is one experiment —
+     so propose the boundaries, do not just write them.
+   - **Per-record drift blocks.** `fit(n_drift=...)` currently **raises** with
+     more than one record, on purpose: one block of time knots cannot serve two
+     clocks, and trap T2 says the answer is two terms with separate priors
+     because the within-record wander (−3.8 mK/h, cooling) and the campaign
+     ramp (+7 mK/h, warming) have opposite signs. Step 7 wants the first;
+     step 8 adds the second.
+
+   Then T4 (drop anchors inside a fitted record's span, or the three holds are
+   counted twice) and T5 (`RECORD_SHARE` explicit, or 106 h of sitting still
+   outvotes the 43 h sweep 2.6 : 1).
+3. Steps 8–10: campaign drift on, `ANCHOR_SIGMA_K` down in the same commit
+   (T3), **leave-one-epoch-out is the gate and the plan says do not proceed if
+   it fails**, then the aux channels, then regenerate and clear the note.
 3. **Before November:** the naive-timestamp fold. `segments.read_table` now
    *refuses* a non-monotonic clock and names the row, so 2026-11-01 02:00 is
    loud instead of silently selecting wrong rows through `searchsorted`. The
