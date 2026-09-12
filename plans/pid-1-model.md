@@ -11,7 +11,14 @@ controller and the monitor read one source.
 never seen them, or nothing proceeds.** Settle first, before regenerating:
 
 - the below-10 K basin (`T_lo` sits where there is no data);
-- `δP` as a power-side error bar on every anchor (REFIT T10).
+- ~~`δP` as a power-side error bar on every anchor (REFIT T10).~~ **DONE
+  2026-09-12**, `DELTA_P_FRAC = 0.007` in quadrature with the kelvin bar, in
+  watts. It binds over 40–120 K — where it is 1.7–2.6× the kelvin bar — and
+  nowhere below 20 K, which is what carrying it in watts was for. The
+  trajectory comes back 13.6 % better for 0.7 % on the anchors, the steady
+  state moves up to 0.51 K at 122 K, and quadrupling the bar moves 77 K by
+  0.10 K, so the answer does not turn on the one fault that sized it. Numbers
+  in [REFIT_PLAN.md](../REFIT_PLAN.md) T10.
 
 ## 1.2 Export the band and the residual functions
 

@@ -14,7 +14,11 @@ The settled holds enter as extra residuals rather than as hard constraints.
 They deserve a margin: u=63.072% was held three times and landed 2.84 K apart,
 and the July-August logs disagree with the September ones by about 2 K at
 matched power.  So a September hold is worth +-1 K and a ``prepython`` hold is
-worth +-3 K, and the fit is free to miss them by that much.
+worth +-3 K, and the fit is free to miss them by that much.  On top of that
+every anchor carries a POWER-side bar, ``DELTA_P_FRAC`` -- the heater circuit
+does not always deliver what the readback says it does -- and the two are added
+in quadrature in watts, because a kelvin is worth five times as much power at
+30 K as it is at 140 K.
 
 ``prepython`` is NOT a different cooldown -- cooldown 10 started 2026-07-15 and
 is still running.  It is the pre-Python chart-recorder half of this one, and
@@ -85,7 +89,11 @@ ANCHORS = "analysis/measured.csv"
 #: once: after deleting the gauge search, two comparison rows came back in zero
 #: seconds carrying the answer the old seed had found.  A stale hit does not
 #: look like an error, it looks like a fast run.
-FIT_CACHE_VERSION = 5
+#:
+#: 6: the anchors' error bar gained its power-side term, ``DELTA_P_FRAC`` --
+#: REFIT_PLAN.md trap T10.  A denominator changed, so every stored fit is an
+#: answer to a different question.
+FIT_CACHE_VERSION = 6
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
 #: extrapolation distance.  Keyed on the ERA the anchor came from
@@ -105,6 +113,37 @@ FIT_CACHE_VERSION = 5
 #: drift ramp on, or the ramp fits a residual that has been priced out already.
 ANCHOR_SIGMA_K = {"prepython": 3.0, "recorder": 1.0, "postcal": 1.0}
 ANCHOR_FLOOR_K = 0.3
+
+#: Fractional uncertainty on the watts the heater circuit actually DELIVERS, as
+#: against the watts ``P(u)`` computes from the 218's readback.
+#:
+#: REFIT_PLAN.md trap T10.  On 2026-09-10 11:33 the sample fell 3.63 K with the
+#: readback unmoved at 64.016 %, and Jeff traced it to a wiring / heater-circuit
+#: fault.  Every fit here takes ``Q = P(u)`` on trust, so that fault is a
+#: SYSTEMATIC on the watts-to-kelvin curve for the whole campaign rather than a
+#: defect in one window, and it stays until a more robust circuit replaces this
+#: one.  Its one measured size is about 5 mW at 0.67 W -- 0.7 %.  How much
+#: smaller the ordinary margin is, the log cannot say, so that is the bar: it is
+#: the only number there is, and it is a BAR rather than a correction because
+#: the sign on any given day is unknown.
+#:
+#: IT ENTERS IN POWER, NOT IN KELVIN, which is the whole reason for carrying it
+#: apart from ``ANCHOR_SIGMA_K``.  The anchor residual is already a power --
+#: ``dQ``, in watts -- divided by ``Lambda'`` so that it reads as kelvin, and
+#: the local gain runs 119 K/W at 30 K to 634 K/W at 140 K (analysis/drift.py).
+#: A single kelvin bar is therefore five times the wrong size at one end or the
+#: other, while ``dP`` is the same 0.7 % of delivered power everywhere.  Added
+#: in quadrature to the kelvin bar's own power equivalent, ``Lambda' * sigma``,
+#: so that neither can be tightened past the other -- which is exactly what T10
+#: forbids.
+#:
+#: PROPORTIONAL TO Q, WITH NO FLOOR.  A circuit that fails to deliver part of
+#: what it is asked for has nothing to fail to deliver at zero output, so the
+#: base-temperature anchors are held by their kelvin bar alone.
+#:
+#: Phase 1 of PID_PLAN.md exports this number beside the table as one term of
+#: the typical band; it is defined here because this is where it is first used.
+DELTA_P_FRAC = 0.007
 
 #: Measured time constants (analysis/steps.py) enter as residuals in log tau.
 #: They are what turns C from a fit parameter into a measurement: with Lambda
@@ -1147,6 +1186,10 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     Tc = np.concatenate([r.Tc for r in recs])
     u = np.concatenate([r.u for r in recs])
     aT, aTc, aQ, aS = anc.T, anc.Tc, anc.Q, anc.sigma
+    # The delivered-power bar, in watts, beside the kelvin one -- trap T10.
+    # Derived here rather than carried on Anchors: it is a function of Q alone,
+    # and a stored copy is one more thing that can fall out of step with it.
+    aP = DELTA_P_FRAC * np.abs(aQ)
     lam, cap, pl0, pc0 = build(n_lam, n_cap, *knot_range(recs),
                                anchors=anc if seed_measured else None,
                                taus=(tauT, tauV))
@@ -1282,7 +1325,10 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
         model = run(p)
         r_sweep = w_sweep * (np.log(model) - logT) / SWEEP_SIGMA_REL
         dQ = lam(pl, aT) - lam(pl, aTc) - aQ - group_offsets(p)
-        r_anchor = w_anchor * dQ / lam.slope(pl, aT) / aS
+        # In POWER throughout.  It reads as "kelvin missed over kelvin allowed"
+        # only when dP is zero; with it, the denominator is the two bars added
+        # in quadrature on the side the residual is actually computed on.
+        r_anchor = w_anchor * dQ / np.hypot(lam.slope(pl, aT) * aS, aP)
         shape = np.log(cap(pc, pT) / cap(pc, ref)[0])
         r_shape = w_shape * (shape - p_target)
         r_tau = w_tau * (np.log(cap(pc, tauT) / lam.slope(pl, tauT)) - log_tau)
@@ -1314,7 +1360,8 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
                     tauV, w_sweep, groups,
                     np.array([n_drift, seed_measured,
                               LAMBDA_SMOOTH_SHARE, LAMBDA_SMOOTH_SIGMA,
-                              ANCHOR_SHARE, ANCHOR_FLOOR_K, TAU_SHARE,
+                              ANCHOR_SHARE, ANCHOR_FLOOR_K, DELTA_P_FRAC,
+                              TAU_SHARE,
                               TAU_SIGMA_FACTOR, SWEEP_SIGMA_REL, DRIFT_SHARE,
                               DRIFT_SIGMA_W, CAP_SHAPE_SHARE, CAP_SHAPE_FACTOR,
                               CAP_SHAPE_REF_K], float))

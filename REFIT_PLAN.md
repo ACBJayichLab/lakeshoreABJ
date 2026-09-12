@@ -948,6 +948,58 @@ band, so one number in kelvin is wrong at both ends — and do not tighten
 circuit is out of scope for this plan; recording when it was fixed is not, and
 it belongs in the manifest the way `era` records the recalibration.
 
+**DONE, 2026-09-12** — PID_PLAN.md phase 1 §1.1's first prerequisite.
+`fit_ode.DELTA_P_FRAC = 0.007`, entering the anchor residual as
+`dQ / hypot(Λ′·σ_K, δP)`: the two bars added in quadrature **on the power
+side**, which is the side the residual is computed on anyway. Proportional to
+`Q` with no floor — a circuit that fails to deliver part of what it is asked
+for has nothing to fail to deliver at zero output. `FIT_CACHE_VERSION` 5 → 6.
+
+**Where it binds.** Medians per band, production fit (Λ20 / C4 / drift 3,
+`groups=True`), over the 136 anchors:
+
+| T band | n | kelvin bar, mW | δP, mW | δP / kelvin bar | total widening |
+|---|---|---|---|---|---|
+| 0–10 K | 22 | 19.3 | 0.19 | 0.01 | 1.00 |
+| 10–20 | 19 | 25.8 | 1.55 | 0.06 | 1.00 |
+| 20–40 | 30 | 10.7 | 3.07 | 0.29 | 1.04 |
+| 40–80 | 10 | 2.35 | 4.00 | 1.70 | 1.99 |
+| 80–120 | 12 | 1.73 | 4.54 | 2.62 | **2.88** |
+| 120–160 | 35 | 5.05 | 5.00 | 0.99 | 1.39 |
+| 160–250 | 6 | 2.66 | 5.35 | 2.01 | 2.32 |
+
+**It binds where the gain is highest and nowhere else**, which is the whole
+reason for carrying it in watts. Over 40–120 K the circuit's margin is the
+*dominant* uncertainty on an anchor and the kelvin bar was two to three times
+too tight; below 20 K it is 6 % of the bar and invisible. The 120–160 K band
+is already wide because most of those anchors are `prepython` at 3 K — and T3
+says that 3 K comes down at step 8, at which point this term takes over there
+too.
+
+**What it changes.** `cost` is *not* comparable across this change — the
+denominator moved — so the comparable columns are `rms_k` (the sweep residual,
+which the anchor bar does not enter) and `anchor_k` (unweighted kelvin):
+
+| δP | `rms_k` | `anchor_k` | τ(137 s) | `mass_g` | `group_w` | `nfev` |
+|---|---|---|---|---|---|---|
+| 0 | 0.1499 | 1.5479 | 571.3 | 4.8059 | −4.72 mW | 149 |
+| 0.35 % | 0.1315 | 1.5575 | 578.9 | 4.8264 | −4.51 | 96 |
+| **0.7 %** | **0.1295** | 1.5590 | 582.3 | 4.8357 | −4.36 | 111 |
+| 1.4 % | 0.1306 | 1.5581 | 583.5 | 4.8391 | −4.29 | 113 |
+| 2.8 % | 0.1313 | 1.5574 | 583.9 | 4.8400 | −4.34 | 115 |
+
+A **13.6 % better trajectory for 0.7 % on the anchors**, and the steady state
+moves by up to **0.51 K, at 122 K**. That is §1's tension easing rather than a
+weight being traded: the anchors this frees are in the band the sweep passes
+through, so the curve no longer has to choose between them.
+
+**It is a plateau, not a knife edge**, and that is the property that matters
+here. Quadrupling the bar from 0.7 % to 2.8 % moves the 77 K steady state by
+0.10 K and `rms_k` by 1.4 %; half of it already buys most of the effect. T10's
+own statement is that the ordinary margin is unknown and *smaller* than the one
+fault that measured it, so a fit that turned on the exact number would be
+reading a single fault's size as data. This one does not.
+
 ---
 
 ## 9. Out of scope
