@@ -662,6 +662,22 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
              "and the software loop disarmed so the zero sticks")
     snd_sub.add_parser("ping", help="prove the command path works, touching nothing")
 
+    nt = snd_sub.add_parser(
+        "note",
+        help="write a line into the log's Notes column",
+        description="Record what a person did, in the log, at the moment they "
+                    "did it. Nothing else in the recorder does: the Notes "
+                    "column was empty across both the 2026-09-09 cold-head "
+                    "transient and the 2026-09-10 heater-circuit fault, and "
+                    "each had to be reconstructed afterwards from the shape of "
+                    "the curves. Touches no instrument and needs no power gate, "
+                    "but it goes through the spool and so passes "
+                    "ipc.accept_commands and the source policy like any other "
+                    "command. It lands on the NEXT row, because this one has "
+                    "already been written by the time the spool is read.",
+    )
+    nt.add_argument("text", help="what happened, in one line")
+
     def _collect_send_args(parsed) -> list[tuple]:
         """Turn the chosen sub-parser's options into the command's arguments."""
         keys = {
@@ -676,6 +692,7 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "source": ("name", "allowed"),
             "heaters_off": (),
             "ping": (),
+            "note": ("text",),
         }[parsed.kind]
         if parsed.kind == "source":
             # `on`/`off` at the terminal, a bool on the wire.  The words are

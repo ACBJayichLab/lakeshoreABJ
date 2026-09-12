@@ -163,6 +163,12 @@ class IpcService:
         #: then say so by name rather than failing on a missing attribute.
         self.software_loop = None
 
+        #: Text waiting to go into the CSV's ``Notes`` column, one entry per
+        #: `note` command.  Drained by the poller through :meth:`take_note`
+        #: on the next cycle -- see that method for why the next one and not
+        #: this one.
+        self._notes: list[str] = []
+
         self.applied = 0
         self.refused = 0
         self.last_applied_id = ""
@@ -360,6 +366,68 @@ class IpcService:
         nothing about whether commands are being read.  This does.
         """
         return "pong"
+
+    #: Longest note that reaches the CSV, in characters.  A note is a person
+    #: saying what they did; a paragraph is a document and belongs in the
+    #: manifest.  The cap is here because the Notes column shares its cell with
+    #: the supervisor's own messages and the frame's errors, and a runaway
+    #: client could otherwise make every row of a day's log unreadable.
+    NOTE_MAX_CHARS = 500
+
+    def _do_note(self, cmd: Command) -> str:
+        """Write a line into the log's ``Notes`` column.
+
+        **The gap this closes.** Nothing in the log records what a person did
+        at the cryostat. On 2026-09-09 a power transient moved the cold head
+        and on 2026-09-10 a heater connector failed and was reseated by hand;
+        the `Notes` column is empty across both, and each had to be
+        reconstructed afterwards from the shape of the curves. A note makes the
+        next one attributable on the day.
+
+        It touches no instrument, so it needs no power gate -- but it arrives
+        through the spool and therefore passes `accept_commands` and the source
+        policy like everything else, which is invariant 3: a command by file
+        passes exactly the gates a command typed at the CLI passes. It is not a
+        panic kind and is exempt from nothing.
+
+        **It lands on the NEXT row, not this one.** The cycle reads, writes the
+        CSV, and only then drains the spool, so by the time this runs the row
+        for this cycle is already on disk. Queuing it for the next row is the
+        honest option: the alternative is rewriting a row that has been
+        flushed. At a 2 s cadence the note is at most one cycle later than the
+        moment it was sent, and the acknowledgement carries the text so a
+        client can see what landed.
+        """
+        text = cmd.args.get("text")
+        if text is None or text == [] or not str(text).strip():
+            raise CommandError(
+                "note needs some text -- an empty note is a row that says "
+                "something happened and not what")
+        # One line. A newline would split the cell across CSV rows, which the
+        # csv module reads back correctly and which makes `tail` and `grep` on
+        # a live log lie to whoever is watching it.
+        clean = " ".join(str(text).split())
+        if len(clean) > self.NOTE_MAX_CHARS:
+            clean = clean[:self.NOTE_MAX_CHARS - 1] + "…"
+        who = cmd.source or "?"
+        self._notes.append(f"[{who}] {clean}")
+        return f"note queued for the next row: {clean}"
+
+    def take_note(self) -> str:
+        """Everything queued since the last call, joined, and cleared.
+
+        Called by the poller BEFORE it writes a row, and returns ``""`` when
+        there is nothing -- which is every cycle but the rare one, so this is
+        on the hot path and does nothing on it.
+
+        Several notes in one cycle are joined rather than dropped or spread
+        over several rows: two people typing at once is not a reason to lose
+        one of them, and a row is the smallest thing the CSV can carry.
+        """
+        if not self._notes:
+            return ""
+        out, self._notes = "; ".join(self._notes), []
+        return out
 
     def _do_setpoint(self, cmd: Command) -> str:
         inst = self._target(cmd)

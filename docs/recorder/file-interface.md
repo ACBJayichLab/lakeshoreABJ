@@ -142,6 +142,7 @@ Handled on the acquisition thread, because that thread owns the bus.
 | Command | |
 |---|---|
 | `ping` | proves the whole path, touching no instrument |
+| `note` | `text` — one line into the log's `Notes` column. Touches no instrument, so no power gate; lands on the **next** row |
 | `setpoint` | `loop`, `kelvin` |
 | `ramp` | `loop`, `rate_k_per_min` (0 disables) |
 | `range` | `output`, `value` 0–3 — **applies power** on a 33x |

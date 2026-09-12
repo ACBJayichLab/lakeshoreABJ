@@ -47,6 +47,7 @@ class Poller:
         log_every_n: int = 1,
         status_every_n_cycles: int = 0,
         on_frame: Callable[[Frame], None] | None = None,
+        note_source: Callable[[], str] | None = None,
         clock=time.monotonic,
     ) -> None:
         self.instruments = instruments
@@ -58,6 +59,11 @@ class Poller:
         self.log_every_n = max(1, log_every_n)
         self.status_every_n_cycles = status_every_n_cycles
         self.on_frame = on_frame
+        #: Zero-argument callable returning any text a client has asked to be
+        #: put in the log, and clearing it.  Duck-typed and optional, like
+        #: `on_frame`: the poller never learns what an IPC service is, and a
+        #: plain recorder with no file interface leaves it None.
+        self.note_source = note_source
         self.clock = clock
 
         self._thread: threading.Thread | None = None
@@ -115,6 +121,13 @@ class Poller:
 
         state = ""
         note = ""
+        if self.note_source is not None:
+            # Before the supervisor, so that if both speak this cycle the
+            # person's words come first and the machine's follow.
+            try:
+                note = self.note_source()
+            except Exception:  # pragma: no cover - a client must not stop logging
+                log.exception("note_source raised; acquisition continues")
         if self.supervisor is not None and self.control_channel:
             # The supervisor sees every cycle including empty ones: a missing
             # reading is information, and swallowing it would let a dead link
@@ -125,7 +138,8 @@ class Poller:
                 self.last_control_status = status
                 state = status.state.value
                 if status.wrote and status.output_pct is not None:
-                    note = f"heater -> {status.output_pct:.3f}%"
+                    note = "; ".join(
+                        x for x in (note, f"heater -> {status.output_pct:.3f}%") if x)
                     frame.aux["heater_pct"] = status.output_pct
                 elif status.output_pct is not None:
                     frame.aux["heater_pct"] = status.output_pct

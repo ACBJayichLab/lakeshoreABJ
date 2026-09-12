@@ -184,6 +184,14 @@ the recorder sees the command *kind*, not who sent it, and an automated abort
 is a large part of why the command exists. It is still refused by
 `ipc.accept_commands`, by `allow_writes` and by `transport.read_only`.
 
+`note()` is the one command that writes to the **log** rather than to a box.
+It needs no power gate, but it is not a panic kind either: a client the source
+policy has muted stays muted for it. Use it to bracket a script —
+`ls.note('starting the 40 K -> 120 K ladder')` — as well as to record what was
+done at the cryostat. Nothing else in the recorder records that, and the two
+events of September 2026 both had to be reconstructed from the curves because
+the column was empty.
+
 | Refusal | Fix |
 |---|---|
 | `this recorder is not accepting commands` | `ipc.accept_commands: true` in the recorder's config |

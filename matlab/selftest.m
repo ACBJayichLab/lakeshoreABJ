@@ -113,6 +113,15 @@ function selftest(directory)
     fprintf('              (not exercised -- both change what the cryostat ');
     fprintf('is doing)\n');
 
+    % -- 7. the log annotation ---------------------------------------------
+    %
+    % Also named rather than exercised, for a smaller reason: note() is
+    % harmless to the cryostat, but a selftest that wrote a row into the log
+    % every time somebody checked their install would fill the Notes column
+    % with the fact that the selftest ran.
+    fprintf('note        : note(''text'') writes into the log''s Notes column\n');
+    fprintf('              (not exercised -- it would annotate the live log)\n');
+
     fprintf('\nOK -- MATLAB can read this recorder and command it.\n');
 end
 

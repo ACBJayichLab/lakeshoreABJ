@@ -895,3 +895,110 @@ def test_ack_on_a_recorder_with_no_software_loop_says_so_by_name(tmp_path):
     assert entry["ok"] is False
     assert "no lockout to clear" in entry["message"]
     assert "allow_analog_output" not in entry["message"]
+
+
+# -- `note`: the only command whose output is a row in the log ---------------
+
+
+def test_a_note_reaches_the_recorders_notes_column(tmp_path):
+    """The whole point: a person's words end up in the CSV, on a dated row."""
+    svc = service(tmp_path)
+    assert svc.take_note() == ""
+    assert send(svc, "note", text="reseated the heater connector")["ok"]
+    assert svc.take_note() == "[?] reseated the heater connector"
+
+
+def test_taking_the_note_clears_it_so_it_lands_on_one_row_only(tmp_path):
+    svc = service(tmp_path)
+    send(svc, "note", text="once")
+    assert svc.take_note() == "[?] once"
+    assert svc.take_note() == ""
+
+
+def test_two_notes_in_one_cycle_are_joined_rather_than_one_being_lost(tmp_path):
+    """Two people typing at once is not a reason to drop one of them."""
+    svc = service(tmp_path)
+    svc.spool.submit("note", text="first")
+    svc.spool.submit("note", text="second")
+    tick(svc)
+    got = svc.take_note()
+    assert "first" in got and "second" in got
+
+
+def test_a_note_carries_who_sent_it(tmp_path):
+    svc = service(tmp_path)
+    send(svc, "note", text="ladder starting", source="matlab")
+    assert svc.take_note() == "[matlab] ladder starting"
+
+
+def test_an_empty_note_is_refused(tmp_path):
+    """A row that says something happened and not what is worse than no row."""
+    svc = service(tmp_path)
+    entry = send(svc, "note", text="   ")
+    assert not entry["ok"]
+    assert "empty note" in entry["message"]
+    assert svc.take_note() == ""
+
+
+def test_a_note_is_flattened_to_one_line(tmp_path):
+    """A newline would split the cell across CSV rows and make `tail` lie."""
+    svc = service(tmp_path)
+    send(svc, "note", text="two\nlines\tand   spaces")
+    assert svc.take_note() == "[?] two lines and spaces"
+
+
+def test_a_very_long_note_is_truncated_rather_than_filling_the_column(tmp_path):
+    svc = service(tmp_path)
+    send(svc, "note", text="x" * 5000)
+    got = svc.take_note()
+    assert len(got) <= IpcService.NOTE_MAX_CHARS + len("[?] ")
+    assert got.endswith("\u2026")
+
+
+def test_a_note_still_needs_accept_commands(tmp_path):
+    """It touches no instrument, but the file door is not a back door:
+    invariant 3 says a command by file passes the gates a typed one passes."""
+    svc = service(tmp_path, accept_commands=False)
+    entry = send(svc, "note", text="should not land")
+    assert not entry["ok"]
+    assert svc.take_note() == ""
+
+
+def test_a_note_obeys_the_source_policy_and_is_not_a_panic_kind(tmp_path):
+    """`hold` and `heaters_off` are exempt because of what they are. A note
+    is an annotation, so a muted client stays muted for it too."""
+    svc = service(tmp_path, sources={"matlab": False})
+    entry = send(svc, "note", text="from a muted client", source="matlab")
+    assert not entry["ok"]
+    assert svc.take_note() == ""
+
+
+def test_the_poller_puts_a_pending_note_on_the_next_row(tmp_path):
+    """End to end through the poller, which is where the two halves meet."""
+    from lschart.acquisition.poller import Poller
+    from lschart.acquisition.recorder import Recorder
+
+    svc = service(tmp_path)
+    (tmp_path / "log").mkdir()
+    rec = Recorder(str(tmp_path / "log"), channels=["Sample"])
+    poller = Poller([], recorder=rec, note_source=svc.take_note,
+                    on_frame=svc.on_frame)
+    svc.spool.submit("note", text="connector reseated")
+
+    # Cycle one writes its row and only THEN reads the spool, so the note is
+    # queued by the end of it and lands on the row cycle two writes.
+    poller.step()
+    poller.step()
+    rec.close()
+
+    files = list((tmp_path / "log").glob("*.csv"))
+    assert files, "the recorder wrote no file"
+    import csv as _csv
+    with open(files[0], newline="", encoding="utf-8") as fh:
+        rows = list(_csv.DictReader(fh))
+    assert len(rows) == 2
+    # THE NEXT ROW, not this one: cycle one's row was on disk before the spool
+    # was read.  Pinned because the alternative -- rewriting a flushed row --
+    # is the tempting wrong answer.
+    assert rows[0]["Notes"] == ""
+    assert rows[1]["Notes"] == "[?] connector reseated"

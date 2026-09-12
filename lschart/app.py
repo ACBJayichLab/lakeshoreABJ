@@ -293,6 +293,7 @@ class Application:
                 (c.status_every_n_cycles for c in cfg.enabled_instruments), default=0
             ),
             on_frame=self.ipc.on_frame if self.ipc is not None else None,
+            note_source=self.ipc.take_note if self.ipc is not None else None,
         )
         if self.ipc is not None:
             self.ipc.poller = self.poller

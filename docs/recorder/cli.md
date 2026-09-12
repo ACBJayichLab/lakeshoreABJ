@@ -129,6 +129,7 @@ python -m lschart -c config.yaml send hold
 python -m lschart -c config.yaml send arm            # or `send arm 96.5`
 python -m lschart -c config.yaml send ack            # clear a fault lockout
 python -m lschart -c config.yaml send source lschart-gui off
+python -m lschart -c config.yaml send note "reseated the heater connector"
 ```
 
 Writes into the command spool and waits for the acknowledgement
@@ -137,6 +138,17 @@ Writes into the command spool and waits for the acknowledgement
 `ping` is the one command that proves the whole path — spool, recorder,
 acknowledgement — without touching an instrument. Run it first when setting up
 a client.
+
+`note` is the other one that touches no instrument, and it is the only command
+whose output is a row in the log rather than a change to a box. **Nothing else
+in the recorder records what a person did.** The `Notes` column was empty
+across both the 2026-09-09 cold-head transient and the 2026-09-10
+heater-circuit fault, and each had to be reconstructed afterwards from the
+shape of the curves alone; `send note` is what makes the next one attributable
+on the day. It needs no power gate but passes `ipc.accept_commands` and the
+source policy like everything else, and it lands on the **next** row — by the
+time the recorder reads the spool it has already written the row for that
+cycle.
 
 `analog` is manual control of a 218 analog output, in percent. It is the 218's
 equivalent of `range` and `setpoint` at once, because that box has neither: the

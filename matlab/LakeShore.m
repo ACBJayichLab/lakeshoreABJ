@@ -454,6 +454,40 @@ classdef LakeShore < handle
             [ok, message, id] = obj.run('ping', struct(), nargout);
         end
 
+        function [ok, message, id] = note(obj, text)
+            %NOTE  Write a line into the log's Notes column.
+            %
+            %   Record what a person did, in the log, at the moment they did
+            %   it.  Nothing else in the recorder does: the Notes column was
+            %   empty across both the 2026-09-09 cold-head transient and the
+            %   2026-09-10 heater-circuit fault, and each had to be
+            %   reconstructed afterwards from the shape of the curves.
+            %
+            %   Touches no instrument and needs no power gate, but it goes
+            %   through the spool and so passes ipc.accept_commands and the
+            %   source policy like any other command.  It lands on the NEXT
+            %   row: by the time the recorder reads the spool it has already
+            %   written the row for that cycle.
+            %
+            %   Use it to bracket a script as well as to record a repair:
+            %
+            %       ls.note('starting the 40 K -> 120 K ladder');
+            %       ...
+            %       ls.note('ladder finished, 31 rungs');
+            %
+            if ~(ischar(text) || (isstring(text) && isscalar(text)))
+                error('LakeShore:note', ...
+                      'note() takes one string; got a %s', class(text));
+            end
+            text = strtrim(char(text));
+            if isempty(text)
+                error('LakeShore:note', ...
+                      ['an empty note is a row that says something ' ...
+                       'happened and not what']);
+            end
+            [ok, message, id] = obj.run('note', struct('text', text), nargout);
+        end
+
         function [id, issuedAt] = submit(obj, kind, args, instrument)
             %SUBMIT  Queue a command without waiting for the acknowledgement.
             %   Returns the id, and when it was issued; pass both to await()
