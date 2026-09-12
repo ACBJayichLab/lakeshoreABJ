@@ -1,7 +1,8 @@
 # Thermal model refit — plan
 
-**Status: PHASE A DONE with option 4; PHASE B steps 1-3, 5, 6, 6b and 6c DONE,
-and trap T10 with them.** Next is step 7. Steps 1-3 were refactors and are
+**Status: PHASE A DONE with option 4; PHASE B steps 1-3 and 5-7 DONE, and
+traps T4, T5 and T10 with them.** Next is step 8, and §7.1 is the measurement
+saying it is needed. Steps 1-3 were refactors and are
 proved inert; step 6 is the first thing that moves a curve, and it made the
 production fit CONVERGE. **6c and T10 are PID_PLAN.md phase 1 §1.1's two
 "settle first" items and both are answered** — the anchors now carry a
@@ -37,8 +38,9 @@ Update this Status line as phases land.
 | **done** | Phase B **step 5** — `analysis/drift.py`. The drift is a **power**: 0.281 mW/day, three bands agreeing to ±25 % where K/day spans 5.6×. Coverage says **affine**. §7 step 5 |
 | **done** | Phase B **step 6** — Λ and C seeded from the anchors, `fit_ode.py --seed-only`. The model-free C(137 K) = 4.96 g against the fit's 4.79. And **6b**: the production fit did not converge from the old seed in 1000 evaluations and converges from this one in 562, so `MAX_NFEV` is 1500 — and the two seeds converge to DIFFERENT optima, the measured one 14.5 % better on the objective. §7 steps 6, 6b |
 | **done** | trap **T10** — the anchors' error bar gained its power side, `DELTA_P_FRAC = 0.007`, in quadrature with the kelvin bar *in watts*. It binds over 40–120 K and nowhere below 20 K; `rms_k` 0.1499 → **0.1295** for 0.7 % on `anchor_k`. `FIT_CACHE_VERSION` 6. §8 T10 |
+| **done** | Phase B **step 7** — the post-recal trace row, T4 (36 anchors were counted twice, not 17), T5 (`RECORD_SHARE = "equal"`), and per-record drift knots. **The trajectory recovers 57 % of the miss and leaves 1.47 K against a 0.3 K target**, with the post-recal wander term railing at its 2 mW prior: the model needs step 8's campaign ramp. §7.1 |
 | **done** | Phase B **6c** — the below-10 K basin. **The knots stay.** Nothing identifies dΛ/dT below 7 K: four placements spread it 10× at 4.55 K and 1.02× at 7 K, one *extra* knot down there costs 83 % of the objective, and dropping all four zero-output anchors moves the curve in the sixth figure. Λ *is* evaluated at the coldplate, 2.7 % below the bottom knot — now bounded by `KNOT_EXTRAP_TOL`. §7 step 6c |
-| **next** | Phase B **step 7** (the post-recal trace, T4, T5), then 8–10. Read traps T1–T10 and §6.1's last paragraph first |
+| **next** | Phase B **step 8** — the campaign drift on, `ANCHOR_SIGMA_K` down in the same commit (T3), and leave-one-epoch-out is the gate. §7.1 is the evidence it is needed. Then 9–10. Read traps T1–T10 and §6.1's last paragraph first |
 | **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
 | **then** | rejoinder step 5 - finding 5's leftovers |
 
@@ -950,6 +952,69 @@ it bisectable.
    +0.306 K at 180.6 K, +0.220 at 130.8 and −0.320 at 5.1. So this is not a
    dataset being thinned, it is the same evidence stopping being counted twice —
    and `ANCHOR_SHARE` means what it says again.
+
+   **Per-record drift knots** are in — `n_drift` with several records no longer
+   raises. One block per record, each on its own clock, which is the first of
+   T2's two terms; the campaign ramp is still step 8 and is still a separate
+   term for the reason T2 gives. Inert at one record by construction, and
+   *proved* so rather than assumed: `FIT_CACHE_VERSION` 7 forces the refit and
+   it comes back 850.5153, the number T4 left.
+
+### 7.1 What the trajectory alone recovers — and it is not enough
+
+**Fit A** is the production path today: one record, the 43 h sweep. **Fit B**
+adds `trace-postcal-20260905` as a second record at `RECORD_SHARE = "equal"`,
+so two of the three post-recal holds stop being anchors (T4) and become 96.5 h
+of trajectory the ODE is integrated down. The decimator thins it 134:1, 173,728
+samples to 1,301, reconstructing the full trace to 17.5 mK rms against the
+thermometer's own 28.
+
+**Kelvin the model is LOW by at each hold** — `Λ(T_s) − Λ(T_c) > P` means the
+model needs more power than was applied, so it would sit below where the
+cryostat sat:
+
+| hold | T | shipped table | fit A | **fit B** | in fit B |
+|---|---|---|---|---|---|
+| `pc-20260904-233855` | 96.5 K | +4.059 | +3.218 | **+1.616** | anchor |
+| `pc-20260905-165509` | 114.4 K | +4.208 | +3.512 | **+1.287** | trajectory |
+| `pc-20260908-154814` | 118.6 K | +4.250 | +3.597 | **+1.492** | trajectory |
+| mean | | +4.172 | +3.442 | **+1.465** | |
+
+**The trajectory recovers 57 % of fit A's miss and 65 % of the shipped table's,
+and leaves 1.47 K against a 0.3 K target.** So step 7's question — "were those
+holds only ever anchors, or does the model need a drift term" — is answered:
+**it needs the drift term.** Three things say so at once.
+
+**The two records cannot both be satisfied.** Adding the second one makes the
+*first* fit far worse: the sweep's own weighted residual goes 0.1295 → 0.3262 K
+while the post-recal record fits at 0.0953 K rms, 0.252 K max. That is not a
+model being refined, it is a model being pulled between two dates.
+
+**The per-record wander term rails trying to be the era offset.** `DRIFT_SIGMA_W`
+is 2 mW and the fitted knots are
+
+| record | drift knots, mW |
+|---|---|
+| `trace-sweep-20260902` | +0.62 +0.06 +0.17 |
+| `trace-postcal-20260905` | **+2.01 +2.15 +2.42** |
+
+— the post-recal block is a near-constant **+2.2 mW sitting at and past its own
+prior**, which is a nuisance term absorbing a systematic. That is exactly what
+T2 and T3 warn about, and it is the shape of the missing campaign ramp showing
+through the only term available to it. `group_w` moves the same way, −4.40 →
+−6.15 mW.
+
+**And the curve moves where the holds are, not everywhere**: Q falls by 1.8–2.0 K
+equivalent over 100–119 K and by under 0.03 K below 50 K; τ(137 K) 581.7 →
+550.0 s, τ(114 K) 507 → 486.
+
+> **A discrepancy §1 has to answer for.** §1's "where it stands today" column
+> reads 2.36 / 2.65 / 2.81 K for these three holds. The shipped table measures
+> **4.06 / 4.21 / 4.25** — which agrees with §2.1's "4.4 K low" and with
+> `SUPERSEDED_NOTE`, and is not `T_pole` (that is within 0.06 K of `T_inf` on
+> all three). 2.5 K is 60 % of 4.17, so §1's column is almost certainly §2.2's
+> *first refit*, not the shipped model. **Re-derive that row before §1 is used
+> as the definition of done**; invariant 9 says the number wins.
 8. **Turn on the campaign drift**, retire `groups=`/`anchor_groups`, and set
    `ANCHOR_SIGMA_K` to `{fit_recorder: 1.0, fit_cd10: 1.0, postcal: 0.5}`
    (trap T3). Then the test that decides whether this worked:

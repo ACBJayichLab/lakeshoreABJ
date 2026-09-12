@@ -93,7 +93,16 @@ ANCHORS = "analysis/measured.csv"
 #: 6: the anchors' error bar gained its power-side term, ``DELTA_P_FRAC`` --
 #: REFIT_PLAN.md trap T10.  A denominator changed, so every stored fit is an
 #: answer to a different question.
-FIT_CACHE_VERSION = 6
+#:
+#: 7: step 7.  ``trim_anchors`` (trap T4) drops 36 anchors from the production
+#: fit and ``record_scale`` (trap T5) names the between-record weighting, and
+#: then the drift knots became one block PER RECORD.  The first two show up in
+#: the input digest on their own; the third does not, because with one record it
+#: is inert and there is nothing in the data to see.  That is precisely what
+#: this number is for -- and bumping it is also how the inertness gets PROVED,
+#: by forcing the refit and comparing rather than by reading a cached answer
+#: back and calling it agreement.
+FIT_CACHE_VERSION = 7
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
 #: extrapolation distance.  Keyed on the ERA the anchor came from
@@ -697,6 +706,35 @@ def load_decimated_record(path=DECIMATED, name=SWEEP) -> Record:
     """The thinned sweep as a :class:`Record`, weights and absolute clock included."""
     data, w = load_decimated(path)
     return Record.from_tuple(data, weights=w, name=name, t0=_decimated_t0(path))
+
+
+#: The post-recalibration trajectory, as a manifest window.  2026-09-05 17:35 ->
+#: 09-09 18:06, 96.5 h, 114.2-121.0 K: the tail of the 69.94 h hold at 63.699 %,
+#: the 09-08 steps that walked the sample to 121 K, and the 27.06 h hold after
+#: them.  Its two arguable boundaries are argued in its own manifest note.
+POSTCAL = "trace-postcal-20260905"
+
+
+def load_trace_record(window, **kw) -> Record:
+    """A manifest ``trace`` as a decimated :class:`Record`, thinned in memory.
+
+    :func:`load_decimated_record` reads a COMMITTED table, which is what the
+    sweep has and what keeps the expensive fit reproducible from a clone without
+    a preparation step.  This one pays the twenty seconds instead, because a
+    second committed table is only worth having once a second record actually
+    ships -- that is step 10, not step 7.
+
+    The thinning is ``decimate``'s, unchanged and with its own constants, so
+    both records are on the same rule.  It matters more here than on the sweep:
+    the post-recal record is 96.5 h of which 96 h is two settled holds, 173,728
+    samples thinned 134:1 to 1,301, and the reconstruction is 17.5 mK rms
+    against the thermometer's own 28.
+    """
+    import decimate as _dec
+    full = load_record(window)
+    small, span, _ = _dec.decimate((full.t, full.T, full.Tc, full.u), **kw)
+    return Record(name=window, t=small[0], T=small[1], Tc=small[2], u=small[3],
+                  w=_dec.weights(span), t0=full.t0)
 
 
 def as_records(data, weights=None) -> list:
@@ -1420,24 +1458,38 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
             f"anchors that fell inside a record.")
     n_group = int(groups.max()) if len(groups) else 0
 
-    if n_drift and len(recs) > 1:
-        raise SystemExit(
-            "fit_ode: n_drift with more than one record.  The drift knots are "
-            "in TIME and there is only one block of them, so several records "
-            "would share a clock they do not have.  REFIT_PLAN.md trap T2 says "
-            "there have to be TWO terms -- a per-record short-timescale wander "
-            "and one campaign ramp, with separate priors, because they have "
-            "opposite signs -- and building that is step 8, not this one.")
-    dk = np.linspace(recs[0].t[0], recs[0].t[-1], n_drift) if n_drift else np.zeros(0)
-    w_drift = (math.sqrt(DRIFT_SHARE * N_eff / max(n_drift, 1))
+    # ONE BLOCK OF DRIFT KNOTS PER RECORD, each on its OWN clock.  This used to
+    # raise with more than one record, because a single block in TIME would have
+    # several trajectories sharing a clock they do not have -- the sweep's t=0 is
+    # 2026-09-02 16:01 and the post-recal record's is three days later, and
+    # interpolating one set of knots against both would put the sweep's opening
+    # hold and the 70 h hold on the same knot.
+    #
+    # This is the FIRST of trap T2's two terms: the per-record short-timescale
+    # wander, the thing that makes the sweep's 22.8 h opening hold drift
+    # -3.8 mK/h at a heater that never moves.  The campaign ramp -- +7 mK/h,
+    # opposite sign, a function of wall-clock date rather than of time within a
+    # record -- is step 8, and it is a different term with its own prior for
+    # exactly that reason.  ``Record.t0`` is what step 8 will hang it on.
+    #
+    # Inert at one record: n_drift_all == n_drift and the single knot block is
+    # the same linspace over the same clock.
+    dks = ([np.linspace(r.t[0], r.t[-1], n_drift) for r in recs] if n_drift
+           else [])
+    n_drift_all = n_drift * len(recs)
+    # Divided by the TOTAL number of drift knots, so that the term's share of
+    # the objective does not grow with the number of records -- each record's
+    # wander is a nuisance of the same size, not n times one.
+    w_drift = (math.sqrt(DRIFT_SHARE * N_eff / max(n_drift_all, 1))
                / DRIFT_SIGMA_W)
 
     def drift_of(p):
-        """Per record, in watts, or ``None``.  One record while T2 is open."""
+        """Per record, in watts, or ``None``.  Each on its own knots."""
         if not n_drift:
             return None
         knots = p[len(p) - n_tail:len(p) - n_group]
-        return [np.interp(r.t, dk, knots) for r in recs]
+        return [np.interp(r.t, dks[i], knots[i * n_drift:(i + 1) * n_drift])
+                for i, r in enumerate(recs)]
 
     def unpack2(p):
         f = 1.0 / (1.0 + math.exp(-p[-2]))
@@ -1455,7 +1507,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
                if LAMBDA_SMOOTH_SHARE and len(rough_T) > 2 else 0.0)
     rough_lx = np.log(rough_T)
 
-    n_tail = n_drift + n_group
+    n_tail = n_drift_all + n_group
 
     def split_p(p):
         """(lambda knots, capacity knots) with the tail parameters removed."""
@@ -1517,7 +1569,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
 
     p0 = np.concatenate([pl0, pc0]
                         + ([np.array(TIER2_SEED)] if tier2 else [])
-                        + ([np.zeros(n_drift)] if n_drift else [])
+                        + ([np.zeros(n_drift_all)] if n_drift else [])
                         + ([np.zeros(n_group)] if n_group else []))
     # EVERY constant the objective reads goes in the key, not just the ones
     # that were being tuned the day it was written.  ANCHOR_SHARE was not in
@@ -1530,6 +1582,10 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     # ``lam(pl, aTc)`` and belongs in the key beside the rest.
     key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aTc, aQ, aS,
                     tauV, w_sweep, groups,
+                    # The PARTITION, not just the concatenation: two records
+                    # split differently hash the same flat arrays and are a
+                    # different fit -- different knot blocks, different T0s.
+                    np.array([len(r) for r in recs], float),
                     np.array([n_drift, seed_measured,
                               LAMBDA_SMOOTH_SHARE, LAMBDA_SMOOTH_SIGMA,
                               ANCHOR_SHARE, ANCHOR_FLOOR_K, DELTA_P_FRAC,
@@ -1561,8 +1617,11 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     # seeds converging to different local minima is decided by this number and
     # by nothing else on the row.
     cost = 0.5 * float(np.dot(resid(x), resid(x)))
-    drift_w = (x[len(x) - n_tail:len(x) - n_group] if n_drift
-               else np.zeros(0))
+    # One ROW per record, so that a caller reading "the drift" gets a per-record
+    # answer rather than a block it has to know the partition of.  min/max over
+    # the whole thing still mean what they did, which is what plot_gain reads.
+    drift_w = (x[len(x) - n_tail:len(x) - n_group].reshape(len(recs), n_drift)
+               if n_drift else np.zeros(0))
     group_w = x[len(x) - n_group:] if n_group else np.zeros(0)
     err = model - T
     # Weighted, so a decimated fit reports the same quantity a full-grid one
@@ -1593,7 +1652,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
         "n_lam": n_lam, "n_cap": n_cap, "npar": len(x), "nfev": nfev,
         "n_anchor": len(aT), "anchors_twice": twice,
         "key": key, "cost": cost,
-        "n_drift": n_drift, "drift_w": drift_w, "drift_t": dk,
+        "n_drift": n_drift, "drift_w": drift_w, "drift_t": dks,
         "n_group": n_group, "group_w": group_w,
         "drift_mw": float(1e3 * np.abs(drift_w).max()) if n_drift else 0.0,
         "lam": lam, "cap": cap, "pl": pl, "pc": pc,
