@@ -182,6 +182,30 @@ TAU_SHARE = 0.10
 SWEEP_SIGMA_REL = 0.01
 #: The anchors together carry this share of the sweep's weight.
 ANCHOR_SHARE = 0.10
+
+#: What decides one record's weight AGAINST THE OTHERS -- as distinct from how
+#: the samples inside one record are weighted against each other, which is
+#: ``Record.w`` and the decimator's business.  REFIT_PLAN.md trap T5.
+#:
+#: ``"equal"``    every record carries the same total, whatever its length.
+#: ``"samples"``  each carries its own sample count -- what the code did before
+#:                anybody chose, and what T5 warns about.
+#:
+#: **It has to be explicit because duration is not evidence.** The post-recal
+#: record is 96.5 h of which 96 h is two settled holds; the sweep is 43 h of
+#: 4.9-192.6 K in continuous movement. Weighted by time the first outvotes the
+#: second 2.6 : 1 on the strength of sitting still, and a joint fit that
+#: converges and means nothing is the easiest thing in this file to produce.
+#:
+#: ``"equal"`` is Jeff's call, 2026-09-12. It is not a claim that the two
+#: records carry the same information -- it is a refusal to let LENGTH be the
+#: vote, which is the specific failure T5 describes. What each record has to say
+#: about Lambda still arrives through its own residuals.
+#:
+#: **Inert at one record, exactly**: the scale is sqrt((N_eff/1)/len(r)) = 1, so
+#: the production fit's ``w_sweep`` is unchanged bit for bit and every stored
+#: cache entry stays valid. It is in the key anyway, through ``w_sweep``.
+RECORD_SHARE = "equal"
 #: Integration step, and the cadence the residual is evaluated on.  The log's
 #: own cadence is 2 s, and that is what this should be: at 25 K tau is about
 #: 4 s, so a 4 s step is one time constant and the recovery ramp -- where the
@@ -693,6 +717,69 @@ def as_records(data, weights=None) -> list:
                 "several clocks.")
         return list(data)
     return [Record.from_tuple(data, weights=weights)]
+
+
+def trim_anchors(anchors, records):
+    """``(anchors, dropped)`` -- anchors inside a fitted record's span removed.
+
+    REFIT_PLAN.md trap T4.  A dwell that lies inside a trajectory the ODE is
+    integrated down is already in the objective, sample by sample, as the
+    trajectory; keeping it as an anchor too counts the same evidence twice.  It
+    is not fatal -- the two agree, they are the same seconds of the same log --
+    but it silently multiplies that dwell's weight and stops ``ANCHOR_SHARE``
+    meaning what it says.
+
+    Dated by ``t_abs``, which is the window's MIDPOINT (see
+    :func:`_anchor_epoch`), so a dwell straddling a record's edge is judged by
+    where its level was quoted.  An anchor whose date is unknown is ``nan``,
+    every comparison against it is false, and it is kept -- which is the right
+    way round: "cannot be shown to be inside" is not "inside".
+
+    The 17 sweep-derived anchors have been double-counted in the production fit
+    all along, so this is not only for the records step 7 adds.
+    """
+    if not len(anchors) or not records:
+        return anchors, ()
+    inside = np.zeros(len(anchors), bool)
+    for r in records:
+        if math.isnan(r.t0) or not len(r.t):
+            continue
+        inside |= ((anchors.t_abs >= r.t0)
+                   & (anchors.t_abs <= r.t0 + float(r.t[-1] - r.t[0])))
+    if not inside.any():
+        return anchors, ()
+    keep = ~inside
+    dropped = tuple(np.asarray(anchors.source, object)[inside])
+    return replace(
+        anchors, T=anchors.T[keep], Tc=anchors.Tc[keep], Q=anchors.Q[keep],
+        sigma=anchors.sigma[keep], t_abs=anchors.t_abs[keep],
+        group=anchors.group[keep], u=anchors.u[keep],
+        source=tuple(np.asarray(anchors.source, object)[keep]),
+    ), dropped
+
+
+def record_scale(records, n_eff):
+    """One multiplier per record, applying :data:`RECORD_SHARE`.
+
+    Each record arrives with unit-mean-square weights, so it would contribute
+    ``sum(w**2) = len(r)`` to the objective -- its sample count.  These
+    multipliers redistribute that total without changing it: whatever the
+    policy, ``sum over records of (scale * w)**2`` is ``n_eff``, so
+    ``ANCHOR_SHARE`` and every other share below still means the fraction of
+    the trajectory it always meant.
+
+    Returns ``[1.0]`` for a single record under either policy, which is what
+    makes this inert on everything that ships today.
+    """
+    if RECORD_SHARE == "samples":
+        return [1.0] * len(records)
+    if RECORD_SHARE != "equal":
+        raise SystemExit(
+            f"fit_ode: RECORD_SHARE = {RECORD_SHARE!r} is not a policy this "
+            f"knows.  It is 'equal' or 'samples', and it is explicit on "
+            f"purpose -- see REFIT_PLAN.md trap T5.")
+    each = n_eff / len(records)
+    return [math.sqrt(each / len(r)) for r in records]
 
 
 def knot_range(records, anchors=None, taus=None):
@@ -1241,6 +1328,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     """
     recs = as_records(data if data is not None else load_sweep(), weights)
     anc = Anchors.from_tuple(anchors if anchors is not None else load_anchors())
+    anc, twice = trim_anchors(anc, recs)
     tauT, tauV = taus if taus is not None else load_taus()
     # The flat concatenations.  Every residual and every reported metric runs
     # over these, so with one record they are the arrays this function has
@@ -1274,10 +1362,6 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
             f"bottom knot the curve is a log-log continuation and nothing "
             f"measures it; read knot_range's docstring before widening this.")
     n = len(pl0)
-    # Normalised in Record.__post_init__ now, and to the same thing: a uniform
-    # grid is ones, whose mean square is already 1.
-    w_sweep = np.concatenate([r.w for r in recs])
-
     #: The sample count every prior share is measured against.
     #:
     #: It was ``len(t)`` for the one record there was.  With several it has to
@@ -1287,10 +1371,15 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     #: ``sum(w**2)`` -- the two agree exactly, which is what makes it inert.
     #:
     #: It does NOT decide the records' weight relative to EACH OTHER.  That is
-    #: ``RECORD_SHARE`` and REFIT_PLAN.md trap T5, and it is step 7: normalising
-    #: by time alone lets 106 h of three settled holds outvote the 43 h sweep on
-    #: the strength of sitting still.
+    #: ``RECORD_SHARE``, just below.
     N_eff = sum(len(r) for r in recs)
+    # Each record's own weights are unit mean square (Record.__post_init__), so
+    # before this they contributed sum(w**2) = len(r) each -- their sample count,
+    # which is the implicit weighting trap T5 names.  `record_scale` replaces
+    # that with the declared one and leaves the total at N_eff either way, so
+    # every prior share below still means what it did.
+    w_sweep = np.concatenate([s * r.w for s, r in
+                              zip(record_scale(recs, N_eff), recs)])
     w_anchor = math.sqrt(ANCHOR_SHARE * N_eff / len(aT))
     logT = np.log(T)
 
@@ -1325,7 +1414,10 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
         raise SystemExit(
             f"fit_ode: {len(groups)} group labels for {len(aT)} anchors.  They "
             f"are positional, so a mismatch mis-assigns every offset after the "
-            f"first gap -- use groups=True, or production_inputs().")
+            f"first gap -- use groups=True, or production_inputs().  Note "
+            f"that trim_anchors may have just dropped some: an array built "
+            f"from the untrimmed table is the wrong length by exactly the "
+            f"anchors that fell inside a record.")
     n_group = int(groups.max()) if len(groups) else 0
 
     if n_drift and len(recs) > 1:
@@ -1499,6 +1591,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
         "records": tuple(r.name for r in recs),
         "n_record": len(recs),
         "n_lam": n_lam, "n_cap": n_cap, "npar": len(x), "nfev": nfev,
+        "n_anchor": len(aT), "anchors_twice": twice,
         "key": key, "cost": cost,
         "n_drift": n_drift, "drift_w": drift_w, "drift_t": dk,
         "n_group": n_group, "group_w": group_w,

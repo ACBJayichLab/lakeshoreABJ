@@ -914,6 +914,42 @@ it bisectable.
    campaign drift. **Report how much of the 2.5 K the trajectory alone
    recovers** — this separates "those holds were only ever anchors" from "the
    model needs a drift term".
+
+   **The trace row is in**, `trace-postcal-20260905`, 2026-09-05T17:35:06 →
+   09-09T18:06:03, 96.51 h, 173,727 rows, 114.2–121.0 K, one segment. Its two
+   arguable boundaries are in its manifest note: it begins one second after
+   `trace-ladder-20260905` because two `trace` rows may not overlap and the
+   ladder's bounds reproduce a region export exactly, and it ends where
+   `mask-20260909-180604` begins. The 11.5 h flat hold at 96.5 K before the
+   ladder is deliberately outside it — by T4 a trace over a flat hold *converts*
+   a measured anchor into trajectory the decimator would thin away.
+
+   **T5 is settled: `RECORD_SHARE = "equal"`** (Jeff, 2026-09-12). Every record
+   carries the same total whatever its length, which is not a claim that they
+   hold the same information — it is a refusal to let *duration* be the vote,
+   which is the specific failure T5 names. **Inert at one record by
+   construction** (the scale is `sqrt((N_eff/1)/len(r)) = 1`): the production
+   `w_sweep` is bit-identical and the cache key is unchanged.
+
+   **T4 is in, and it was 36 anchors, not the 17 this trap estimated.** The
+   whole 43 h sweep window is a record, so every dwell inside it was in the
+   objective twice — once sample by sample, once as an anchor:
+
+   | | anchors | cost | `rms_k` | `anchor_k` | τ(137) | `mass_g` | `nfev` |
+   |---|---|---|---|---|---|---|---|
+   | T4 off | 134 | 836.075 | 0.1295 | 1.5590 | 582.3 | 4.8357 | 111 |
+   | T4 on | **98** | 850.515 | **0.1295** | 1.8218 | 581.7 | 4.8342 | 103 |
+
+   **Q(T) moves by at most 0.070 K** anywhere from 5 to 192 K, and `rms_k` does
+   not move at all to four figures. `anchor_k` rises because it is now an rms
+   over a *different, harder* set — the 36 that left were the ones sitting
+   inside the trajectory, which of course fitted.
+
+   **The evidence that they carried nothing: the fit that dropped them predicts
+   them anyway.** Median miss well under 0.1 K over 5–192 K; the worst are
+   +0.306 K at 180.6 K, +0.220 at 130.8 and −0.320 at 5.1. So this is not a
+   dataset being thinned, it is the same evidence stopping being counted twice —
+   and `ANCHOR_SHARE` means what it says again.
 8. **Turn on the campaign drift**, retire `groups=`/`anchor_groups`, and set
    `ANCHOR_SIGMA_K` to `{fit_recorder: 1.0, fit_cd10: 1.0, postcal: 0.5}`
    (trap T3). Then the test that decides whether this worked:
