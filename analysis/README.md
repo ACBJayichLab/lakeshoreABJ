@@ -22,8 +22,8 @@ first; it carries the provenance, the segment boundaries and the caveats.
 |---|---|
 | `cd10_20260715_prepython.csv.gz` | 2026-07-15 → 08-20, 5 segments. The pre-Python chart recorder's half, via `xls_to_csv`. Its heater column is **reconstructed** from the `ANALOG` commands in the log's Notes, not read back. Coldplate remapped |
 | `cd10_20260824_recorder.csv.gz` | 2026-08-24 → 09-04 12:07, 4 segments. The Python recorder up to the calibration cutover, Coldplate remapped. **Contains the 43 h sweep** |
-| `cd10_20260904_recorder.csv.gz` | 2026-09-04 23:38 → 09-09, 2 segments. Post-cutover, the recorder's own numbers. **Contains the 09-05 ladder, the three long holds and the 09-09 transient** |
-| `segments.csv` | 239 named windows. **This is the dataset.** |
+| `cd10_20260904_recorder.csv.gz` | 2026-09-04 23:38 → **09-11**, 2 segments. Post-cutover, the recorder's own numbers. **Contains the 09-05 ladder, the three long holds, the 09-09 transient, and the 09-10 heater-circuit fault with the hold after the reseat** |
+| `segments.csv` | 319 named windows. **This is the dataset.** |
 | `sweep_decimated.csv.gz` | the sweep window adaptively thinned by `decimate.py` — 4,968 rows and 62 kB against 77,374 and 1.4 MB. Regenerable in twenty seconds, committed because it is what the expensive fit actually reads. It is the **one file left** in `reference/heater-calibration/`, which makes that directory a candidate for retirement — deliberately not done in passing |
 
 These are derived and versioned anyway, which reverses this repository's usual
@@ -83,9 +83,14 @@ row in the manifest. The two that matter:
   exactly the failure `steps.py`'s own docstring describes.
 - **The 09-09 hold at 64.015 %.** Nothing versioned reached past 16:16 that
   day, so it was 24.47 h at 118.535 K. It is now 26.30 h at 118.570 K, cut at
-  18:06:04 by the one mask — and there is a **new** anchor after the transient,
-  2.67 h at 118.091 K, which is the only measurement anywhere of two settled
-  steady states at one heater output three hours apart.
+  18:06:04 by `mask-20260909-180604`. The stretch *after* that transient was
+  briefly an anchor too — 2.67 h at 118.091 K, and this list used to call it
+  the only measurement anywhere of two settled steady states at one output
+  three hours apart. **It is not one any more.** Extending the archive past
+  09-09 showed the window runs 14.17 h, not 2.67, and is still recovering at
+  +47 mK/h when the 09-10 fault ends it; the grader now excludes it. The
+  matched-output pair that *does* survive is `pc-20260908-154814` against
+  `pc-20260910-144849`, either side of the fault — see that row's note.
 
 `T_c` also moves by **1.2 mK rms** (41 mK worst) because the region export had
 been rounded before the Coldplate remap — it wrote values like `6.4000` — where

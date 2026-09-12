@@ -13,7 +13,7 @@ named in the manifest, never a second copy on disk.
 |---|---|---|---|
 | `cd10_20260715_prepython.csv.gz` | 2026-07-15 20:56 -> 08-20 14:49 | 298,617 | 5 |
 | `cd10_20260824_recorder.csv.gz` | 2026-08-24 17:10 -> 09-04 12:07 | 461,849 | 4 |
-| `cd10_20260904_recorder.csv.gz` | 2026-09-04 23:38 -> 09-09 23:59 | 216,582 | 2 |
+| `cd10_20260904_recorder.csv.gz` | 2026-09-04 23:38 -> **09-11 23:59** | 302,982 | 2 |
 
 All three carry the same twelve columns: `Timestamp, t_s, segment, Sample,
 Coldplate, Magnet, RAD SHIELD, THE CHONKE, 1st Stage, 2nd Stage, u_pct, note`.
@@ -33,7 +33,7 @@ cd10_20260824_recorder    seg 0  08-24 17:10 -> 08-28 11:11    90.00 h  162,006
                           seg 2  08-28 13:08 -> 08-28 13:36     0.46 h      822
                           seg 3  08-28 14:16 -> 09-04 12:07   165.85 h  298,523
 cd10_20260904_recorder    seg 0  09-04 23:38 -> 09-09 20:12   116.57 h  209,820
-                          seg 1  09-09 20:14 -> 09-09 23:59     3.76 h    6,762
+                          seg 1  09-09 20:14 -> 09-11 23:59    51.76 h   93,162
 ```
 
 ## The two boundaries, and why they are where they are
@@ -83,7 +83,7 @@ No table spans the cutover, so no table mixes two calibrations.
 ```bash
 python -m lschart.tools.fit_table "data/coldplate-recal/cd10/cd10_*.csv"              -o reference/cooldown-10/cd10_20260715_prepython.csv
 python -m lschart.tools.fit_table "data/coldplate-recal/recorder/ltspm3-heater_*.csv" -o reference/cooldown-10/cd10_20260824_recorder.csv --rename "Cold Head=Coldplate,Shield=Magnet"
-python -m lschart.tools.fit_table "data/ltspm3-heater_2026-09-0[456789].csv"          -o reference/cooldown-10/cd10_20260904_recorder.csv
+python -m lschart.tools.fit_table "data/ltspm3-heater_2026-09-0[456789].csv" "data/ltspm3-heater_2026-09-1[01].csv" -o reference/cooldown-10/cd10_20260904_recorder.csv
 gzip -9 -n *.csv
 ```
 
@@ -106,9 +106,18 @@ which needs none because the name did not change.
 these are committed despite being derived -- the same reasoning as
 `analysis/README.md`'s, one level up.
 
+**Extending the third table is additive and was checked to be.** The 2026-09-12
+extension past 09-09 re-ran the original glob first and got the committed file
+back **byte for byte**, then added 86,400 rows -- exactly 48 h at 2 s -- with
+every old row an exact prefix of the new one. Do that check before trusting an
+extension: the manifest's boundaries are timestamps, so a table whose earlier
+rows shifted would move every window under them with nothing on screen to say
+so. **Whole days only**, so the table is reproducible: the recorder is still
+writing today's file.
+
 ## `segments.csv` -- the manifest
 
-315 named windows in the three tables: which stretch is a long settled hold,
+319 named windows in the three tables: which stretch is a long settled hold,
 which is a driven step worth a time constant, which is a trajectory for the ODE,
 and which is masked off and why.
 
@@ -135,10 +144,14 @@ python analysis/segments.py --tables     # the archive's segment structure
 
 **Masks are an input to the proposal, not an output of it.** A dwell that would
 cross a mask is cut at its edge and a dwell inside one is dropped, which is what
-lets `--propose` be a regression check and still respect a judgement. There is
-one mask so far -- the 2026-09-09 18:06 power transient -- and cutting there is
-what turns 26 h of hold into an anchor: read straight through the transient the
-same stretch fits a 24-day pole and grades as nothing.
+lets `--propose` be a regression check and still respect a judgement. There are
+two. The 2026-09-09 18:06 power transient, where cutting is what turns 26 h of
+hold into an anchor -- read straight through it the same stretch fits a 24-day
+pole and grades as nothing. And the 2026-09-10 11:30 heater-circuit fault,
+where the grader would have refused the window anyway; that mask is there to
+say **why** it is unusable rather than to leave the exclusion resting on a
+settling test, and to stop a future change to the finder from admitting a
+window in which `Q` is unknown.
 
 **The first thing the review caught, and what it was worth.** Jeff read the
 manifest and said good data was being cut, pointing at the programmed sweep.
@@ -156,6 +169,11 @@ What it comes to, against the five overlapping tables it replaces:
 | dwells found | 234 -> 312 |
 | usable anchors | 111 -> **149**, 147 inside 4-200 K, 45 with a believable tau |
 | reproduction | 103 of the 105 shared graded anchors agree to **3 nK** |
+
+Those two rows are the figures **as Phase 0 left them** and are kept as such.
+Option 4 has since taken the anchors to **136** (REFIT_PLAN.md 6.3) and the
+2026-09-12 extension past the 09-10 fault to 136 again -- one lost to the
+fault, one gained after the reseat -- with 38 believable taus.
 
 The differences are all boundary effects, all in the archive's favour, and each
 one has a `note` on its row. Two matter. The sweep's **opening** hold: the
