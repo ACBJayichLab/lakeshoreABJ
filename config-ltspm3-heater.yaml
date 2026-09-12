@@ -86,25 +86,32 @@
 # is for, and that is a different program.
 #
 # ---------------------------------------------------------------------------
-# THE CRYOSTAT, read from this recorder's own CSV at 2026-08-31 13:05
+# THE CRYOSTAT, read from this recorder's own CSV at 2026-09-12 13:40
 # ---------------------------------------------------------------------------
 #
-# A DATED BLOCK IS NOT THE PRESENT STATE.  The earlier version of this said
-# 4.742 K and 0.0%, measured 2026-08-24 16:10, and was read four days later as
-# though it still held -- by which time this very file had warmed the sample to
-# 149 K.  Read `data/status.json` or the tail of the CSV first.
+# A DATED BLOCK IS NOT THE PRESENT STATE, and this one has now been wrong
+# twice.  It first said 4.742 K and 0.0%, measured 2026-08-24 16:10, and was
+# read four days later as though it still held -- by which time this very file
+# had warmed the sample to 149 K.  It then said 148.980 K at 66.598% and stood
+# for twelve days while the sample was walked down to 118 K and the heater
+# circuit faulted and was reseated under it.  Read `data/status.json` or the
+# tail of the CSV first.  Hourly means over the last hour:
 #
-#   218  Sample    148.980 K     336  A RAD SHIELD   39.881 K
-#        Coldplate   8.304 K          B THE CHONKE  289.150 K  <- loop 2
-#        Magnet      6.913 K          C 1st Stage    28.534 K
-#                                     D 2nd Stage     4.031 K
+#   218  Sample    118.298 K     336  A RAD SHIELD   40.403 K
+#        Coldplate   6.636 K          B THE CHONKE  289.999 K  <- loop 2
+#        Magnet      6.783 K          C 1st Stage    28.748 K
+#                                     D 2nd Stage     3.959 K
 #
-#   ^ COLDPLATE HERE IS PRE-CALIBRATION: the box was on the wrong curve, and
-#     8.304 K was really 6.762 K.  See the note below the block.
+#   ^ Coldplate is now POST-calibration and is the box's own number; see the
+#     note below the block for what that changed.
 #
-#   218 analog out 1 (SAMPLE HEATER)  66.598%  <- what this file can move
+#   218 analog out 1 (SAMPLE HEATER)  64.010%  <- what this file can move
 #   336 loop 1  setpoint 28.5 K,  heater 1 at 0.0%, range 0
-#   336 loop 2  setpoint 289.2 K, heater 2 at 100.0%, RAILED
+#   336 loop 2  setpoint 290.0 K, heater 2 at 90.8%, range 3
+#
+#   The output has been at 64.010% since 2026-09-10 14:49, when a connector on
+#   the sample heater was reseated after the fault of that morning.  It read
+#   64.0154% before.  RESEATED IS NOT REPAIRED -- see docs/ltspm3/cryostat.md.
 
 # TWO CHANGES AT THE BOX, 2026-09-04 12:07
 # ---------------------------------------------------------------------------

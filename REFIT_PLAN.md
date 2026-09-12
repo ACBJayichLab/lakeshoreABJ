@@ -1179,7 +1179,14 @@ reading a single fault's size as data. This one does not.
 
 ## 9. Out of scope
 
-`ltspm3/control/` — the software PID is complete and tested and is left alone.
-The viewer, the MATLAB interface and Windows deployment remain the standing
-priority in `CLAUDE.md`; this is `analysis/`, which ships nothing but one
-generated table. Nothing here arms a heater or moves an output.
+`ltspm3/control/` — **not because it is finished.** It is not: it has never
+closed a loop on the cryostat, and `CLAUDE.md`'s priorities opened it to change
+on 2026-09-11, under the eight rules of
+[safety](docs/ltspm3/safety.md), one rule-scoped commit at a time. It is out of
+scope *of this plan*, which is `analysis/` and ships nothing but one generated
+table. Rebuilding the loop on the model this plan produces is
+[PID_PLAN.md](PID_PLAN.md) phase 3. Nothing here arms a heater or moves an
+output.
+
+This section used to read "the software PID is complete and tested and is left
+alone", and it was quoted as evidence that it was done.

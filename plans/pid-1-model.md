@@ -38,7 +38,7 @@ never seen them, or nothing proceeds.** Settle first, before regenerating:
 | `missing_power_w(T_s, dT_dt, T_c, u, t)` | `model/fitted_response.py` | < 1 mW at every settled anchor the fit was given; −4.9 ± 2 mW across the 09-10 window |
 | `sigma_q_w(T_s, u, t, dT_dt=0)` | same | monotone in `t` after `DRIFT_T0`; 3σ at 118 K, day 0, settled, between 4 and 8 mW; at 5 K/min it grows by `SIGMA_C_FRAC × C × 0.083 K/s` |
 | `analysis/pid_tuning.py` on `production_inputs()`; delay from the filter config; rows with the fit's cache key in `note` | `analysis/` | prints rows every 10 K over the table's range |
-| `analysis/allan.py` | `analysis/` | reproduces the 2026-09-10/11 open-loop hold: 8.3 / 7.6 / 4.3 / 6.3 mK at 4 / 60 / 600 / 3600 s |
+| ~~`analysis/allan.py`~~ **DONE 2026-09-12** | `analysis/` | **The gate as written could not be met, because its figures were a prediction and not a measurement.** Replaced by the measured ladder on `pc-20260908-154814`, the quietest open-loop hold: **7.79 / 7.95 / 9.52 / 12.72 mK at 4 / 60 / 600 / 3600 s**, floor 7.38 mK at 130 s. The estimator is validated exactly against white noise (1/√τ), a linear drift (τ/√2) and a sine (peak at P/2). Averaging stops helping at two minutes; the old figures had it still improving at ten |
 
 ## 1.3 Extend to 300 K
 

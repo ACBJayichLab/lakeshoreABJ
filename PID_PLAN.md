@@ -32,7 +32,7 @@ until those are corrected.
 | | requirement | today | resolution |
 |---|---|---|---|
 | range | **4–300 K** | measured 4.7–180.6 K; ceiling 70 % ≈ 192 K | ladder upward to 300 K, ceiling raised one measured rung at a time to 100 % (1.63 W; heater rated 1.68 W, wiring fine) |
-| hold | slow wander **below the 10 s noise floor** | open loop at 118 K: Allan 8 mK @ 10 s, 6.3 mK @ 1 h and rising | `σ_y(τ) ≤ σ_y(10 s)` for all `τ` in [10 s, run/4] |
+| hold | slow wander **below the 10 s noise floor** | open loop at 118 K: Allan **8.7 mK @ 10 s, floor 7.4 mK @ 130 s, 12.7 mK @ 1 h, 24.5 mK @ 6.6 h** — measured, `analysis/allan.py`, and **2.9× outside the criterion** | `σ_y(τ) ≤ σ_y(10 s)` for all `τ` in [10 s, run/4] |
 | sweep | **5 K/min** | default 0.5 | one rate, converted to heater %/min through the model's gain; ramp lag closed by velocity feedforward |
 | rate limits | **fewer** | eight | **two**: `max_rate_k_per_min: 5`, `min_rate_pct_per_min: 0.20` (floor) |
 | ramp-down | at the same **5 K/min** | 1 / 2 %/min with a knee | open loop through the model's inverse curve, so it needs no sensor |

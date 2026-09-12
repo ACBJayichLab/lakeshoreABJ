@@ -240,7 +240,7 @@ control:
   # closed-loop response time, so it is the only number to choose.
   #
   # RUN A STEP TEST AND REPLACE THE SCHEDULE:
-  #     python -m lschart.tools.steptest --points 63.076,65.0,67.0
+  #     python -m ltspm3.tools.steptest --points 63.076,65.0,67.0
   # Only the 137 K row is currently measured.
   tuning:
     enabled: true

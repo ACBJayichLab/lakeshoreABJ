@@ -882,14 +882,20 @@ no prediction, keep `--min-dwell` at 120 s or above** — that is the value the
 audit measured as safe for the 145 K case, and 60 s is the value at which the
 proxy is inert.
 
-**The end-rate bar is the wrong test for a designed dwell.** Four of the best
-warm points — 56.74, 63.15, 69.93 and **114.28 K** — were thrown away for
-reading 0.51–0.71 K/h against the 0.50 K/h bar, at reach 4.7–5.7 and settled to
-within 0.04 K of their own T_inf. `MAX_END_RATE_K_PER_H` exists to catch
-relaxations cut off mid-flight in logs nobody planned; on a rung whose step time
-is known and whose reach is over 4, it rejects points good to forty millikelvin.
-Whether to loosen `grade()` for these is **open** — it changes what the pipeline
-keeps from the historical logs too, so it is Jeff's call and not a tidy-up.
+**The end-rate bar was the wrong test for a designed dwell — and the question
+is now MOOT.** Four of the best warm points — 56.74, 63.15, 69.93 and
+**114.28 K** — were being thrown away for reading 0.51–0.71 K/h against the
+0.50 K/h bar, at reach 4.7–5.7 and settled to within 0.04 K of their own T_inf.
+This section used to leave loosening `grade()` open as Jeff's call.
+
+It did not need one. REFIT_PLAN.md §6.3's option 4 put the
+no-believable-pole guard on the **plant's** τ, measured from the archive's own
+τ anchors, rather than on a wall clock — and all four now grade on their own
+merits: `pc-20260905-135459` (56.743 K) `steady`, `pc-20260905-140729`
+(63.148 K) `tau`, `pc-20260905-142405` (69.926 K) `tau`, `pc-20260905-165509`
+(114.396 K) `tau`. Nothing was loosened. The bar that was rejecting them was
+never the end rate; it was a clock that did not know what τ was at that
+temperature.
 
 An earlier attempt the same day stopped at rung 13 when the heater was commanded
 to 0% from elsewhere; the sweep noticed the readback disagreeing and stopped
@@ -930,13 +936,33 @@ hysteretic switch between them does not chatter.
 
 ### C6 — the stability figure
 
-The number you actually quote. Hold for ≥6 h at the operating point and compute
-the Allan deviation. The logs predict 6.1 mK @ 4 s, 4.1 mK @ 60 s, 2.5 mK @
-600 s — about 2x worse than 1/√N, because the noise is correlated (lag-1 +0.51).
+The number you actually quote. Hold for ≥6 h at the operating point and run
+`python analysis/allan.py --csv <the run>`.
 
-If the real figure is much better than that, the loop is doing more than the
-measurement can justify and you should suspect the measurement. If much worse,
-go back to C5.
+**Compare against the MEASURED open-loop bar, not against a prediction.** This
+section used to say "the logs predict 6.1 mK @ 4 s, 4.1 mK @ 60 s, 2.5 mK @
+600 s — about 2x worse than 1/√N, because the noise is correlated (lag-1
++0.51)". That model has no drift term in it, so it goes on promising
+improvement through the region where this cryostat has stopped improving. Open
+loop at 118 K, 26.3 h at 64.0155 % (`pc-20260908-154814`):
+
+| τ | 4 s | 10 s | 60 s | 130 s | 600 s | 1 h | 6.6 h |
+|---|---|---|---|---|---|---|---|
+| σ_y, mK | 7.79 | 8.73 | 7.95 | **7.38** | 9.52 | 12.72 | 24.49 |
+| edf | 23666 | 9466 | 1577 | 727 | 157 | 25 | 3 |
+
+**Averaging stops helping at about two minutes**, and the prediction was
+optimistic by nearly 4× at 600 s. The floor is 7.38 mK at τ = 130 s and
+everything past it is drift.
+
+So PID_PLAN.md §1's criterion — σ_y(τ) ≤ σ_y(10 s) out to L/4 — is **not met
+open loop, by 2.9×**, and flattening that rise from 130 s outward is precisely
+what C6 is measuring. A closed-loop run that merely matches the table above has
+not done anything yet.
+
+If the real figure is much better than the table, the loop is doing more than
+the measurement can justify and you should suspect the measurement. If much
+worse, go back to C5.
 
 ### C7 — feedforward regime validity
 
