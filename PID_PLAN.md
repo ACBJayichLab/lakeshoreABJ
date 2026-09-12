@@ -1,7 +1,7 @@
 # Software PID — the plan
 
-**Status: PHASE 0 NOT STARTED. PHASE 1 UNDER WAY — §1.1's two "settle first"
-items are done and REFIT_PLAN.md Phase B has reached step 8.** `ltspm3/model/`
+**Status: PHASE 0 DONE bar one live proof. PHASE 1 UNDER WAY — §1.1's two
+"settle first" items are done and REFIT_PLAN.md Phase B has reached step 8.** `ltspm3/model/`
 exists; nothing has regenerated `_fitted_table.py`, which still carries its
 `SUPERSEDED_NOTE`. Written 2026-09-11 from Jeff's requirements (§1); revised
 the same day through four rounds of questions. Update this line as phases land.
@@ -15,7 +15,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 
 | phase | document | one-line goal | exit gate |
 |---|---|---|---|
-| **0** | §5 here | the record is straight | `curate --propose` clean; `send note` lands in the CSV; four stale documents corrected |
+| **0** | §5 here | the record is straight | **done bar the live `send note`** — `curate --propose` clean, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | REFIT §1 green; leave-one-epoch-out < 0.5 K; table to 300 K; `missing_power_w` < 1 mW at every anchor |
 | **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | replay table all green; < 1 warning/week on a settled hold; 72 h live |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts | bench green at 6 temperatures; 8 rate fields → 2; hold jitter ≤ 0.02 %/min |
@@ -145,19 +145,45 @@ archive export, not before.
 
 ## 5. Phase 0 — the record
 
-1. **Next archive export** past 09-10 (the third table ends 2026-09-09
-   23:59:59): one `mask` row 11:33 → the repair, with a paragraph; the
-   post-repair hold at 64.010 % admitted as an anchor. The window's `Q` is
-   wrong, not noisy, and it is the monitor's test case.
-2. **The repair as a manifest row**, as `era` records the recalibration.
-3. **`note` command kind** → the CSV's `Notes` column; MATLAB `note()`.
-4. **Correct**: `config.yaml`'s `lschart.tools.steptest` (→ `ltspm3`);
-   the heater config's dated block; commissioning's end-rate decision (moot)
-   and 96 K Allan figures; "leave `control/` alone" in `running.md` and
-   REFIT_PLAN §9.
+**Done 2026-09-12**, except the one step that needs the recorder restarted.
+Two of the four resolved differently from how this section imagined them.
 
-**Exit gate:** `curate.py --propose` clean; `send note "x"` in the CSV; the
-four documents corrected.
+1. ~~**Next archive export** past 09-10.~~ **DONE.** `cd10_20260904_recorder`
+   now runs to 2026-09-11 23:59:59, +86,400 rows, and the extension was checked
+   **additive** first — re-running the original glob reproduced the committed
+   file byte for byte. `mask-20260910-113000` carries the paragraph, and the
+   post-reseat hold **`pc-20260910-144849`** is in as an anchor: 33.19 h at
+   64.010 % on 118.33 K, graded `tau`. Still 136 usable anchors, and 38
+   believable τ where there were 37; the production fit moves 0.4 %. The
+   window's `Q` is wrong, not noisy, and it is still the monitor's test case.
+2. ~~**The repair as a manifest row**, as `era` records the recalibration.~~
+   **DONE, but not as an `era`.** `segments.ERAS` is keyed by archive *file*,
+   one era per table, and a reseat is mid-file; forcing a fourth era would mean
+   splitting the table for an event that moves no calibration. It is in the
+   mask's note, which is the human's channel. And it was a **reseat, not a
+   repair** — Jeff, 2026-09-12: the repair is changing the op-amp driver to a
+   robust, correct differential design. So `DELTA_P_FRAC` stays a systematic on
+   the whole campaign rather than a bounded episode, and there are now two
+   independent signatures of the difference: a **0.30 K steady-state deficit at
+   matched output**, and **twice the wander over 300–1200 s** with the coldplate
+   unchanged.
+3. ~~**`note` command kind.**~~ **DONE** — in `lschart`, not `ltspm3`, because a
+   person writing down what they did is not specific to one cryostat. CLI,
+   MATLAB `note()`, ten tests. It lands on the **next** row and that is pinned
+   by a test; no power gate, but `accept_commands` and the source policy apply,
+   and it is deliberately **not** a panic kind.
+4. ~~**Correct** four documents.~~ **DONE**, and the fourth was not a stale
+   sentence but a missing measurement: commissioning's stability figures were a
+   1/√N *prediction* with no drift term in it. `analysis/allan.py` measures it
+   instead — **averaging stops helping at about two minutes**, floor 7.38 mK at
+   τ = 130 s, rising to 24.5 mK at 6.6 h, and the prediction was optimistic by
+   nearly 4× at 600 s.
+
+**Exit gate:** `curate.py --propose` clean ✔; the four documents corrected ✔;
+`send note "x"` in the CSV — **not yet**. The recorder on the cryostat has owned
+the GPIB board continuously since 2026-09-08 and is running the code as it was
+before the command existed. The gate is met at the next restart, which is a
+deliberate act and not a test step.
 
 ## 6. Phase 5 — the viewer
 
