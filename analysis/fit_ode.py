@@ -145,6 +145,30 @@ ANCHOR_FLOOR_K = 0.3
 #: the typical band; it is defined here because this is where it is first used.
 DELTA_P_FRAC = 0.007
 
+#: How far below the lowest Lambda knot the objective may evaluate Lambda, as a
+#: fraction of that knot's temperature.
+#:
+#: The residual is ``Lambda(T_s) - Lambda(T_c)`` everywhere -- the anchors, the
+#: integrator's RHS, the exported Q -- so the curve is evaluated at the
+#: COLDPLATE as well as at the sample, and :func:`knot_range` has only ever
+#: looked at the sample.  Today the coldest ``T_c`` is 4.5299 K (8 anchors and
+#: 64 of the sweep's samples are under the knot) against a bottom knot at
+#: 4.6536, so the bottom **2.7 % in T** is a log-log linear continuation of the
+#: curve rather than a piece of it.
+#:
+#: That is deliberate, and :func:`knot_range` has the measurement: putting a
+#: knot down there is measurably worse and nothing identifies the region either
+#: way.  It is also not a free parameter -- the continuation's slope is PCHIP's
+#: end slope, fixed by the two lowest knot values, which the roughness prior
+#: does reach.  A bounded extrapolation of a penalised curve is a different
+#: thing from an unconstrained one.
+#:
+#: What it is NOT is safe to leave unwatched.  A later record with a colder
+#: coldplate -- a better cold head, a changed radiation shield -- widens this
+#: silently and at some width the continuation stops meaning anything.  5 % is
+#: room for roughly double today's gap and no more.
+KNOT_EXTRAP_TOL = 0.05
+
 #: Measured time constants (analysis/steps.py) enter as residuals in log tau.
 #: They are what turns C from a fit parameter into a measurement: with Lambda
 #: known, C = tau * dLambda/dT.  The margin is generous because a relaxation
@@ -677,18 +701,58 @@ def knot_range(records, anchors=None, taus=None):
     Over every record, because with more than one trajectory the knots have to
     span all of them or the second record is fitted on an extrapolation.
 
-    **``anchors`` and ``taus`` are accepted and are OFF by default, and that is
-    a deliberate stop.** REFIT_PLAN.md step 2 lists covering them here as part
-    of the inert plumbing, and it is not inert any more: the coldest anchor is
-    ``rec-20260824-171059`` at **4.7516 K**, below the sweep's own 4.8985 K, so
-    including it moves ``T_lo`` from 4.6536 to 4.5140 K and every geomspaced
-    knot with it.  That anchor did not exist when the plan was written -- it is
-    the one section 6.3's plant clock RECOVERED -- so the assumption that the
-    records always bracket the anchors was true then and is false now.
+    **``anchors`` and ``taus`` are accepted and are OFF by default.  That was a
+    deferral and is now a decision, and the measurement is below.**  REFIT_PLAN.md
+    step 2 listed covering them here as inert plumbing and it is not inert: the
+    coldest anchor is ``rec-20260824-171059`` at **4.7516 K**, below the sweep's
+    own 4.8985 K, so including it moves ``T_lo`` from 4.6536 to 4.5140 K and
+    every geomspaced knot with it.  The plan deferred the switch to step 6,
+    where the seeding moved anyway; PID_PLAN.md phase 1 section 1.1 is where it
+    got measured.
 
-    Turning it on is a real change to the curve at the cold end and belongs
-    with step 6, where the seeding moves anyway and the effect can be measured
-    against something rather than smuggled in beside a refactor.
+    **Nothing identifies the curve below about 7 K, so more freedom there is
+    worse, not better.**  Four placements of the bottom knot, production preset,
+    the conductance they give as a ratio of largest to smallest:
+
+    ====== ====== ====== ====== ====== ====== ====== ======
+    T (K)   4.55   4.75   5.00   5.50   6.00   7.00  10.00
+    spread  10.0x   5.4x   2.4x   1.6x  1.19x  1.02x  1.03x
+    ====== ====== ====== ====== ====== ====== ====== ======
+
+    Above 7 K the placement does not matter; below 6 K it decides the answer.
+    Three things are meant to determine that region and none of them does.  The
+    140 sweep samples under 10 K are 2.8 % of the grid and **0.3 % of the
+    weight**, the roughness prior is evaluated at knot midpoints and reaches no
+    lower than 5.14 K, and the anchors do not reach either: at 4.75 K one kelvin
+    of bar is 1.8 mW, and the four zero-output anchors -- the only ones that
+    could speak about the bottom -- are missed by 0.2 to 1.2 mW, which is inside
+    it.  **Dropping all four changes the fitted curve in the sixth significant
+    figure** (cost 836.075 -> 837.245, every conductance ratio 1.00x, and the
+    refit predicts them exactly as badly as the fit that saw them).
+
+    So the cold end is whatever basin the optimiser lands in, and handing it
+    another parameter is how you find that out the hard way:
+
+    ================================ ======== ======= ==========
+    bottom knot, upper 19 unmoved      cost     rms_k   ``nfev``
+    ================================ ======== ======= ==========
+    4.6536 K, as shipped               836.1  0.1295         111
+    plus one knot at 4.5299 K         1526.6  0.1623         110
+    moved to 4.5299 K                  852.5  0.1308         220
+    ================================ ======== ======= ==========
+
+    One EXTRA knot below all the data costs **83 % of the objective** and
+    deforms 5-7 K wholesale (Q(6 K) 18.4 -> 10.9 mW).  Moving the bottom knot
+    instead costs 2 % and twice the iterations to reach a curve that differs
+    nowhere above 6 K.  Neither buys anything: the steady state is determined to
+    better than 0.05 K above 6 K under every placement, tau below 7 K is not
+    determined under any of them, and PID_PLAN.md section 3 says tau below 30 K
+    does not enter the loop while the monitor has no opinion below 28 % output,
+    which is about 11 K.  **The switch stays off.**
+
+    What DID have to change is that the objective evaluates Lambda at the
+    coldplate as well as at the sample and this function has never looked at
+    ``T_c``.  See :data:`KNOT_EXTRAP_TOL`.
     """
     lo = min(float(r.T.min()) for r in records)
     hi = max(float(r.T.max()) for r in records)
@@ -1193,6 +1257,22 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     lam, cap, pl0, pc0 = build(n_lam, n_cap, *knot_range(recs),
                                anchors=anc if seed_measured else None,
                                taus=(tauT, tauV))
+    # Lambda is evaluated at the COLDPLATE too -- the residual is
+    # Lambda(T_s) - Lambda(T_c) everywhere -- and knot_range looks only at the
+    # sample.  So the bottom of the curve is a continuation rather than a piece
+    # of it, by a margin nothing here chose.  Measured and accepted at 2.7 %;
+    # checked so that a colder coldplate in some later record is loud.
+    coldest = min([float(np.min(r.Tc)) for r in recs]
+                  + ([float(np.min(aTc))] if len(aTc) else []))
+    if coldest < (1.0 - KNOT_EXTRAP_TOL) * lam.knots[0]:
+        raise SystemExit(
+            f"fit_ode: Lambda's lowest knot is at {lam.knots[0]:.4f} K and the "
+            f"objective evaluates Lambda down to {coldest:.4f} K -- the "
+            f"coldplate, which knot_range does not see.  That is "
+            f"{100 * (1 - coldest / lam.knots[0]):.1f} % below the knot, past "
+            f"KNOT_EXTRAP_TOL = {100 * KNOT_EXTRAP_TOL:.0f} %.  Below the "
+            f"bottom knot the curve is a log-log continuation and nothing "
+            f"measures it; read knot_range's docstring before widening this.")
     n = len(pl0)
     # Normalised in Record.__post_init__ now, and to the same thing: a uniform
     # grid is ones, whose mean square is already 1.

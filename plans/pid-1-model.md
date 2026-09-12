@@ -10,7 +10,17 @@ controller and the monitor read one source.
 **leave-one-epoch-out predicts the three post-recal holds inside 0.5 K having
 never seen them, or nothing proceeds.** Settle first, before regenerating:
 
-- the below-10 K basin (`T_lo` sits where there is no data);
+- ~~the below-10 K basin (`T_lo` sits where there is no data).~~ **DONE
+  2026-09-12**, and the answer is that the knots stay. Below 7 K nothing
+  identifies the conductance — the sweep's 140 cold samples are 0.3 % of the
+  weight, the roughness prior reaches no lower than 5.14 K, and the four
+  zero-output anchors are missed by less than their own bar, so dropping all
+  four moves the curve in the sixth figure. Four bottom-knot placements spread
+  dΛ/dT by 10× at 4.55 K and 1.02× at 7 K; one *extra* knot below the data
+  costs 83 % of the objective. What the question did turn up is that Λ is
+  evaluated at the **coldplate**, 2.7 % below the bottom knot, which
+  `knot_range` never looked at — now bounded by `KNOT_EXTRAP_TOL`. Numbers in
+  [REFIT_PLAN.md](../REFIT_PLAN.md) 6c.
 - ~~`δP` as a power-side error bar on every anchor (REFIT T10).~~ **DONE
   2026-09-12**, `DELTA_P_FRAC = 0.007` in quadrature with the kelvin bar, in
   watts. It binds over 40–120 K — where it is 1.7–2.6× the kelvin bar — and

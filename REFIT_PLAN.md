@@ -1,8 +1,14 @@
 # Thermal model refit — plan
 
-**Status: PHASE A DONE with option 4; PHASE B steps 1-3, 5 and 6 DONE.**
-Next is step 7. Steps 1-3 were refactors and are proved inert; step 6 is the
-first thing that moves a curve, and it made the production fit CONVERGE.
+**Status: PHASE A DONE with option 4; PHASE B steps 1-3, 5, 6, 6b and 6c DONE,
+and trap T10 with them.** Next is step 7. Steps 1-3 were refactors and are
+proved inert; step 6 is the first thing that moves a curve, and it made the
+production fit CONVERGE. **6c and T10 are PID_PLAN.md phase 1 §1.1's two
+"settle first" items and both are answered** — the anchors now carry a
+power-side error bar (T10, and the trajectory fits 13.6 % better for it), and
+the cold basin stays as it is because nothing below 7 K identifies it (6c).
+The production fit is `cost` 836.07, `rms_k` 0.1295, `anchor_k` 1.5590,
+τ(137 K) 582.3 s in 111 evaluations.
 **Nothing has regenerated the shipped table yet** —
 `ltspm3/model/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
@@ -30,6 +36,8 @@ Update this Status line as phases land.
 | **done** | Phase B **steps 1, 2, 3** — the refactors, proved inert two ways: the production 12/4 path bit-identical on a forced refit, and the full-grid 9/4, 3/4 and tier2 paths bit-identical against the pre-refactor `fit_ode.py` taken from git. §7 |
 | **done** | Phase B **step 5** — `analysis/drift.py`. The drift is a **power**: 0.281 mW/day, three bands agreeing to ±25 % where K/day spans 5.6×. Coverage says **affine**. §7 step 5 |
 | **done** | Phase B **step 6** — Λ and C seeded from the anchors, `fit_ode.py --seed-only`. The model-free C(137 K) = 4.96 g against the fit's 4.79. And **6b**: the production fit did not converge from the old seed in 1000 evaluations and converges from this one in 562, so `MAX_NFEV` is 1500 — and the two seeds converge to DIFFERENT optima, the measured one 14.5 % better on the objective. §7 steps 6, 6b |
+| **done** | trap **T10** — the anchors' error bar gained its power side, `DELTA_P_FRAC = 0.007`, in quadrature with the kelvin bar *in watts*. It binds over 40–120 K and nowhere below 20 K; `rms_k` 0.1499 → **0.1295** for 0.7 % on `anchor_k`. `FIT_CACHE_VERSION` 6. §8 T10 |
+| **done** | Phase B **6c** — the below-10 K basin. **The knots stay.** Nothing identifies dΛ/dT below 7 K: four placements spread it 10× at 4.55 K and 1.02× at 7 K, one *extra* knot down there costs 83 % of the objective, and dropping all four zero-output anchors moves the curve in the sixth figure. Λ *is* evaluated at the coldplate, 2.7 % below the bottom knot — now bounded by `KNOT_EXTRAP_TOL`. §7 step 6c |
 | **next** | Phase B **step 7** (the post-recal trace, T4, T5), then 8–10. Read traps T1–T10 and §6.1's last paragraph first |
 | **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
 | **then** | rejoinder step 5 - finding 5's leftovers |
@@ -829,11 +837,77 @@ it bisectable.
    established that the winner is right below 10 K rather than merely lower.
    `T_lo = 4.6536 K` is below the coldest sample AND the coldest anchor, so the
    lowest Λ knot sits where there is no data — settle that before regenerating.
+   **Settled in 6c**, and the two readings of the 928 % turn out to be the same
+   reading: below 7 K nothing identifies the conductance, so a seed, a knot or
+   an optimiser's basin all decide it equally. The knots stay.
 
    Note the better optimum has a **higher** `anchor_k` with a lower `rms_k`. That
    is REFIT_PLAN §1's tension — the model as posed cannot satisfy the trajectory
    and the holds at once — appearing in the shape of the basin rather than in a
    weight study.
+
+6c. ~~**The below-10 K basin.**~~ **SETTLED 2026-09-12** — PID_PLAN.md phase 1
+   §1.1's second prerequisite, and the thing 6b said to settle before
+   regenerating. **The knots stay where they are.** Below about 7 K the
+   conductance is not identified by anything, and every way of giving the
+   region more attention makes the fit worse.
+
+   Four placements of the bottom knot, production preset. The conductance they
+   give, as a ratio of largest to smallest:
+
+   | T (K) | 4.55 | 4.75 | 5.00 | 5.50 | 6.00 | 7.00 | 10.0 | 25.0 |
+   |---|---|---|---|---|---|---|---|---|
+   | spread | **10.0×** | 5.4× | 2.4× | 1.6× | 1.19× | 1.02× | 1.03× | 1.00× |
+
+   **Above 7 K the placement does not matter; below 6 K it decides the
+   answer.** Three things are supposed to determine that region and not one of
+   them does:
+
+   - the **sweep** has 140 samples under 10 K, 2.8 % of the grid and **0.3 %
+     of the weight** after decimation;
+   - the **roughness prior** is evaluated at knot midpoints and reaches no
+     lower than 5.14 K — it does not act below the bottom knot at all;
+   - the **anchors** cannot reach: at 4.75 K one kelvin of bar is 1.8 mW, and
+     the four zero-output anchors are missed by 0.2–1.2 mW, *inside* it.
+     Dropping all four moves the fitted curve in the sixth significant figure
+     (cost 836.075 → 837.245, every conductance ratio 1.00×) and the refit
+     misses them by exactly as much as the fit that saw them.
+
+   **So the cold end is whichever basin the optimiser lands in**, and handing
+   it another parameter is how you find that out. These three share their upper
+   nineteen knots exactly, which the four-way comparison above does not — moving
+   `T_lo` re-places every geomspaced knot, and 11 of that comparison's 36 cost
+   units are the 10–20 K knots landing elsewhere, not the cold end:
+
+   | bottom knot, upper 19 unmoved | cost | `rms_k` | `nfev` |
+   |---|---|---|---|
+   | 4.6536 K, as shipped | **836.1** | 0.1295 | 111 |
+   | plus one knot at 4.5299 K | 1526.6 | 0.1623 | 110 |
+   | moved to 4.5299 K | 852.5 | 0.1308 | 220 |
+
+   One **extra** knot below all the data costs **83 % of the objective** and
+   deforms 5–7 K wholesale — Q(6 K) 18.4 → 10.9 mW — on a parameter nothing
+   determines. Moving the bottom knot instead costs 2 % and twice the
+   iterations, for a curve that differs nowhere above 6 K.
+
+   **And nothing downstream wants either.** The steady state is good to better
+   than 0.05 K above 6 K under every placement and to about 0.3 K at 5 K; τ
+   below 7 K is undetermined under all of them, and PID_PLAN.md §3 says τ below
+   30 K never enters the loop while the monitor has no opinion below 28 %
+   output — about 11 K, well above the whole argument. `knot_range`'s
+   `anchors=`/`taus=` switch, deferred by step 2, **stays off**, now for a
+   measured reason rather than a scheduling one.
+
+   **What did change is what the question turned up.** Λ is evaluated at the
+   **coldplate** as well as at the sample — the residual is Λ(T_s) − Λ(T_c)
+   everywhere — and `knot_range` has only ever looked at the sample. The
+   coldest T_c is 4.5299 K against a bottom knot at 4.6536: 8 anchors and 64
+   sweep samples sit under the knot, and the bottom **2.7 % in T** is a log-log
+   continuation rather than a piece of the curve. It is a *bounded* one — the
+   continuation's slope is PCHIP's end slope, fixed by the two lowest knot
+   values, which the prior does reach — so it is kept, and `KNOT_EXTRAP_TOL`
+   now checks it. A later record with a colder coldplate would have widened it
+   with nothing on screen to say so.
 
 7. **Add the post-recal trace**, drop anchors falling inside a fitted record's
    span (trap T4), set `RECORD_SHARE` explicitly (trap T5). Still `groups=`, no
