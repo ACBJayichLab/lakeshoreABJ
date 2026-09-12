@@ -1,8 +1,10 @@
 # Software PID — the plan
 
-**Status: PHASE 0 NOT STARTED.** `ltspm3/model/` exists. Written 2026-09-11
-from Jeff's requirements (§1); revised the same day through four rounds of
-questions. Update this line as phases land.
+**Status: PHASE 0 NOT STARTED. PHASE 1 UNDER WAY — §1.1's two "settle first"
+items are done and REFIT_PLAN.md Phase B has reached step 8.** `ltspm3/model/`
+exists; nothing has regenerated `_fitted_table.py`, which still carries its
+`SUPERSEDED_NOTE`. Written 2026-09-11 from Jeff's requirements (§1); revised
+the same day through four rounds of questions. Update this line as phases land.
 
 **Goal.** A software PID that holds and sweeps the LTSPM3 sample from 4 to
 300 K, fails gracefully, and judges from the thermal characterisation whether
