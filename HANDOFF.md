@@ -44,8 +44,27 @@ Nine commits, `6ff126b..` on `worktree-bridge-cse_01BPYYTRMXQabkWHg5hU3gTo`.
 | `32a1583` | **phase 0 item 4** — four documents, and `analysis/allan.py` |
 | `d6dbe5d` | **phase 0 item 3** — the `note` command |
 
-**PID_PLAN phase 0 is done bar one live proof**, and **phase 1 §1.1's two
-"settle first" items are done**. REFIT_PLAN Phase B is at **step 8**.
+**PID_PLAN phase 0 is DONE**, gate and all, and **phase 1 §1.1's two "settle
+first" items are done**. REFIT_PLAN Phase B is at **step 8**.
+
+**The gate was proved on the cryostat.** After Jeff restarted the recorder, a
+note landed on row 30210 of `data/ltspm3-heater_2026-09-12.csv` at 16:47:12 —
+sample 118.33 K, output 64.0100 %, the row before it blank:
+
+```
+[lschart-cli] connector reseated 2026-09-10 14:39-14:41; reseat not repair,
+op-amp driver still to change
+```
+
+**The first note in 30,214 rows.** `fit_table.py` carries the column into the
+archive's `note`, so it is in the dataset at the next export.
+
+> **A push is not a deploy here.** The *first* restart changed nothing: the main
+> checkout had never pulled and `origin/main` was six commits ahead of the tree
+> the recorder actually runs from, so there was no handler on disk to load. The
+> refusal said so plainly — `unknown command 'note'` with the old eleven-command
+> list, which is the spool earning its keep. **Pull the main checkout, then
+> restart.**
 
 ## The five things worth a reviewer's attention
 
@@ -93,12 +112,7 @@ improvement through the region where this cryostat has stopped improving.
 PID_PLAN §1's criterion is **not met open loop, by 2.9×** — which is the point
 of it.
 
-## Two things deliberately not done
-
-**`send note "x"` has not been proved on the live recorder.** That is phase 0's
-last exit-gate item. The recorder has owned the GPIB board continuously since
-2026-09-08 and is running the code as it was before the command existed, so the
-gate is met at the **next restart** — a deliberate act, not a test step.
+## One thing deliberately not done
 
 **REFIT_PLAN §1's target table has not been re-derived.** Its "where it stands
 today" column reads 2.36 / 2.65 / 2.81 K for the three post-recal holds; the

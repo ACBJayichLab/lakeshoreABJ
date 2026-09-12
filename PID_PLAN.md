@@ -1,7 +1,7 @@
 # Software PID — the plan
 
-**Status: PHASE 0 DONE bar one live proof. PHASE 1 UNDER WAY — §1.1's two
-"settle first" items are done and REFIT_PLAN.md Phase B has reached step 8.** `ltspm3/model/`
+**Status: PHASE 0 DONE. PHASE 1 UNDER WAY — §1.1's two "settle first" items
+are done and REFIT_PLAN.md Phase B has reached step 8.** `ltspm3/model/`
 exists; nothing has regenerated `_fitted_table.py`, which still carries its
 `SUPERSEDED_NOTE`. Written 2026-09-11 from Jeff's requirements (§1); revised
 the same day through four rounds of questions. Update this line as phases land.
@@ -15,7 +15,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 
 | phase | document | one-line goal | exit gate |
 |---|---|---|---|
-| **0** | §5 here | the record is straight | **done bar the live `send note`** — `curate --propose` clean, four documents corrected |
+| **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | REFIT §1 green; leave-one-epoch-out < 0.5 K; table to 300 K; `missing_power_w` < 1 mW at every anchor |
 | **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | replay table all green; < 1 warning/week on a settled hold; 72 h live |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts | bench green at 6 temperatures; 8 rate fields → 2; hold jitter ≤ 0.02 %/min |
@@ -179,11 +179,29 @@ Two of the four resolved differently from how this section imagined them.
    τ = 130 s, rising to 24.5 mK at 6.6 h, and the prediction was optimistic by
    nearly 4× at 600 s.
 
-**Exit gate:** `curate.py --propose` clean ✔; the four documents corrected ✔;
-`send note "x"` in the CSV — **not yet**. The recorder on the cryostat has owned
-the GPIB board continuously since 2026-09-08 and is running the code as it was
-before the command existed. The gate is met at the next restart, which is a
-deliberate act and not a test step.
+**Exit gate: MET, 2026-09-12.** `curate.py --propose` clean ✔; the four
+documents corrected ✔; `send note "x"` in the CSV ✔ — proved on the live
+recorder after Jeff restarted it, row 30210 of
+`data/ltspm3-heater_2026-09-12.csv` at 16:47:12, sample 118.33 K, output
+64.0100 %:
+
+```
+[lschart-cli] connector reseated 2026-09-10 14:39-14:41; reseat not repair,
+op-amp driver still to change
+```
+
+**The first note in 30,214 rows**, which is the gap this item existed to close.
+The row before it is blank, so the documented "lands on the next row" behaviour
+is what the cryostat actually did. `lschart/tools/fit_table.py` carries the
+column into the archive's `note`, so a note written today is in the dataset the
+next time the archive is exported.
+
+One thing this turned up and it is worth keeping: a restart is not enough on its
+own. The first restart changed nothing because the **main checkout had never
+pulled** — `origin/main` was six commits ahead of the working tree the recorder
+runs from, so there was no handler on disk to load. The refusal said so plainly
+(`unknown command 'note'`, with the old eleven-command list), which is the
+command spool earning its keep.
 
 ## 6. Phase 5 — the viewer
 
