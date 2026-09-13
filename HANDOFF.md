@@ -28,27 +28,58 @@ PID_PLAN.md; this file carries what came after it.
 > is a new reason to want it repaired, and the first one that is not about a
 > single afternoon.
 
-## What this session did — REFIT_PLAN Phase B step 8
+## What this session did
 
-925 passing, `ruff` clean. The step landed in full: the campaign drift is on,
-trap T3 is paid in the same commit (`ANCHOR_SIGMA_K` → `{prepython: 1.0,
-recorder: 1.0, postcal: 0.5}`), `groups=` and `anchor_groups()` are retired,
-and `analysis/holdout.py` is new — it is the gate, and it prints REFIT_PLAN §1's
-scoreboard from the fit in front of it instead of from memory.
+**REFIT_PLAN Phase B is complete and the thermal model is done.** It did not go
+the way step 8 expected: the step built a campaign drift term, measured it three
+ways, and then measured that it was the wrong shape and took it back out. What
+the cryostat actually needs is ONE calibration number, and two of its time
+constants were never measurements at all.
 
-**The gate FAILED: 3.45 K against its 0.5 K bar.** Steps 9 and 10 do not start;
-the plan says so and the reason is worth more than the step would have been.
-Everything below is [REFIT_PLAN.md §7.2](REFIT_PLAN.md), which has the numbers.
+The order it happened in, because each step turned on the one before:
 
-**And the gate cannot be passed as written** while the delivered power steps
-whenever the heater wiring is handled: it asks the fit to predict an epoch whose
-level was set by somebody's hands after the last anchor it can see. That is the
-apparatus, not the model. The gate needs rewording to a hold-out inside one
-undisturbed epoch — and that is not runnable until the level is allowed to
-step, which one null result confirms: holding out only the four anchors after
-09-05 17:00, both sides inside one epoch, still misses the holds by 3.1 K,
-because the fit has no step term and its level is still set by the 47
-pre-reseat anchors.
+1. **Step 8 landed in full** — campaign ramp, trap T3 paid
+   (`ANCHOR_SIGMA_K` → `{prepython: 1.0, recorder: 1.0, postcal: 0.5}`),
+   `groups=`/`anchor_groups()` retired, `analysis/holdout.py` written.
+2. **Its gate failed at 3.45 K against 0.5 K — and cannot be passed**, because
+   it asks the fit to predict a wire being reseated.
+3. **The ramp came back out** (§7.3): inside one undisturbed epoch there is no
+   drift to find, and the ramp made the only honest prediction available worse.
+4. **The gate was reworded** to what the apparatus can answer — gauge on the
+   ladder, predict the holds — and it passes.
+5. **Two τ rules from Jeff** closed §1's last row.
+6. **Step 10 ran**: the table is regenerated and `SUPERSEDED_NOTE` is cleared.
+   Step 9 was dropped as moot.
+
+## PHASE B IS COMPLETE — 2026-09-13
+
+§1's three rows are green, `ltspm3/model/_fitted_table.py` is **regenerated**,
+`SUPERSEDED_NOTE` is **cleared**, 925 passing, `ruff` clean. The shipped table
+is **4-5 K warmer at a given output** than the one every earlier number was
+computed against — 60.597 % read 70.0 K and now reads 75.09 — which is the miss
+the 2026-09-05 ladder measured against it, finally paid.
+
+| row | target | result | |
+|---|---|---|---|
+| the three long settled holds | < 0.3 K | −0.25 / −0.08 / −0.01 K | **PASS** |
+| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | 0.139 K rms, 0.35 max | **PASS** |
+| every measured τ, 40–120 K | < 10 % | 6.7 % worst, 2.1 % median | **PASS** |
+
+The holds and the ladder are **predictions**: one gauge fitted on the ladder,
+the holds scored from it, disjoint anchors, days apart.
+
+**Your two rulings on the τ outliers became two rules in the grader**, not two
+exclusions: `steps.MAX_REACH = 20` (a window of twenty time constants has
+2e-9 of its transient left; past that a pole fits drift) and
+`MAX_AMPLITUDE_FRAC = 0.15` (an excursion wide enough to change τ across itself
+has no single pole to find). The manifest diff is 13 windows, all
+`tau → steady`, **no anchor lost** — a demoted dwell keeps its steady state.
+τ anchors 37 → 25. Both bars sit in gaps the archive already had: reach jumps
+16.7 → 32.5 with nothing between, and amplitude/T jumps 9.7 % → 19.4 %.
+
+**Trap T8 honoured**: the eight pinned points moved by up to 5 K and the 0.05 K
+tolerance stands. **Step 9 was dropped as moot** — it tests the aux channels
+against a fitted drift that §7.3 removed.
 
 ## The four things worth a reviewer's attention
 
@@ -111,14 +142,17 @@ them — a slope of **+0.206 mW/day** takes χ²/n from 0.192 to 0.054. And one 
 to **0.050** once a step is allowed. The other two bands cannot be contaminated
 and are where the median 0.281 comes from.
 
-**3. §1's target row and T10's error bar cannot both stand.** At 118 K the three
-holds' bar is `hypot(Λ′σ, δP)` = **4.75 mW = 2.86 K**, so missing them by 3 K
-costs the fit **1.05σ**. §1 asks for 0.3 K there — a tenth of the bar. The fit
-is doing exactly what it was told, and no amount of extra terms will change
-that while the bar says a 3 K miss is free. **Deciding which to move is a
-question about the heater circuit, and it is Jeff's.**
+**3. §1's target row and T10's error bar cannot both stand — and this is the one
+thing on this page still open.** At 118 K the three holds' bar is
+`hypot(Λ′σ, δP)` = **4.75 mW = 2.86 K**, so missing them by 3 K costs the fit
+**1.05σ** while §1 asks for 0.3 K — a tenth of the bar. The gauge sidesteps it
+(the holds are now predicted to 0.25 K) but does not answer it: `DELTA_P_FRAC`
+is still sized on the ONE fault that measured it, 0.7 %, and T10's own text says
+the ordinary margin is smaller by an amount the log cannot say. **A voltage
+reading across the heater would settle it and retire the bar**; until then every
+anchor over 40–120 K carries 2.9 K of uncertainty it may not deserve.
 
-**4. So the ramp came back OUT, and §1 is two rows out of three.** Your
+**4. So the ramp came back OUT.** Your
 instruction — don't model in fine detail what changes the next time someone
 touches it — has a measurable consequence, and it points the opposite way from
 step 8. `holdout.py --in-epoch` asks the question the apparatus can answer:
@@ -137,51 +171,17 @@ of warming across six days in which the cryostat did not warm. So
 twice as good. The machinery stays, because it is how all of the above was
 established; nothing that ships carries a term for what a screwdriver changes.
 
-**§1 against its own targets, on predictions the fit never saw:**
-
-| row | target | as fitted | gauged | |
-|---|---|---|---|---|
-| the three long settled holds | < 0.3 K | +3.34 / +3.70 / +3.79 | **−0.23 / −0.05 / +0.01** | **PASS** |
-| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | 1.214 K rms | **0.137 K rms**, 0.35 max | **PASS** |
-| every measured τ, 40–120 K | < 10 % | 26.5 % worst | 2.5 % median | your call |
-
-The left column is mostly the last person to touch the cryostat; the right one
-is what the model gets wrong. "31 rungs" was a count nobody could reproduce —
-the window holds 45.
-
-## PHASE B IS COMPLETE — 2026-09-13
-
-§1's three rows are green, `ltspm3/model/_fitted_table.py` is **regenerated**,
-`SUPERSEDED_NOTE` is **cleared**, 925 passing, `ruff` clean. The shipped table
-is **4-5 K warmer at a given output** than the one every earlier number was
-computed against — 60.597 % read 70.0 K and now reads 75.09 — which is the miss
-the 2026-09-05 ladder measured against it, finally paid.
-
-| row | target | result | |
-|---|---|---|---|
-| the three long settled holds | < 0.3 K | −0.25 / −0.08 / −0.01 K | **PASS** |
-| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | 0.139 K rms, 0.35 max | **PASS** |
-| every measured τ, 40–120 K | < 10 % | 6.7 % worst, 2.1 % median | **PASS** |
-
-The holds and the ladder are **predictions**: one gauge fitted on the ladder,
-the holds scored from it, disjoint anchors, days apart.
-
-**Your two rulings on the τ outliers became two rules in the grader**, not two
-exclusions: `steps.MAX_REACH = 20` (a window of twenty time constants has
-2e-9 of its transient left; past that a pole fits drift) and
-`MAX_AMPLITUDE_FRAC = 0.15` (an excursion wide enough to change τ across itself
-has no single pole to find). The manifest diff is 13 windows, all
-`tau → steady`, **no anchor lost** — a demoted dwell keeps its steady state.
-τ anchors 37 → 25. Both bars sit in gaps the archive already had: reach jumps
-16.7 → 32.5 with nothing between, and amplitude/T jumps 9.7 % → 19.4 %.
-
-**Trap T8 honoured**: the eight pinned points moved by up to 5 K and the 0.05 K
-tolerance stands. **Step 9 was dropped as moot** — it tests the aux channels
-against a fitted drift that §7.3 removed.
+That table is where §1 stood before the two τ rules landed; the final numbers
+are at the top of this file. The lesson that outlives both is the two columns:
+**an anchor's absolute level is mostly the last person to touch the cryostat,
+and only the gauged column is what the model gets wrong.** ("31 rungs" was a
+count nobody could reproduce — the window holds 45.)
 
 ## Then, in order
 
-**Both decisions of 2026-09-12 are answered and acted on.**
+**Every decision put to Jeff is answered and acted on** — the gauge and the τ
+row on 09-12/13, and the two τ outliers on 09-13, which became the two grading
+rules at the top of this file rather than two hand-removals.
 
 **The gauge is in** (your "calibrate now, date it"). `export_response.py`
 measures the delivered-power gauge from the most recent programmed ladder,
