@@ -1,20 +1,23 @@
 # Thermal model refit — plan
 
 **Status: PHASE A DONE with option 4; PHASE B steps 1-3 and 5-8 DONE, and
-traps T3, T4, T5, T7 and T10 with them. STEP 8's GATE FAILED and steps 9-10 do
-not start — §7.2.** Steps 1-3 were refactors and are
+traps T3, T4, T5, T7 and T10 with them. Step 8's own gate failed and CANNOT be
+passed — it asks the fit to predict a wire being reseated. Reworded to ask what
+the apparatus can answer, §1 is now TWO ROWS OUT OF THREE, on predictions:
+§7.2 and §7.3.** Steps 1-3 were refactors and are
 proved inert; step 6 is the first thing that moves a curve, and it made the
 production fit CONVERGE. **6c and T10 are PID_PLAN.md phase 1 §1.1's two
 "settle first" items and both are answered** — the anchors now carry a
 power-side error bar (T10, and the trajectory fits 13.6 % better for it), and
 the cold basin stays as it is because nothing below 7 K identifies it (6c).
-The production fit is `cost` **871.49**, `rms_k` **0.1326**, `anchor_k`
-**2.1249**, τ(137 K) 583.3 s in 109 evaluations, on 98 anchors, carrying a
-campaign ramp of **+0.177 mW/day** — quoted on the
+The production fit is `cost` **922.18**, `rms_k` **0.1361**, `anchor_k`
+**1.7760**, τ(137 K) 583.1 s in 158 evaluations, on 98 anchors — quoted on the
 archive as it stands, which since 2026-09-12 reaches past the 09-10 fault.
-**The ramp is a fraction of the DELIVERED HEAT and not a constant parasitic
-watt**: written the way this plan assumed, the cold end refuses it three ways
-and the fit takes a seventh of the measured rate. §7.2.
+**It carries no campaign ramp.** Step 8 built one, measured it three ways, and
+then measured that it makes the only honest prediction available worse: what
+looks like a 55-day drift is a staircase of handling, and the one term the
+cryostat really needs is a single delivered-power **gauge**, which is
+calibration and not model. §7.3.
 **Nothing has regenerated the shipped table yet** —
 `ltspm3/model/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
@@ -45,8 +48,8 @@ Update this Status line as phases land.
 | **done** | trap **T10** — the anchors' error bar gained its power side, `DELTA_P_FRAC = 0.007`, in quadrature with the kelvin bar *in watts*. It binds over 40–120 K and nowhere below 20 K; `rms_k` 0.1499 → **0.1295** for 0.7 % on `anchor_k`. `FIT_CACHE_VERSION` 6. §8 T10 |
 | **done** | Phase B **step 7** — the post-recal trace row, T4 (36 anchors were counted twice, not 17), T5 (`RECORD_SHARE = "equal"`), and per-record drift knots. **The trajectory recovers 57 % of the miss and leaves 1.47 K against a 0.3 K target**, with the post-recal wander term railing at its 2 mW prior: the model needs step 8's campaign ramp. §7.1 |
 | **done** | Phase B **6c** — the below-10 K basin. **The knots stay.** Nothing identifies dΛ/dT below 7 K: four placements spread it 10× at 4.55 K and 1.02× at 7 K, one *extra* knot down there costs 83 % of the objective, and dropping all four zero-output anchors moves the curve in the sixth figure. Λ *is* evaluated at the coldplate, 2.7 % below the bottom knot — now bounded by `KNOT_EXTRAP_TOL`. §7 step 6c |
-| **done** | Phase B **step 8** — the campaign ramp is on, T3 is paid, `groups=`/`anchor_groups` are retired, and `analysis/holdout.py` is the gate. **The ramp is NOT a constant watt** — the cold end refuses that three ways — it is a fraction of the delivered heat. §7.2 |
-| **next** | **The gate FAILED at 3.45 K against 0.5 K, and §7.2 says why.** What is left after the ramp is a **+3.03 mW step at the 2026-09-04 cutover** (trap T7, measured), and the holds' own bar under T10 is 2.86 K at 118 K against a 0.3 K target. **Steps 9 and 10 do not start.** Read §7.2's last section: the next move is a named step, and what the step MEANS is a question for a person |
+| **done** | Phase B **step 8** — T3 paid, `groups=`/`anchor_groups` retired, `analysis/holdout.py` written, and the campaign ramp built, measured and then **taken back out**. The step it was absorbing is a wire Jeff reseated on 2026-09-04, worth 0.79 % of delivered power; the ramp is a staircase of handling read as a rate. §7.2, §7.3 |
+| **next** | **Two decisions for a person, then step 10.** (a) §1's τ row: median 2.5 % or worst 26.5 %, and only one of them is reachable. (b) Does the shipped table carry a dated delivered-power **gauge**? §7.3 says it has to, and that is step 10's first question. Step 9 (aux channels against the fitted drift) is **moot** — there is no fitted drift any more |
 | **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
 | **then** | rejoinder step 5 - finding 5's leftovers |
 
@@ -80,28 +83,35 @@ line predates that.
 Produce a thermal model of the LTSPM3 cryostat that reproduces, **at the same
 time and without retuning between them**:
 
-| | target | where it stands, 2026-09-12 | measured by |
-|---|---|---|---|
-| the three long settled holds | < 0.3 K | **+3.04 / +3.15 / +3.01 K low** | `holdout.py` |
-| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | **1.107 K rms**, 3.13 K max | `holdout.py` |
-| every measured τ, 40–120 K | < 10 % | **26.4 % worst**, 2.7 % median, 11 τ | `holdout.py` |
+| | target | as fitted | **gauged** | |
+|---|---|---|---|---|
+| the three long settled holds | < 0.3 K | +3.34 / +3.70 / +3.79 | **−0.23 / −0.05 / +0.01** | **PASS** |
+| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | 1.214 K rms, 3.49 max | **0.137 K rms**, 0.35 max | **PASS** |
+| every measured τ, 40–120 K | < 10 % | 26.5 % worst | 2.5 % median | see below |
 
-**All three rows fail, and the column is now generated rather than quoted.**
-`python analysis/holdout.py` prints exactly this table from the fit in front of
-it. That matters because the column had gone stale twice over: it used to read
-2.36 / 2.65 / 2.81 K, which is §2.2's *first refit* and not the shipped table
-(that is 4.06 / 4.21 / 4.25, agreeing with §2.1 and with `SUPERSEDED_NOTE`), and
-"31 rungs" was a count nobody could reproduce — the ladder window holds **45**
-graded dwells. A definition of done quoted from three different fits is not one.
+**Two of the three rows are met, and the column is generated rather than
+quoted** — `python analysis/holdout.py --in-epoch`. It had gone stale twice
+over: it used to read 2.36 / 2.65 / 2.81 K, which is §2.2's *first refit* and
+not the shipped table (that is 4.06 / 4.21 / 4.25, agreeing with §2.1 and with
+`SUPERSEDED_NOTE`), and "31 rungs" was a count nobody could reproduce — the
+ladder window holds **45** graded dwells.
 
-The τ row is the one to read carefully. §2.4 reports it passing and that is not
-wrong: the *shape* of τ(T) travels, and the median miss over the eleven τ
-anchors in band is **2.7 %**. What fails is the row as written — "every
-measured τ" — because a single dwell's τ scatters 433 to 850 s near 137 K and
-the worst of eleven is 26.4 %. Either the row means the median and should say
-so, or it means every one and the target is unreachable by a one-pole model of
-a body with internal gradients. **That is a decision for a person**, and until
-it is made the row is reported both ways.
+**What the two columns are, because the difference is the whole of §7.2.** An
+anchor's absolute level carries the *delivered-power gauge* of the epoch it was
+taken in, and a reseated wire moves that by up to 0.8 % — **3.2 K at 118 K**,
+larger than every target in this table. So the gauge is measured once, as ONE
+number, on the 45 ladder rungs of 2026-09-05, and the three holds are then
+**predicted**: disjoint anchors, one undisturbed epoch, one to four days later.
+**The right-hand column is what the model gets wrong. The left-hand one is
+mostly the last person to touch the cryostat.**
+
+**The τ row still needs a decision, and it is not a modelling one.** §2.4 is
+right that the shape travels — the median miss over the eleven τ anchors in
+band is **2.5 %** — and the worst of eleven is 26.5 %, because a single dwell's
+τ scatters 433 to 850 s near 137 K. Either the row means the median and should
+say so, or it means every one, and then it is not reachable by a one-pole model
+of a body with internal gradients. **That is a decision for a person**, and
+until it is made the row is reported both ways.
 
 and to do it from data that is **organised, named and frozen** rather than
 rediscovered by a heuristic each time a fit runs.
@@ -1213,14 +1223,6 @@ justification is short-timescale wander. That is the step again, absorbed by
 the only parameter in reach — which is what it was doing in §7.1 before the
 ramp existed, and the ramp has not relieved it. Two routes, one missing term.
 
-#### What this means for step 9
-
-**Do not start step 9.** The next move is T7's own prescription, now with a
-measurement behind it: **an optional named step at the 2026-09-04 12:07
-cutover**, fitted beside the ramp, and then the gate re-run. The step is worth
-about 1.8 K at the holds, which is where §7.1's fit B got to by a different
-route — the post-recal *trajectory* pinned the post-cutover state instead.
-
 #### What the step IS: Jeff reseated a wire, and the anchors agree
 
 **The step is not the recalibration. It is a wire being reseated** (Jeff,
@@ -1303,6 +1305,53 @@ time anyone touches the cryostat. Two things follow.
   being a 2.86 K bar on every anchor over 40–120 K. That is a bench job on the
   circuit Jeff is already planning to rebuild, and it is worth more than any
   term this plan could add.
+
+### 7.3 The ramp comes back OFF, and one gauge does the work
+
+> *"I don't want to model in fine detail things which will change the next time
+> someone touches it."* — Jeff, 2026-09-12.
+
+Taken seriously, that instruction has a measurable consequence and it points
+the opposite way from step 8. **No event term was added. One was taken away.**
+
+`analysis/holdout.py --in-epoch` is the gate reworded so that it asks a
+question the apparatus can answer: **given one calibration number, does the
+model's SHAPE travel?** The gauge — the delivered-power fraction, the single
+thing a reseat changes — is fitted on the **45 ladder rungs of 2026-09-05**,
+5–120 K in under five hours, and the **three long holds** are then predicted,
+one to four days later. Disjoint anchors, one undisturbed epoch, nothing fitted
+to a hold.
+
+| | the three holds, K | worst | the ladder |
+|---|---|---|---|
+| campaign ramp ON, gauged | −0.242 −0.293 −0.467 | 0.467 | 0.144 K rms |
+| **campaign ramp OFF, gauged** | **−0.234 −0.052 +0.012** | **0.234** | **0.137 K rms** |
+
+**The ramp makes the only honest prediction available WORSE**, and it is clear
+why: it adds 0.7 mW of warming across six days in which the cryostat did not
+warm. Within one undisturbed epoch there is no drift to find. What the campaign
+shows across 55 days is a staircase of handling, and a slope fitted through a
+staircase predicts the next step wrongly in both directions.
+
+**So `PRODUCTION_CAMPAIGN = False`.** It costs 2.6 % of `rms_k` and buys a
+prediction twice as good. The machinery stays — `campaign=`, `campaign_w=`,
+`--profile` and `--shapes` are how all of this was established, and they are
+how the alternative gets tested if handling dates ever arrive — but nothing
+that ships carries a term for something a screwdriver changes.
+
+**And §1 is then two rows out of three, on predictions.** −0.23 / −0.05 /
++0.01 K against a 0.3 K target, and 0.137 K rms against 0.5 K, from a fit that
+saw neither. The third row is the τ wording, which is §1's own paragraph and a
+decision for a person.
+
+**What this costs the shipped table.** The curve carries no gauge, so it is
+about 0.9 % low in delivered power — 3.2 K at 118 K — for the epoch the
+cryostat is in now. Closing Phase B therefore means exporting the curve **with
+an epoch gauge beside it**, measured the way `--in-epoch` measures it and dated,
+so that a reader knows it is a calibration with a shelf life rather than a
+property of the cryostat. That is one number in `_fitted_table.py`'s
+provenance, not a term in the objective, and it is the first thing step 10 has
+to decide.
 
 9. **Then, and only then, test the aux channels** against the fitted drift —
    the second half of the agreed approach. Regress `d(t)` on 1st Stage / RAD

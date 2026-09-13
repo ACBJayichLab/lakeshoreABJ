@@ -332,13 +332,21 @@ falls to **0.050 K/day** once the regression is allowed a step there. The other
 two bands have one post-cutover anchor and none — they cannot be contaminated —
 and they are the ones the median 0.281 comes from.
 
-**The drift is still real.** Inside the pre-cutover half alone, 47 anchors over
-47 days with no calibration change in them, a slope of **+0.206 mW/day** takes
-χ²/n from 0.192 to 0.054. And with the post-recal trajectory in the fit the
-ramp comes out at **+0.287 mW/day**, against this table's independently
-measured 0.281. What is *also* real is a **+3.03 mW step at the cutover**
-(trap T7), which no term is allowed to be and which both the one-record ramp
-and the two-record wander knots have been absorbing.
+**And then the ramp came out of the shipped fit again.** The step at
+2026-09-04 is a wire Jeff reseated, worth **+0.79 % of delivered power** — the
+anchors say so rather than merely allowing it, because a reseated wire scales
+with the heater and a disturbed heat leak does not, and the 09-05 ladder spans
+7–64 % of output right after the event (χ²/n 0.0345 against 0.1128, same
+parameter count). Three events — the 09-04 reseat, the 09-10 fault, the 09-10
+reseat — come out at +0.79 %, −0.90 % and −0.11 %, which is a few tenths of an
+ohm in series with a 75.5 Ω heater.
+
+So the question was whether the campaign's apparent drift is a RATE or a
+staircase of handling, and the one undisturbed epoch says staircase: gauge the
+model on the ladder and predict the three holds days later and the ramp makes
+it **worse** (worst 0.467 K against 0.234 K with the ramp off), because it adds
+warming across six days in which the cryostat did not warm.
+`fit_ode.PRODUCTION_CAMPAIGN` is therefore `False`. REFIT_PLAN.md §7.3.
 
 ## Λ and C without a fit — 2026-09-10
 
@@ -528,7 +536,7 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 | `steps.py` | the finder, the pole and the bars — **no `__main__` any more**, see `measure.py`. `archive_dwells()` is the **one** scan of the archive and `curate.py` builds the manifest from it. `fit_pole` fits `T = T∞ + A e^(−t/τ)`; `pole_bounds` says what interval it searched τ on, because a τ *at* a bound is the search giving up and neither grader notices (AUDIT-2026-09-10 finding 2). **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
 | `measure.py` | **what a fit reads.** Measures the windows the manifest names and writes `measured.csv`: a jump keeps `fit_pole`'s numbers exactly, a hold gets level + drift + relaxation + a 24 h harmonic, and every row carries `sigma_T_inf` = statistical ⊕ extrapolation ⊕ the measured long-term fluctuation, plus `t_mid` and `days`. `--verify` checks REFIT_PLAN.md §6's exit criteria. **A single pole is the wrong model for a hold** and had four graded anchors 0.4–1.7 K out; `T_pole` is kept beside `T_inf` so that stays visible. |
 | `fit_ode.py` | integrates the ODE down the 43 h sweep and fits Λ and C as monotone cubics in (log T, log y). One curve's knots freed at a time. Writes `ladder.csv`. `campaign=True` adds the drift ramp — one slope, on the wall clock, zero at the reference epoch, on the anchors and on every record's right-hand side — and `campaign_w=` pins it so the objective can be profiled in it. **`CAMPAIGN_FORM` is `"power"`, a fraction of the delivered heat**, because a constant watt is refused by the cold end three ways (REFIT_PLAN.md §7.2). An anchor's error bar has **two halves and they are combined in watts**: `ANCHOR_SIGMA_K` in kelvin, times the local Λ′, in quadrature with `DELTA_P_FRAC × Q` — the watts the heater circuit may not have delivered (REFIT_PLAN.md T10). The second dominates over 40–120 K and is invisible below 20 K, which one bar in kelvin cannot express. |
-| `holdout.py` | **REFIT_PLAN.md section 1's scoreboard and step 8's gate.** Prints the three targets from the fit in front of it rather than from memory, then drops every anchor after the 2026-09-04 cutover, refits, and PREDICTS the three holds. A hold's miss is a root of `Λ(T) − Λ(T_c) = Q + campaign(t)`, not a linearisation, because at 3 K of miss the two differ by 0.1 K. `--profile` pins the campaign slope and traces the objective; `--postcal` adds the second record (§7.1's fit B) |
+| `holdout.py` | **REFIT_PLAN.md section 1's scoreboard, and the gate.** `--in-epoch` is the one that matters: it fits ONE delivered-power gauge on the 45 ladder rungs and PREDICTS the three long holds days later, which is what is left to ask once a reseated wire can move the level by 3.2 K at 118 K. Prints the three targets from the fit in front of it rather than from memory, then drops every anchor after the 2026-09-04 cutover, refits, and PREDICTS the three holds. A hold's miss is a root of `Λ(T) − Λ(T_c) = Q + campaign(t)`, not a linearisation, because at 3 K of miss the two differ by 0.1 K. `--profile` pins the campaign slope and traces the objective; `--postcal` adds the second record (§7.1's fit B) |
 | `decimate.py` | the sweep, thinned where nothing is happening and kept where it is. **16x fewer samples, 26x faster to fit, 0.8% different.** Writes `sweep_decimated.csv.gz` |
 | `bath.py` | the coldplate as a first-order lag driven by the heater, not as a bath. **tau = 175 s, 27.6 mK rms over a 2.30 K swing.** What makes the plant self-contained |
 | `_data.py` | where the inputs live and how to open them; every reader here goes through it |

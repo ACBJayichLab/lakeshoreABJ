@@ -111,8 +111,8 @@ def fig_plantclock(outdir):
 
 def _production_fit(seed_measured=True):
     rec, anchors, taus = F.production_inputs()
-    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, campaign=True,
-              seed_measured=seed_measured)
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT,
+              campaign=F.PRODUCTION_CAMPAIGN, seed_measured=seed_measured)
     return r, anchors, taus
 
 

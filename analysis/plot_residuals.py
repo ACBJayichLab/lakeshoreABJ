@@ -90,7 +90,8 @@ BAND = "#e6e5e1"
 
 def main() -> int:
     rec, anchors, taus = F.production_inputs()
-    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, campaign=True)
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT,
+              campaign=F.PRODUCTION_CAMPAIGN)
     lam, cap, pl, pc = r["lam"], r["cap"], r["pl"], r["pc"]
     a = anchors
     rows = {(row.get("id") or row.get("source") or "").strip(): row for row in F.load_rows()}

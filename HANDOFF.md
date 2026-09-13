@@ -1,4 +1,4 @@
-# Handoff — 2026-09-12 (REFIT step 8: the ramp is in, the gate failed, and it found two things)
+# Handoff — 2026-09-12 (REFIT step 8: the ramp went in, and then came back out)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
 refit's own state is [REFIT_PLAN.md](REFIT_PLAN.md) and the route to a working
@@ -118,43 +118,59 @@ is doing exactly what it was told, and no amount of extra terms will change
 that while the bar says a 3 K miss is free. **Deciding which to move is a
 question about the heater circuit, and it is Jeff's.**
 
-**4. §1's scoreboard is generated now, and all three rows fail.** The "where it
-stands today" column had been quoted from three different fits over the life of
-the plan; `python analysis/holdout.py` prints it:
+**4. So the ramp came back OUT, and §1 is two rows out of three.** Your
+instruction — don't model in fine detail what changes the next time someone
+touches it — has a measurable consequence, and it points the opposite way from
+step 8. `holdout.py --in-epoch` asks the question the apparatus can answer:
+**given one calibration number, does the model's SHAPE travel?** The gauge is
+fitted on the 45 ladder rungs of 09-05; the three long holds are then
+**predicted**, one to four days later, disjoint anchors, same epoch:
 
-| row | target | measured | |
+| | the three holds, K | worst | the ladder |
 |---|---|---|---|
-| the three long settled holds | < 0.3 K | **+3.04 / +3.15 / +3.01 K** | FAIL |
-| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | **1.107 K rms**, 3.13 max | FAIL |
-| every measured τ, 40–120 K | < 10 % | **26.4 % worst**, 2.7 % median | FAIL |
+| ramp ON, gauged | −0.242 −0.293 −0.467 | 0.467 | 0.144 K rms |
+| **ramp OFF, gauged** | **−0.234 −0.052 +0.012** | **0.234** | **0.137 K rms** |
 
-"31 rungs" was a count nobody could reproduce — the window holds 45. And the τ
-row needs a decision: the median is 2.7 % and §2.4 is right that the *shape*
-travels, but a single dwell's τ scatters 433–850 s near 137 K, so "every
-measured τ" may not be reachable by a one-pole model at all.
+**The ramp makes the only honest prediction available worse** — it adds 0.7 mW
+of warming across six days in which the cryostat did not warm. So
+`PRODUCTION_CAMPAIGN = False`: it costs 2.6 % of `rms_k` and buys a prediction
+twice as good. The machinery stays, because it is how all of the above was
+established; nothing that ships carries a term for what a screwdriver changes.
 
-With the post-recal record added as a second trajectory (§7.1's fit B) the
-holds come to **+1.66 / +1.12 / +0.93** and the ramp lands on **+0.287 mW/day**
-against `drift.py`'s independently measured 0.281 — the best evidence in the
-session that the ramp is real. But that record's own wander knots then rail at
-**+1.35 to +2.10 mW** against a 2 mW prior: the same step, absorbed by the only
-parameter in reach.
+**§1 against its own targets, on predictions the fit never saw:**
 
-## Then, in order
+| row | target | as fitted | gauged | |
+|---|---|---|---|---|
+| the three long settled holds | < 0.3 K | +3.34 / +3.70 / +3.79 | **−0.23 / −0.05 / +0.01** | **PASS** |
+| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | 1.214 K rms | **0.137 K rms**, 0.35 max | **PASS** |
+| every measured τ, 40–120 K | < 10 % | 26.5 % worst | 2.5 % median | your call |
 
-1. **Two questions for Jeff before any more fitting.** They decide what the
-   next term even is, and neither is a modelling choice:
-   - **When else was that circuit touched?** 2026-09-04 and 2026-09-10 are
-     known and measured; the pre-reseat half's 0.206 mW/day is +0.032 %/day of
-     delivered power, 1.5 % over 47 days, which is larger than any single event
-     above and may well be a staircase of undocumented ones rather than a rate.
-     **Only you have those dates**, and an epoch model built on an incomplete
-     list fits the gaps with a slope and is back where it started. They belong
-     in the manifest the way `era` records the recalibration.
-   - **Is `DELTA_P_FRAC = 0.007` the ordinary margin, or the worst case?** If
-     the ordinary margin is much smaller, the bar comes down and §1's 0.3 K
-     becomes reachable; if it is right, §1's target is asking for a tenth of
-     the uncertainty and should say so instead.
+The left column is mostly the last person to touch the cryostat; the right one
+is what the model gets wrong. "31 rungs" was a count nobody could reproduce —
+the window holds 45.
+
+## Then, in order — and it is two decisions, not more fitting
+
+1. **Two questions only you can answer.** Both are about what "done" means
+   rather than about the model:
+   - **§1's τ row: median or worst?** 2.5 % median, 26.5 % worst over eleven
+     τ anchors. §2.4 is right that the shape travels; a single dwell's τ
+     scatters 433–850 s near 137 K, so "every measured τ inside 10 %" may not
+     be reachable by a one-pole model of a body with internal gradients. It is
+     the last row standing between Phase B and done.
+   - **Does the shipped table carry a dated delivered-power gauge?** It has to
+     carry something: as it stands the curve is ~0.9 % low in power for the
+     epoch the cryostat is in now, which is 3.2 K at 118 K. One number in
+     `_fitted_table.py`'s provenance, measured the way `--in-epoch` measures
+     it, with the date it was measured and the warning that a reseat expires
+     it. That is step 10's first question.
+   - *(Useful but not blocking)* **When else was that circuit touched?**
+     09-04 and 09-10 are known and measured. The pre-reseat half's 0.206 mW/day
+     is 1.5 % of delivered power over 47 days — larger than any single event
+     above, and on this session's evidence a staircase of undocumented handling
+     rather than a rate. Those dates belong in the manifest the way `era`
+     records the recalibration, and they are the only thing that could bring a
+     drift term back.
 2. **Measuring α beats modelling it.** A voltage reading across the heater —
    any four-wire measurement of that circuit — turns α from a fitted nuisance
    into a logged input. Then `Q = α(t)·P(u)` is known per sample, the step and
@@ -165,8 +181,9 @@ parameter in reach.
    which is the whole remaining miss, but it is fitted from each epoch's own
    anchors and so predicts nothing — it expires the next time anyone touches
    the cryostat.
-3. **Steps 9 and 10 stay shut.** Nothing regenerates `_fitted_table.py` while
-   the gate is red; `SUPERSEDED_NOTE` stays.
+3. **Step 9 is moot** — it tests the aux channels against the fitted drift and
+   there is no fitted drift any more. Step 10 waits on the two decisions above;
+   `SUPERSEDED_NOTE` stays until the table is regenerated with its gauge.
 4. PID_PLAN phase 1 §1.2 is **not blocked by any of this** — the band constants
    and the two residual functions. `DELTA_P_FRAC` is defined and in the cache
    key; `missing_power_w` should still be written against `pc-20260908-154814`

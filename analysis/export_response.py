@@ -64,10 +64,12 @@ def evaluate():
     """The production fit, sampled onto the grid."""
     rec, anchors, taus = F.production_inputs()
     top = float(rec.T.max())
-    # campaign=True, like plot_gain.py: the drift ramp is fitted and is zero at
-    # the latest date any input describes, so the curve THIS EXPORTS is the
-    # cryostat's present state rather than an average over 55 days of it.
-    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, campaign=True)
+    # The ramp is OFF in the shipped fit -- see fit_ode.PRODUCTION_CAMPAIGN.
+    # What the curve does NOT carry is the delivered-power gauge of whichever
+    # epoch it is read in; that is one number, and holdout.py --in-epoch
+    # measures it.
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT,
+              campaign=F.PRODUCTION_CAMPAIGN)
     rows = [x for x in F.load_rows()
             if x.get("grade") and float(x["T_inf"]) <= top]
     tc_of, _, _ = coldplate_of(rows)

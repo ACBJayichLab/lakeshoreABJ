@@ -206,7 +206,8 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
 def main():
     rec, anchors, taus = F.production_inputs()
     hi = float(rec.T.max())
-    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, campaign=True)
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT,
+              campaign=F.PRODUCTION_CAMPAIGN)
     print(f"  Lambda {N_LAM} knots, C {N_CAP}, drift {N_DRIFT}: "
           f"rms {r['rms_k']:.3f} K, opening hold {r['hold_max_k']:.2f} K "
           f"over {r['hold_h']:.1f} h")

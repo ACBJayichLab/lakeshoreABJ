@@ -388,6 +388,35 @@ CAMPAIGN_SHARE = 0.05
 #: parasitic watt, and it does.
 CAMPAIGN_FORM = "power"
 
+#: Whether the SHIPPED fit carries the ramp at all.  It does not, and that is a
+#: measurement rather than a preference.
+#:
+#: Step 8 turned the ramp on because section 7.1 showed the model could not
+#: satisfy two records at two dates.  Step 8 then found the cause: a wire Jeff
+#: reseated on 2026-09-04 changed the delivered power by 0.79 % (REFIT_PLAN.md
+#: section 7.2), which is 3.2 K at 118 K and the whole of the disagreement.
+#:
+#: **So the question became whether the ramp is a RATE or a staircase of
+#: handling events, and the one epoch that can answer it says staircase.**
+#: Gauge the model on the 45 ladder rungs of 2026-09-05 and predict the three
+#: long holds one to four days later -- disjoint anchors, one undisturbed epoch,
+#: analysis/holdout.py --in-epoch:
+#:
+#:     ramp on    -0.242  -0.293  -0.467 K      worst 0.467
+#:     ramp OFF   -0.234  -0.052  +0.012 K      worst 0.234
+#:
+#: The ramp is adding warming across six days in which the cryostat did not
+#: warm.  It costs 2.6 % of ``rms_k`` to remove and it buys a prediction twice
+#: as good, so it is off.  What is left of the campaign's apparent drift is
+#: handling: events at dates only a person can supply, and modelling those in
+#: detail is modelling something that changes the next time anyone touches the
+#: cryostat (Jeff, 2026-09-12).
+#:
+#: The machinery stays, and so does everything measured with it -- ``campaign=``
+#: and ``campaign_w=`` are how the above was established, and if handling dates
+#: ever arrive they are how the alternative gets tested.
+PRODUCTION_CAMPAIGN = False
+
 #: The power ``CAMPAIGN_SIGMA_W_PER_DAY`` and the fitted slope are quoted at,
 #: so that "mW/day" means the same thing under either form and can still be
 #: compared with analysis/drift.py.  0.65 W is the middle of the three bands
