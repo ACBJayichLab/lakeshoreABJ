@@ -1,16 +1,20 @@
 # Thermal model refit — plan
 
-**Status: PHASE A DONE with option 4; PHASE B steps 1-3 and 5-7 DONE, and
-traps T4, T5 and T10 with them.** Next is step 8, and §7.1 is the measurement
-saying it is needed. Steps 1-3 were refactors and are
+**Status: PHASE A DONE with option 4; PHASE B steps 1-3 and 5-8 DONE, and
+traps T3, T4, T5, T7 and T10 with them. STEP 8's GATE FAILED and steps 9-10 do
+not start — §7.2.** Steps 1-3 were refactors and are
 proved inert; step 6 is the first thing that moves a curve, and it made the
 production fit CONVERGE. **6c and T10 are PID_PLAN.md phase 1 §1.1's two
 "settle first" items and both are answered** — the anchors now carry a
 power-side error bar (T10, and the trajectory fits 13.6 % better for it), and
 the cold basin stays as it is because nothing below 7 K identifies it (6c).
-The production fit is `cost` **854.21**, `rms_k` **0.1300**, `anchor_k`
-**1.8300**, τ(137 K) 582.3 s in 103 evaluations, on 98 anchors — quoted on the
+The production fit is `cost` **871.49**, `rms_k` **0.1326**, `anchor_k`
+**2.1249**, τ(137 K) 583.3 s in 109 evaluations, on 98 anchors, carrying a
+campaign ramp of **+0.177 mW/day** — quoted on the
 archive as it stands, which since 2026-09-12 reaches past the 09-10 fault.
+**The ramp is a fraction of the DELIVERED HEAT and not a constant parasitic
+watt**: written the way this plan assumed, the cold end refuses it three ways
+and the fit takes a seventh of the measured rate. §7.2.
 **Nothing has regenerated the shipped table yet** —
 `ltspm3/model/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
@@ -41,7 +45,8 @@ Update this Status line as phases land.
 | **done** | trap **T10** — the anchors' error bar gained its power side, `DELTA_P_FRAC = 0.007`, in quadrature with the kelvin bar *in watts*. It binds over 40–120 K and nowhere below 20 K; `rms_k` 0.1499 → **0.1295** for 0.7 % on `anchor_k`. `FIT_CACHE_VERSION` 6. §8 T10 |
 | **done** | Phase B **step 7** — the post-recal trace row, T4 (36 anchors were counted twice, not 17), T5 (`RECORD_SHARE = "equal"`), and per-record drift knots. **The trajectory recovers 57 % of the miss and leaves 1.47 K against a 0.3 K target**, with the post-recal wander term railing at its 2 mW prior: the model needs step 8's campaign ramp. §7.1 |
 | **done** | Phase B **6c** — the below-10 K basin. **The knots stay.** Nothing identifies dΛ/dT below 7 K: four placements spread it 10× at 4.55 K and 1.02× at 7 K, one *extra* knot down there costs 83 % of the objective, and dropping all four zero-output anchors moves the curve in the sixth figure. Λ *is* evaluated at the coldplate, 2.7 % below the bottom knot — now bounded by `KNOT_EXTRAP_TOL`. §7 step 6c |
-| **next** | Phase B **step 8** — the campaign drift on, `ANCHOR_SIGMA_K` down in the same commit (T3), and leave-one-epoch-out is the gate. §7.1 is the evidence it is needed. Then 9–10. Read traps T1–T10 and §6.1's last paragraph first |
+| **done** | Phase B **step 8** — the campaign ramp is on, T3 is paid, `groups=`/`anchor_groups` are retired, and `analysis/holdout.py` is the gate. **The ramp is NOT a constant watt** — the cold end refuses that three ways — it is a fraction of the delivered heat. §7.2 |
+| **next** | **The gate FAILED at 3.45 K against 0.5 K, and §7.2 says why.** What is left after the ramp is a **+3.03 mW step at the 2026-09-04 cutover** (trap T7, measured), and the holds' own bar under T10 is 2.86 K at 118 K against a 0.3 K target. **Steps 9 and 10 do not start.** Read §7.2's last section: the next move is a named step, and what the step MEANS is a question for a person |
 | **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
 | **then** | rejoinder step 5 - finding 5's leftovers |
 
@@ -75,11 +80,28 @@ line predates that.
 Produce a thermal model of the LTSPM3 cryostat that reproduces, **at the same
 time and without retuning between them**:
 
-| | target | where it stands today |
-|---|---|---|
-| the three long settled holds | < 0.3 K | **2.36 / 2.65 / 2.81 K low** |
-| the 2026-09-05 ladder, 31 rungs | < 0.5 K rms | **1.36 K rms**, 2.66 K max |
-| every measured τ, 40–120 K | < 10 % | **passes** (see §2.4) |
+| | target | where it stands, 2026-09-12 | measured by |
+|---|---|---|---|
+| the three long settled holds | < 0.3 K | **+3.04 / +3.15 / +3.01 K low** | `holdout.py` |
+| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | **1.107 K rms**, 3.13 K max | `holdout.py` |
+| every measured τ, 40–120 K | < 10 % | **26.4 % worst**, 4.7 % median, 11 τ | `holdout.py` |
+
+**All three rows fail, and the column is now generated rather than quoted.**
+`python analysis/holdout.py` prints exactly this table from the fit in front of
+it. That matters because the column had gone stale twice over: it used to read
+2.36 / 2.65 / 2.81 K, which is §2.2's *first refit* and not the shipped table
+(that is 4.06 / 4.21 / 4.25, agreeing with §2.1 and with `SUPERSEDED_NOTE`), and
+"31 rungs" was a count nobody could reproduce — the ladder window holds **45**
+graded dwells. A definition of done quoted from three different fits is not one.
+
+The τ row is the one to read carefully. §2.4 reports it passing and that is not
+wrong: the *shape* of τ(T) travels, and the median miss over the eleven τ
+anchors in band is **4.7 %**. What fails is the row as written — "every
+measured τ" — because a single dwell's τ scatters 433 to 850 s near 137 K and
+the worst of eleven is 26.4 %. Either the row means the median and should say
+so, or it means every one and the target is unreachable by a one-pole model of
+a body with internal gradients. **That is a decision for a person**, and until
+it is made the row is reported both ways.
 
 and to do it from data that is **organised, named and frozen** rather than
 rediscovered by a heuristic each time a fit runs.
@@ -1040,6 +1062,185 @@ equivalent over 100–119 K and by under 0.03 K below 50 K; τ(137 K) 582.3 →
    > never seen them means the drift has been measured rather than fitted.
    > **Do not proceed if this fails.**
 
+   **DONE, 2026-09-12, and THE GATE FAILED at 3.45 K against its 0.5 K bar.**
+   All three code changes landed and the ramp is real — but it is not what the
+   holds were missing, and two things had to be measured on the way that this
+   step did not anticipate. **§7.2 is the whole of it; steps 9 and 10 do not
+   start.**
+
+### 7.2 What step 8 measured, and why the gate failed
+
+Everything below is `python analysis/holdout.py --profile`, which prints §1's
+scoreboard, the profile and the gate in one run, and two scratch regressions
+whose numbers are quoted here and in `analysis/README.md`.
+
+**What landed.** The campaign ramp — one slope, on the wall clock, zero at the
+reference epoch, applied to the anchors *and* to every record's right-hand side.
+`ANCHOR_SIGMA_K` is `{prepython: 1.0, recorder: 1.0, postcal: 0.5}`, paying T3
+in the same commit. `groups=`/`anchor_groups` are gone; `Anchors.group` is now
+`Anchors.era` and no residual is a function of it. `FIT_CACHE_VERSION` 8.
+
+#### The ramp is not a constant parasitic watt, and the cold end says so
+
+**This was the surprise.** Written as `camp = s × days`, the way step 5, T2 and
+Jeff's reading all assume, the fit takes **0.041 mW/day** — seven times below
+the 0.281 the warm bands measure — and a tenfold looser prior does not move it.
+It is not the prior refusing. It is the cold end, three ways:
+
+- The sweep's own zero-output tail has **0.577 mW** between sample and coldplate
+  at 4.90 K. The record sits 6.9–8.6 days before the reference epoch, so
+  0.281 mW/day asks for −2.2 mW there: the model's sample would sit **below its
+  own heat sink**. Pinned at 0.15 mW/day the integrator drives the cold tail
+  into its 1 K clamp and overflows.
+- At 4.75 K the fitted local resistance is **527 K/W**, so 0.281 mW/day is
+  **1.35 K of base temperature in 12 days**. The zero-output anchors move 4.7516
+  (08-24) to 4.856 and 4.926 K (09-05) — about 0.1 K — and their **coldplate**
+  moved 4.530 → 4.68 K, which accounts for it without any drift at all.
+- The drift was never measured down there. `drift.py` needs 8 anchors over
+  10 days inside a 1.5 % output band and no band below 52 % output has them, so
+  "constant in temperature" was an extrapolation from 27 K to 4.8 K that
+  nobody had checked.
+
+So `CAMPAIGN_FORM = "power"`: the ramp is a fixed **fraction of the delivered
+heat**, `s × days × P(u)/CAMPAIGN_REF_W`, which is the same number where the
+drift was measured — over the three bands `P(u)` runs 0.45, 0.66, 0.71 W, a
+factor of 1.6, against measured rates spanning 1.5 with no trend — and is zero
+with the heater off. **The bands cannot separate the two shapes; the cold end
+can, and does.**
+
+The mechanism it implies is not the one this plan started with. A constant load
+is "the cryostat is losing cooling power". A fixed fraction of the delivered
+heat is **the heater circuit delivering less of what it is asked for** — trap
+T10's failure mode, slowly instead of all at once, on the circuit Jeff calls
+reseated and not repaired. The fit cannot tell a degrading heater from a
+degrading link, because at steady state both scale with the heat carried; it
+can tell either from a constant parasitic watt.
+
+#### The fit, and the profile
+
+| | anchors | cost | `rms_k` | `anchor_k` | ramp | τ(137) | `nfev` |
+|---|---|---|---|---|---|---|---|
+| campaign off | 98 | 922.18 | 0.1361 | 1.7760 | — | 583.1 | 158 |
+| **campaign on** | 98 | **871.49** | 0.1326 | 2.1249 | **+0.177 mW/day** | 583.3 | 109 |
+
+Pinned and re-fitted, the objective against the slope (mW/day at 0.65 W):
+
+| mW/day | 0.000 | 0.050 | 0.100 | **0.200** | 0.281 | 0.400 |
+|---|---|---|---|---|---|---|
+| cost | 922.18 | 897.64 | 881.13 | **872.34** | 889.03 | 952.44 |
+| the three holds, K low | +3.34 +3.70 +3.79 | +3.26 +3.54 +3.57 | +3.17 +3.38 +3.34 | +3.01 +3.08 +2.91 | +2.88 +2.84 +2.55 | +2.69 +2.49 +2.04 |
+
+**A real minimum, and a shallow one.** 0.1 to 0.28 all sit within 2 % of the
+best cost, so the fit determines the slope to about a factor of two and agrees
+with the independent 0.281 within that. It is the difference between a
+parameter the data has an opinion about and one it merely permits.
+
+#### The gate, and why it failed
+
+Dropping every anchor after 2026-09-04 12:07 leaves 83 of 134 (47 after T4),
+and the held-out fit predicts the three holds **+3.31 / +3.45 / +3.32 K low**.
+Worst 3.45 K against 0.5 K: **FAIL**.
+
+But read the slope beside it: held out it is **+0.160 mW/day** against
+**+0.177** in sample. **The ramp travels; the level does not.** The gate failed
+on something the ramp was never going to fix, and two measurements say what.
+
+**1. T10's own bar lets it.** At 118 K the anchors' error bar is
+`hypot(Λ′σ, δP)` = hypot(0.97, 4.65) = **4.75 mW**, which through 602 K/W is
+**2.86 K**. The three holds are missed by 3 K, which is **1.05σ** — the fit is
+doing exactly what it was told. §1 asks the model to hit those holds to 0.3 K,
+a tenth of the bar T10 gives them. **Either the target or the bar is wrong and
+they cannot both stand.** T10's own text says the ordinary margin is smaller
+than the one fault that measured it, but "smaller" is not a number, and this is
+where that costs something.
+
+**2. What is left is a STEP at the recalibration — trap T7, measured.**
+`holdout.py --shapes`. Take the campaign-on fit's leftover — its anchor miss
+minus its own ramp — and ask what shape describes it, weighted by each anchor's
+own bar, which is the objective's own weighting:
+
+| shape | par | χ²/n | coefficients |
+|---|---|---|---|
+| nothing | 0 | 0.2576 | |
+| a constant | 1 | 0.1947 | +1.32 mW |
+| a slope in date | 2 | 0.1371 | +2.27 mW, +0.115 mW/day |
+| **a step at the cutover** | 2 | **0.1128** | −0.04 mW, **+3.03 mW** |
+| both | 3 | 0.1124 | +0.23 mW, +0.016 mW/day, +2.75 mW |
+
+One parameter at the cutover beats another day-slope, and **given the step
+there is no slope left** (0.016 mW/day). T7 warned that a ramp would absorb a
+step as slope; it did.
+
+**3. The ramp is still real, and that is not a contradiction.**
+`holdout.py --shapes --no-campaign`, which asks the same question of the fit
+with no ramp in it at all: inside the **pre-cutover half alone** — 47 anchors
+over 47 days, no calibration change in them — a slope of **+0.206 mW/day**
+takes χ²/n from 0.192 to **0.054** and the rms from 2.80 to 1.35 mW. So there
+is a drift *and* a step, and over the whole set that regression finds both:
++0.213 mW/day with +2.03 mW at the cutover.
+
+The two runs agree where they should. With the ramp ON, the pre-cutover
+leftover has **no slope left** — +0.009 mW/day, χ²/n 0.0412 → 0.0408 — so the
+fitted 0.177 mW/day has taken up very nearly all of the 0.206 the anchors show
+there, and what remains unexplained is on the other side of the cutover:
++3.00 mW as a constant, over 51 anchors.
+
+`drift.py`'s own bands say the same thing once a step is allowed in them. The
+62.87–64.37 % band has 5 of its 9 anchors after the cutover, and its 0.186 K/day
+collapses to **0.050 K/day** with a step; the other two bands have one
+post-cutover anchor and none, cannot be contaminated, and keep 0.0334 and
+0.1413 K/day. **The 0.335 mW/day row was the step, read as a rate.** The median
+0.281 survives because it comes from the clean band.
+
+#### The second record agrees, and pays for the same thing twice
+
+`holdout.py --postcal` adds `trace-postcal-20260905`, which is §7.1's fit B,
+and now with the ramp:
+
+| | holds, K low | mean | ladder rms | ramp | postcal wander knots |
+|---|---|---|---|---|---|
+| §7.1 fit B, no ramp | +1.63 +1.30 +1.50 | +1.47 | — | — | +2.02 +2.16 +2.42 mW |
+| **fit B + ramp** | +1.66 +1.12 +0.93 | **+1.23** | 0.832 K | **+0.287 mW/day** | +2.10 +1.67 +1.35 mW |
+| one record + ramp | +3.04 +3.15 +3.01 | +3.07 | 1.107 K | +0.177 mW/day | — |
+
+Two things to read here. **The ramp lands on the independently measured rate**
+— 0.287 against `drift.py`'s 0.281 — once a trajectory pins the post-cutover
+epoch, which is the best evidence in this section that the term is real.
+
+And **the post-recal record's wander knots still rail against their 2 mW
+prior**, +1.35 to +2.10 mW, a near-constant offset on a term whose whole
+justification is short-timescale wander. That is the step again, absorbed by
+the only parameter in reach — which is what it was doing in §7.1 before the
+ramp existed, and the ramp has not relieved it. Two routes, one missing term.
+
+#### What this means for step 9
+
+**Do not start step 9.** The next move is T7's own prescription, now with a
+measurement behind it: **an optional named step at the 2026-09-04 12:07
+cutover**, fitted beside the ramp, and then the gate re-run. The step is worth
+about 1.8 K at the holds, which is where §7.1's fit B got to by a different
+route — the post-recal *trajectory* pinned the post-cutover state instead.
+
+**What the step IS remains open, and it is a question for a person, not a
+parameter.** Three candidates, and they want different fixes:
+
+- the Coldplate remap is imperfect, and the step is an artefact of
+  `tools/recalibrate.py` — in which case it belongs in the data, not the
+  objective. Arithmetically hard: T_c sits at 4.6–6.4 K where Λ′ is 2–9 mW/K,
+  so 3 mW needs the remap to be 0.3–1.5 K wrong, which is far more than a
+  curve swap between two sensors of the same model plausibly does;
+- something physical changed in that window. **The postcal era is not
+  homogeneous** — it contains the 09-09 power transient (§2.5) and the 09-10
+  heater-circuit fault and reseat, both of which moved the sample at fixed
+  output, and the archive now reaches past both;
+- the step is where the drift's *mechanism* changed — a heater circuit that
+  degrades and is then disturbed does not follow one slope through the
+  disturbance.
+
+The data cannot place the step better than "between 09-03 21:00, the last
+pre-cutover anchor, and 09-04 23:38, the first hold after it". That window
+contains the recalibration and nothing else the log records.
+
 9. **Then, and only then, test the aux channels** against the fitted drift —
    the second half of the agreed approach. Regress `d(t)` on 1st Stage / RAD
    SHIELD / 2nd Stage where they exist, fit the coefficients on Aug 24 – Sep 03
@@ -1074,6 +1275,10 @@ breaks it is the log-log smoothness prior, not data. `export_response.py`
 already knows — it exports `Q` rather than Λ for exactly this reason. **What
 must be identifiable is Λ′ and Q(T).** Do not spend effort "pinning the level".
 
+**T2 is right about two terms and wrong about one of them being watts — see
+§7.2.** The campaign ramp is a fraction of the *delivered heat*, not a constant
+load, and the cold end is what settled it. Everything else below stands.
+
 **T2 · The campaign drift and the within-record drift have opposite signs.**
 The 43 h sweep's 22.8 h opening hold drifts **−3.8 mK/h** (cooling) at a fixed
 heater — the entire stated justification for the existing `DRIFT_SIGMA_W` — while
@@ -1086,6 +1291,11 @@ per-record short-timescale wander, and the campaign ramp, with separate priors.
 ramp now explains the July/September disagreement and the 3 K bar stays, the
 ramp is fitting a residual that has been priced out and will come back
 under-determined. It must drop in the same commit that turns the ramp on.
+
+**PAID, 2026-09-12**, in step 8's commit: `{prepython: 1.0, recorder: 1.0,
+postcal: 0.5}`. The `postcal` 0.5 is a tightening and T10 is why it is a safe
+one -- over 40-120 K the power-side bar already dominates by 2-3x, so halving
+the kelvin half moves the total by a few percent.
 
 **T4 · The three holds would be double-counted** — once as anchors, once as
 106 h of trajectory. Not fatal, they are consistent, but it silently multiplies
@@ -1109,6 +1319,14 @@ throughout: a held setpoint, no signal.
 before it has a remapped Coldplate column. A residual imperfection in that remap
 presents as a step at that date and a ramp will absorb it as slope. Offer an
 optional named step there and report whether it is significant.
+
+**MEASURED, 2026-09-12, and it is significant -- §7.2.** A step at the cutover
+beats another day-slope on the leftover residual, one parameter each
+(chi2/n 0.113 against 0.137), it is **+3.03 mW**, and given the step no slope
+is left (0.016 mW/day). The ramp had been absorbing it, exactly as this trap
+says. **The term itself is NOT implemented**: what the step means decides
+whether it belongs in the objective at all, and the three candidates want three
+different fixes. §7.2's last section has them.
 
 **T8 · Two tests will fail, and one of them by design.**
 `tests_ltspm3/test_fitted_response.py` pins eight (percent, kelvin) points to
@@ -1183,6 +1401,12 @@ A **13.6 % better trajectory for 0.7 % on the anchors**, and the steady state
 moves by up to **0.51 K, at 122 K**. That is §1's tension easing rather than a
 weight being traded: the anchors this frees are in the band the sweep passes
 through, so the curve no longer has to choose between them.
+
+**And it is what step 8's gate ran into -- §7.2.** At 118 K the three holds'
+bar is `hypot(0.97, 4.65) = 4.75 mW`, which through 602 K/W is **2.86 K**, so
+missing them by 3 K costs the fit **1.05 sigma**. Section 1 asks for 0.3 K
+there, a tenth of the bar this trap gives them. Both cannot stand, and deciding
+which is a question about the heater circuit rather than about the fit.
 
 **It is a plateau, not a knife edge**, and that is the property that matters
 here. Quadrupling the bar from 0.7 % to 2.8 % moves the 77 K steady state by

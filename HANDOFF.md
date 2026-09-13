@@ -1,10 +1,13 @@
-# Handoff — 2026-09-12 (PID phase 0 done, phase 1 §1.1's prerequisites, REFIT step 7)
+# Handoff — 2026-09-12 (REFIT step 8: the ramp is in, the gate failed, and it found two things)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
 refit's own state is [REFIT_PLAN.md](REFIT_PLAN.md) and the route to a working
 loop is [PID_PLAN.md](PID_PLAN.md). This goes stale.
 
-Previous: [HANDOFF-2026-09-10.md](HANDOFF-2026-09-10.md).
+Previous: [HANDOFF-2026-09-10.md](HANDOFF-2026-09-10.md). The earlier half of
+today — PID phase 0 closed, `send note` proved on the cryostat, the archive
+extended past the 09-10 fault — is in `git log 6ff126b..a2c8cd1` and in
+PID_PLAN.md; this file carries what came after it.
 
 > ## THE HEATER IS ON, AND THE 09-10 FAULT IS OVER — BUT RESEATED IS NOT REPAIRED
 >
@@ -13,13 +16,6 @@ Previous: [HANDOFF-2026-09-10.md](HANDOFF-2026-09-10.md).
 > at **118.3 K** since 09-11 00:00. Nothing will move it on its own — invariant
 > 6 — so move it deliberately or leave it.
 >
-> **What happened on 09-10, from the log and from Jeff.** The sample fell from
-> 118.47 K starting 11:30, reaching 112.80 K at 14:40:43. Jeff **reseated a
-> connector** at about 14:39–14:41 — the sample dips a further 1.8 K in 90 s as
-> it is disturbed and **turns around at 14:41, six minutes before the first
-> heater command**. The commands at 14:47:55–14:49:03 (64.031 → 65.008 →
-> 64.010) were deliberate, modulating the output to watch the response.
->
 > **It is a reseat, not a repair** (Jeff, 2026-09-12). The repair is changing
 > the op-amp driver to a robust, correct differential design; until then the
 > fault mode is present and `DELTA_P_FRAC = 0.007` stays a systematic on the
@@ -27,139 +23,133 @@ Previous: [HANDOFF-2026-09-10.md](HANDOFF-2026-09-10.md).
 > at matched output the sample sits **0.30 K colder** than before the fault,
 > and it carries **twice the wander over 300–1200 s** (16.4 mK against 9.5 at
 > τ = 600 s) while the coldplate is unchanged at 0.24 mK.
+>
+> **And the campaign drift now points at the same circuit** — see below. That
+> is a new reason to want it repaired, and the first one that is not about a
+> single afternoon.
 
-## What this session did
+## What this session did — REFIT_PLAN Phase B step 8
 
-Eleven commits, `6ff126b..0e60d1b`, **merged to `main` and pushed**. 925
-passing, `ruff` clean, `curate.py --propose` reports no diff. The eight below
-are the substantive ones; the other three are this file and the two plans.
+925 passing, `ruff` clean. The step landed in full: the campaign drift is on,
+trap T3 is paid in the same commit (`ANCHOR_SIGMA_K` → `{prepython: 1.0,
+recorder: 1.0, postcal: 0.5}`), `groups=` and `anchor_groups()` are retired,
+and `analysis/holdout.py` is new — it is the gate, and it prints REFIT_PLAN §1's
+scoreboard from the fit in front of it instead of from memory.
 
-| | |
-|---|---|
-| `6ff126b` | **trap T10** — the anchors get a power-side error bar |
-| `dd62f1a` | **step 6c** — the below-10 K basin, settled: the knots stay |
-| `3583ac4` | the manifest gets `trace-postcal-20260905` |
-| `0eb3381` | **traps T4 and T5** — `RECORD_SHARE` explicit, 36 anchors counted twice |
-| `982714b` | **step 7** — per-record drift, and the two-record measurement |
-| `b46779f` | **phase 0 items 1–2** — the archive past the fault, and its mask |
-| `32a1583` | **phase 0 item 4** — four documents, and `analysis/allan.py` |
-| `d6dbe5d` | **phase 0 item 3** — the `note` command |
+**The gate FAILED: 3.45 K against its 0.5 K bar.** Steps 9 and 10 do not start;
+the plan says so and the reason is worth more than the step would have been.
+Everything below is [REFIT_PLAN.md §7.2](REFIT_PLAN.md), which has the numbers.
 
-**PID_PLAN phase 0 is DONE**, gate and all, and **phase 1 §1.1's two "settle
-first" items are done**. REFIT_PLAN Phase B is at **step 8**.
+## The four things worth a reviewer's attention
 
-**The gate was proved on the cryostat.** After Jeff restarted the recorder, a
-note landed on row 30210 of `data/ltspm3-heater_2026-09-12.csv` at 16:47:12 —
-sample 118.33 K, output 64.0100 %, the row before it blank:
+**1. The drift is not a constant parasitic watt, and the cold end refuses it
+three ways.** Written `camp = s × days`, the way step 5, trap T2 and Jeff's
+reading all assume, the fit takes **0.041 mW/day** against the 0.281 the warm
+bands measure, and a tenfold looser prior does not move it. It is the cold end,
+not the prior: the sweep's zero-output tail has **0.577 mW** between sample and
+coldplate at 4.90 K and sits 7–9 days before the reference epoch, so the
+measured rate asks the model's sample to sit below its own heat sink (pinned at
+0.15 mW/day the integrator overflows); at 4.75 K, 527 K/W, that rate is
+**1.35 K of base temperature in 12 days** against a measured ~0.1 K that the
+coldplate's own rise already explains; and the drift was **never measured below
+27 K** — no output band under 52 % holds 8 anchors over 10 days.
 
-```
-[lschart-cli] connector reseated 2026-09-10 14:39-14:41; reseat not repair,
-op-amp driver still to change
-```
+So `CAMPAIGN_FORM = "power"`: a fixed **fraction of the delivered heat**, which
+is the same milliwatts per day where the drift was measured and zero with the
+heater off. **The bands cannot tell the two shapes apart; the cold end can.**
 
-**The first note in 30,214 rows.** `fit_table.py` carries the column into the
-archive's `note`, so it is in the dataset at the next export.
+**The mechanism that implies is the heater circuit, not the cryostat.** A
+constant load is "we are losing cooling power". A fixed fraction of the
+delivered heat is the heater delivering less than the readback says — trap
+T10's failure mode, slowly instead of all at once, on the circuit that is
+reseated and not repaired. The fit cannot separate a degrading heater from a
+degrading link; it can separate either from a constant watt, and it does.
 
-> **A push is not a deploy here.** The *first* restart changed nothing: the main
-> checkout had never pulled and `origin/main` was six commits ahead of the tree
-> the recorder actually runs from, so there was no handler on disk to load. The
-> refusal said so plainly — `unknown command 'note'` with the old eleven-command
-> list, which is the spool earning its keep. **Pull the main checkout, then
-> restart.**
+**2. What is left after the ramp is a step at the recalibration — trap T7,
+measured.** On the leftover anchor residual, weighted by each anchor's own bar:
+a step at 2026-09-04 12:07 gives χ²/n **0.1128** against **0.1371** for another
+day-slope, one parameter each, and it is **+3.03 mW**. Given the step, no slope
+is left (0.016 mW/day). T7 predicted exactly this absorption.
 
-## The five things worth a reviewer's attention
+**The ramp is still real**, which is not a contradiction: inside the
+**pre-cutover half alone** — 47 anchors over 47 days, no calibration change in
+them — a slope of **+0.206 mW/day** takes χ²/n from 0.192 to 0.054. And one of
+`drift.py`'s three bands turns out to have been the step read as a rate: the
+62.9–64.4 % band has 5 of 9 anchors after the cutover and its 0.186 K/day falls
+to **0.050** once a step is allowed. The other two bands cannot be contaminated
+and are where the median 0.281 comes from.
 
-**1. The anchors' error bar has two halves and they combine in watts.**
-`DELTA_P_FRAC = 0.007`, in quadrature with `ANCHOR_SIGMA_K × Λ′`. It binds over
-40–120 K (1.7–2.6× the kelvin bar) and does nothing below 20 K. `rms_k`
-0.1499 → **0.1295** for 0.7 % on `anchor_k`, and quadrupling the bar moves the
-77 K steady state by 0.10 K — the answer does not turn on the size of the one
-fault that measured it. REFIT_PLAN T10.
+**3. §1's target row and T10's error bar cannot both stand.** At 118 K the three
+holds' bar is `hypot(Λ′σ, δP)` = **4.75 mW = 2.86 K**, so missing them by 3 K
+costs the fit **1.05σ**. §1 asks for 0.3 K there — a tenth of the bar. The fit
+is doing exactly what it was told, and no amount of extra terms will change
+that while the bar says a 3 K miss is free. **Deciding which to move is a
+question about the heater circuit, and it is Jeff's.**
 
-**2. Nothing identifies the conductance below about 7 K, and more freedom there
-is worse.** Four bottom-knot placements spread dΛ/dT **10× at 4.55 K** and
-1.02× at 7 K; one *extra* knot below the data costs **83 % of the objective**;
-dropping all four zero-output anchors moves the curve in the sixth figure. The
-knots stay. What the question turned up is that **Λ is evaluated at the
-coldplate**, 2.7 % below the bottom knot, which `knot_range` never looked at —
-now bounded by `KNOT_EXTRAP_TOL`. REFIT_PLAN 6c.
+**4. §1's scoreboard is generated now, and all three rows fail.** The "where it
+stands today" column had been quoted from three different fits over the life of
+the plan; `python analysis/holdout.py` prints it:
 
-**3. 36 anchors were in the objective twice, not the 17 trap T4 estimated.**
-Dropping them moves Q(T) by at most **0.070 K** from 5 to 192 K and `rms_k` not
-at all — and the fit that dropped them predicts them anyway, median miss well
-under 0.1 K.
+| row | target | measured | |
+|---|---|---|---|
+| the three long settled holds | < 0.3 K | **+3.04 / +3.15 / +3.01 K** | FAIL |
+| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | **1.107 K rms**, 3.13 max | FAIL |
+| every measured τ, 40–120 K | < 10 % | **26.4 % worst**, 4.7 % median | FAIL |
 
-**4. The post-recal trajectory recovers 57 % and the model needs step 8.**
-Adding `trace-postcal-20260905` as a second record takes the three holds from
-+3.45 K mean low to **+1.47 K**, against a 0.3 K target. Three things then say
-the campaign ramp is the missing piece: the two records **cannot both be
-satisfied** (the sweep's own residual goes 0.1300 → 0.3272 K), the per-record
-wander term **rails trying to be the era offset** (+2.02/+2.16/+2.42 mW against
-a 2 mW prior), and `group_w` moves with it. §7.1.
+"31 rungs" was a count nobody could reproduce — the window holds 45. And the τ
+row needs a decision: the median is 4.7 % and §2.4 is right that the *shape*
+travels, but a single dwell's τ scatters 433–850 s near 137 K, so "every
+measured τ" may not be reachable by a one-pole model at all.
 
-**5. The stability figure had never been measured.** `commissioning.md` quoted
-a 1/√N prediction: 6.1 / 4.1 / 2.5 mK at 4 / 60 / 600 s. `analysis/allan.py`
-measures it, validated exactly against white noise, a linear drift and a sine.
-Open loop at 118 K, 26.3 h:
-
-| τ | 4 s | 10 s | 60 s | 130 s | 600 s | 1 h | 6.6 h |
-|---|---|---|---|---|---|---|---|
-| σ_y, mK | 7.79 | 8.73 | 7.95 | **7.38** | 9.52 | 12.72 | 24.49 |
-| edf | 23666 | 9466 | 1577 | 727 | 157 | 25 | 3 |
-
-**Averaging stops helping at about two minutes.** The prediction was optimistic
-by nearly 4× at 600 s, because a model with no drift term goes on promising
-improvement through the region where this cryostat has stopped improving.
-PID_PLAN §1's criterion is **not met open loop, by 2.9×** — which is the point
-of it.
-
-## One thing deliberately not done
-
-**REFIT_PLAN §1's target table has not been re-derived.** Its "where it stands
-today" column reads 2.36 / 2.65 / 2.81 K for the three post-recal holds; the
-shipped table measures **4.06 / 4.21 / 4.25**, which agrees with §2.1 and
-`SUPERSEDED_NOTE` and is not `T_pole`. 2.5 K is 60 % of 4.17, so that column is
-almost certainly §2.2's *first refit*. **§1 is the definition of done, so it has
-to be fixed before it is used as one.**
+With the post-recal record added as a second trajectory (§7.1's fit B) the
+holds come to **+1.66 / +1.12 / +0.93** and the ramp lands on **+0.287 mW/day**
+against `drift.py`'s independently measured 0.281 — the best evidence in the
+session that the ramp is real. But that record's own wander knots then rail at
+**+1.35 to +2.10 mW** against a 2 mW prior: the same step, absorbed by the only
+parameter in reach.
 
 ## Then, in order
 
-1. **REFIT step 8** — campaign drift on, `ANCHOR_SIGMA_K` down in the same
-   commit (T3), `groups=`/`anchor_groups` retired. §7.1 is the evidence it is
-   needed; `load_trace_record(F.POSTCAL)` is the one call for the second
-   record. **Leave-one-epoch-out is the gate and the plan says do not proceed
-   if it fails.**
-2. Steps 9 and 10: aux channels against the fitted drift, then migrate the five
-   callers, regenerate `_fitted_table.py`, clear `SUPERSEDED_NOTE`. T8 says
-   `test_fitted_response.py`'s pins are **regenerated, not loosened**.
-3. PID_PLAN phase 1 §1.2 — the band constants (`DELTA_P_FRAC` is defined and in
-   the cache key; `SIGMA_C_FRAC` and the rest are not) and the two residual
-   functions. **`missing_power_w` should be written against
-   `pc-20260908-154814` vs `pc-20260910-144849`** — the matched-output pair
-   either side of the fault, which is the one measurement of what the reseat
-   left. The by-hand arithmetic in that row's note is flagged as not the answer.
-4. Phase 1 §1.3 — the 300 K pipeline, dry-run on the 180 K top rung. The ladder
-   itself waits: Jeff says much later, rely on extrapolation until then, so the
-   table's `T_MAX_K` does not move and the monitor's no-opinion region stays.
+1. **Two questions for Jeff before any more fitting.** They decide what the
+   next term even is, and neither is a modelling choice:
+   - **What is the +3 mW step at 2026-09-04?** The candidates want different
+     fixes: an imperfect Coldplate remap (belongs in the data, not the
+     objective — and arithmetically strained: T_c sits where Λ′ is 2–9 mW/K, so
+     3 mW needs the remap to be 0.3–1.5 K wrong); something physical in that
+     window; or the drift's mechanism changing. **The postcal era is not
+     homogeneous** — it contains the 09-09 transient and the 09-10 fault.
+   - **Is `DELTA_P_FRAC = 0.007` the ordinary margin, or the worst case?** If
+     the ordinary margin is much smaller, the bar comes down and §1's 0.3 K
+     becomes reachable; if it is right, §1's target is asking for a tenth of
+     the uncertainty and should say so instead.
+2. **Then trap T7's named step**, fitted beside the ramp, and re-run
+   `analysis/holdout.py`. Worth about 1.8 K at the holds on the one-record fit.
+   Only after 1: if the step is the remap, it belongs in `recalibrate.py`.
+3. **Steps 9 and 10 stay shut.** Nothing regenerates `_fitted_table.py` while
+   the gate is red; `SUPERSEDED_NOTE` stays.
+4. PID_PLAN phase 1 §1.2 is **not blocked by any of this** — the band constants
+   and the two residual functions. `DELTA_P_FRAC` is defined and in the cache
+   key; `missing_power_w` should still be written against `pc-20260908-154814`
+   vs `pc-20260910-144849`, the matched-output pair either side of the fault.
 
 ## Traps this session added to the list
 
-- **The cache key does not contain the knot range.** Any study that moves
-  `T_lo` must give each variant its own `CACHE_DIR`, or it gets another
-  variant's answer back in zero seconds — which does not look like an error, it
-  looks like agreement.
-- **Moving `T_lo` re-places all 20 geomspaced knots**, so a four-way comparison
-  confounds the cold end with the 10–20 K knots landing elsewhere — 11 of 36
-  cost units in the case measured. Pass explicit knots to isolate it.
-- **Check an archive extension is additive before trusting it.** Re-run the
-  original glob and compare byte for byte first. The manifest's boundaries are
-  timestamps, so a table whose earlier rows shifted would move every window
-  under them silently.
-- **Heredocs on stdin mangle UTF-8** in this environment: `—` and `→` arrive as
-  `?` and a patch script fails its own assertion. Write the script to a file.
-- **`analysis/measured.csv` and `analysis/.fit_cache/` do not exist on a fresh
-  clone or in a new worktree.** `measure.py` takes 11 s; the production fit then
-  takes about 50 s.
+- **`\n` inside a heredoc on this box gets eaten a level.** Writing a patch
+  script with `python - <<'PY'` and a `"\\n"` in it lands a REAL newline in the
+  file and a syntax error, quoted delimiter or not. This is the sibling of the
+  UTF-8 trap already on the list: **write the script to a file** rather than to
+  stdin, or keep backslashes out of it.
+- **A campaign term must be told what it is proportional to.** The bands that
+  measured the drift span a factor of 1.6 in heater power and the rates scatter
+  by 1.5, so they cannot choose the shape. Anything that claims a drift in
+  watts is quietly claiming it at zero output too, where the base temperature
+  and the sweep's own cold tail are very much able to disagree.
+- **A fitted slope is not evidence; the profile is.** `holdout.py --profile`
+  pins the slope and refits everything else. Here the objective is within 2 %
+  of its best over 0.1–0.28 mW/day, so the fit determines the rate to about a
+  factor of two — which is worth knowing before quoting four figures of it.
+- **The anchors' dates are an input now, not a label.** They are in the cache
+  key for that reason; re-measuring a window's `t_mid` changes the fit.
 
 ## Running it
 
@@ -169,6 +159,13 @@ The venv is Windows and lives at the **repository root**, not in a worktree:
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest -q
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ruff check .
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/measure.py
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/curate.py --propose
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/allan.py
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --profile
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --shapes
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --shapes --no-campaign
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/drift.py
 ```
+
+`analysis/measured.csv` and `analysis/.fit_cache/` do not exist on a fresh
+clone or in a new worktree. `measure.py` takes 11 s; the production fit then
+takes about a minute, and `--profile` runs seven of them.
