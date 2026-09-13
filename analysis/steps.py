@@ -58,6 +58,52 @@ MIN_REACH = 3.0
 #: has nothing but noise to work with and obligingly fits it.  reach alone
 #: cannot catch that, because reach is computed from the tau being tested.
 MIN_AMPLITUDE_SIGMA = 20.0
+
+#: ...and it must not have run SO long that the relaxation was over before the
+#: window ended, because then a pole has nothing left to fit but the cryostat's
+#: drift.
+#:
+#: "Fitting many hours for a tau is a bad idea.  The response time is clearly
+#: minute scale" (Jeff, 2026-09-13).  A window of 20 time constants has
+#: e^-20 = 2e-9 of its transient left in the last sample; anything past that is
+#: the slow wander of REFIT_PLAN.md section 6.1, which is exactly what put four
+#: graded anchors 0.4-1.7 K out when a pole was fitted to a HOLD's level.  The
+#: same disease, one column over.
+#:
+#: **20 sits in a gap the data has anyway**: over the 38 graded relaxations in
+#: the archive, reach runs 3.4 to 16.7 and then jumps to 32.5, 33.9, 40.9 and
+#: up to 471.  Nothing lands between 17 and 32.  The bar removes 12 of them,
+#: all holds or near-holds, including the 33 h window at 118.3 K whose tau came
+#: back 712 s where a clean 2.6 K step at the same temperature -- 40 mK away --
+#: measures 524.7 +- 4.5 s.
+#:
+#: A dropped dwell is still an ANCHOR: only its tau is refused, its steady
+#: state is untouched, and `load_anchors` never looked at this.
+MAX_REACH = 20.0
+
+#: ...and its excursion must be narrow enough that ONE time constant describes
+#: the whole of it, as a fraction of where it ended up.
+#:
+#: "The step spans more than the region valid for a single step" (Jeff,
+#: 2026-09-13), of ``pc-20260905-111947``: 83.0 -> 68.4 K, a 14.5 K COOLING
+#: excursion whose neighbours in the same ladder are 6.8 and 7.2 K steps up.
+#: tau is C/Lambda' and both move with temperature -- across that span the
+#: fitted model says tau changes by about half -- so there is no single pole to
+#: find.  A relaxation is dated by where it ENDS, so what the fit returns
+#: belongs somewhere in the middle of the excursion and is then scored at the
+#: bottom of it; that one window is 24 % off the model where its neighbours are
+#: within 2.5 %.
+#:
+#: **It is a proxy and is labelled one.**  The quantity that actually matters
+#: is how much tau(T) changes between ``T_lo`` and ``T_hi``, and that cannot be
+#: asked here: :func:`plant_clock` is built FROM the graded relaxations, so a
+#: window wide enough to be doubted is also the one bending the clock it would
+#: be tested against -- measured, and the ratio comes back 1.12 for the 14.5 K
+#: excursion against 1.50 for a 6 K step that is fine.  Amplitude over
+#: temperature is uncontaminated and separates cleanly: 21.3 % and 19.4 % for
+#: the two wide excursions in the archive, then a factor-of-two gap down to
+#: 9.7 % for everything else.  0.15 sits in that gap.
+MAX_AMPLITUDE_FRAC = 0.15
 #: A "steady" point extrapolates from where the dwell ended to T_inf.  Past
 #: this much extrapolation it is a prediction of the model being fitted, not a
 #: measurement of the cryostat.
@@ -603,12 +649,29 @@ def settled(r, tau_plant_s=None):
 
 
 def grade(r, tau_plant_s=None):
-    """'tau' if the time constant may be believed, 'steady' if only T_inf, else ''."""
+    """'tau' if the time constant may be believed, 'steady' if only T_inf, else ''.
+
+    Four ways a relaxation can fail to be a time-constant measurement while
+    still being a perfectly good steady-state anchor: it never resolved its
+    transient (``MIN_REACH``), it had no transient worth the name
+    (``MIN_AMPLITUDE_SIGMA``), it ran so long that the transient was over and
+    the pole is fitting drift (``MAX_REACH``), or it swept so far that tau
+    itself changed across it (``MAX_AMPLITUDE_FRAC``).  The last two are new on
+    2026-09-13 and are Jeff's, from REFIT_PLAN.md section 1's third row.
+
+    **These two are NOT mirrored into ltspm3/tools/sweep.py**, and the
+    divergence is deliberate in the same way ``long_enough``'s is: the sweep
+    tool asks "has this rung settled, may I move on", which is a question about
+    the LOWER bound only.  A rung that ran too long or moved too far is a
+    grading question for a fit, and the sweep tool never grades anything.
+    """
     if abs(r["settle_K"]) > MAX_SETTLE_K:
         return ""
     if not settled(r, tau_plant_s):
         return ""
-    if (r["reach"] >= MIN_REACH and r["amp_sigma"] >= MIN_AMPLITUDE_SIGMA
+    if (MIN_REACH <= r["reach"] <= MAX_REACH
+            and r["amp_sigma"] >= MIN_AMPLITUDE_SIGMA
+            and abs(r["amp_K"]) <= MAX_AMPLITUDE_FRAC * r["T_inf"]
             and r["rms_sigma"] < 8.0 and not pole_floor(r)):
         return "tau"
     return "steady"
