@@ -348,6 +348,38 @@ it **worse** (worst 0.467 K against 0.234 K with the ramp off), because it adds
 warming across six days in which the cryostat did not warm.
 `fit_ode.PRODUCTION_CAMPAIGN` is therefore `False`. REFIT_PLAN.md §7.3.
 
+## Two rules for a believable τ, and the refit is done — 2026-09-13
+
+The last thing standing between Phase B and done was REFIT_PLAN §1's third row,
+"every measured τ, 40–120 K, within 10 %", reading 26.5 % worst against 2.5 %
+median. The gap was **two windows out of eleven and neither was a model error**
+(`analysis/plot_tau.py` draws it). Jeff's two rulings became two rules:
+
+| | | |
+|---|---|---|
+| `steps.MAX_REACH = 20` | *"fitting many hours for a tau is a bad idea — the response time is clearly minute scale"* | a window of 20 τ has 2e-9 of its transient left; past that a pole fits drift, which is §6.1's finding one column over |
+| `steps.MAX_AMPLITUDE_FRAC = 0.15` | *"the step spans more than the region valid for a single step"* | τ = C/Λ′ and both move with T, so a wide excursion has no single pole — and a relaxation is dated by where it ENDS, so the fit is scored at the bottom of a swing it averaged |
+
+**Both bars sit in gaps the archive already had.** Reach runs 3.4 to 16.7 and
+then jumps to 32.5, with nothing between; amplitude over temperature runs to
+9.7 % and then jumps to 19.4 %. Neither number was chosen to make a test pass.
+
+**The amplitude rule is a proxy and is labelled one.** What matters is how much
+τ(T) changes between `T_lo` and `T_hi` — and that cannot be asked here, because
+`plant_clock` is built *from* the graded relaxations, so a window wide enough to
+be doubted is the one bending the ruler. Measured: the ratio comes back 1.12 for
+the 14.5 K excursion and 1.50 for a 6 K step that is fine.
+
+The manifest diff is **13 windows, all `tau` → `steady`, no anchor lost** — a
+demoted dwell keeps its steady state and only its time constant is refused.
+τ anchors 37 → 25.
+
+**§1's three rows are then green** and `ltspm3/model/_fitted_table.py` is
+regenerated: −0.25 / −0.08 / −0.01 K at the three holds, 0.139 K rms across the
+ladder, 6.7 % worst on τ — with the holds and the ladder scored as PREDICTIONS
+from one gauge fitted on disjoint anchors. The shipped table is 4–5 K warmer at
+a given output than the one every earlier number used.
+
 ## Λ and C without a fit — 2026-09-10
 
 `analysis/fit_ode.py --seed-only`, REFIT_PLAN.md Phase B step 6. Every number
@@ -539,7 +571,7 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 
 | | |
 |---|---|
-| `steps.py` | the finder, the pole and the bars — **no `__main__` any more**, see `measure.py`. `archive_dwells()` is the **one** scan of the archive and `curate.py` builds the manifest from it. `fit_pole` fits `T = T∞ + A e^(−t/τ)`; `pole_bounds` says what interval it searched τ on, because a τ *at* a bound is the search giving up and neither grader notices (AUDIT-2026-09-10 finding 2). **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
+| `steps.py` | the finder, the pole and the bars — **no `__main__` any more**, see `measure.py`. Four ways a relaxation fails to be a τ measurement while staying a good steady-state anchor: `MIN_REACH`, `MIN_AMPLITUDE_SIGMA`, and (2026-09-13) `MAX_REACH` and `MAX_AMPLITUDE_FRAC`. The last two are **not** mirrored into `ltspm3/tools/sweep.py` — that tool asks "has this rung settled", a lower bound only, and never grades. `archive_dwells()` is the **one** scan of the archive and `curate.py` builds the manifest from it. `fit_pole` fits `T = T∞ + A e^(−t/τ)`; `pole_bounds` says what interval it searched τ on, because a τ *at* a bound is the search giving up and neither grader notices (AUDIT-2026-09-10 finding 2). **Read the `U_TOL_PCT` note**: the 218's readback flickers between adjacent codes, and an exact match shreds every dwell below 29 K. |
 | `measure.py` | **what a fit reads.** Measures the windows the manifest names and writes `measured.csv`: a jump keeps `fit_pole`'s numbers exactly, a hold gets level + drift + relaxation + a 24 h harmonic, and every row carries `sigma_T_inf` = statistical ⊕ extrapolation ⊕ the measured long-term fluctuation, plus `t_mid` and `days`. `--verify` checks REFIT_PLAN.md §6's exit criteria. **A single pole is the wrong model for a hold** and had four graded anchors 0.4–1.7 K out; `T_pole` is kept beside `T_inf` so that stays visible. |
 | `fit_ode.py` | integrates the ODE down the 43 h sweep and fits Λ and C as monotone cubics in (log T, log y). One curve's knots freed at a time. Writes `ladder.csv`. `campaign=True` adds the drift ramp — one slope, on the wall clock, zero at the reference epoch, on the anchors and on every record's right-hand side — and `campaign_w=` pins it so the objective can be profiled in it. **`CAMPAIGN_FORM` is `"power"`, a fraction of the delivered heat**, because a constant watt is refused by the cold end three ways (REFIT_PLAN.md §7.2). An anchor's error bar has **two halves and they are combined in watts**: `ANCHOR_SIGMA_K` in kelvin, times the local Λ′, in quadrature with `DELTA_P_FRAC × Q` — the watts the heater circuit may not have delivered (REFIT_PLAN.md T10). The second dominates over 40–120 K and is invisible below 20 K, which one bar in kelvin cannot express. |
 | `holdout.py` | **REFIT_PLAN.md section 1's scoreboard, and the gate.** `--in-epoch` is the one that matters: it fits ONE delivered-power gauge on the 45 ladder rungs and PREDICTS the three long holds days later, which is what is left to ask once a reseated wire can move the level by 3.2 K at 118 K. Prints the three targets from the fit in front of it rather than from memory, then drops every anchor after the 2026-09-04 cutover, refits, and PREDICTS the three holds. A hold's miss is a root of `Λ(T) − Λ(T_c) = Q + campaign(t)`, not a linearisation, because at 3 K of miss the two differ by 0.1 K. `--profile` pins the campaign slope and traces the objective; `--postcal` adds the second record (§7.1's fit B) |

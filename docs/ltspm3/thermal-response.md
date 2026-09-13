@@ -54,6 +54,12 @@ recorder in **4 h 17 min**, and it settles both halves of this page.
 1.03, 1.03, 1.03, 1.02, 1.01. At 50–57 K it is 0.88–0.90. The dynamics
 generalise, as this page has always claimed they would.
 
+> **PAID, 2026-09-13.** The refit below is done and the shipped table now
+> reproduces these same 45 rungs to **0.139 K rms, 0.35 K max**, and predicts
+> the three long holds it was not fitted to within 0.25 K. Everything in this
+> section is the measurement that forced it, kept as it was written.
+> REFIT_PLAN.md §1.
+
 **The steady state was not.** The model came back **low by up to 4.5 K** across
 the band it had been interpolating through, rising smoothly from +0.35 K at
 28 K to a plateau of about +4.5 K from 53 K up — 25 times the fit's own 0.168 K

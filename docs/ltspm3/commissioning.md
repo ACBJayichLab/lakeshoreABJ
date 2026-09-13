@@ -841,7 +841,9 @@ which is invariant 6.
 every command was verified by readback. The result is in
 [thermal response](thermal-response.md#the-programmed-ladder-measured-it--2026-09-05):
 τ within 3% of the model from 77 K up, the steady state **low by up to 4.5 K**
-through the band that had no measurement in it.
+through the band that had no measurement in it. **That miss was paid on
+2026-09-13**: the refitted table reproduces these rungs to 0.139 K rms. The
+numbers below are the measurement that forced the refit, not the state today.
 
 Two things to do differently next time, both learned the expensive way.
 
