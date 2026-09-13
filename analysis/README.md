@@ -512,11 +512,17 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 #     --shapes asks what the leftover residual is: a slope, or a step (trap T7)
 .venv/Scripts/python.exe analysis/holdout.py
 
+# 3c. section 1's tau row, drawn: which relaxations a single pole can describe
+.venv/Scripts/python.exe analysis/plot_tau.py
+
 # 4. plan the next sweep -- what to fill in, and how long it takes  (~10 s)
 .venv/Scripts/python.exe analysis/plan_sweep.py
 
 # 5. refreeze the simulator's copy of the model, if the fit moved   (~10 s)
-.venv/Scripts/python.exe analysis/export_response.py --verify
+#     --dry-run measures and reports without touching the shipped table.
+#     It now carries a DATED delivered-power gauge: the level is a calibration
+#     with a shelf life, and heater work expires it.  REFIT_PLAN section 7.3
+.venv/Scripts/python.exe analysis/export_response.py --dry-run --verify
 ```
 
 `pip install -e ".[analysis]"` for scipy and matplotlib; the recorder itself
@@ -537,6 +543,7 @@ is what `FIT_CACHE_VERSION` is for. Delete the directory to force a refit.
 | `measure.py` | **what a fit reads.** Measures the windows the manifest names and writes `measured.csv`: a jump keeps `fit_pole`'s numbers exactly, a hold gets level + drift + relaxation + a 24 h harmonic, and every row carries `sigma_T_inf` = statistical ⊕ extrapolation ⊕ the measured long-term fluctuation, plus `t_mid` and `days`. `--verify` checks REFIT_PLAN.md §6's exit criteria. **A single pole is the wrong model for a hold** and had four graded anchors 0.4–1.7 K out; `T_pole` is kept beside `T_inf` so that stays visible. |
 | `fit_ode.py` | integrates the ODE down the 43 h sweep and fits Λ and C as monotone cubics in (log T, log y). One curve's knots freed at a time. Writes `ladder.csv`. `campaign=True` adds the drift ramp — one slope, on the wall clock, zero at the reference epoch, on the anchors and on every record's right-hand side — and `campaign_w=` pins it so the objective can be profiled in it. **`CAMPAIGN_FORM` is `"power"`, a fraction of the delivered heat**, because a constant watt is refused by the cold end three ways (REFIT_PLAN.md §7.2). An anchor's error bar has **two halves and they are combined in watts**: `ANCHOR_SIGMA_K` in kelvin, times the local Λ′, in quadrature with `DELTA_P_FRAC × Q` — the watts the heater circuit may not have delivered (REFIT_PLAN.md T10). The second dominates over 40–120 K and is invisible below 20 K, which one bar in kelvin cannot express. |
 | `holdout.py` | **REFIT_PLAN.md section 1's scoreboard, and the gate.** `--in-epoch` is the one that matters: it fits ONE delivered-power gauge on the 45 ladder rungs and PREDICTS the three long holds days later, which is what is left to ask once a reseated wire can move the level by 3.2 K at 118 K. Prints the three targets from the fit in front of it rather than from memory, then drops every anchor after the 2026-09-04 cutover, refits, and PREDICTS the three holds. A hold's miss is a root of `Λ(T) − Λ(T_c) = Q + campaign(t)`, not a linearisation, because at 3 K of miss the two differ by 0.1 K. `--profile` pins the campaign slope and traces the objective; `--postcal` adds the second record (§7.1's fit B) |
+| `plot_tau.py` | **section 1's third row, drawn.** Nine of the eleven graded relaxations over 40–120 K agree to 6.9 %; the two that do not are a 14.5 K *cooling* excursion (τ changes ~50 % across it, and a relaxation is dated by where it ends) and 1.1 K of motion across 33 h (a drift fit — and a clean 2.6 K step at the same temperature measures 524.7 ± 4.5 s, which the model reproduces to 0.3 %). Neither is a model error |
 | `decimate.py` | the sweep, thinned where nothing is happening and kept where it is. **16x fewer samples, 26x faster to fit, 0.8% different.** Writes `sweep_decimated.csv.gz` |
 | `bath.py` | the coldplate as a first-order lag driven by the heater, not as a bath. **tau = 175 s, 27.6 mK rms over a 2.30 K swing.** What makes the plant self-contained |
 | `_data.py` | where the inputs live and how to open them; every reader here goes through it |

@@ -44,6 +44,7 @@ import numpy as np
 
 sys.path.insert(0, "analysis")
 import fit_ode as F  # noqa: E402
+import holdout as H  # noqa: E402
 from plot_gain import N_CAP, N_DRIFT, N_LAM, coldplate_of  # noqa: E402
 
 OUT = "ltspm3/model/_fitted_table.py"
@@ -58,6 +59,24 @@ N_GRID = 300
 #: anything to say.  Outside it the interpolation clamps, deliberately: a
 #: simulator that silently extrapolates a fitted curve is inventing a cryostat.
 T_LO, T_HI = 4.7, 195.0
+
+
+def measure_gauge(r):
+    """``(fraction, window, n)`` -- the delivered-power gauge for the CURRENT epoch.
+
+    The one number a reseated wire changes, and the reason this export needs it:
+    the fit's Lambda is levelled across the whole campaign, and the cryostat has
+    been opened since.  Measured on the most recent programmed ladder, whose
+    rungs span 5-120 K in under five hours and so cannot themselves drift
+    (REFIT_PLAN.md section 7.3).
+
+    **It is a calibration with a shelf life, not a property of the cryostat.**
+    Any work on the heater wiring expires it, which is why the generated header
+    carries the number, the window and the date rather than quietly folding it
+    in.
+    """
+    rungs = H.ladder_rungs()
+    return H.gauge(r, rungs), H.LADDER, len(rungs)
 
 
 def evaluate():
@@ -82,6 +101,14 @@ def evaluate():
     # clamps the T_c term at the bottom of the grid, which is worse: it made
     # every cold steady state 0.2 K too warm.  Q is exported evaluated, once.
     Q = r["lam"](r["pl"], T) - r["lam"](r["pl"], Tc)
+    # In COMMANDED watts, which is what every consumer converts to percent.
+    # The fit's own Lambda is in commanded watts for a level averaged over the
+    # campaign; the gauge moves it to the epoch the cryostat is in now.  Divide,
+    # do not multiply: g > 0 means the circuit delivers MORE than P(u) says
+    # relative to the fit, so holding T takes LESS commanded power than the
+    # ungauged curve claims.
+    gauge, gauge_window, gauge_n = measure_gauge(r)
+    Q = Q / (1.0 + gauge)
     if np.any(np.diff(Q) <= 0):
         raise SystemExit("Q(T) is not monotone -- it is inverted by "
                          "interpolation downstream, so this must not ship")
@@ -91,6 +118,9 @@ def evaluate():
     return r, {
         "T": T,
         "q": Q,
+        "gauge": gauge,
+        "gauge_window": gauge_window,
+        "gauge_n": gauge_n,
         "slope": r["lam"].slope(r["pl"], T),
         "cap": r["cap"](r["pc"], T),
         "tc": Tc,
@@ -107,16 +137,39 @@ def verify(r, g) -> None:
     T = g["T"]
     mid = np.sqrt(T[:-1] * T[1:])                    # geometric midpoints
 
-    def err(name, exact, table):
+    def err(name, exact, table, floor=None):
+        """Relative error, and where it is worth reading.
+
+        REFIT_PLAN.md trap T9 asked why this reported 5e-2 against a docstring
+        claiming a part in 10^5.  **It is the bottom two grid points and nothing
+        else.**  ``q`` is Lambda(T) - Lambda(T_c), which goes to ZERO as the
+        sample approaches its own heat sink, so a relative error there divides
+        by a number the grid itself is driving to nothing: 3.8e-2 at 4.73 K
+        where q = 0.13 mW, 3.8e-3 above 5 K, 6e-4 above 6 K and 6e-5 above 8 K.
+        The docstring is right everywhere the quantity means anything.  So the
+        absolute error is reported beside it, because that is what a consumer
+        feels -- 45 uW at worst, over a heater that runs to 800 mW.
+        """
         rel = np.abs(table / exact - 1.0)
-        print(f"  {name:<10} max {rel.max():.2e}  rms {np.sqrt((rel**2).mean()):.2e}")
+        abs_err = np.abs(np.asarray(table) - np.asarray(exact))
+        extra = ""
+        if floor is not None:
+            warm = np.asarray(exact) >= floor
+            if warm.any():
+                extra = f"   above {floor} : {rel[warm].max():.2e}"
+        print(f"  {name:<10} max {rel.max():.2e}  rms "
+              f"{np.sqrt((rel**2).mean()):.2e}   abs {abs_err.max():.2e}{extra}")
 
     def interp_log(x, xs, ys):
         return np.exp(np.interp(np.log(x), np.log(xs), np.log(ys)))
 
-    exact_q = (r["lam"](r["pl"], mid)
-               - r["lam"](r["pl"], np.interp(mid, T, g["tc"])))
-    err("Q", exact_q, interp_log(mid, T, g["q"]))
+    # Gauged, because g["q"] is: comparing a gauged table against an ungauged
+    # reference reports the gauge itself as an interpolation error, which is a
+    # 0.9 % lie in the one row anybody reads.
+    exact_q = ((r["lam"](r["pl"], mid)
+                - r["lam"](r["pl"], np.interp(mid, T, g["tc"])))
+               / (1.0 + g["gauge"]))
+    err("Q", exact_q, interp_log(mid, T, g["q"]), floor=0.05)
     err("Lambda'", r["lam"].slope(r["pl"], mid), interp_log(mid, T, g["slope"]))
     err("C", r["cap"](r["pc"], mid), interp_log(mid, T, g["cap"]))
     err("T_c", np.interp(mid, T, g["tc"]), interp_log(mid, T, g["tc"]))
@@ -167,6 +220,17 @@ def write(r, g, path: str) -> None:
         f"{r['rms_k']:.3f} K rms, {r['max_k']:.2f} K max; tau(137 K) = "
         f"{r['tau_137_s']:.0f} s;",
         f"implied mass {r['mass_g']:.2f} g of the Cu/sapphire/diamond mix.",
+        "",
+        "THE LEVEL IS A CALIBRATION AND IT HAS A SHELF LIFE.  `q` below is in",
+        "COMMANDED watts, and how much of a commanded watt reaches the sample",
+        "changes when the heater wiring is handled -- 0.8 % when a wire was",
+        f"reseated on 2026-09-04, which is 3.2 K at 118 K.  Gauged "
+        f"{100 * g['gauge']:+.3f} %",
+        f"on {g['gauge_n']} rungs of {g['gauge_window']}, measured {stamp}.",
+        "",
+        "ANY WORK ON THE HEATER CIRCUIT EXPIRES THIS TABLE'S LEVEL.  Re-measure",
+        "with `python analysis/holdout.py --in-epoch` and re-export.  The SHAPE",
+        "-- tau(T), the local gain -- is unaffected and does not expire.",
         *(["", *SUPERSEDED_NOTE.split("\n")] if SUPERSEDED_NOTE else []),
         "",
         "Columns, one row per grid point:",
@@ -207,13 +271,24 @@ def main() -> int:
     ap.add_argument("-o", "--out", default=OUT)
     ap.add_argument("--verify", action="store_true",
                     help="report the interpolation error at the grid midpoints")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="measure and report, write nothing -- the shipped "
+                         "table is what the simulator runs on")
     args = ap.parse_args()
 
     r, g = evaluate()
     print(f"fit: Lambda {N_LAM} knots, C {N_CAP}, drift {N_DRIFT} -- "
           f"rms {r['rms_k']:.3f} K, tau(137 K) {r['tau_137_s']:.0f} s")
+    print(f"gauge: {100 * g['gauge']:+.3f} % of delivered power, from "
+          f"{g['gauge_n']} rungs of {g['gauge_window']}")
+    print(f"       holding 118 K takes {1e3 * float(np.interp(118.0, g['T'], g['q'])):.1f} mW "
+          f"commanded, {1e3 * float(np.interp(118.0, g['T'], g['q'])) * g['gauge']:+.1f} mW "
+          f"of which is the gauge")
     if args.verify:
         verify(r, g)
+    if args.dry_run:
+        print("dry run: nothing written")
+        return 0
     write(r, g, args.out)
     return 0
 

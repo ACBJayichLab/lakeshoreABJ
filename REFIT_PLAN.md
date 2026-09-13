@@ -105,13 +105,32 @@ number, on the 45 ladder rungs of 2026-09-05, and the three holds are then
 **The right-hand column is what the model gets wrong. The left-hand one is
 mostly the last person to touch the cryostat.**
 
-**The τ row still needs a decision, and it is not a modelling one.** §2.4 is
-right that the shape travels — the median miss over the eleven τ anchors in
-band is **2.5 %** — and the worst of eleven is 26.5 %, because a single dwell's
-τ scatters 433 to 850 s near 137 K. Either the row means the median and should
-say so, or it means every one, and then it is not reachable by a one-pole model
-of a body with internal gradients. **That is a decision for a person**, and
-until it is made the row is reported both ways.
+**The τ row: the gap is two windows, and neither is a model error.**
+`python analysis/plot_tau.py` draws it. Nine of the eleven graded relaxations in
+the band agree to **6.9 % or better**; the two that do not are not measuring
+what the row assumes.
+
+- `pc-20260905-111947` runs **83.0 → 68.4 K** — a 14.5 K *cooling* excursion
+  where its neighbours in the ladder are 6.8 and 7.2 K steps up. A relaxation
+  is dated by where it ENDS, and the plant's own τ changes by about half across
+  that span, so there is no single pole to find: the fit returns something
+  belonging near the middle of the excursion and it is scored at the bottom.
+- `pc-20260910-144849` is **1.1 K of motion across 33 hours**, reach 168 — the
+  relaxation was over a hundred time constants before the window ended, so what
+  a pole fits there is drift. §6.1 established exactly this for a hold's
+  *level*; it is no different for its τ. The check is in the data:
+  `pc-20260908-150234` sits at the same temperature to 40 mK, is a clean 2.6 K
+  step with a full settle, measures 524.7 ± 4.5 s — and the model reproduces it
+  to **0.3 %**. Two measurements of one temperature disagree by 36 %, so no
+  model can satisfy both and a target demanding it is unreachable by arithmetic.
+
+Scoring at the mid-span temperature was tried and is the wrong fix: it rescues
+the cooling excursion (−24.2 → −8.2 %) and biases every ordinary step by
+−8 %, because an exponential approach spends most of its time near the endpoint.
+
+**What remains for a person** is whether the row is stated over relaxations a
+single pole can describe — in which case it is met, at 6.9 % — or over every
+graded window, in which case it is not reachable and should be rewritten.
 
 and to do it from data that is **organised, named and frozen** rather than
 rediscovered by a heuristic each time a fit runs.
@@ -1452,6 +1471,16 @@ delivered power beats modelling it. §7.2's last two sections.
 do not loosen the tolerance.** And `tests_ltspm3/test_fitted_table.py` checks
 `SUPERSEDED_NOTE` in both directions — clearing it without regenerating the
 table fails on the sentinel branch.
+
+**T9's second half is answered, 2026-09-12.** `export_response --verify`
+reported Q at 5.0e-2 against a docstring claiming a part in 10^5, and **it is
+the bottom two grid points and nothing else**: `q` is `Λ(T) − Λ(T_c)`, which
+goes to zero as the sample reaches its own heat sink, so a relative error there
+divides by a number the grid is driving to nothing — 3.8e-2 at 4.73 K where
+q = 0.13 mW, 3.8e-3 above 5 K, 6e-4 above 6 K, **6.9e-5 above 50 mW**. The
+docstring is right everywhere the quantity means anything. `verify` now reports
+the absolute error (45 µW at worst, against a 800 mW heater) and the relative
+error above a floor. The `T_c` half of T9 is untouched.
 
 **T9 · Two live inconsistencies to settle deliberately, not by accident.** The
 shipped `T_c(T)` column comes from `plot_gain.coldplate_of` (an 8-bin median

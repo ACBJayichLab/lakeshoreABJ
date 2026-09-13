@@ -149,21 +149,30 @@ The left column is mostly the last person to touch the cryostat; the right one
 is what the model gets wrong. "31 rungs" was a count nobody could reproduce —
 the window holds 45.
 
-## Then, in order — and it is two decisions, not more fitting
+## Then, in order
 
-1. **Two questions only you can answer.** Both are about what "done" means
-   rather than about the model:
-   - **§1's τ row: median or worst?** 2.5 % median, 26.5 % worst over eleven
-     τ anchors. §2.4 is right that the shape travels; a single dwell's τ
-     scatters 433–850 s near 137 K, so "every measured τ inside 10 %" may not
-     be reachable by a one-pole model of a body with internal gradients. It is
-     the last row standing between Phase B and done.
-   - **Does the shipped table carry a dated delivered-power gauge?** It has to
-     carry something: as it stands the curve is ~0.9 % low in power for the
-     epoch the cryostat is in now, which is 3.2 K at 118 K. One number in
-     `_fitted_table.py`'s provenance, measured the way `--in-epoch` measures
-     it, with the date it was measured and the warning that a reseat expires
-     it. That is step 10's first question.
+**Both decisions of 2026-09-12 are answered and acted on.**
+
+**The gauge is in** (your "calibrate now, date it"). `export_response.py`
+measures the delivered-power gauge from the most recent programmed ladder,
+applies it so `q` is in COMMANDED watts, and writes the number, the window and
+the date into the generated header along with the warning that any work on the
+heater circuit expires the level — while the shape does not. Today it reads
+**+0.935 %**, 6.2 mW at 118 K, from 45 rungs of `trace-ladder-20260905`.
+`--dry-run` measures without writing.
+
+**The τ row is drawn** (your "explain, ideally show"). `analysis/plot_tau.py`.
+The gap is two windows out of eleven and neither is a model error — a 14.5 K
+*cooling* excursion, and 1.1 K of motion across 33 hours. Nine of eleven agree
+to 6.9 %. Smoothing is not the fix and was tested: scoring at the mid-span
+temperature rescues the excursion and biases every ordinary step by −8 %.
+
+1. **One decision left, and it is a wording one.** Is §1's τ row stated over
+   the relaxations a single pole can describe — in which case it is met, at
+   6.9 % — or over every graded window, in which case it is unreachable and
+   should be rewritten? Two dwells 40 mK apart measure 525 and 712 s, so no
+   model can satisfy both. **That one sentence is what stands between Phase B
+   and done.**
    - *(Useful but not blocking)* **When else was that circuit touched?**
      09-04 and 09-10 are known and measured. The pre-reseat half's 0.206 mW/day
      is 1.5 % of delivered power over 47 days — larger than any single event
@@ -182,8 +191,10 @@ the window holds 45.
    anchors and so predicts nothing — it expires the next time anyone touches
    the cryostat.
 3. **Step 9 is moot** — it tests the aux channels against the fitted drift and
-   there is no fitted drift any more. Step 10 waits on the two decisions above;
-   `SUPERSEDED_NOTE` stays until the table is regenerated with its gauge.
+   there is no fitted drift any more. **Step 10 is one command from done**:
+   `export_response.py` (no `--dry-run`), clear `SUPERSEDED_NOTE`, and
+   regenerate `tests_ltspm3/test_fitted_response.py`'s eight pinned points
+   rather than loosening them — trap T8. It waits only on the τ wording.
 4. PID_PLAN phase 1 §1.2 is **not blocked by any of this** — the band constants
    and the two residual functions. `DELTA_P_FRAC` is defined and in the cache
    key; `missing_power_w` should still be written against `pc-20260908-154814`
