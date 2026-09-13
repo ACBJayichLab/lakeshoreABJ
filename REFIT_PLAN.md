@@ -8,8 +8,9 @@ production fit CONVERGE. **6c and T10 are PID_PLAN.md phase 1 §1.1's two
 "settle first" items and both are answered** — the anchors now carry a
 power-side error bar (T10, and the trajectory fits 13.6 % better for it), and
 the cold basin stays as it is because nothing below 7 K identifies it (6c).
-The production fit is `cost` 836.07, `rms_k` 0.1295, `anchor_k` 1.5590,
-τ(137 K) 582.3 s in 111 evaluations.
+The production fit is `cost` **854.21**, `rms_k` **0.1300**, `anchor_k`
+**1.8300**, τ(137 K) 582.3 s in 103 evaluations, on 98 anchors — quoted on the
+archive as it stands, which since 2026-09-12 reaches past the 09-10 fault.
 **Nothing has regenerated the shipped table yet** —
 `ltspm3/model/_fitted_table.py` still carries its `SUPERSEDED_NOTE`.
 Prerequisite work is at `da295af`; Phase 0 is at `6432128` (the archive and the
@@ -942,6 +943,12 @@ it bisectable.
    | T4 off | 134 | 836.075 | 0.1295 | 1.5590 | 582.3 | 4.8357 | 111 |
    | T4 on | **98** | 850.515 | **0.1295** | 1.8218 | 581.7 | 4.8342 | 103 |
 
+   **Both rows predate the 2026-09-12 archive extension** and are kept as taken,
+   because the pair is a *controlled* comparison — one archive, one switch. On
+   the archive as it stands the `T4 on` row reads 854.214 / 0.1300 / 1.8300 /
+   582.3, still on 98 anchors. Nothing in the conclusion moves; do not read the
+   850.515 as the production fit.
+
    **Q(T) moves by at most 0.070 K** anywhere from 5 to 192 K, and `rms_k` does
    not move at all to four figures. `anchor_k` rises because it is now an rms
    over a *different, harder* set — the 36 that left were the ones sitting
@@ -958,7 +965,9 @@ it bisectable.
    T2's two terms; the campaign ramp is still step 8 and is still a separate
    term for the reason T2 gives. Inert at one record by construction, and
    *proved* so rather than assumed: `FIT_CACHE_VERSION` 7 forces the refit and
-   it comes back 850.5153, the number T4 left.
+   it comes back 850.5153, the number T4 left -- both on the archive as it
+   stood that day, which is what makes the pair a proof rather than a
+   coincidence. Re-run today it is 854.2138 on either side.
 
 ### 7.1 What the trajectory alone recovers — and it is not enough
 
@@ -975,10 +984,17 @@ cryostat sat:
 
 | hold | T | shipped table | fit A | **fit B** | in fit B |
 |---|---|---|---|---|---|
-| `pc-20260904-233855` | 96.5 K | +4.059 | +3.218 | **+1.616** | anchor |
-| `pc-20260905-165509` | 114.4 K | +4.208 | +3.512 | **+1.287** | trajectory |
-| `pc-20260908-154814` | 118.6 K | +4.250 | +3.597 | **+1.492** | trajectory |
-| mean | | +4.172 | +3.442 | **+1.465** | |
+| `pc-20260904-233855` | 96.5 K | +4.059 | +3.230 | **+1.630** | anchor |
+| `pc-20260905-165509` | 114.4 K | +4.208 | +3.524 | **+1.295** | trajectory |
+| `pc-20260908-154814` | 118.6 K | +4.250 | +3.607 | **+1.496** | trajectory |
+| mean | | +4.172 | +3.454 | **+1.474** | |
+
+and the two fits themselves, both on the archive as it stands:
+
+| | anchors | cost | `rms_k` | `anchor_k` | τ(137) | `mass_g` | `nfev` |
+|---|---|---|---|---|---|---|---|
+| **A** sweep only | 98 | 854.214 | 0.1300 | 1.8300 | 582.3 | 4.8377 | 103 |
+| **B** + postcal | 95 | 912.727 | 0.2409 | 2.1280 | 550.9 | 4.7653 | 255 |
 
 **The trajectory recovers 57 % of fit A's miss and 65 % of the shipped table's,
 and leaves 1.47 K against a 0.3 K target.** So step 7's question — "were those
@@ -986,8 +1002,8 @@ holds only ever anchors, or does the model need a drift term" — is answered:
 **it needs the drift term.** Three things say so at once.
 
 **The two records cannot both be satisfied.** Adding the second one makes the
-*first* fit far worse: the sweep's own weighted residual goes 0.1295 → 0.3262 K
-while the post-recal record fits at 0.0953 K rms, 0.252 K max. That is not a
+*first* fit far worse: the sweep's own weighted residual goes 0.1300 → 0.3272 K
+while the post-recal record fits at 0.0951 K rms, 0.251 K max. That is not a
 model being refined, it is a model being pulled between two dates.
 
 **The per-record wander term rails trying to be the era offset.** `DRIFT_SIGMA_W`
@@ -995,18 +1011,18 @@ is 2 mW and the fitted knots are
 
 | record | drift knots, mW |
 |---|---|
-| `trace-sweep-20260902` | +0.62 +0.06 +0.17 |
-| `trace-postcal-20260905` | **+2.01 +2.15 +2.42** |
+| `trace-sweep-20260902` | +0.62 +0.06 +0.18 |
+| `trace-postcal-20260905` | **+2.02 +2.16 +2.42** |
 
 — the post-recal block is a near-constant **+2.2 mW sitting at and past its own
 prior**, which is a nuisance term absorbing a systematic. That is exactly what
 T2 and T3 warn about, and it is the shape of the missing campaign ramp showing
 through the only term available to it. `group_w` moves the same way, −4.40 →
-−6.15 mW.
+−6.16 mW.
 
 **And the curve moves where the holds are, not everywhere**: Q falls by 1.8–2.0 K
-equivalent over 100–119 K and by under 0.03 K below 50 K; τ(137 K) 581.7 →
-550.0 s, τ(114 K) 507 → 486.
+equivalent over 100–119 K and by under 0.03 K below 50 K; τ(137 K) 582.3 →
+550.9 s, τ(114 K) 508 → 487.
 
 > **A discrepancy §1 has to answer for.** §1's "where it stands today" column
 > reads 2.36 / 2.65 / 2.81 K for these three holds. The shipped table measures

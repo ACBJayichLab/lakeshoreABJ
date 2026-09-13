@@ -133,6 +133,14 @@ lschart/                    GENERIC -- any Lake Shore cryostat
                      acknowledgement, and clock-skew refusal.
     service.py       Joins the two onto the acquisition cycle, on the
                      acquisition thread, because that thread owns the bus.
+                     `note` is the odd command out: it writes a line into the
+                     CSV's Notes column and touches no instrument, so it has no
+                     power gate -- but it still passes `accept_commands` and the
+                     source policy, and it is NOT a panic kind.  It lands on the
+                     NEXT row, because the cycle writes the CSV before it drains
+                     the spool.  Nothing else in the recorder records what a
+                     PERSON did, and the column was empty across both September
+                     2026 events.
   gui/               The strip chart. A SEPARATE PROCESS, not a thread.
     source.py        CsvTail + StatusSource, plus the arithmetic the window is
                      not allowed to hold: region statistics, hover lookup, the
@@ -301,6 +309,17 @@ analysis/            EXPLORATORY, not shipped. Fits the thermal model from the
                        carries an error bar with the residual's autocorrelation
                        in it and the measured long-term fluctuation under it.
                        `--verify` is REFIT_PLAN.md 6's exit gate.
+                     allan.py       THE HOLD'S FIGURE OF MERIT, and a different
+                       question from measure.py's: not where a window was
+                       heading but whether averaging for longer HELPS.  Those
+                       come apart exactly where it matters -- a stretch can be
+                       quiet at ten seconds and wander at an hour, and the rms
+                       over the window is the same number for both.  Open loop
+                       at 118 K it floors at 7.38 mK at tau = 130 s and rises
+                       after: AVERAGING STOPS HELPING AT TWO MINUTES, where
+                       commissioning.md's old 1/sqrt(N) prediction had it still
+                       improving at ten.  Validated against white noise, a
+                       linear drift and a sine.  -> PID_PLAN.md section 1
 ```
 
 ## Conventions

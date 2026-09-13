@@ -30,8 +30,9 @@ Previous: [HANDOFF-2026-09-10.md](HANDOFF-2026-09-10.md).
 
 ## What this session did
 
-Nine commits, `6ff126b..` on `worktree-bridge-cse_01BPYYTRMXQabkWHg5hU3gTo`.
-925 passing, `ruff` clean, `curate.py --propose` reports no diff.
+Eleven commits, `6ff126b..0e60d1b`, **merged to `main` and pushed**. 925
+passing, `ruff` clean, `curate.py --propose` reports no diff. The eight below
+are the substantive ones; the other three are this file and the two plans.
 
 | | |
 |---|---|
@@ -90,10 +91,10 @@ under 0.1 K.
 
 **4. The post-recal trajectory recovers 57 % and the model needs step 8.**
 Adding `trace-postcal-20260905` as a second record takes the three holds from
-+3.44 K mean low to **+1.47 K**, against a 0.3 K target. Three things then say
++3.45 K mean low to **+1.47 K**, against a 0.3 K target. Three things then say
 the campaign ramp is the missing piece: the two records **cannot both be
-satisfied** (the sweep's own residual goes 0.1295 → 0.3262 K), the per-record
-wander term **rails trying to be the era offset** (+2.01/+2.15/+2.42 mW against
+satisfied** (the sweep's own residual goes 0.1300 → 0.3272 K), the per-record
+wander term **rails trying to be the era offset** (+2.02/+2.16/+2.42 mW against
 a 2 mW prior), and `group_w` moves with it. §7.1.
 
 **5. The stability figure had never been measured.** `commissioning.md` quoted
