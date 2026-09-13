@@ -289,7 +289,7 @@ def profile(slopes=(0.0, 0.05, 0.1, 0.2, 0.281, 0.4), campaign=True,
 
 
 def leftover(r, anchors, records):
-    """``(left, bar, days, after, era)`` -- what the fit did not explain.
+    """``(left, bar, days, after, era, q)`` -- what the fit did not explain.
 
     ``left`` is the anchor's own miss in watts with the fitted ramp taken back
     off, so it is what a further term would have to describe.  The anchors are
@@ -302,7 +302,8 @@ def leftover(r, anchors, records):
     left = miss - F.campaign_power_w(r, a.t_abs, a.Q)
     bar = np.hypot(lam.slope(pl, a.T) * a.sigma, F.DELTA_P_FRAC * np.abs(a.Q))
     cut = _seg._stamp(CUTOVER)
-    return left, bar, (a.t_abs - cut) / 86400.0, a.t_abs > cut, np.array(a.era)
+    return (left, bar, (a.t_abs - cut) / 86400.0, a.t_abs > cut,
+            np.array(a.era), a.Q)
 
 
 def shapes(campaign=True, postcal=False):
@@ -320,16 +321,24 @@ def shapes(campaign=True, postcal=False):
     """
     r, anchors, _ = production(campaign=campaign, postcal=postcal)
     describe(r)
-    left, bar, days, after, era = leftover(r, anchors, inputs(postcal)[0])
+    left, bar, days, after, era, q = leftover(r, anchors, inputs(postcal)[0])
 
     def table(label, m):
         w = 1.0 / bar[m]
         y, d, af = left[m], days[m], after[m].astype(float)
-        cols = {"a constant": [np.ones(int(m.sum()))],
-                "a slope in date": [np.ones(int(m.sum())), d]}
+        one = np.ones(int(m.sum()))
+        cols = {"a constant": [one], "a slope in date": [one, d]}
         if af.any() and not af.all():
-            cols["a step at the cutover"] = [np.ones(int(m.sum())), af]
-            cols["both"] = [np.ones(int(m.sum())), d, af]
+            # THE DISCRIMINATING PAIR.  A reseated wire changes the series
+            # resistance of the heater circuit, so its step is a fraction of the
+            # DELIVERED POWER and vanishes with the heater off; a disturbed
+            # thermal leak is a constant watt and does not.  The 2026-09-05
+            # ladder runs 7-64 % output on the far side of the 09-04 event, so
+            # the anchors can tell these apart -- which they cannot do for the
+            # ramp, where the cold end had to settle it.
+            cols["a step, constant watts"] = [one, af]
+            cols["a step, fraction of P"] = [one, af * q[m] / F.CAMPAIGN_REF_W]
+            cols["both, watts"] = [one, d, af]
         print(f"\n  {label}: {int(m.sum())} anchors, day {d.min():+.1f} to "
               f"{d.max():+.1f} either side of {CUTOVER[:10]}")
         print(f"  {'shape':<26}{'par':>4}{'chi2/n':>9}{'rms mW':>9}"
@@ -390,6 +399,11 @@ def main(argv=None) -> int:
                          "(section 7.1's fit B)")
     ap.add_argument("--shapes", action="store_true",
                     help="what shape the leftover residual has -- trap T7")
+    ap.add_argument("--cutover", default=CUTOVER,
+                    help="hold out every anchor after this instead of the "
+                         "2026-09-04 one.  Pass a date INSIDE one delivered"
+                         "-power epoch to ask whether the model travels when "
+                         "nothing has been reseated")
     a = ap.parse_args(argv)
     campaign = not a.no_campaign
 
@@ -405,7 +419,7 @@ def main(argv=None) -> int:
     scoreboard(r, taus=taus)
     if a.profile:
         profile(campaign=campaign, postcal=a.postcal)
-    gate(campaign=campaign, postcal=a.postcal)
+    gate(cutover=a.cutover, campaign=campaign, postcal=a.postcal)
     return 0
 
 

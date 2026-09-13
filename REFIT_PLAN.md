@@ -1221,25 +1221,88 @@ cutover**, fitted beside the ramp, and then the gate re-run. The step is worth
 about 1.8 K at the holds, which is where §7.1's fit B got to by a different
 route — the post-recal *trajectory* pinned the post-cutover state instead.
 
-**What the step IS remains open, and it is a question for a person, not a
-parameter.** Three candidates, and they want different fixes:
+#### What the step IS: Jeff reseated a wire, and the anchors agree
 
-- the Coldplate remap is imperfect, and the step is an artefact of
-  `tools/recalibrate.py` — in which case it belongs in the data, not the
-  objective. Arithmetically hard: T_c sits at 4.6–6.4 K where Λ′ is 2–9 mW/K,
-  so 3 mW needs the remap to be 0.3–1.5 K wrong, which is far more than a
-  curve swap between two sensors of the same model plausibly does;
-- something physical changed in that window. **The postcal era is not
-  homogeneous** — it contains the 09-09 power transient (§2.5) and the 09-10
-  heater-circuit fault and reseat, both of which moved the sample at fixed
-  output, and the archive now reaches past both;
-- the step is where the drift's *mechanism* changed — a heater circuit that
-  degrades and is then disturbed does not follow one slope through the
-  disturbance.
+**The step is not the recalibration. It is a wire being reseated** (Jeff,
+2026-09-12) — an event the log does not record and the manifest had no column
+for. That turns the three candidates this section used to list into one
+mechanism with an arithmetic consequence, and the anchors can test it.
 
-The data cannot place the step better than "between 09-03 21:00, the last
-pre-cutover anchor, and 09-04 23:38, the first hold after it". That window
-contains the recalibration and nothing else the log records.
+**A reseated wire and a disturbed heat leak make different predictions, and the
+09-05 ladder settles it.** The heater is voltage-driven, so a series contact
+resistance `R_s` takes a fixed FRACTION of the delivered power:
+`α = 1 − 2R_s/R_h`. A disturbed thermal leak is a constant watt instead. The
+ladder runs 7–64 % of output on the far side of the event, so unlike the ramp —
+where only the cold end could decide — the anchors have the leverage:
+
+| the step at 2026-09-04, fitted on the leftover | par | χ²/n | rms mW |
+|---|---|---|---|
+| constant watts | 2 | 0.1128 | 2.573 |
+| **a fraction of delivered power** | 2 | **0.0345** | **1.776** |
+
+**A factor of 3.3 in χ² for the same parameter count**, and 0.0345 over all 98
+anchors is *tighter than the undisturbed pre-cutover half on its own* (0.0412).
+With no ramp in the fit at all, the proportional step alone (χ²/n 0.1305) still
+beats a 55-day slope (0.1398) at one parameter each. **The step is in the
+heater circuit.**
+
+In the units a bench measurement would use, with the 09-10 events beside it —
+the fault from its own 3.63 K drop at a fixed 64.016 %, the reseat from the
+matched-output pair `pc-20260908-154814` / `pc-20260910-144849` after taking
+out the 0.0055 % of output between them and the ramp's own 2.1 days:
+
+| event | mW at 64 % | % of delivered | implied ΔR_s |
+|---|---|---|---|
+| 2026-09-04 wire reseat | **+5.31** | +0.79 % | **−0.30 Ω** |
+| 2026-09-10 11:33 fault | −6.03 | −0.90 % | +0.34 Ω |
+| 2026-09-10 14:40 reseat | −0.75 | −0.11 % | +0.04 Ω |
+
+**Three events, one scale: a few tenths of an ohm in series with a 75.5 Ω
+heater.** That is exactly what a connector does. It also unifies this section
+with trap T10 — the fault, the reseats and the "campaign drift" stop being
+three phenomena and become one number, `α(t)`, the fraction of commanded power
+the circuit actually delivers, which steps when anything is touched and creeps
+between touches. And it is the independent reason the ramp had to be
+proportional to `P(u)`: a series resistance only matters when current flows.
+
+#### What this means for step 9, and for the gate
+
+**The gate as written cannot be passed while `α` steps on handling**, and that
+is a property of the apparatus rather than of the model. Leave-one-epoch-out
+asks the fit to predict an epoch whose delivered fraction was set by somebody's
+hands after the last anchor it can see. No term fitted to the past contains
+that information. Tightening the model will not fix it; **the gate needs
+rewording, to a hold-out inside one undisturbed epoch.**
+
+That reworded gate is not runnable yet, and one null result says why: holding
+out only the four anchors after 2026-09-05 17:00 — both sides of the cut inside
+the same epoch — still misses the three holds by 3.11 / 3.27 / 3.13 K, because
+the fit it is held out of *has no step term*, so its level is still set by the
+47 pre-reseat anchors and the sweep. **The level has to be allowed to step
+before the shape can be tested.** `holdout.py --cutover` takes the date.
+
+**What "event modelling" would buy, and what it would not.** One free `α` per
+undisturbed epoch is worth **3.19 K at 118 K** — the whole of the remaining
+miss at the three holds, and the only term measured here that reaches it. But
+each epoch's `α` is fitted from that epoch's own anchors, so it has **no
+predictive content**: it corrects the model's description of the past and gives
+the shipped Q(T) the right level for the current epoch, and it expires the next
+time anyone touches the cryostat. Two things follow.
+
+- **It needs the dates, and only Jeff has them.** 2026-09-04 and 2026-09-10 are
+  known; the 0.206 mW/day the pre-cutover half shows is +0.032 %/day of
+  delivered power, which over 47 days is 1.5 % — larger than any single event
+  here and quite possibly a staircase of undocumented ones rather than a rate.
+  An epoch model built on an incomplete list of dates fits the gaps with a
+  slope and is back where it started. The dates belong in the manifest the way
+  `era` records the recalibration.
+- **Measuring `α` beats modelling it.** A voltage measurement across the heater,
+  or any four-wire reading of that circuit, turns `α` from a fitted nuisance
+  into a logged input — and then `Q = α(t)·P(u)` is known per sample, the step
+  and the ramp both disappear from the objective, and `DELTA_P_FRAC` stops
+  being a 2.86 K bar on every anchor over 40–120 K. That is a bench job on the
+  circuit Jeff is already planning to rebuild, and it is worth more than any
+  term this plan could add.
 
 9. **Then, and only then, test the aux channels** against the fitted drift —
    the second half of the agreed approach. Regress `d(t)` on 1st Stage / RAD
@@ -1320,13 +1383,19 @@ before it has a remapped Coldplate column. A residual imperfection in that remap
 presents as a step at that date and a ramp will absorb it as slope. Offer an
 optional named step there and report whether it is significant.
 
-**MEASURED, 2026-09-12, and it is significant -- §7.2.** A step at the cutover
-beats another day-slope on the leftover residual, one parameter each
-(chi2/n 0.113 against 0.137), it is **+3.03 mW**, and given the step no slope
-is left (0.016 mW/day). The ramp had been absorbing it, exactly as this trap
-says. **The term itself is NOT implemented**: what the step means decides
-whether it belongs in the objective at all, and the three candidates want three
-different fixes. §7.2's last section has them.
+**MEASURED, 2026-09-12, and it is significant -- but it is not the
+recalibration.** A step there beats another day-slope on the leftover residual
+at one parameter each, and the ramp had been absorbing it exactly as this trap
+says. **The cause is a wire Jeff reseated** (2026-09-12), and the anchors
+confirm the mechanism rather than merely the date: the step is a fraction of
+the DELIVERED POWER, not a constant watt (chi2/n 0.0345 against 0.1128, same
+parameter count), which is a series contact resistance of -0.30 ohm and not a
+disturbed heat leak. So T7's premise -- "everything before it has a remapped
+Coldplate column" -- is not what fired, and the remap is off the hook.
+
+**The term is NOT implemented.** Per-epoch delivered power is worth 3.19 K at
+118 K, which is the whole remaining miss, and predicts nothing; measuring the
+delivered power beats modelling it. §7.2's last two sections.
 
 **T8 · Two tests will fail, and one of them by design.**
 `tests_ltspm3/test_fitted_response.py` pins eight (percent, kelvin) points to

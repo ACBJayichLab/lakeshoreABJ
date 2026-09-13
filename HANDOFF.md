@@ -40,6 +40,16 @@ scoreboard from the fit in front of it instead of from memory.
 the plan says so and the reason is worth more than the step would have been.
 Everything below is [REFIT_PLAN.md §7.2](REFIT_PLAN.md), which has the numbers.
 
+**And the gate cannot be passed as written** while the delivered power steps
+whenever the heater wiring is handled: it asks the fit to predict an epoch whose
+level was set by somebody's hands after the last anchor it can see. That is the
+apparatus, not the model. The gate needs rewording to a hold-out inside one
+undisturbed epoch — and that is not runnable until the level is allowed to
+step, which one null result confirms: holding out only the four anchors after
+09-05 17:00, both sides inside one epoch, still misses the holds by 3.1 K,
+because the fit has no step term and its level is still set by the 47
+pre-reseat anchors.
+
 ## The four things worth a reviewer's attention
 
 **1. The drift is not a constant parasitic watt, and the cold end refuses it
@@ -65,11 +75,33 @@ T10's failure mode, slowly instead of all at once, on the circuit that is
 reseated and not repaired. The fit cannot separate a degrading heater from a
 degrading link; it can separate either from a constant watt, and it does.
 
-**2. What is left after the ramp is a step at the recalibration — trap T7,
-measured.** On the leftover anchor residual, weighted by each anchor's own bar:
-a step at 2026-09-04 12:07 gives χ²/n **0.1128** against **0.1371** for another
-day-slope, one parameter each, and it is **+3.03 mW**. Given the step, no slope
-is left (0.016 mW/day). T7 predicted exactly this absorption.
+**2. What is left after the ramp is a step — and it is Jeff reseating a wire,
+not the recalibration.** Trap T7 asked for the test; Jeff supplied the cause.
+The anchors then confirm the mechanism, because a reseated wire and a disturbed
+heat leak predict different shapes and the 09-05 ladder spans 7–64 % of output
+right after the event:
+
+| the step at 2026-09-04, fitted on the leftover | par | χ²/n | rms mW |
+|---|---|---|---|
+| constant watts | 2 | 0.1128 | 2.573 |
+| **a fraction of delivered power** | 2 | **0.0345** | **1.776** |
+
+**A factor of 3.3 for the same parameter count**, and tighter than the
+undisturbed pre-reseat half on its own. The heater is voltage-driven, so a
+series contact resistance takes a fixed fraction of the power: `α = 1 − 2R_s/R_h`.
+Three events, one scale:
+
+| event | mW at 64 % | % of delivered | implied ΔR_s |
+|---|---|---|---|
+| 2026-09-04 wire reseat | **+5.31** | +0.79 % | **−0.30 Ω** |
+| 2026-09-10 11:33 fault | −6.03 | −0.90 % | +0.34 Ω |
+| 2026-09-10 14:40 reseat | −0.75 | −0.11 % | +0.04 Ω |
+
+**A few tenths of an ohm in series with a 75.5 Ω heater** — which is what a
+connector does, and which unifies the fault, both reseats and the "campaign
+drift" into one number: `α(t)`, the fraction of commanded power the circuit
+delivers. It is also the independent reason the ramp had to be proportional to
+`P(u)`: a series resistance only matters when current flows.
 
 **The ramp is still real**, which is not a contradiction: inside the
 **pre-cutover half alone** — 47 anchors over 47 days, no calibration change in
@@ -112,19 +144,27 @@ parameter in reach.
 
 1. **Two questions for Jeff before any more fitting.** They decide what the
    next term even is, and neither is a modelling choice:
-   - **What is the +3 mW step at 2026-09-04?** The candidates want different
-     fixes: an imperfect Coldplate remap (belongs in the data, not the
-     objective — and arithmetically strained: T_c sits where Λ′ is 2–9 mW/K, so
-     3 mW needs the remap to be 0.3–1.5 K wrong); something physical in that
-     window; or the drift's mechanism changing. **The postcal era is not
-     homogeneous** — it contains the 09-09 transient and the 09-10 fault.
+   - **When else was that circuit touched?** 2026-09-04 and 2026-09-10 are
+     known and measured; the pre-reseat half's 0.206 mW/day is +0.032 %/day of
+     delivered power, 1.5 % over 47 days, which is larger than any single event
+     above and may well be a staircase of undocumented ones rather than a rate.
+     **Only you have those dates**, and an epoch model built on an incomplete
+     list fits the gaps with a slope and is back where it started. They belong
+     in the manifest the way `era` records the recalibration.
    - **Is `DELTA_P_FRAC = 0.007` the ordinary margin, or the worst case?** If
      the ordinary margin is much smaller, the bar comes down and §1's 0.3 K
      becomes reachable; if it is right, §1's target is asking for a tenth of
      the uncertainty and should say so instead.
-2. **Then trap T7's named step**, fitted beside the ramp, and re-run
-   `analysis/holdout.py`. Worth about 1.8 K at the holds on the one-record fit.
-   Only after 1: if the step is the remap, it belongs in `recalibrate.py`.
+2. **Measuring α beats modelling it.** A voltage reading across the heater —
+   any four-wire measurement of that circuit — turns α from a fitted nuisance
+   into a logged input. Then `Q = α(t)·P(u)` is known per sample, the step and
+   the ramp both leave the objective, and `DELTA_P_FRAC` stops being a 2.86 K
+   bar on every anchor over 40–120 K. That is a bench job on the circuit you
+   are already rebuilding, and it is worth more than any term this plan can add.
+   **A per-epoch α is the fallback, not the plan**: it is worth 3.19 K at 118 K,
+   which is the whole remaining miss, but it is fitted from each epoch's own
+   anchors and so predicts nothing — it expires the next time anyone touches
+   the cryostat.
 3. **Steps 9 and 10 stay shut.** Nothing regenerates `_fitted_table.py` while
    the gate is red; `SUPERSEDED_NOTE` stays.
 4. PID_PLAN phase 1 §1.2 is **not blocked by any of this** — the band constants
