@@ -64,10 +64,10 @@ def evaluate():
     """The production fit, sampled onto the grid."""
     rec, anchors, taus = F.production_inputs()
     top = float(rec.T.max())
-    # groups=True, like plot_gain.py: the July-August anchors get a free power
-    # offset so the curve THIS EXPORTS describes the cryostat's present state
-    # rather than splitting the difference with a state it left in August.
-    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, groups=True)
+    # campaign=True, like plot_gain.py: the drift ramp is fitted and is zero at
+    # the latest date any input describes, so the curve THIS EXPORTS is the
+    # cryostat's present state rather than an average over 55 days of it.
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, campaign=True)
     rows = [x for x in F.load_rows()
             if x.get("grade") and float(x["T_inf"]) <= top]
     tc_of, _, _ = coldplate_of(rows)

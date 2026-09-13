@@ -93,11 +93,14 @@ def regress(u, days, T):
 
     Ordinary least squares, deliberately.  The anchors carry error bars and
     this does not use them: the bars are dominated by ``ANCHOR_SIGMA_K``, which
-    is **3.0 K for prepython and 1.0 for the rest** -- an era label, not a
-    measurement -- so weighting by them would down-weight exactly the old half
-    of the campaign that carries the date leverage, and the drift would come
-    back small for a reason that has nothing to do with the cryostat.  That is
-    trap T3 arriving early.
+    is an ERA LABEL rather than a measurement, so weighting by them would size
+    a date's leverage by which file it came out of.  It mattered more when this
+    was written -- ``prepython`` then carried 3.0 K against 1.0 for the rest,
+    which is trap T3, and weighting would have quietly down-weighted exactly
+    the old half of the campaign that carries the baseline.  **Step 8 has since
+    paid T3** (1.0 / 1.0 / 0.5), so the distortion would now be small; the
+    reason for not weighting is unchanged, and this function is the input to
+    the term that pays it, so it must not depend on the term's own bars.
     """
     M = np.column_stack([np.ones_like(u), u, days])
     c, *_ = np.linalg.lstsq(M, T, rcond=None)

@@ -41,6 +41,7 @@ extends down there is a separate question that has not been asked yet.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import math
 import sys
 
@@ -114,18 +115,23 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
     mT = np.array([_g(v, "T_inf") for v in rows])
     cd10 = np.array([(v.get("era") or "").strip() == "prepython" for v in rows])
 
-    # CD10 is a different cooldown -- different contact, different radiation,
-    # a different parasitic load -- and no single Lambda can satisfy both.  The
-    # fit measures that as ONE free power offset (fit_ode.anchor_groups), so
-    # CD10's dwells are drawn against the same curve shifted by it rather than
-    # against a curve that was never theirs.  Without this they sat 2.2 K high
-    # as a body, which reads as a model error and is not one.
-    offset_mw = 1e3 * float(r["group_w"][0]) if r["n_group"] else 0.0
-    mP = mP + np.where(cd10, offset_mw, 0.0)
-    mU = np.where(cd10, 100.0 * np.sqrt(np.maximum(mP, 0) * 1e-3 * F.R_OHM)
+    # EVERY dwell is drawn at its own date's offset, not just the July ones.
+    # The cryostat drifts -- 0.281 mW/day, REFIT_PLAN.md step 5 -- and the curve
+    # is quoted at one epoch, so a dwell belongs on it at the effective power
+    # Q + campaign(its date).  This used to be one step for the whole
+    # July-August half, which put every dwell inside each half at the same
+    # offset and left a 55-day slope drawn as two flat blocks.  Undated rows
+    # (nothing writes one today) shift by zero rather than vanish.
+    shift_mw = 1e3 * F.campaign_power_w(
+        r, np.array([F.anchor_epoch(v) for v in rows]), 1e-3 * mP)
+    shift_mw = np.where(np.isfinite(shift_mw), shift_mw, 0.0)
+    mP = mP + shift_mw
+    mU = np.where(shift_mw != 0.0,
+                  100.0 * np.sqrt(np.maximum(mP, 0) * 1e-3 * F.R_OHM)
                   / (F.GAIN * F.V_FS), mU)
-    cd10_label = (f"settled dwells, CD10 ({offset_mw:+.1f} mW)" if offset_mw
-                  else "settled dwells, CD10 (other cooldown)")
+    cd10_mw = float(np.median(shift_mw[cd10])) if cd10.any() else 0.0
+    cd10_label = (f"settled dwells, July-Aug (median {cd10_mw:+.1f} mW)"
+                  if cd10_mw else "settled dwells, July-Aug")
 
 
     fig, ax = plt.subplots(1, 4, figsize=(21.0, 5.0))
@@ -162,12 +168,12 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
     a.plot(mT[~cd10], (pred - mT)[~cd10], "o", ms=5, mfc="none",
            color="#1a202c", label="this cooldown")
     a.plot(mT[cd10], (pred - mT)[cd10], "s", ms=4, mfc="none",
-           color="#c05621", label=f"CD10 ({offset_mw:+.1f} mW)")
+           color="#c05621", label=f"July-Aug ({cd10_mw:+.1f} mW)")
     a.axhline(0, color="#718096", lw=.7)
     a.axhspan(-1, 1, color="#2c7a7b", alpha=.10, lw=0, label="±1 K")
     a.set_xlabel("measured steady T  [K]")
     a.set_ylabel("model − measured  [K]")
-    a.set_title("(c) against the settled dwells, each cooldown on its own offset")
+    a.set_title("(c) against the settled dwells, each drawn at its own date")
     a.grid(alpha=.3); a.legend(fontsize=8)
 
     # Panel (d) is tau, not thermal resistance.  dT/dP is a static property and
@@ -200,7 +206,7 @@ def figure(r, T, Tc, Q, u, dTdu, rows, out):
 def main():
     rec, anchors, taus = F.production_inputs()
     hi = float(rec.T.max())
-    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, groups=True)
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, campaign=True)
     print(f"  Lambda {N_LAM} knots, C {N_CAP}, drift {N_DRIFT}: "
           f"rms {r['rms_k']:.3f} K, opening hold {r['hold_max_k']:.2f} K "
           f"over {r['hold_h']:.1f} h")
@@ -260,9 +266,9 @@ def main():
     dudT = (50.0 / (F.GAIN * F.V_FS)) * np.sqrt(F.R_OHM / Q) * dQdT
     dTdu = 1.0 / dudT
 
-    if r["n_group"]:
-        print(f"  CD10 sits {1e3 * r['group_w'][0]:+.2f} mW from this cooldown "
-              f"at matched temperature")
+    if r["campaign"]:
+        print(f"  campaign drift {1e3 * r['campaign_w_per_day']:+.3f} mW/day, "
+              f"zero at {_dt.datetime.fromtimestamp(r['campaign_t_ref']):%Y-%m-%d %H:%M}")
     figure(r, T, Tc, Q, u, dTdu, rows, OUT)
 
     print(f"\n{'P mW':>9}{'u %':>8}{'T_ss K':>10}{'dT/dP K/W':>11}"

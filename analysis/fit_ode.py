@@ -11,22 +11,25 @@ the complexity knob, and they are turned one at a time: a joint grid confounds
 the two and hides the fact that they are not equally constrained.
 
 The settled holds enter as extra residuals rather than as hard constraints.
-They deserve a margin: u=63.072% was held three times and landed 2.84 K apart,
-and the July-August logs disagree with the September ones by about 2 K at
-matched power.  So a September hold is worth +-1 K and a ``prepython`` hold is
-worth +-3 K, and the fit is free to miss them by that much.  On top of that
-every anchor carries a POWER-side bar, ``DELTA_P_FRAC`` -- the heater circuit
-does not always deliver what the readback says it does -- and the two are added
-in quadrature in watts, because a kelvin is worth five times as much power at
-30 K as it is at 140 K.
+They deserve a margin: u=63.072% was held three times and landed 2.84 K apart.
+So an anchor is worth about a kelvin, and the fit is free to miss it by that
+much.  On top of that every anchor carries a POWER-side bar, ``DELTA_P_FRAC``
+-- the heater circuit does not always deliver what the readback says it does --
+and the two are added in quadrature in watts, because a kelvin is worth five
+times as much power at 30 K as it is at 140 K.
 
 ``prepython`` is NOT a different cooldown -- cooldown 10 started 2026-07-15 and
 is still running.  It is the pre-Python chart-recorder half of this one, and
 the cryostat has drifted across it: at seven outputs where the two halves
 overlap the sample sits 1.8-2.9 K WARMER in September than it did in July and
-August, same sign every time.  That is what the per-group power offset below
-measures, and it is why group 0 -- the recent data -- is the reference: the
-shipped model has to describe the cryostat as it is now.
+August, same sign every time.  That used to be fitted as one free power offset
+between two named halves of the campaign; since REFIT_PLAN.md Phase B step 8 it
+is a RAMP IN DATE -- one slope in watts per day, ``campaign=True`` -- because
+the anchors span 55 days continuously and a step function of them is a model of
+the filenames rather than of the cryostat.  The ramp is zero at the reference
+epoch, the latest moment any input describes, so the curve itself still
+describes the cryostat as it is NOW: the state the simulator and the loop have
+to match.
 
 Integration is exponential Euler: T += g*tau*(1 - exp(-dt/tau)) with
 tau = C/Lambda'.  It is exact for the linearised relaxation and unconditionally
@@ -102,14 +105,16 @@ ANCHORS = "analysis/measured.csv"
 #: this number is for -- and bumping it is also how the inertness gets PROVED,
 #: by forcing the refit and comparing rather than by reading a cached answer
 #: back and calling it agreement.
-FIT_CACHE_VERSION = 7
+#:
+#: 8: step 8.  The per-era power offset is gone and a campaign RAMP is in its
+#: place, ``ANCHOR_SIGMA_K`` came down with it (trap T3), and both change the
+#: objective for every preset -- including the ones that pass neither, because
+#: the anchors' error bars moved underneath them.
+FIT_CACHE_VERSION = 8
 
 #: Margin on a settled point, in kelvin, added in quadrature to twice its own
 #: extrapolation distance.  Keyed on the ERA the anchor came from
-#: (``segments.ERAS``): ``prepython`` is the July-August half of this cooldown
-#: and sits about 2 K off the September half at matched power (see the module
-#: docstring), so it is given the wider bar.  ``recorder`` and ``postcal`` are
-#: the current state and share the narrow one.
+#: (``segments.ERAS``).
 #:
 #: This used to be keyed on the input FILENAME, tested with
 #: ``source.startswith("fit_cd10")``.  Every era now has its own entry and a
@@ -117,10 +122,22 @@ FIT_CACHE_VERSION = 7
 #: input rename made every anchor ``recent``, the per-era offset fitted nothing,
 #: and the curve came out about a kelvin wrong for both halves with no symptom.
 #:
-#: REFIT_PLAN.md trap T3: the 3.0 on ``prepython`` IS the campaign drift,
-#: forgiven once.  It has to come down to 1.0 in the same commit that turns a
-#: drift ramp on, or the ramp fits a residual that has been priced out already.
-ANCHOR_SIGMA_K = {"prepython": 3.0, "recorder": 1.0, "postcal": 1.0}
+#: **``prepython`` was 3.0 K and is 1.0 -- REFIT_PLAN.md trap T3, paid in the
+#: same commit that turned the campaign ramp on.**  That 3 K was never a
+#: measurement of anything about a July anchor; it was the campaign drift,
+#: forgiven once, at the only place the model had to put it.  With ``campaign``
+#: fitting the drift explicitly, leaving it up would have priced the same
+#: residual twice -- the ramp would be free to explain a disagreement the bar
+#: had already excused, and would come back under-determined for it.
+#:
+#: ``postcal`` gets **0.5**: it is the only era measured end to end by
+#: ``measure.py`` on the corrected Coldplate curve, with each hold's own drift
+#: fitted rather than smeared into its level.  It is a tightening, and T10 is
+#: the reason it is a safe one -- over 40-120 K, where these anchors are,
+#: ``DELTA_P_FRAC`` already dominates the bar by 2-3x, so halving the kelvin
+#: half moves the total by a few percent and no anchor ends up claiming more
+#: precision than the heater circuit can deliver.
+ANCHOR_SIGMA_K = {"prepython": 1.0, "recorder": 1.0, "postcal": 0.5}
 ANCHOR_FLOOR_K = 0.3
 
 #: Fractional uncertainty on the watts the heater circuit actually DELIVERS, as
@@ -296,6 +313,87 @@ LAMBDA_SMOOTH_SIGMA = 0.30
 #: the term from absorbing anything Lambda should be explaining.
 DRIFT_SIGMA_W = 2.0e-3
 DRIFT_SHARE = 0.05
+
+#: The CAMPAIGN ramp's prior: how many watts per day of slow parasitic load the
+#: fit may find before the objective starts objecting.  ``campaign=True``.
+#:
+#: REFIT_PLAN.md Phase B step 8, and it is a SECOND term rather than more knots
+#: on the one above -- trap T2, measured.  The 43 h sweep's 22.8 h opening hold
+#: drifts -3.8 mK/h (cooling) at a fixed heater while the campaign runs
+#: +7 mK/h (warming): opposite signs, four orders of magnitude apart in
+#: timescale, and one term cannot be both.  ``DRIFT_SIGMA_W`` is the wander
+#: WITHIN a record, on the record's own clock; this is the trend ACROSS the
+#: campaign, on the wall clock, and it is the one the anchors measure.
+#:
+#: **In watts per day, not kelvin per day**, which analysis/drift.py had to
+#: establish before this could be written: the same underlying change reads
+#: 0.033 K/day at 30 K and 0.186 K/day at 118 K, because the local gain runs
+#: 2 to 14 K/%.  Divided back through dT/dP the three independent output bands
+#: agree to +-25 % -- 0.281, 0.335, 0.223 mW/day, median **0.281** -- against
+#: 0.27 mW/day measured a fourth way in section 2.3 and 4.6 mW over ~20 days
+#: as the old per-era step.  So the drift is a POWER at the heater's own node,
+#: and it enters exactly where the heater does, in the anchor residual and in
+#: the ODE's right-hand side alike.
+#:
+#: 1 mW/day is **3.5x the measured rate**, deliberately.  The prior is here to
+#: stop a nuisance term walking off with Lambda's level, not to tell the fit
+#: what the answer is -- if this number decided the slope, the leave-one-epoch-
+#: out gate in analysis/holdout.py would be testing the prior rather than the
+#: cryostat.
+CAMPAIGN_SIGMA_W_PER_DAY = 1.0e-3
+CAMPAIGN_SHARE = 0.05
+
+#: WHAT THE CAMPAIGN DRIFT IS PROPORTIONAL TO -- and this was measured, after
+#: the obvious answer was tried and refuted.
+#:
+#: ``"watts"``   a constant parasitic load on the sample: ``camp = s * days``.
+#:               Jeff's reading of the sign, and what REFIT_PLAN.md step 5 and
+#:               trap T2 assume.
+#: ``"power"``   a fixed FRACTION of the delivered heat going missing:
+#:               ``camp = s * days * P(u) / CAMPAIGN_REF_W``.  Identical at the
+#:               power the drift was measured at, and zero with the heater off.
+#:
+#: **The cold end refuses ``"watts"``, three ways.**  The drift was only ever
+#: measured above 27 K -- analysis/drift.py needs 8 anchors over 10 days inside
+#: a 1.5 % output band, and no band below 52 % output has them -- so what a
+#: constant load implies at 5 K was an extrapolation nobody had checked.
+#:
+#:   * The sweep's own zero-output tail has **0.577 mW** between the sample and
+#:     the coldplate at 4.90 K.  The record sits 6.9-8.6 days before the
+#:     reference epoch, so 0.281 mW/day asks for -2.2 mW there: the model's
+#:     sample would have to sit BELOW its own heat sink.  Pinned at 0.15 mW/day
+#:     the integrator drives the cold tail into its 1 K clamp and overflows.
+#:   * At 4.75 K the fitted local resistance is 527 K/W, so 0.281 mW/day is
+#:     **1.35 K of base temperature in 12 days**.  The zero-output anchors move
+#:     4.7516 K (08-24) to 4.856 and 4.926 K (09-05) -- about 0.1 K, and their
+#:     COLDPLATE moved 4.530 to 4.68-4.69 K, which accounts for it on its own.
+#:   * Left free, the fit takes **0.041 mW/day** -- seven times below the warm
+#:     bands -- and loosening the prior tenfold does not move it.  It is not
+#:     the prior refusing, it is the cold end.
+#:
+#: ``"power"`` survives all three because it vanishes with the heater, and it
+#: is not a worse description of where the drift WAS measured: over the three
+#: bands P(u) runs 0.45, 0.66 and 0.71 W, a factor of 1.6, against a measured
+#: 0.281 / 0.335 / 0.223 mW/day that spans 1.5 with no trend either way.  The
+#: bands cannot separate the two shapes; the cold end can, and does.
+#:
+#: The mechanism it implies is not the one this plan started with.  A constant
+#: load is "the cryostat is losing cooling power"; a fixed fraction of the
+#: delivered heat is **the heater circuit delivering less of what it is asked
+#: for** -- which is the same failure mode as trap T10's, whose one measured
+#: instance is 0.7 % on 2026-09-10, slowly rather than all at once.  It is
+#: consistent with the circuit Jeff describes as reseated and not repaired.
+#: The fit cannot tell a degrading heater from a degrading link (at steady
+#: state both scale with the heat carried); it can tell either from a constant
+#: parasitic watt, and it does.
+CAMPAIGN_FORM = "power"
+
+#: The power ``CAMPAIGN_SIGMA_W_PER_DAY`` and the fitted slope are quoted at,
+#: so that "mW/day" means the same thing under either form and can still be
+#: compared with analysis/drift.py.  0.65 W is the middle of the three bands
+#: the drift was measured in (0.45, 0.66, 0.71 W) and about where the cryostat
+#: is held.
+CAMPAIGN_REF_W = 0.65
 
 #: How far C(T) may depart from a Debye SHAPE, as a factor either way.
 #:
@@ -518,11 +616,12 @@ class Anchors:
     temperature it reports.  AUDIT-2026-09-10-REJOINDER.md asks for exactly
     this convention to be honoured here.
 
-    ``group`` is carried but **not applied unless asked** -- see
-    ``fit(groups=)``.  Defaulting it on would silently give the ladder,
-    ``plot_ode`` and ``pid_tuning`` a per-era power offset none of them has
-    today, which is a change to three fits wearing a refactor's clothes.
-    Retiring :func:`anchor_groups` in favour of it is step 8.
+    ``era`` is the label ``ANCHOR_SIGMA_K`` is keyed on and is carried for
+    reporting only -- **no residual is a function of it any more.**  Step 8
+    retired the per-era power offset: two named halves of one continuous
+    campaign were a step function fitted to a slope, and ``t_abs`` is what the
+    slope is fitted on now.  Keeping the label costs nothing and is what lets a
+    diagnostic say WHICH anchors a residual belongs to.
     """
 
     T: np.ndarray
@@ -530,7 +629,7 @@ class Anchors:
     Q: np.ndarray
     sigma: np.ndarray
     t_abs: np.ndarray
-    group: np.ndarray
+    era: tuple = ()
     source: tuple = ()
     #: Heater output in percent.  Not used by the objective -- ``Q`` is what
     #: enters it -- and carried because the campaign drift is measured at
@@ -539,14 +638,12 @@ class Anchors:
     u: np.ndarray = None
 
     @classmethod
-    def from_tuple(cls, a, groups=None):
+    def from_tuple(cls, a):
         if isinstance(a, Anchors):
             return a
         T, Tc, Q, sigma = (np.asarray(v, float) for v in a)
-        g = (np.zeros(len(T), int) if groups is None
-             else np.asarray(groups, int))
         return cls(T=T, Tc=Tc, Q=Q, sigma=sigma,
-                   t_abs=np.full(len(T), math.nan), group=g,
+                   t_abs=np.full(len(T), math.nan), era=("",) * len(T),
                    u=np.full(len(T), math.nan))
 
     def __len__(self) -> int:
@@ -556,6 +653,28 @@ class Anchors:
     def days(self) -> np.ndarray:
         """Days from the earliest anchor -- the axis the campaign drift runs on."""
         return (self.t_abs - np.nanmin(self.t_abs)) / 86400.0
+
+    def select(self, keep) -> "Anchors":
+        """The subset ``keep`` masks, with every column carried along.
+
+        Eight parallel arrays and two tuples, which is exactly the shape of
+        thing that gets sliced in six places and misaligned in one of them --
+        :func:`trim_anchors` did it by hand, and the leave-one-epoch-out gate
+        in analysis/holdout.py needs the same operation on a different mask.
+        """
+        keep = np.asarray(keep, bool)
+
+        def labels(t):
+            # Left alone when it is not per-anchor: `from_tuple` leaves both
+            # empty, and a tuple that is not the right length is not a column.
+            if len(t) != len(keep):
+                return t
+            return tuple(v for v, k in zip(t, keep) if k)
+
+        return replace(
+            self, T=self.T[keep], Tc=self.Tc[keep], Q=self.Q[keep],
+            sigma=self.sigma[keep], t_abs=self.t_abs[keep], u=self.u[keep],
+            era=labels(self.era), source=labels(self.source))
 
 
 def load_rows(path=ANCHORS):
@@ -569,30 +688,6 @@ def load_rows(path=ANCHORS):
     """
     with open_table(path) as fh:
         return list(csv.DictReader(fh))
-
-
-def anchor_groups(path=ANCHORS, t_max=None):
-    """Which half of the cooldown each anchor came from: 0 recent, 1 prepython.
-
-    One cooldown, two states.  The July-August logs disagree with the September
-    ones by 1.8-2.9 K at matched output, measured directly at seven overlapping
-    outputs, and no single Lambda can satisfy both.  Fitted as one free power
-    offset, that stops being an error and becomes a measurement; see
-    `fit(groups=...)`.
-
-    Group 0 is the reference and gets no offset, so the curve itself describes
-    the recent state -- which is the one the simulator and the loop have to
-    match.  PASS THIS to `fit()` for anything that ships; without it the
-    shipped curve splits the difference and is about 1 K wrong for both.
-
-    Reads :func:`load_anchors` rather than looping over the table again.  It
-    used to have its own copy of the "is this row an anchor" filter, as did
-    :func:`load_taus`, and three loops that must agree on which rows exist is
-    two too many -- a ``t_max`` or a grade test drifting in one of them would
-    misalign ``groups`` against ``aT`` by one row and mis-assign every offset
-    after it, silently.
-    """
-    return load_anchors(path, t_max).group
 
 
 def _era_sigma(row) -> float:
@@ -609,7 +704,7 @@ def _era_sigma(row) -> float:
             f"came to fit nothing.") from None
 
 
-def _anchor_epoch(row) -> float:
+def anchor_epoch(row) -> float:
     """When this anchor's level was true, in unix seconds.
 
     ``t_mid``, and the choice matters for step 8.  Phase A quotes a hold's
@@ -635,7 +730,7 @@ def load_anchors(path=ANCHORS, t_max=None) -> Anchors:
     unpacked it, so this is a widening rather than a break; ``fit`` still
     accepts the tuple through :meth:`Anchors.from_tuple`.
     """
-    T, Tc, Q, sigma, when, group, ids, u = [], [], [], [], [], [], [], []
+    T, Tc, Q, sigma, when, era, ids, u = [], [], [], [], [], [], [], []
     for r in load_rows(path):
         if not r.get("grade"):
             continue
@@ -648,14 +743,14 @@ def load_anchors(path=ANCHORS, t_max=None) -> Anchors:
         Tc.append(_f(r, "Coldplate"))
         Q.append(_f(r, "P_W"))
         sigma.append(math.hypot(cool, own))
-        when.append(_anchor_epoch(r))
-        group.append(1 if (r.get("era") or "").strip() == "prepython" else 0)
+        when.append(anchor_epoch(r))
+        era.append((r.get("era") or "").strip())
         ids.append((r.get("id") or r.get("source") or "").strip())
         u.append(_f(r, "u_pct"))
     return Anchors(T=np.array(T, float), Tc=np.array(Tc, float),
                    Q=np.array(Q, float), sigma=np.array(sigma, float),
                    t_abs=np.array(when, float),
-                   group=np.array(group, int), source=tuple(ids),
+                   era=tuple(era), source=tuple(ids),
                    u=np.array(u, float))
 
 
@@ -768,7 +863,7 @@ def trim_anchors(anchors, records):
     meaning what it says.
 
     Dated by ``t_abs``, which is the window's MIDPOINT (see
-    :func:`_anchor_epoch`), so a dwell straddling a record's edge is judged by
+    :func:`anchor_epoch`), so a dwell straddling a record's edge is judged by
     where its level was quoted.  An anchor whose date is unknown is ``nan``,
     every comparison against it is false, and it is kept -- which is the right
     way round: "cannot be shown to be inside" is not "inside".
@@ -786,14 +881,8 @@ def trim_anchors(anchors, records):
                    & (anchors.t_abs <= r.t0 + float(r.t[-1] - r.t[0])))
     if not inside.any():
         return anchors, ()
-    keep = ~inside
     dropped = tuple(np.asarray(anchors.source, object)[inside])
-    return replace(
-        anchors, T=anchors.T[keep], Tc=anchors.Tc[keep], Q=anchors.Q[keep],
-        sigma=anchors.sigma[keep], t_abs=anchors.t_abs[keep],
-        group=anchors.group[keep], u=anchors.u[keep],
-        source=tuple(np.asarray(anchors.source, object)[keep]),
-    ), dropped
+    return anchors.select(~inside), dropped
 
 
 def record_scale(records, n_eff):
@@ -1352,8 +1441,8 @@ def cache_store(key: str, x, nfev: int) -> None:
 
 
 def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
-        tier2=False, weights=None, n_drift=0, groups=None, key_only=False,
-        seed_measured=SEED_MEASURED):
+        tier2=False, weights=None, n_drift=0, campaign=False,
+        campaign_w=None, key_only=False, seed_measured=SEED_MEASURED):
     """Fit Lambda and C to a sweep.
 
     ``weights`` is the per-sample weight of the sweep residual, and exists for
@@ -1363,6 +1452,22 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     normalised to unit mean square, so ``sum(w**2) == len(t)`` exactly as on a
     uniform grid -- which is what keeps the anchor, tau and shape shares below
     balanced against the sweep the same way they were.
+
+    ``campaign`` turns on the drift ramp of :data:`CAMPAIGN_SIGMA_W_PER_DAY`.
+    **Pass it for anything that ships.**  It replaces the ``groups=`` per-era
+    power offset, which was one step between two named halves of a continuous
+    55-day campaign; without either, the curve splits the difference between
+    July and September and is about a kelvin wrong for both.  It is off by
+    default for the same reason ``groups=`` was: the knot ladder and
+    ``pid_tuning`` are complexity studies and a drift term in them confounds
+    what they exist to separate.
+
+    ``campaign_w`` PINS the ramp at a given watts per day instead of fitting
+    it, and is how the objective gets profiled in the one parameter step 8
+    adds -- "is this slope measured or merely permitted" is a question about
+    the shape of the objective around the optimum, and a fit that is free to
+    move cannot answer it.  The prior term is kept in ``cost`` when the slope
+    is pinned, as a constant, so the two are comparable numbers.
     """
     recs = as_records(data if data is not None else load_sweep(), weights)
     anc = Anchors.from_tuple(anchors if anchors is not None else load_anchors())
@@ -1430,33 +1535,63 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
              / math.log(TAU_SIGMA_FACTOR))
     log_tau = np.log(tauV)
 
-    # The drift knots are in TIME, evenly, and there are very few of them --
-    # see DRIFT_SIGMA_W.  Linear interpolation rather than a spline: with three
-    # knots a spline's extra smoothness buys nothing and its overshoot is one
-    # more way for a nuisance term to reach somewhere it should not.
-    # One free power offset per anchor group beyond the first.  Group 0 is the
-    # recent state and is the reference, so it gets no offset -- an offset on
-    # every group would be degenerate with Lambda's own level.
-    # ``groups=True`` means "use the anchors' own era column", which is what
-    # step 8 will make the only behaviour.  ``None`` still means OFF, and it
-    # has to: the ladder, ``plot_ode`` and ``pid_tuning`` all pass nothing, and
-    # switching them on here would change three fits under cover of a
-    # refactor.  See Anchors.group.
-    if groups is None:
-        groups = np.zeros(len(aT), int)
-    elif groups is True:
-        groups = anc.group
-    else:
-        groups = np.asarray(groups, int)
-    if len(groups) != len(aT):
+    # THE CAMPAIGN RAMP -- one slope, in watts per day, on the WALL CLOCK.
+    #
+    # This is the second of trap T2's two terms and the whole of step 8.  It
+    # replaces a per-era power offset: two named halves of one continuous
+    # cooldown, with a step between them, fitted to anchors that are in fact
+    # spread evenly over 55 days.  What the anchors measure is a slope
+    # (analysis/drift.py: +0.281 mW/day, three independent output bands
+    # agreeing to +-25 % once the local gain is divided out), and a step
+    # function of the filename could only ever put that slope's average in one
+    # place and call the rest residual.
+    #
+    # ZERO AT THE REFERENCE EPOCH, which is the latest moment any input
+    # describes.  The gauge matters because Lambda is quoted at it: the curve
+    # that ships has to be the cryostat AS IT IS NOW, which is what group 0
+    # being the reference used to buy.  It is reported, so a caller planning a
+    # ladder two weeks out can carry the ramp forward rather than guess.
+    if campaign_w is not None:
+        campaign = True
+    if campaign:
+        bad = [s for s, when in zip(anc.source, anc.t_abs)
+               if not math.isfinite(when)]
+        if bad:
+            raise SystemExit(
+                f"fit_ode: campaign=True and {len(bad)} anchors have no date "
+                f"({', '.join(map(str, bad[:3]))}...).  The ramp is a function "
+                f"of wall-clock time and an undated anchor cannot be placed on "
+                f"it; re-run analysis/measure.py, which writes t_mid.")
+        undated = [r.name for r in recs if math.isnan(r.t0)]
+        if undated:
+            raise SystemExit(
+                f"fit_ode: campaign=True and record(s) {undated} carry no "
+                f"absolute clock.  A record built from a bare (t, T, Tc, u) "
+                f"tuple has none -- load it with load_record or "
+                f"load_decimated_record, which read it from the archive.")
+    #: A pinned ramp is applied and not fitted, so it costs no parameter.
+    n_camp = 1 if (campaign and campaign_w is None) else 0
+    camp_fixed = 0.0 if campaign_w is None else float(campaign_w)
+    t_ref = math.nan
+    if campaign:
+        t_ref = max(([float(np.nanmax(anc.t_abs))] if len(anc) else [])
+                    + [float(r.t_abs[-1]) for r in recs if len(r)])
+    if CAMPAIGN_FORM not in ("watts", "power"):
         raise SystemExit(
-            f"fit_ode: {len(groups)} group labels for {len(aT)} anchors.  They "
-            f"are positional, so a mismatch mis-assigns every offset after the "
-            f"first gap -- use groups=True, or production_inputs().  Note "
-            f"that trim_anchors may have just dropped some: an array built "
-            f"from the untrimmed table is the wrong length by exactly the "
-            f"anchors that fell inside a record.")
-    n_group = int(groups.max()) if len(groups) else 0
+            f"fit_ode: CAMPAIGN_FORM = {CAMPAIGN_FORM!r} is not a shape this "
+            f"knows.  It is 'watts' or 'power', and which one it is was "
+            f"measured rather than chosen -- read its docstring.")
+    # Days before the reference epoch, times whatever the ramp is proportional
+    # to.  Under "power" that is the delivered heat over CAMPAIGN_REF_W, so the
+    # slope means the same milliwatts per day under either form.
+    a_days = ((anc.t_abs - t_ref) / 86400.0 if campaign
+              else np.zeros(len(aT)))
+    rec_days = ([(r.t_abs - t_ref) / 86400.0 for r in recs] if campaign
+                else [])
+    if campaign and CAMPAIGN_FORM == "power":
+        a_days = a_days * (np.abs(aQ) / CAMPAIGN_REF_W)
+        rec_days = [d * (power_w(r.u) / CAMPAIGN_REF_W)
+                    for d, r in zip(rec_days, recs)]
 
     # ONE BLOCK OF DRIFT KNOTS PER RECORD, each on its OWN clock.  This used to
     # raise with more than one record, because a single block in TIME would have
@@ -1469,8 +1604,13 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     # wander, the thing that makes the sweep's 22.8 h opening hold drift
     # -3.8 mK/h at a heater that never moves.  The campaign ramp -- +7 mK/h,
     # opposite sign, a function of wall-clock date rather than of time within a
-    # record -- is step 8, and it is a different term with its own prior for
-    # exactly that reason.  ``Record.t0`` is what step 8 will hang it on.
+    # record -- is ``campaign`` above, hung on ``Record.t0``, and it is a
+    # different term with its own prior for exactly that reason.
+    #
+    # The knots are evenly spaced in TIME and there are very few of them -- see
+    # DRIFT_SIGMA_W.  Linear interpolation rather than a spline: with three
+    # knots a spline's extra smoothness buys nothing and its overshoot is one
+    # more way for a nuisance term to reach somewhere it should not.
     #
     # Inert at one record: n_drift_all == n_drift and the single knot block is
     # the same linspace over the same clock.
@@ -1482,14 +1622,42 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     # wander is a nuisance of the same size, not n times one.
     w_drift = (math.sqrt(DRIFT_SHARE * N_eff / max(n_drift_all, 1))
                / DRIFT_SIGMA_W)
+    #: One parameter, so no count to divide by.
+    w_camp = (math.sqrt(CAMPAIGN_SHARE * N_eff) / CAMPAIGN_SIGMA_W_PER_DAY
+              if campaign else 0.0)
 
-    def drift_of(p):
-        """Per record, in watts, or ``None``.  Each on its own knots."""
-        if not n_drift:
+    def campaign_slope(p):
+        """Watts per day: the fitted parameter, or the pinned value."""
+        return p[-1] if n_camp else camp_fixed
+
+    def campaign_of(p):
+        """The ramp at each ANCHOR's own date, in watts.  Zero at ``t_ref``."""
+        return campaign_slope(p) * a_days if campaign else 0.0
+
+    def q_extra_of(p):
+        """The unmeasured power added to each RECORD's right-hand side, in watts.
+
+        Both slow terms, because both are loads on the same node as the heater:
+        the per-record wander on the record's own clock, and the campaign ramp
+        on the wall clock.  The ramp is nearly constant across a 43 h record --
+        0.5 mW at the measured rate -- but its OFFSET from ``t_ref`` is not, and
+        that offset is the whole point: a trajectory taken five days before the
+        reference epoch has to be integrated against the cryostat as it was
+        then, or it drags Lambda back to its own date.
+        """
+        if not n_drift and not campaign:
             return None
-        knots = p[len(p) - n_tail:len(p) - n_group]
-        return [np.interp(r.t, dks[i], knots[i * n_drift:(i + 1) * n_drift])
-                for i, r in enumerate(recs)]
+        knots = p[len(p) - n_tail:len(p) - n_camp] if n_camp else p[len(p) - n_tail:]
+        out = []
+        for i, r in enumerate(recs):
+            q = np.zeros(len(r.t))
+            if n_drift:
+                q = q + np.interp(r.t, dks[i],
+                                  knots[i * n_drift:(i + 1) * n_drift])
+            if campaign:
+                q = q + campaign_slope(p) * rec_days[i]
+            out.append(q)
+        return out
 
     def unpack2(p):
         f = 1.0 / (1.0 + math.exp(-p[-2]))
@@ -1507,19 +1675,12 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
                if LAMBDA_SMOOTH_SHARE and len(rough_T) > 2 else 0.0)
     rough_lx = np.log(rough_T)
 
-    n_tail = n_drift_all + n_group
+    n_tail = n_drift_all + n_camp
 
     def split_p(p):
         """(lambda knots, capacity knots) with the tail parameters removed."""
         body = p[:-n_tail] if n_tail else p
         return body[:n], (body[n:-2] if tier2 else body[n:])
-
-    def group_offsets(p):
-        """Per-anchor power offset, in watts.  Zero for the reference group."""
-        if not n_group:
-            return 0.0
-        q = np.concatenate([[0.0], p[len(p) - n_group:]])
-        return q[groups]
 
     def run(p):
         """The modelled T for every record, concatenated in record order.
@@ -1532,7 +1693,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
         same trap ``segments.load`` refuses for a window spanning one.
         """
         pl, pc = split_p(p)
-        q = drift_of(p)
+        q = q_extra_of(p)
         out = []
         for i, rc in enumerate(recs):
             if not tier2:
@@ -1548,7 +1709,7 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
         pl, pc = split_p(p)
         model = run(p)
         r_sweep = w_sweep * (np.log(model) - logT) / SWEEP_SIGMA_REL
-        dQ = lam(pl, aT) - lam(pl, aTc) - aQ - group_offsets(p)
+        dQ = lam(pl, aT) - lam(pl, aTc) - aQ - campaign_of(p)
         # In POWER throughout.  It reads as "kelvin missed over kelvin allowed"
         # only when dP is zero; with it, the denominator is the two bars added
         # in quadrature on the side the residual is actually computed on.
@@ -1563,14 +1724,16 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
                   - (g[1:-1] - g[:-2]) / (rough_lx[1:-1] - rough_lx[:-2]))
             parts.append(w_rough * d2)
         if n_drift:
-            parts.append(w_drift
-                         * p[len(p) - n_tail:len(p) - n_group])
+            parts.append(w_drift * (p[len(p) - n_tail:len(p) - n_camp]
+                                    if n_camp else p[len(p) - n_tail:]))
+        if campaign:
+            parts.append(np.array([w_camp * campaign_slope(p)]))
         return np.concatenate(parts)
 
     p0 = np.concatenate([pl0, pc0]
                         + ([np.array(TIER2_SEED)] if tier2 else [])
                         + ([np.zeros(n_drift_all)] if n_drift else [])
-                        + ([np.zeros(n_group)] if n_group else []))
+                        + ([np.zeros(n_camp)] if n_camp else []))
     # EVERY constant the objective reads goes in the key, not just the ones
     # that were being tuned the day it was written.  ANCHOR_SHARE was not in
     # here, so a study that varied it got the first run's answer back four
@@ -1580,13 +1743,20 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     # coldplate column -- exactly the thing that happened on 2026-09-04 -- did
     # not invalidate a stored fit.  It enters the objective through
     # ``lam(pl, aTc)`` and belongs in the key beside the rest.
+    # The anchors' DATES are in the key because the campaign ramp makes them
+    # an input to the objective rather than a label on it -- re-measuring a
+    # window's t_mid moves where the ramp places it.  They are hashed whether
+    # or not the ramp is on: an entry keyed without them could be reached by a
+    # later run that does use them.
     key = cache_key(n_lam, n_cap, tier2, max_nfev, t, T, Tc, u, aT, aTc, aQ, aS,
-                    tauV, w_sweep, groups,
+                    tauV, w_sweep, anc.t_abs,
                     # The PARTITION, not just the concatenation: two records
                     # split differently hash the same flat arrays and are a
                     # different fit -- different knot blocks, different T0s.
                     np.array([len(r) for r in recs], float),
-                    np.array([n_drift, seed_measured,
+                    np.array([n_drift, seed_measured, n_camp, camp_fixed,
+                              CAMPAIGN_SHARE, CAMPAIGN_SIGMA_W_PER_DAY,
+                              CAMPAIGN_FORM == "power", CAMPAIGN_REF_W,
                               LAMBDA_SMOOTH_SHARE, LAMBDA_SMOOTH_SIGMA,
                               ANCHOR_SHARE, ANCHOR_FLOOR_K, DELTA_P_FRAC,
                               TAU_SHARE,
@@ -1620,9 +1790,11 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
     # One ROW per record, so that a caller reading "the drift" gets a per-record
     # answer rather than a block it has to know the partition of.  min/max over
     # the whole thing still mean what they did, which is what plot_gain reads.
-    drift_w = (x[len(x) - n_tail:len(x) - n_group].reshape(len(recs), n_drift)
+    drift_w = ((x[len(x) - n_tail:len(x) - n_camp] if n_camp
+                else x[len(x) - n_tail:]).reshape(len(recs), n_drift)
                if n_drift else np.zeros(0))
-    group_w = x[len(x) - n_group:] if n_group else np.zeros(0)
+    campaign_slope_w = (float(x[-1]) if n_camp
+                        else (camp_fixed if campaign else 0.0))
     err = model - T
     # Weighted, so a decimated fit reports the same quantity a full-grid one
     # does: rms over TIME, not over samples.  Unweighted these agree exactly on
@@ -1653,7 +1825,13 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
         "n_anchor": len(aT), "anchors_twice": twice,
         "key": key, "cost": cost,
         "n_drift": n_drift, "drift_w": drift_w, "drift_t": dks,
-        "n_group": n_group, "group_w": group_w,
+        # The ramp, and the epoch it is zero at -- which is the date the whole
+        # curve is quoted at, so nothing downstream may read one without the
+        # other.  See campaign_power_w.
+        "campaign": bool(campaign), "campaign_w_per_day": campaign_slope_w,
+        "campaign_pinned": campaign_w is not None,
+        "campaign_form": CAMPAIGN_FORM if campaign else "",
+        "campaign_t_ref": t_ref,
         "drift_mw": float(1e3 * np.abs(drift_w).max()) if n_drift else 0.0,
         "lam": lam, "cap": cap, "pl": pl, "pc": pc,
         "t": t, "T": T, "Tc": Tc, "u": u, "model": model,
@@ -1669,6 +1847,40 @@ def fit(n_lam, n_cap, data=None, anchors=None, taus=None, max_nfev=MAX_NFEV,
         "tau_137_s": float(cap(pc, np.array([CAP_SHAPE_REF_K]))[0]
                            / lam.slope(pl, np.array([CAP_SHAPE_REF_K]))[0]),
     }
+
+
+def campaign_power_w(r, t_abs, q_w=None):
+    """The fitted campaign load at absolute time(s) ``t_abs``, in watts.
+
+    The one place the ramp's sign convention lives, because three call sites
+    got it wrong independently when it was a per-era offset.  The anchor
+    residual is ``Lambda(T_s) - Lambda(T_c) - Q - campaign``, so a dwell taken
+    at date ``t`` sits on the reference curve at an EFFECTIVE power of
+    ``Q + campaign(t)``.  The ramp is negative in the past -- the cryostat had
+    more cooling then -- so a July dwell is drawn at a lower effective power
+    than its heater readback, which is what makes it land on the same curve as
+    a September one.
+
+    ``q_w`` is the heat that was being delivered at that moment, and under
+    ``CAMPAIGN_FORM == "power"`` it is REQUIRED, because the ramp is a fraction
+    of it.  Refused rather than defaulted: a caller that forgets would get a
+    silently zero offset on every dwell, which is the shape of "the ramp did
+    nothing" and reads as a result.
+
+    Returns zeros for a fit that had no ramp, so a caller need not branch.
+    """
+    t = np.asarray(t_abs, float)
+    if not r.get("campaign"):
+        return np.zeros_like(t)
+    days = (t - r["campaign_t_ref"]) / 86400.0
+    if r.get("campaign_form", CAMPAIGN_FORM) == "power":
+        if q_w is None:
+            raise SystemExit(
+                "fit_ode: campaign_power_w needs q_w under CAMPAIGN_FORM = "
+                "'power' -- the ramp is a fraction of the delivered heat, so "
+                "without it there is nothing to take a fraction of.")
+        days = days * (np.abs(np.asarray(q_w, float)) / CAMPAIGN_REF_W)
+    return r["campaign_w_per_day"] * days
 
 
 #: Vary one curve's freedom at a time.  A joint grid confounds the two and
@@ -1744,7 +1956,7 @@ class FitSpec:
     decimated: bool = False
     t_max: float | None = None
     n_drift: int = 0
-    groups: bool = False
+    campaign: bool = False
     tier2: bool = False
     max_nfev: int = MAX_NFEV
 
@@ -1752,8 +1964,8 @@ class FitSpec:
         rec, anchors, taus = production_inputs(self.decimated, self.t_max)
         return fit(self.n_lam, self.n_cap, rec, anchors, taus,
                    max_nfev=self.max_nfev, tier2=self.tier2,
-                   n_drift=self.n_drift,
-                   groups=True if self.groups else None, key_only=key_only)
+                   n_drift=self.n_drift, campaign=self.campaign,
+                   key_only=key_only)
 
     def key(self) -> str:
         """The cache key :meth:`run` will use, without paying for the fit."""

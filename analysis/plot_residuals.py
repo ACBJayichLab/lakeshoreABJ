@@ -90,17 +90,18 @@ BAND = "#e6e5e1"
 
 def main() -> int:
     rec, anchors, taus = F.production_inputs()
-    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, groups=True)
+    r = F.fit(N_LAM, N_CAP, rec, anchors, taus, n_drift=N_DRIFT, campaign=True)
     lam, cap, pl, pc = r["lam"], r["cap"], r["pl"], r["pc"]
     a = anchors
     rows = {(row.get("id") or row.get("source") or "").strip(): row for row in F.load_rows()}
     era = np.array([rows[s]["era"] for s in a.source])
 
-    # The per-era power offset the fit measures: group 0 has none, group g >= 1
-    # is group_w[g - 1] -- the same indexing fit() uses on the anchor residual.
-    group_w = np.asarray(r["group_w"], float)
-    offset_w = np.where(a.group > 0, group_w[np.maximum(a.group - 1, 0)] if len(group_w)
-                        else 0.0, 0.0)
+    # The campaign ramp at each anchor's own date -- the same term fit() put on
+    # the anchor residual, read back through the one function that knows its
+    # sign.  It replaced a per-era step at REFIT_PLAN.md step 8, so an anchor's
+    # offset is now a function of WHEN it was taken rather than of which half of
+    # the campaign its filename belongs to.
+    offset_w = F.campaign_power_w(r, a.t_abs, a.Q)
 
     # --- the residual, in power and in kelvin ------------------------------
     q_model = lam(pl, a.T) - lam(pl, a.Tc)
