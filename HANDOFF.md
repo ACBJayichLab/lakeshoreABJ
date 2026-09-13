@@ -216,12 +216,15 @@ The venv is Windows and lives at the **repository root**, not in a worktree:
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest -q
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ruff check .
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/measure.py
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --in-epoch
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --profile
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --shapes
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --shapes --no-campaign
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --profile --campaign
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/drift.py
 ```
+
+`--in-epoch` is the one to run first: it is section 1's scoreboard with the
+delivered-power gauge taken out, and the three holds as predictions.
 
 `analysis/measured.csv` and `analysis/.fit_cache/` do not exist on a fresh
 clone or in a new worktree. `measure.py` takes 11 s; the production fit then
