@@ -94,10 +94,10 @@ the plan; `python analysis/holdout.py` prints it:
 |---|---|---|---|
 | the three long settled holds | < 0.3 K | **+3.04 / +3.15 / +3.01 K** | FAIL |
 | the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | **1.107 K rms**, 3.13 max | FAIL |
-| every measured τ, 40–120 K | < 10 % | **26.4 % worst**, 4.7 % median | FAIL |
+| every measured τ, 40–120 K | < 10 % | **26.4 % worst**, 2.7 % median | FAIL |
 
 "31 rungs" was a count nobody could reproduce — the window holds 45. And the τ
-row needs a decision: the median is 4.7 % and §2.4 is right that the *shape*
+row needs a decision: the median is 2.7 % and §2.4 is right that the *shape*
 travels, but a single dwell's τ scatters 433–850 s near 137 K, so "every
 measured τ" may not be reachable by a one-pole model at all.
 

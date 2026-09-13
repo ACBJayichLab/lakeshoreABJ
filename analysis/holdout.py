@@ -169,12 +169,12 @@ def scoreboard(r, rows=None, taus=None) -> bool:
     ladder = f"{lr:.3f} K rms, {lmax:.2f} max"
     worst_tau = f"{100 * tf:.1f} % worst, {100 * tmed:.1f} % median"
     print("REFIT_PLAN.md section 1 -- the definition of done")
-    print(f"  {'row':<34}{'target':>12}{'measured':>26}  verdict")
-    print(f"  {'the three long settled holds':<34}{'< 0.3 K':>12}{three:>26}"
+    print(f"  {'row':<34}{'target':>12}{'measured':>30}  verdict")
+    print(f"  {'the three long settled holds':<34}{'< 0.3 K':>12}{three:>30}"
           f"  {mark(ok[0])}   mean {mean:+.2f} K")
-    print(f"  {'the 2026-09-05 ladder':<34}{'< 0.5 K rms':>12}{ladder:>26}"
+    print(f"  {'the 2026-09-05 ladder':<34}{'< 0.5 K rms':>12}{ladder:>30}"
           f"  {mark(ok[1])}   {ln} rungs")
-    print(f"  {'every measured tau, 40-120 K':<34}{'< 10 %':>12}{worst_tau:>26}"
+    print(f"  {'every measured tau, 40-120 K':<34}{'< 10 %':>12}{worst_tau:>30}"
           f"  {mark(ok[2])}   {tn} taus")
     return all(ok)
 

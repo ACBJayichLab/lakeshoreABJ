@@ -84,7 +84,7 @@ time and without retuning between them**:
 |---|---|---|---|
 | the three long settled holds | < 0.3 K | **+3.04 / +3.15 / +3.01 K low** | `holdout.py` |
 | the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | **1.107 K rms**, 3.13 K max | `holdout.py` |
-| every measured τ, 40–120 K | < 10 % | **26.4 % worst**, 4.7 % median, 11 τ | `holdout.py` |
+| every measured τ, 40–120 K | < 10 % | **26.4 % worst**, 2.7 % median, 11 τ | `holdout.py` |
 
 **All three rows fail, and the column is now generated rather than quoted.**
 `python analysis/holdout.py` prints exactly this table from the fit in front of
@@ -96,7 +96,7 @@ graded dwells. A definition of done quoted from three different fits is not one.
 
 The τ row is the one to read carefully. §2.4 reports it passing and that is not
 wrong: the *shape* of τ(T) travels, and the median miss over the eleven τ
-anchors in band is **4.7 %**. What fails is the row as written — "every
+anchors in band is **2.7 %**. What fails is the row as written — "every
 measured τ" — because a single dwell's τ scatters 433 to 850 s near 137 K and
 the worst of eleven is 26.4 %. Either the row means the median and should say
 so, or it means every one and the target is unreachable by a one-pole model of
