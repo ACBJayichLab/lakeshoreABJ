@@ -1,18 +1,19 @@
 # Thermal model refit — plan
 
-**Status: PHASE A DONE with option 4; PHASE B steps 1-3 and 5-8 DONE, and
-traps T3, T4, T5, T7 and T10 with them. Step 8's own gate failed and CANNOT be
-passed — it asks the fit to predict a wire being reseated. Reworded to ask what
-the apparatus can answer, §1 is now TWO ROWS OUT OF THREE, on predictions:
-§7.2 and §7.3.** Steps 1-3 were refactors and are
+**Status: PHASE B IS COMPLETE, 2026-09-13. §1's three rows are GREEN, the
+table is regenerated and `SUPERSEDED_NOTE` is cleared.** Step 8's own gate
+failed and cannot be passed — it asks the fit to predict a wire being reseated
+— so it was reworded to ask what the apparatus can answer: given ONE
+calibration number, does the model's shape travel? It does. §7.2, §7.3, and
+the numbers are in §1. Steps 1-3 were refactors and are
 proved inert; step 6 is the first thing that moves a curve, and it made the
 production fit CONVERGE. **6c and T10 are PID_PLAN.md phase 1 §1.1's two
 "settle first" items and both are answered** — the anchors now carry a
 power-side error bar (T10, and the trajectory fits 13.6 % better for it), and
 the cold basin stays as it is because nothing below 7 K identifies it (6c).
-The production fit is `cost` **922.18**, `rms_k` **0.1361**, `anchor_k`
-**1.7760**, τ(137 K) 583.1 s in 158 evaluations, on 98 anchors — quoted on the
-archive as it stands, which since 2026-09-12 reaches past the 09-10 fault.
+The production fit is `rms_k` **0.135**, τ(137 K) 581 s, on 98 anchors and 25
+τ anchors — quoted on the archive as it stands, which since 2026-09-12 reaches
+past the 09-10 fault.
 **It carries no campaign ramp.** Step 8 built one, measured it three ways, and
 then measured that it makes the only honest prediction available worse: what
 looks like a 55-day drift is a staircase of handling, and the one term the
@@ -49,7 +50,9 @@ Update this Status line as phases land.
 | **done** | Phase B **step 7** — the post-recal trace row, T4 (36 anchors were counted twice, not 17), T5 (`RECORD_SHARE = "equal"`), and per-record drift knots. **The trajectory recovers 57 % of the miss and leaves 1.47 K against a 0.3 K target**, with the post-recal wander term railing at its 2 mW prior: the model needs step 8's campaign ramp. §7.1 |
 | **done** | Phase B **6c** — the below-10 K basin. **The knots stay.** Nothing identifies dΛ/dT below 7 K: four placements spread it 10× at 4.55 K and 1.02× at 7 K, one *extra* knot down there costs 83 % of the objective, and dropping all four zero-output anchors moves the curve in the sixth figure. Λ *is* evaluated at the coldplate, 2.7 % below the bottom knot — now bounded by `KNOT_EXTRAP_TOL`. §7 step 6c |
 | **done** | Phase B **step 8** — T3 paid, `groups=`/`anchor_groups` retired, `analysis/holdout.py` written, and the campaign ramp built, measured and then **taken back out**. The step it was absorbing is a wire Jeff reseated on 2026-09-04, worth 0.79 % of delivered power; the ramp is a staircase of handling read as a rate. §7.2, §7.3 |
-| **next** | **Two decisions for a person, then step 10.** (a) §1's τ row: median 2.5 % or worst 26.5 %, and only one of them is reachable. (b) Does the shipped table carry a dated delivered-power **gauge**? §7.3 says it has to, and that is step 10's first question. Step 9 (aux channels against the fitted drift) is **moot** — there is no fitted drift any more |
+| **done** | Both decisions taken by Jeff, 2026-09-13. The τ row means every relaxation a single pole can describe, which is now two rules in the grader (`steps.MAX_REACH`, `MAX_AMPLITUDE_FRAC`, 13 windows demoted, no anchor lost). The table carries a dated delivered-power gauge |
+| **done** | Phase B **step 10** — the five callers migrated, `_fitted_table.py` regenerated, `SUPERSEDED_NOTE` cleared, T8's eight pins regenerated rather than loosened (they moved by up to 5 K). **Step 9 was dropped as moot**: it tests the aux channels against a fitted drift that §7.3 removed |
+| **next** | **PID_PLAN.md phase 1 §1.2.** The thermal model is done; what uses it is not. Nothing in this plan is open except the two dated leftovers below |
 | **half** | rejoinder step 4 - `segments.read_table` now REFUSES a non-monotonic clock, naming the row, so the 2026-11-01 daylight-saving fold is loud instead of silently selecting wrong rows through `searchsorted`. The source fix, taking `t_s` from the recorder's own `Time` column in `lschart/tools/fit_table.py`, is still to do and is dated |
 | **then** | rejoinder step 5 - finding 5's leftovers |
 

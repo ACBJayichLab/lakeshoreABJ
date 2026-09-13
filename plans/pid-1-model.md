@@ -62,9 +62,13 @@ base is output zero, which the band's floor already allows.
 ## Exit gate
 
 - REFIT_PLAN §1's three rows green: holds < 0.3 K, ladder < 0.5 K rms, every
-  τ within 10 %.
+  τ within 10 %. **MET 2026-09-13** — −0.25 / −0.08 / −0.01 K, 0.139 K rms,
+  6.7 % worst, with the holds and the ladder scored as PREDICTIONS from a gauge
+  fitted on disjoint anchors. "Every τ" now means every relaxation a single
+  pole can describe, which is `steps.MAX_REACH` and `MAX_AMPLITUDE_FRAC`.
 - `SUPERSEDED_NOTE` cleared; `test_fitted_response.py`'s pins **regenerated,
-  not loosened**.
+  not loosened**. **DONE** — eight points moved by up to 5 K and the 0.05 K
+  tolerance stands.
 - `missing_power_w` < 1 mW at every anchor; `sigma_q_w` exported.
 - The pipeline of 1.3 run end to end on the existing 180 K top rung as a dry
   run, producing no table change.

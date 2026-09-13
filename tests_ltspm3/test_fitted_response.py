@@ -44,13 +44,24 @@ def test_the_heater_is_a_resistor_and_the_arithmetic_round_trips():
 
 # -- the steady state ------------------------------------------------------
 
-#: Off the fitted curve, 2026-09-05.  Not round numbers and not from anybody's
-#: memory: these are what `analysis/plan_sweep.py` prints, and they are the
-#: whole reason the old two-pole response was replaced -- it puts 56.06% at
-#: 56 K where the fit and the 43 h sweep put it at 38.7 K.
+#: Off the fitted curve.  Not round numbers and not from anybody's memory:
+#: these are read straight off the generated table, and they are how a
+#: regenerated table that has quietly changed shape announces itself.
+#:
+#: **REGENERATED 2026-09-13** with the table, which is REFIT_PLAN.md Phase B
+#: step 10 and trap T8's instruction taken literally: a successful refit moves
+#: these by kelvins and the tolerance stays at 0.05 K.  They moved because the
+#: old table was known low -- 60.597 % read 70.0 K and now reads 75.09 -- and
+#: +4.6 K at 110 K is the miss the 2026-09-05 ladder measured against it.
+#:
+#: The level carries the delivered-power gauge of the epoch it was exported in,
+#: so **work on the heater wiring expires these numbers** and a re-export moves
+#: them again by up to 3 K.  That is a calibration with a shelf life rather than
+#: a defect; the SHAPE below -- the gain ratio, monotonicity, tau -- does not
+#: expire and is pinned separately.
 FITTED_POINTS = [
-    (7.187, 5.30), (24.380, 9.93), (44.530, 20.0), (52.709, 30.0),
-    (56.425, 40.0), (60.597, 70.0), (63.701, 110.0), (66.724, 150.0),
+    (7.187, 5.48), (24.380, 10.06), (44.530, 20.23), (52.709, 30.60),
+    (56.425, 41.93), (60.597, 75.09), (63.701, 114.58), (66.724, 154.46),
 ]
 
 
@@ -182,7 +193,7 @@ def test_it_drops_into_the_generic_simulator_untouched():
                  channels={1: "Sample", 2: "Coldplate"},
                  allow_writes=True, verify_writes=False, max_output_pct=70.0)
     readings, aux = inst.read_frame()
-    assert readings["Sample"].kelvin == pytest.approx(70.0, abs=0.5)
+    assert readings["Sample"].kelvin == pytest.approx(75.09, abs=0.5)
     assert aux["ls218.aout1"] == pytest.approx(60.597, abs=0.01)
 
     # ...and the ancillary channels follow it, which is what cross-channel
@@ -190,7 +201,7 @@ def test_it_drops_into_the_generic_simulator_untouched():
     inst.set_analog_percent(63.701)
     clock[0] += 20000.0
     readings, _ = inst.read_frame()
-    assert readings["Sample"].kelvin == pytest.approx(110.0, abs=0.5)
+    assert readings["Sample"].kelvin == pytest.approx(114.58, abs=0.5)
     assert readings["Coldplate"].kelvin > 8.0
 
 

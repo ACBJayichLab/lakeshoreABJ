@@ -191,20 +191,24 @@ def verify(r, g) -> None:
 #: It lives here rather than being pasted into ltspm3/model/_fitted_table.py because
 #: that file is generated: a hand-edited warning is deleted by the next refit,
 #: which is precisely the moment somebody is relying on it.
-SUPERSEDED_NOTE = """\
-KNOWN LOW, and not yet refitted.  The programmed ladder of 2026-09-05 measured
-the steady state LOW BY UP TO 4.5 K across 40-98 K -- 25 times the rms residual
-quoted above -- through the band where the 43 h sweep left no settled point at
-all and this fit was therefore interpolating.  tau came back within 3% from
-77 K to 114 K, so the dynamics travelled and the steady state did not.
-
-Both `ltspm3.tools.sweep --simulate` and analysis/plan_sweep.py read this table
-and inherit the error.  Invariant 9: where a measured number contradicts the
-model, the number wins.
-
-CLEAR SUPERSEDED_NOTE in analysis/export_response.py when a refit reconciles
-them.  HANDOFF.md has the command order; tests_ltspm3/test_fitted_table.py
-checks that this warning is actually present in the generated file."""
+SUPERSEDED_NOTE = ""
+#: CLEARED 2026-09-13, when the refit reconciled the table with the ladder that
+#: had contradicted it.  REFIT_PLAN.md section 1, all three rows, with the level
+#: gauged on the most recent ladder and the three long holds PREDICTED from it:
+#: -0.25 / -0.08 / -0.01 K against a 0.3 K target, 0.139 K rms across 45 rungs
+#: against 0.5 K, and 6.7 % worst on the relaxations a single pole can describe
+#: against 10 %.
+#:
+#: The mechanism stays, and the empty string is load-bearing:
+#: tests_ltspm3/test_fitted_table.py asserts in BOTH directions, so a stale
+#: warning left in the generated header now fails the build exactly as a
+#: dropped one did.
+#:
+#: What replaced it is not a caveat but a DATE.  The header carries the
+#: delivered-power gauge, the window it was measured on and the day it was
+#: measured, because the level is a calibration with a shelf life -- any work on
+#: the heater wiring expires it, while the shape does not.  See
+#: REFIT_PLAN.md section 7.3.
 
 
 def write(r, g, path: str) -> None:

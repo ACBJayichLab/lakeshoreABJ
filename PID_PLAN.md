@@ -1,9 +1,12 @@
 # Software PID — the plan
 
 **Status: PHASE 0 DONE. PHASE 1 UNDER WAY — §1.1's two "settle first" items
-are done and REFIT_PLAN.md Phase B has reached step 8.** `ltspm3/model/`
-exists; nothing has regenerated `_fitted_table.py`, which still carries its
-`SUPERSEDED_NOTE`. Written 2026-09-11 from Jeff's requirements (§1); revised
+are done, and REFIT_PLAN.md PHASE B IS COMPLETE.** `ltspm3/model/` exists and
+**`_fitted_table.py` has been regenerated** (2026-09-13): §1's three rows are
+green, `SUPERSEDED_NOTE` is cleared, and the table is 4-5 K warmer at a given
+output than the one every earlier number in this plan was computed against.
+**Its level now carries a dated delivered-power gauge** — work on the heater
+wiring expires it, the shape does not; REFIT_PLAN.md §7.3. Written 2026-09-11 from Jeff's requirements (§1); revised
 the same day through four rounds of questions. Update this line as phases land.
 
 **Goal.** A software PID that holds and sweeps the LTSPM3 sample from 4 to

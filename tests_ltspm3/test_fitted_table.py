@@ -25,6 +25,11 @@ GENERATOR = ROOT / "analysis" / "export_response.py"
 TABLE = ROOT / "ltspm3" / "model" / "_fitted_table.py"
 
 HEAD = 'SUPERSEDED_NOTE = """'
+#: How the generator says it has no caveat at all.  A cleared note is a state
+#: this test has to keep asserting in -- that is exactly when a stale warning
+#: would be left behind in the table -- so the empty form is recognised rather
+#: than read as "the mechanism was deleted".
+CLEARED = 'SUPERSEDED_NOTE = ""'
 
 #: Phrases that only ever appear in a caveat.  Used to catch a warning left in
 #: the table after the generator's was cleared; update alongside the note.
@@ -34,6 +39,8 @@ SENTINELS = ("KNOWN LOW", "not yet refitted")
 def _note() -> str:
     """The generator's caveat, or "" when it declares none."""
     src = GENERATOR.read_text(encoding="utf-8")
+    if HEAD not in src and CLEARED in src:
+        return ""
     if HEAD not in src:
         pytest.fail(f"{GENERATOR.name} no longer defines SUPERSEDED_NOTE; if the "
                     "caveat mechanism was removed, remove this test with it")

@@ -1,4 +1,4 @@
-# Handoff — 2026-09-12 (REFIT step 8: the ramp went in, and then came back out)
+# Handoff — 2026-09-13 (the thermal refit is DONE; the table is regenerated)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
 refit's own state is [REFIT_PLAN.md](REFIT_PLAN.md) and the route to a working
@@ -149,6 +149,36 @@ The left column is mostly the last person to touch the cryostat; the right one
 is what the model gets wrong. "31 rungs" was a count nobody could reproduce —
 the window holds 45.
 
+## PHASE B IS COMPLETE — 2026-09-13
+
+§1's three rows are green, `ltspm3/model/_fitted_table.py` is **regenerated**,
+`SUPERSEDED_NOTE` is **cleared**, 925 passing, `ruff` clean. The shipped table
+is **4-5 K warmer at a given output** than the one every earlier number was
+computed against — 60.597 % read 70.0 K and now reads 75.09 — which is the miss
+the 2026-09-05 ladder measured against it, finally paid.
+
+| row | target | result | |
+|---|---|---|---|
+| the three long settled holds | < 0.3 K | −0.25 / −0.08 / −0.01 K | **PASS** |
+| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | 0.139 K rms, 0.35 max | **PASS** |
+| every measured τ, 40–120 K | < 10 % | 6.7 % worst, 2.1 % median | **PASS** |
+
+The holds and the ladder are **predictions**: one gauge fitted on the ladder,
+the holds scored from it, disjoint anchors, days apart.
+
+**Your two rulings on the τ outliers became two rules in the grader**, not two
+exclusions: `steps.MAX_REACH = 20` (a window of twenty time constants has
+2e-9 of its transient left; past that a pole fits drift) and
+`MAX_AMPLITUDE_FRAC = 0.15` (an excursion wide enough to change τ across itself
+has no single pole to find). The manifest diff is 13 windows, all
+`tau → steady`, **no anchor lost** — a demoted dwell keeps its steady state.
+τ anchors 37 → 25. Both bars sit in gaps the archive already had: reach jumps
+16.7 → 32.5 with nothing between, and amplitude/T jumps 9.7 % → 19.4 %.
+
+**Trap T8 honoured**: the eight pinned points moved by up to 5 K and the 0.05 K
+tolerance stands. **Step 9 was dropped as moot** — it tests the aux channels
+against a fitted drift that §7.3 removed.
+
 ## Then, in order
 
 **Both decisions of 2026-09-12 are answered and acted on.**
@@ -167,12 +197,11 @@ The gap is two windows out of eleven and neither is a model error — a 14.5 K
 to 6.9 %. Smoothing is not the fix and was tested: scoring at the mid-span
 temperature rescues the excursion and biases every ordinary step by −8 %.
 
-1. **One decision left, and it is a wording one.** Is §1's τ row stated over
-   the relaxations a single pole can describe — in which case it is met, at
-   6.9 % — or over every graded window, in which case it is unreachable and
-   should be rewritten? Two dwells 40 mK apart measure 525 and 712 s, so no
-   model can satisfy both. **That one sentence is what stands between Phase B
-   and done.**
+1. **PID_PLAN.md phase 1 §1.2 is the next work.** The thermal model is done;
+   what uses it is not. The band constants and the two residual functions, and
+   `missing_power_w` written against `pc-20260908-154814` vs
+   `pc-20260910-144849` — the matched-output pair either side of the fault,
+   which is the one measurement of what the reseat left.
    - *(Useful but not blocking)* **When else was that circuit touched?**
      09-04 and 09-10 are known and measured. The pre-reseat half's 0.206 mW/day
      is 1.5 % of delivered power over 47 days — larger than any single event
