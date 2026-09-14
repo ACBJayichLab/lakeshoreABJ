@@ -55,10 +55,10 @@ python -m ltspm3.monitor --replay reference/cooldown-10/
 python -m ltspm3.monitor -c config-ltspm3-heater.yaml
 ```
 
-**The row that matters: the 2026-09-10 fault warns at 11:44 — eleven minutes
-after the event — at −5.01 mW against a required −4.9 ± 2 mW, and as a warning
-rather than a fault.** The recalibration moves no verdict, the three long holds
-and the 43 h sweep are quiet, and the false-alarm budget is met.
+**The row that matters: the 2026-09-10 fault warns at 11:46 — fourteen minutes
+after the event — at −5.08 mW against a required −4.9 ± 2 mW.** The
+recalibration moves no verdict, the three long holds and the 43 h sweep are
+quiet, and the false-alarm budget is met.
 
 ### The baseline variable, which took two wrong answers
 
@@ -116,10 +116,10 @@ and nothing is measured at all. It is the monitor's one-pass pole fit on a short
 dwell, not the model (the refit's graded τ agree to 6.7 %). Left as it is rather
 than tuned into passing: τ never faults and is not what catches a heater event.
 
-**The archive has two fault-level excursions** — 2026-09-04 and 2026-09-10, both
-real wiring events. The row expected none. What it actually says is that **8 mW
-is below the size of a reseated connector**, which matters before plan 3 turns
-`fault_mw` into a ramp-down.
+**The archive has fault-level excursions** — 2026-09-04 and 2026-09-10, both
+real wiring events. The row expected none. What it actually says is that a fault
+level of 8–10 mW is **below the size of a reseated connector**, which is the
+decision recorded below.
 
 ### And one thing it corroborated in passing
 
