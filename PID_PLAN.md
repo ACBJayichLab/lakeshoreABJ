@@ -10,11 +10,19 @@ written against.
 
 **PHASE 2 IS BUILT, 2026-09-14.** `ltspm3/monitor/` — report only, no port, no
 commands. The 2026-09-10 fault warns fourteen minutes after it happened at
-−5.08 mW, and does not fault — because a fault is a step and that one is 5 mW. **What is left of phase 2 is the 72 h live soak**, which needs the
-recorder restarted with the monitor beside it and is Jeff's to schedule.
-**PHASE 3 — the loop — is the next code.** Written
-2026-09-11 from Jeff's requirements (§1); revised the same day through four
-rounds of questions. Update this line as phases land.
+−5.08 mW, and does not fault — because a fault is a step and that one is 5 mW.
+**What is left of phase 2 is the 72 h live soak.** It does NOT need the
+recorder restarted — the monitor is a separate process that tails the CSV — and
+it is one command in a second window, now that the file-selection defect is
+fixed: the tail chose the last `*.csv` by name in a directory it does not own,
+which on the cryostat was a nine-day-old sweep table, and then its own plant
+log. → plans/pid-2-monitor.md's opening.
+
+**PHASE 3 — the loop — is the next code**, and
+[plans/pid-3-loop.md](plans/pid-3-loop.md) was **revised 2026-09-14**: its §3.0
+carries seven things the 09-11 draft did not know, of which the authority band
+never moving is the one that blocks 4 to 300 K outright. Update this line as
+phases land.
 
 **Goal.** A software PID that holds and sweeps the LTSPM3 sample from 4 to
 300 K, fails gracefully, and judges from the thermal characterisation whether
@@ -28,7 +36,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 | **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | **DONE 2026-09-14** — REFIT §1 green; in-epoch prediction 0.135 K rms; `missing_power_w` 0.58 mW worst in-epoch over 40 K; `sigma_q_w` exported. The 300 K half is a PIPELINE, run as a dry run; the ladder itself is stage 6 |
 | **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **72 h live outstanding** |
-| **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts | bench green at 6 temperatures; 8 rate fields → 2; hold jitter ≤ 0.02 %/min |
+| **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts, **a band that follows the setpoint** | bench green at 6 temperatures; 8 rate fields → 2; hold jitter ≤ 0.02 %/min |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | 7 days unattended, hold criterion met, every warning explained; ladder graded to 300 K |
 | **5** | §6 here | warnings and faults in the viewer | verdict row visible, contrast-tested |
 
@@ -224,6 +232,15 @@ three hours. A residual that takes hours to reach a level did not step, and
 faulting on it is a ramp-down, hours late, for something that was never sudden.
 **Slow degradation has its own fault — authority exhausted — which no window
 gates.** Across 57 days the fault level fires three times, all genuine steps.
+
+**Settled 2026-09-14, on the revised plan 3 (Jeff).** **The authority band
+follows the setpoint** — centred on `percent_for(setpoint)`, `authority_pct`
+still the half-width, `hard_max_pct` still absolute and still the last word.
+Rule 5 is reworded in that commit and nowhere else. It was believed to work
+this way already; it never has, and at a fixed ±1 % around 63.076 % no sweep
+below 60 K is arithmetically possible. **And the kelvin premise check stays on
+in `move` below `min_output_pct`**, where `δQ` has no opinion and the gain is
+small enough that kelvin is not the wrong variable — plans/pid-3-loop.md §3.0.F.
 
 **Open.** Nothing that blocks phase 3.
 
