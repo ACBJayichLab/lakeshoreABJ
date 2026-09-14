@@ -9,6 +9,7 @@ pick from this table rather than reaching for a synonym.
 | **cryostat** | the physical setup — the thermometers, the heater, the plumbing. There is exactly one this software is calibrated against: the LTSPM3. |
 | **recorder** | the process (`lschart run`) that owns the port, polls the instruments every cycle, and writes the CSV. |
 | **viewer** | the strip-chart GUI process (`lschart-view`). A separate process that reads files; it never touches the port. |
+| **monitor** | the judge (`python -m ltspm3.monitor`). A separate process that reads the recorder's files and says whether the cryostat is behaving typically. It reports and never commands. Not a "watchdog" -- a watchdog acts. |
 | **cycle** | one acquisition pass: read everything → apply any commands → write `status.json`. Not a "poll" or a "sample". |
 | **command spool** | the directory clients drop command files into and the recorder consumes. It is maildir-*style*; say "spool", not "maildir". |
 | **instrument** (or **box**) | one physical Lake Shore device. The code behind one is its **driver**; how it is reached is its **transport**. |

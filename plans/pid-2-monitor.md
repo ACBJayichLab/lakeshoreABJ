@@ -12,8 +12,8 @@ in-loop check (plan 3 §3.4) is tested against.
 **Status: BUILT 2026-09-14.** `ltspm3/monitor/` — `source.py` (a live tail and
 an archive replay, one `Sample` shape), `judge.py` (the residuals and the
 verdicts), `report.py` (`plant.json` and the daily CSV), `__main__.py`.
-27 tests, of which 11 are the replay on genuine data. **The 72 h live soak is
-what is left**, and the replay table is green except for one row — see §2.4.
+34 tests, of which 11 are the replay on genuine data. **The 72 h live soak is
+what is left**; §2.4 has the replay row by row and §2.5 the two thresholds.
 
 ### The one design decision this phase added
 
@@ -61,16 +61,18 @@ different shapes.
 
 | residual | computed | band | verdict |
 |---|---|---|---|
-| `δQ` | `model.missing_power_w` with `dT/dt` from a regressed slope | `model.sigma_q_w` | typical / warn / no opinion |
-| `δT_c` | coldplate − locus, 175 s pole; 1st/2nd stage beside it | 27.6 mK rms | typical / warn |
+| `δQ` | `missing_power_w` against a slow baseline, `dT/dt` from a regressed slope | `max(3 × sigma_q_fast_w, warn_mw)` | typical / warn / no opinion |
+| `δT_c` | coldplate − locus, `TAU_BATH_S` pole | `3 × TC_RMS_K` | typical / warn |
+| cold head | 1st/2nd Stage stepped against their own recent scatter | `stage_sigma`, floored | typical / warn |
 | τ ratio | pole fit after a heater move holds, against `tau_s(T)` | 0.85–1.10 | typical / warn / no opinion below 25 K |
-| noise | trailing rms vs `1.36e-6·T²`, floor 1.8 mK | < 2× | typical / warn |
-| fault-level | `δQ` beyond `fault_mw` — **reported**, never acted on | seed 8 mW | flag only |
+| noise | trailing rms over `noise_window_s` vs `1.36e-6·T²`, floor 1.8 mK | < 2× | typical / warn |
+| fault-level | `δQ` **stepping** `fault_mw` inside `fault_window_s` — **reported**, never acted on | 10 mW in 30 min | latched flag |
 
-Persistence: a verdict changes only after `warn_after_s` out of band. No
-opinion within `settle_taus × τ(T)` of a heater move, inside a mask, outside
-the table, below 28 % output, or while `δT_c` is atypical (one cause, one
-alarm).
+Persistence: a verdict changes only after `warn_after_s` out of band, in **both**
+directions, with a Schmitt trigger at `hysteresis_frac` so a residual sitting on
+its threshold still declares itself. No opinion within
+`max(settle_taus × τ(T), slope_window_s)` of a heater move, outside the table,
+below `min_output_pct`, or while `δT_c` is atypical (one cause, one alarm).
 
 ## 2.3 The replay — the test on genuine data
 
@@ -106,7 +108,7 @@ about 30 s. Pinned in `tests_ltspm3/test_monitor.py`.
 | three post-recal holds: typical | **PASS** — 106 h of settled hold, no warning |
 | `trace-sweep-20260902`: no warn | **PASS** — the fit's own training data reads as typical |
 | `trace-ladder-20260905`: ≥ 27 of 30 rungs with τ in 0.85–1.10 above 40 K | **NOT MET** — see below |
-| whole archive: **zero** fault-level flags | **NOT MET** — two in 57 days, both real steps: 2026-08-28 (17.9 mW) and the 2026-09-10 **reseat** (16.4 mW) |
+| whole archive: **zero** fault-level flags | **NOT MET** — three in 57 days, all real steps: 2026-07-17 (21.7 mW, the cooldown from 300 K), 2026-08-28 (17.9 mW) and the 09-10 **reseat** (16.4 mW) |
 
 **The 2026-09-09 row, and it is the most interesting thing this phase found.**
 The row asks `δT_c` to warn within 30 minutes. It cannot, and the reason is not
@@ -203,11 +205,11 @@ constraints say different things and both have to hold:
 So the threshold is `max(warn_sigma × σ_fast, warn_mw)`. Neither constraint can
 be violated by the other.
 
-### Two defects the floor exposed, both of them coupling
+### 1 and 2. Two defects the floor exposed, both of them coupling
 
 **1. The baseline must freeze on the BAND, not on the warning.** Keyed to the
 warning, the moment a 5 mW floor went in the 2026-09-10 event **disappeared
-entirely**: its residual is −5.01 mW against a 5 mW floor, so the verdict stayed
+entirely**: its residual is −5.08 mW against a 5 mW floor, so the verdict stayed
 typical, so the baseline kept learning, so it walked onto the fault within a few
 hours — and the fault-level flag never fired either, because by the time the
 excursion reached 11.6 mW the baseline had moved most of the way to meet it.
@@ -255,8 +257,13 @@ authority exhausted, railed at the band with the error past `fault_error_k`
 
 This resolves the conflict rather than trading one number against another: at
 10 mW the 09-10 event is a **warning at +14 min and never a fault**, which is
-what §1 said all along. Across 57 days the fault level fires **twice**, both
-genuine steps — 2026-08-28 (17.9 mW) and the 09-10 reseat (16.4 mW).
+what §1 said all along. Across 57 days the fault level fires **three times**,
+all genuine steps: 2026-07-17 (21.7 mW, the cooldown from room temperature),
+2026-08-28 (17.9 mW) and the 09-10 reseat (16.4 mW).
+
+**And across 106 hours of settled hold it says nothing at all** — the three long
+post-recalibration holds and the 32 h after the reseat produce **zero**
+warnings of any kind, against a budget of one a week.
 
 Three things the step test needed before it behaved:
 
@@ -276,11 +283,12 @@ Three things the step test needed before it behaved:
 ## Exit gate
 
 - The replay table green in `pytest`; `fault_mw` and `warn_after_s` written
-  into config from what the replay required. **PARTLY MET 2026-09-14** -- six of
-  eight rows green, and the two that are not are §2.4's, one of them a finding
-  rather than a defect. `warn_after_s` is 600 s, which is what puts the 09-10
-  event at eleven minutes rather than at two; `fault_mw` is **handed to plan 3
-  unset**, because the archive says 8 mW is smaller than a reseated connector.
+  into config from what the replay required. **PARTLY MET 2026-09-14** -- seven
+  of nine rows green, and the two that are not are §2.4's, one of them a finding
+  rather than a defect. `warn_after_s` is 600 s, which with the Schmitt trigger
+  is what puts the 09-10 event at fourteen minutes rather than at 104.
+  `warn_mw: 5` and `fault_mw: 10` are Jeff's, and the fault is a **step inside
+  `fault_window_s`** rather than a level -- §2.5.
 - 72 h beside the live recorder, `plant.json` read by `lschart status` and
   MATLAB `plant()`, the post-repair residual inside the band throughout.
   **NOT STARTED.** It needs the recorder restarted with the monitor beside it,

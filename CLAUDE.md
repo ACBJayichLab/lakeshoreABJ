@@ -386,6 +386,7 @@ analysis/            EXPLORATORY, not shipped. Fits the thermal model from the
 | **cryostat** | the physical setup; the calibrated one is the LTSPM3 |
 | **recorder** | the process that owns the port, polls, writes the CSV |
 | **viewer** | the strip-chart GUI process (`lschart-view`), separate process |
+| **monitor** | the judge (`python -m ltspm3.monitor`), separate process; reports, never commands |
 | **cycle** | one acquisition pass: read → apply commands → write status |
 | **command spool** | the directory clients drop commands into |
 | **instrument / driver / transport** | a box; the code behind it; how it is reached |

@@ -232,6 +232,43 @@ it gives a confident wrong one, and R² will not warn you.
 [commissioning.md](commissioning.md) for the two rules the existing hand data
 teaches about step size and doublets.
 
+## The monitor: a judge that never commands
+
+**Built 2026-09-14, not yet in service** — it has not had its 72 h soak beside
+the live recorder. Run it when you want it; it can do nothing.
+
+```bash
+python -m ltspm3.monitor -c config-ltspm3-heater.yaml     # follow the live log
+python -m ltspm3.monitor --replay reference/cooldown-10/  # 57 days of archive
+```
+
+A separate process, like the viewer: **no port, no commands, ever** — it never
+builds a transport and never writes into the command spool, so there is no code
+path from a verdict to a heater. It tails the recorder's CSV, applies the
+model's error band, and writes `plant.json` beside `status.json` plus a daily
+`plant_*.csv`. It runs whether or not the loop is armed, which is most of this
+cryostat's life so far.
+
+What it judges, and what makes it usable across a whole cooldown:
+
+| | |
+|---|---|
+| `δQ` | do the watts add up — `missing_power_w` against a **slow baseline**, not against its own level. The level carries the calibration and the campaign drift, and over a months-long cooldown they swamp it |
+| `δT_c`, cold head | the coldplate against its locus, and the 1st/2nd Stage against their own recent scatter. **Never fault** — a cold head going off is a compressor question |
+| τ, noise | the plant's time constant after a move, and the thermometer's trailing rms |
+
+It warns at **5 mW** and flags fault-level at a **step of 10 mW inside half an
+hour** (Jeff, 2026-09-14), both as floors under the model's own 3σ band. A
+fault is a step rather than a level on purpose: a change in delivered power
+moves the residual immediately, so anything that creeps to a threshold over
+hours is not what that flag is for, and the fault a slow degradation eventually
+causes is authority exhausted instead.
+
+On the archive it catches the 2026-09-10 heater-circuit event **fourteen minutes
+after it happened**, as a warning, and flags two genuine steps in 57 days.
+[plans/pid-2-monitor.md](../../plans/pid-2-monitor.md) §2.4 is the replay row by
+row, including the two rows it does not meet and why.
+
 ## Replay: the only test on genuine data
 
 ```bash

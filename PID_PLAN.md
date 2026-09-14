@@ -9,8 +9,8 @@ are in `fitted_response.py`, and the two of them are what §3 below is now
 written against.
 
 **PHASE 2 IS BUILT, 2026-09-14.** `ltspm3/monitor/` — report only, no port, no
-commands. The 2026-09-10 fault warns eleven minutes after it happened at
-−5.01 mW. **What is left of phase 2 is the 72 h live soak**, which needs the
+commands. The 2026-09-10 fault warns fourteen minutes after it happened at
+−5.08 mW, and does not fault — because a fault is a step and that one is 5 mW. **What is left of phase 2 is the 72 h live soak**, which needs the
 recorder restarted with the monitor beside it and is Jeff's to schedule.
 **PHASE 3 — the loop — is the next code.** Written
 2026-09-11 from Jeff's requirements (§1); revised the same day through four
@@ -27,7 +27,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 |---|---|---|---|
 | **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | **DONE 2026-09-14** — REFIT §1 green; in-epoch prediction 0.135 K rms; `missing_power_w` 0.58 mW worst in-epoch over 40 K; `sigma_q_w` exported. The 300 K half is a PIPELINE, run as a dry run; the ladder itself is stage 6 |
-| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 11 min at −5.01 mW; < 1 warning/week met; three rows argued in §2.4 rather than met. **72 h live outstanding** |
+| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **72 h live outstanding** |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts | bench green at 6 temperatures; 8 rate fields → 2; hold jitter ≤ 0.02 %/min |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | 7 days unattended, hold criterion met, every warning explained; ladder graded to 300 K |
 | **5** | §6 here | warnings and faults in the viewer | verdict row visible, contrast-tested |
@@ -145,9 +145,11 @@ never sees it**, because integral action absorbs a constant power offset
 exactly — which is why measuring the heater circuit four-wire is not on the
 critical path (Jeff, 2026-09-14: out of scope, size the margins instead).
 
-At day ~9 the band overtakes the 8 mW `fault_mw` seed. Phase 2's replay is what
-sets that number, and it is the argument for re-gauging on a cadence rather
-than for widening anything.
+The band grows about 0.29 mW/day at 118 K with nothing subtracting it, so on a
+cooldown that runs for months it stops being usable as a LEVEL. That is why the
+monitor judges the residual against a slow baseline instead, and why
+`sigma_q_fast_w` — the same band with the drift term removed — is what it
+compares to. See plans/pid-2-monitor.md's opening.
 
 **What the fit must get right, and how right.** Steady-state Λ(T) is what
 the residual needs: 0.3 K at 118 K is 0.5 mW, and the pre-refit table's
@@ -160,16 +162,28 @@ unused there, and C is millijoules per kelvin.
 
 | residual | typical | warn | fault |
 |---|---|---|---|
-| `δQ` missing power | < 3 σ_Q | ≥ 3 σ_Q for `warn_after_s` | ≥ `fault_mw` (seed 8 mW; set by replay) for `fault_after_s` |
+| `δQ` against a slow baseline | inside the bar | beyond `max(3 σ_fast, warn_mw)` for `warn_after_s` | **a STEP of `fault_mw` inside `fault_window_s`** for `fault_after_s` |
 | `δT_c` coldplate vs locus, 175 s pole | < 28 mK rms | beyond band | **never** |
+| cold head, 1st/2nd stage step | inside its own scatter | beyond it | **never** |
 | τ ratio on a step | 0.85–1.10 | outside | never |
 | noise rms vs `1.36e-6·T²` | < 2× | outside | never |
 | tracking error, `hold` phase | < 1 K | ≥ 1 K | ≥ 5 K **and railed** at the band (authority exhausted) |
 | sensor | guard `ok` | `suspect` | guard `fault` |
 
-Kelvin equivalents at Λ′: 1 K ≡ 1.7 mW and 5 K ≡ 8.3 mW at 118 K; 19 and 96 mW
-at 20 K. **No opinion**, not "typical", outside the table, below 28 % output,
-within 3τ of a heater move, or while `δT_c` is atypical.
+`warn_mw: 5` and `fault_mw: 10` are Jeff's (2026-09-14) and are **floors under
+the 3σ band, not replacements** — at a settled 118 K the floor binds and on a
+5 K/min sweep at 180 K the band does. Kelvin equivalents at Λ′: 5 mW ≡ 3.0 K and
+10 mW ≡ 6.0 K at 118 K; 0.26 and 0.52 K at 20 K.
+
+**A fault is a step, not a level.** A change in delivered power puts
+`−(1 − α)·P(u)` into the residual immediately; anything that takes hours to
+reach a level did not step, and the fault a slow degradation eventually causes
+is **authority exhausted**, which is the row below and is not gated by any
+window.
+
+**No opinion**, not "typical", outside the table, below 28 % output, within
+`max(3τ, the judge's own slope window)` of a heater move, or while `δT_c` is
+atypical.
 
 **Hold figure of merit**: `σ_y(τ) ≤ σ_y(10 s)` for `τ` ∈ [10 s, L/4] over any
 settled closed-loop run of length `L`. `analysis/allan.py` grades archive and
@@ -209,7 +223,7 @@ delivered power puts `−(1 − a)·P(u)` into the residual **immediately**, and
 three hours. A residual that takes hours to reach a level did not step, and
 faulting on it is a ramp-down, hours late, for something that was never sudden.
 **Slow degradation has its own fault — authority exhausted — which no window
-gates.** Across 57 days the fault level fires twice, both genuine steps.
+gates.** Across 57 days the fault level fires three times, all genuine steps.
 
 **Open.** Nothing that blocks phase 3.
 

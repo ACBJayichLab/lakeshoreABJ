@@ -166,9 +166,15 @@ So the fault is now a step of `fault_mw` **within `fault_window_s` = 30 min**,
 measured as the range of the residual in a trailing window. **This resolved the
 §1 conflict rather than trading numbers**: the 09-10 event is a warning at
 +14 min and never a fault, which is what §1 said all along. Across 57 days the
-fault level fires **twice**, both genuine steps — 2026-08-28 (17.9 mW) and the
-09-10 reseat (16.4 mW). Slow degradation still has its own fault and it is a
-different one: authority exhausted, which no window gates.
+fault level fires **three times**, all genuine steps: 2026-07-17 (21.7 mW, the
+cooldown from room temperature), 2026-08-28 (17.9 mW) and the 09-10 reseat
+(16.4 mW). Slow degradation still has its own fault and it is a different one:
+authority exhausted, which no window gates.
+
+**Across 106 hours of settled hold the monitor says nothing at all** — zero
+warnings of any kind on the three long post-recalibration holds or the 32 h
+after the reseat, against a budget of one a week. The 43 warnings it does raise
+over 59 days are in the cooldown, the ladders and the disturbed period.
 
 Three things it needed before it behaved, all in plans/pid-2-monitor.md §2.5:
 the **range** rather than a departure from the band crossing (the reseat landed
