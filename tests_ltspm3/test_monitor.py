@@ -56,6 +56,27 @@ def run(judge: Judge, *, kelvin: float, pct: float | None = None,
     return record
 
 
+def glide(judge: Judge, *, frm: float, to: float, pct: float,
+          seconds: float, t0: float, dt: float = 2.0):
+    """Walk the sample from one temperature to another, linearly.
+
+    A sample cannot teleport, and a test that makes it do so is testing the
+    heat-capacity term rather than whatever it meant to.  Stepping 118 K to
+    114 K in one sample puts `dT/dt` at 2 K/s, which is 1.7 W of dynamic term
+    at 118 K -- two orders of magnitude past any fault -- and the verdict that
+    comes back is about the arithmetic.
+    """
+    record = None
+    t = t0
+    while t < t0 + seconds:
+        frac = (t - t0) / seconds
+        record = judge.step(Sample(
+            t_s=t, epoch_s=1.788e9 + t, sample_k=frm + (to - frm) * frac,
+            coldplate_k=M.coldplate_k(frm), u_pct=pct))
+        t += dt
+    return record
+
+
 def state(record, name: str) -> str:
     for v in list(record["verdicts"]) + [record["fault_level"]]:
         if v.name == name:
@@ -299,24 +320,22 @@ def test_the_2026_09_10_fault_warns_within_thirty_minutes(archive_run):
     assert "-5." in hits[0][5] or "-4." in hits[0][5], hits[0][5]
 
 
-def test_the_09_10_event_is_a_warning_for_the_first_hour(archive_run):
-    """It warns long before it is fault-sized, which is the point of warning.
+def test_the_09_10_event_is_a_warning_and_never_a_fault(archive_run):
+    """PID_PLAN.md §1: "the 09-10 event is a warning".  It holds.
 
-    **And then it becomes fault-sized, which is a conflict this test records
-    rather than resolves.**  PID_PLAN.md §1 says "the 09-10 event is a
-    warning"; Jeff set `fault_mw` to 10 mW on 2026-09-14; and the excursion
-    peaks at **14.11 mW**, three hours in, just before the connector was
-    reseated.  All three cannot hold.
+    It holds because the fault is a STEP and not a level (Jeff, 2026-09-14:
+    it should trigger fairly quickly or not at all).  The event's residual
+    steps 5.2 mW in seven minutes and then sits flat at -5 mW for three hours,
+    so it warns at +14 min and never faults -- which is exactly the shape §1
+    describes and, under a level test at 10 mW, was not what happened: the
+    excursion reaches 14.11 mW eventually and would have faulted at +190 min.
 
-    Nothing here is broken by that -- this process only reports -- but plan 3
-    turns `fault_mw` into a ramp-down, and under 10 mW the supervisor would
-    have ramped this event down at about +190 min.  Either the fault level
-    rises to about 15 mW or §1's sentence changes; it is Jeff's, and
-    plans/pid-2-monitor.md §2.4 states it with the numbers.
+    The window runs to 14:39, one minute before the connector was reseated.
+    What happens after that is a different event.
     """
     hits = warns(archive_run, "fault_level",
-                 "2026-09-10T11:33:00", "2026-09-10T12:33:00")
-    assert not hits, f"the 09-10 event read as fault-level within the hour: {hits}"
+                 "2026-09-10T11:33:00", "2026-09-10T14:39:00")
+    assert not hits, f"the 09-10 event read as fault-level: {hits}"
 
 
 def test_the_coldplate_is_typical_across_the_09_10_event(archive_run):
@@ -593,3 +612,88 @@ def test_a_residual_sitting_on_its_threshold_still_declares_itself():
         r = run(j, kelvin=under, pct=held, seconds=30.0, t0=t + 30.0)
         t += 60.0
     assert state(r, "missing_power") == WARN
+
+
+def test_a_fault_is_a_step_and_a_slow_creep_never_faults():
+    """Jeff, 2026-09-14: it should trigger fairly quickly or not at all.
+
+    A change in delivered power puts a step in the residual immediately and by
+    construction -- dQ is identically `-(1 - a) P(u)` from the instant the
+    delivered fraction `a` moves, whatever the sample then does.  So a residual
+    that takes hours to reach a fault level did not step, and whatever it is,
+    faulting on it is the worst available outcome: a ramp-down, hours late, for
+    something that was never sudden.
+
+    Slow degradation has its own fault and it is a different one -- authority
+    exhausted, which is plan 3's and is not gated by any window here.
+    """
+    j = Judge()
+    held = at(118.0)
+    run(j, kelvin=118.0, seconds=40000.0)
+    # Walk the residual out to 20 mW over eight hours: four times the fault
+    # level, and never more than a milliwatt inside any half-hour window.
+    t = 40000.0
+    for i in range(1, 33):
+        kelvin = M.steady_temperature_k(M.power_w(held) - i * 0.6e-3)
+        r = run(j, kelvin=kelvin, pct=held, seconds=900.0, t0=t)
+        t += 900.0
+    power = next(v for v in r["verdicts"] if v.name == "missing_power")
+    assert abs(power.value) > 15e-3, "the creep should have reached 15 mW+"
+    assert state(r, "missing_power") == WARN, "and it is very much a warning"
+    assert state(r, "fault_level") != WARN, "but it never stepped"
+
+
+def test_a_real_step_faults_even_while_a_warning_is_already_up():
+    """The 2026-09-10 reseat landed three hours into an existing warning.
+
+    A fault test anchored to the moment the band was last crossed would have
+    been blind for the whole of those three hours -- which is exactly when the
+    connector was handled.  Measuring the RANGE inside a trailing window is
+    what keeps a second event visible on top of a first.
+    """
+    j = Judge()
+    held = at(118.0)
+    run(j, kelvin=118.0, seconds=40000.0)
+    warm = M.steady_temperature_k(M.power_w(held) - 6e-3)
+    glide(j, frm=118.0, to=warm, pct=held, seconds=1800.0, t0=40000.0)
+    r = run(j, kelvin=warm, pct=held, seconds=20000.0, t0=41800.0)
+    assert state(r, "missing_power") == WARN
+    assert state(r, "fault_level") != WARN, "6 mW over half an hour is not 10"
+    # Now a genuine step, on top of the warning, at the rate the 2026-09-10
+    # event actually moved: its residual reached full size in seven minutes.
+    stepped = M.steady_temperature_k(M.power_w(held) - 20e-3)
+    glide(j, frm=warm, to=stepped, pct=held, seconds=420.0, t0=61800.0)
+    r = run(j, kelvin=stepped, pct=held, seconds=1200.0, t0=62220.0)
+    assert state(r, "fault_level") == WARN
+
+
+def test_a_fault_stays_reported_after_its_window_scrolls_past():
+    """A step that happened does not stop having happened.
+
+    The window is half an hour and a person reads `plant.json` when they get
+    in.  Cleared by a new recording, which is the same thing that clears the
+    baseline.
+    """
+    j = Judge()
+    held = at(118.0)
+    run(j, kelvin=118.0, seconds=40000.0)
+    stepped = M.steady_temperature_k(M.power_w(held) - 20e-3)
+    glide(j, frm=118.0, to=stepped, pct=held, seconds=420.0, t0=40000.0)
+    r = run(j, kelvin=stepped, pct=held, seconds=1200.0, t0=40420.0)
+    assert state(r, "fault_level") == WARN
+    r = run(j, kelvin=stepped, pct=held, seconds=14400.0, t0=41620.0)
+    assert state(r, "fault_level") == WARN, "four hours later, still reported"
+
+
+def test_a_commanded_heater_move_is_not_a_residual_step():
+    """A ladder rung is a command, not a fault.
+
+    The step history breaks at every no-opinion sample rather than merely not
+    growing, because a range taken across a commanded move measures the
+    command.  On the 2026-09-05 ladder that read as a 21 mW step and flagged
+    fault-level nine times.
+    """
+    j = Judge()
+    run(j, kelvin=60.0, seconds=40000.0)
+    r = run(j, kelvin=140.0, seconds=40000.0, t0=40000.0)
+    assert state(r, "fault_level") != WARN

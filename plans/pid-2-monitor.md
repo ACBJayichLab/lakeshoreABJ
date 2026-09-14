@@ -100,13 +100,13 @@ about 30 s. Pinned in `tests_ltspm3/test_monitor.py`.
 | 2026-09-09 18:06: `δT_c` warn within 30 min | **NOT MET, and deliberately** — see below |
 | …and `δQ` typical or no opinion | **PASS** |
 | 2026-09-10 11:33: `δQ` warn within 30 min, −5 ± 2 mW | **PASS** — warns at **11:46**, fourteen minutes, **−5.08 mW** (−0.76 % of delivered) |
-| …and **not** fault-level | **PASS for an hour, then NOT** — the excursion peaks at 14.11 mW at +188 min. See §2.5 |
+| …and **not** fault-level | **PASS** — it warns and never faults, because the fault is a step and this one is 5.2 mW |
 | …and `δT_c` typical | **PASS** — the sink did not move, the heater did |
 | 2026-09-04 12:07 recalibration: no verdict change | **PASS** — a *reading* changed and the cryostat did not |
 | three post-recal holds: typical | **PASS** — 106 h of settled hold, no warning |
 | `trace-sweep-20260902`: no warn | **PASS** — the fit's own training data reads as typical |
 | `trace-ladder-20260905`: ≥ 27 of 30 rungs with τ in 0.85–1.10 above 40 K | **NOT MET** — see below |
-| whole archive: **zero** fault-level flags | **NOT MET** — two, and both are real |
+| whole archive: **zero** fault-level flags | **NOT MET** — two in 57 days, both real steps: 2026-08-28 (17.9 mW) and the 2026-09-10 **reseat** (16.4 mW) |
 
 **The 2026-09-09 row, and it is the most interesting thing this phase found.**
 The row asks `δT_c` to warn within 30 minutes. It cannot, and the reason is not
@@ -224,20 +224,54 @@ warning did not land for **104 minutes**. With a Schmitt trigger —
 `hysteresis_frac: 0.8` — it lands at **14**. The alarm was not slow because the
 cryostat was subtle.
 
-### And one thing 10 mW decides that needs Jeff
+### 3. A fault is a STEP, not a level — and that resolved the §1 conflict
 
-The 09-10 excursion **peaks at 14.11 mW**, three hours in, just before the
-connector was reseated. So under `fault_mw: 10` it *is* fault-level, at about
-+190 min.
+**Jeff, 2026-09-14: it should trigger fairly quickly or not at all.**
 
-That contradicts PID_PLAN §1, which says in as many words that **the 09-10 event
-is a warning**. All three of {§1's sentence, 10 mW, a 14.11 mW peak} cannot
-hold. Nothing here is broken by it — this process only reports — but **plan 3
-§3.4 turns `fault_mw` into a ramp-down**, and under 10 mW the supervisor would
-have ramped this event down after three hours rather than warned about it.
+Under a *level* test at 10 mW the 09-10 event faulted at **+190 min**, which
+looked like a slow creep to a threshold and contradicted PID_PLAN §1's "the
+09-10 event is a warning". The archive says it is neither:
 
-Either the fault level rises to about 15 mW, or §1's sentence changes. It is
-Jeff's, and it is the one decision phase 2 hands forward.
+```
+11:30   +0.13 mW      11:35   -2.95      11:40   -5.18      11:45   -5.16
+12:00   -5.04         13:00   -4.88      14:00   -5.31      14:30   -5.36
+14:40  -10.72   <- the connector being reseated, a different event
+```
+
+**The residual is a step.** It reaches full size in **seven minutes** and then
+sits flat at −5 mW for three hours. That is not an accident of this event, it is
+identically what the physics does: with `C dT/dt = a·P(u) − [Λ(T_s) − Λ(T_c)]`,
+the residual is exactly `−(1 − a)·P(u)` from the instant the delivered fraction
+`a` moves, whatever the sample then does. The 14.11 mW at +190 min was never the
+fault developing — it is Jeff handling the connector at 14:40.
+
+So the fault condition is now **a step of `fault_mw` within `fault_window_s`**
+(30 min), measured as the range of the residual inside a trailing window. A
+residual that takes hours to reach a level did not step, and faulting on it is
+the worst available outcome: a ramp-down, hours late, for something that was
+never sudden. **Slow degradation has its own fault and it is a different one** —
+authority exhausted, railed at the band with the error past `fault_error_k`
+(PID_PLAN §1), which no window here gates.
+
+This resolves the conflict rather than trading one number against another: at
+10 mW the 09-10 event is a **warning at +14 min and never a fault**, which is
+what §1 said all along. Across 57 days the fault level fires **twice**, both
+genuine steps — 2026-08-28 (17.9 mW) and the 09-10 reseat (16.4 mW).
+
+Three things the step test needed before it behaved:
+
+- **the range, not a departure from the band crossing.** The reseat landed three
+  hours into an existing warning; a test anchored to the last band crossing
+  would have been blind for exactly the window in which the connector was
+  handled.
+- **the history breaks at every no-opinion sample**, rather than merely not
+  growing. A range taken across a commanded move measures the command: on the
+  09-05 ladder that read as a 21 mW step and flagged fault-level nine times.
+- **the transient gate is floored at the judge's own slope window.** Below 30 K
+  the plant settles in under ten seconds while the slope is still being
+  regressed over five minutes, so the gate expired while every number
+  downstream of it was still half made of the previous regime — a 99 mW step on
+  the ladder's cold end. Two settling times, and the longer one governs.
 
 ## Exit gate
 

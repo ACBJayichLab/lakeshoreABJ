@@ -46,7 +46,7 @@ until those are corrected.
 | sweep | **5 K/min** | default 0.5 | one rate, converted to heater %/min through the model's gain; ramp lag closed by velocity feedforward |
 | rate limits | **fewer** | eight | **two**: `max_rate_k_per_min: 5`, `min_rate_pct_per_min: 0.20` (floor) |
 | ramp-down | at the same **5 K/min** | 1 / 2 %/min with a knee | open loop through the model's inverse curve, so it needs no sensor |
-| premise | **warn at 1 K, fault at 5 K**; for the PID **in watts, from the fit** | hold at 1 K, ramp down after 180 s | **settled 2026-09-14: `warn_mw: 5`, `fault_mw: 10`** — 3.0 K and 6.0 K at 118 K, as floors under the 3σ band. "The 09-10 event is a warning" is now in tension with 10 mW: it peaks at 14.11 mW. §4 |
+| premise | **warn at 1 K, fault at 5 K**; for the PID **in watts, from the fit** | hold at 1 K, ramp down after 180 s | **settled 2026-09-14: `warn_mw: 5`, `fault_mw: 10`** — 3.0 K and 6.0 K at 118 K, as floors under the 3σ band; and the fault is a **step within 30 min**, not a level. The 09-10 event is a warning at +14 min and never a fault, as this row always said. §4 |
 | faults | a lost sensor, a runaway heater, a strange transient. **Not** a rising coldplate | — | `δT_c` warns only; **authority exhausted** (railed + error > 5 K) is the fault a compressor failure eventually causes |
 | unattended | a weekend; indefinitely in principle | never armed | 7 days is the gate, not the design life |
 | failure | **graceful** — a crashed PID disengages | poller keeps logging, loop does not disengage | `panic_hold()` on exception, state `crashed`, `ack` + `arm` to resume |
@@ -201,14 +201,17 @@ binds (8.8 mW), and a flat 5 mW there would warn about every sweep.
 `warn_after_s: 600` is the replay's, and is what puts the 09-10 event at
 fourteen minutes rather than at two.
 
-**Open, and it is one decision.** The 09-10 excursion **peaks at 14.11 mW**, so
-under `fault_mw: 10` it *is* fault-level at about +190 min — and the row above
-says **"the 09-10 event is a warning"**. All three of that sentence, 10 mW and
-14.11 mW cannot hold. The monitor only reports, so nothing is broken today; but
-**phase 3 §3.4 turns `fault_mw` into a ramp-down**, and under 10 mW the
-supervisor would have ramped that event down rather than warned about it. Either
-the fault level rises to about 15 mW or the sentence changes.
-plans/pid-2-monitor.md §2.5 has the numbers.
+**A fault is a STEP, not a level** (Jeff, 2026-09-14: it should trigger fairly
+quickly or not at all). `fault_window_s: 1800` — the residual must move
+`fault_mw` *within* half an hour. This is not a tuning choice: a change in
+delivered power puts `−(1 − a)·P(u)` into the residual **immediately**, and the
+09-10 event reached its full −5 mW in **seven minutes** and then sat flat for
+three hours. A residual that takes hours to reach a level did not step, and
+faulting on it is a ramp-down, hours late, for something that was never sudden.
+**Slow degradation has its own fault — authority exhausted — which no window
+gates.** Across 57 days the fault level fires twice, both genuine steps.
+
+**Open.** Nothing that blocks phase 3.
 
 ---
 

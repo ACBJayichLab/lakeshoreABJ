@@ -114,6 +114,12 @@ class MonitorConfig:
     #: behaviour rather than a false alarm.
     fault_mw: float = 10.0
     fault_after_s: float = 180.0
+    #: A FAULT IS A STEP INSIDE THIS WINDOW, not a level reached eventually.
+    #: Jeff, 2026-09-14: it should trigger fairly quickly or not at all.  The
+    #: 2026-09-10 residual reached its full size in seven minutes, which is
+    #: what a change in delivered power does; thirty minutes is generous
+    #: against that and is the same bound the replay row uses for the warning.
+    fault_window_s: float = 1800.0
 
     #: The trailing baseline.  Slow against a fault, fast against the drift.
     baseline_tau_s: float = 21600.0
@@ -403,6 +409,12 @@ class Judge:
         #: 1-D search -- and a time constant does not change between cycles.
         self._tau_at: float | None = None
         self._tau_last: Verdict | None = None
+        #: The residual's recent history, for the step test, and whether a
+        #: step has ever been seen.  A step that happened does not stop having
+        #: happened when its window scrolls past.
+        self._fault_hist: deque = deque()
+        self._fault_seen = False
+        self._fault_note = ""
         self._q = _Persist(self.cfg.warn_after_s)
         self._tc = _Persist(self.cfg.warn_after_s)
         self._noise = _Persist(self.cfg.warn_after_s)
@@ -473,6 +485,9 @@ class Judge:
         self._last_u = self._move_t = None
         self._last_t = None
         self.baseline_seeded_t = None
+        self._fault_hist.clear()
+        self._fault_seen = False
+        self._fault_note = ""
 
     def in_transient(self, s) -> bool:
         """Is the cryostat still relaxing from the last heater move?
@@ -489,7 +504,17 @@ class Judge:
         if self._move_t is None or s.sample_k is None:
             return False
         tau = M.tau_s(min(max(s.sample_k, M.T_MIN_K), M.T_MAX_K))
-        return s.t_s - self._move_t < self.cfg.settle_taus * tau
+        # FLOORED AT THE JUDGE'S OWN WINDOW, and not at the cryostat's tau
+        # alone.  Below 30 K the plant settles in under ten seconds while the
+        # slope is still being regressed over five minutes, so the gate expired
+        # while every number downstream of it was still half made of the
+        # previous regime.  On the 2026-09-05 ladder's cold end that read as a
+        # 99 mW step and flagged fault-level -- a commanded ladder, working.
+        #
+        # Two different settling times, and the longer one is what governs: the
+        # cryostat's, and the measurement's.
+        settle = max(self.cfg.settle_taus * tau, self.cfg.slope_window_s)
+        return s.t_s - self._move_t < settle
 
     def _track_move(self, s) -> None:
         if s.u_pct is None:
@@ -741,9 +766,19 @@ class Judge:
         fault = Verdict("fault_level")
         why = self.opinion(s, tc)
         if why:
-            v.reason = fault.reason = why
+            v.reason = why
             v.state = self._q.update(NO_OPINION, s.t_s)
-            fault.state = self._fault.update(NO_OPINION, s.t_s)
+            # THE STEP HISTORY BREAKS HERE, and that is the point of clearing
+            # it rather than merely not appending.  Every no-opinion sample is
+            # a moment the residual is not comparable with the one before it --
+            # a commanded heater move above all -- so a range taken across the
+            # gap measures the COMMAND.  On the 2026-09-05 ladder that read as
+            # a 21 mW step and flagged fault-level nine times, which is the
+            # programmed ladder working exactly as intended.
+            self._fault_hist.clear()
+            latched = self._fault.update(NO_OPINION, s.t_s)
+            fault.state = WARN if self._fault_seen else latched
+            fault.reason = self._fault_note or why
             return math.nan, v, fault
 
         q_abs = M.missing_power_w(s.sample_k, rate, s.coldplate_k, s.u_pct)
@@ -821,16 +856,56 @@ class Judge:
             self.baseline += alpha * (q_frac - self.baseline)
         self.baseline_t = s.t_s
 
+        # THE FAULT IS A STEP, NOT A LEVEL, and the archive is what settled
+        # that (Jeff, 2026-09-14: "it should trigger fairly quickly or not at
+        # all").
+        #
+        # A change in delivered power puts a STEP in dQ, immediately and by
+        # construction: with `C dT/dt = a P(u) - [Lambda(T_s) - Lambda(T_c)]`,
+        # the residual is identically `-(1 - a) P(u)` from the instant `a`
+        # changes, whatever the sample then does.  The 2026-09-10 event is that
+        # shape exactly -- +0.13 mW to -5.18 mW in SEVEN MINUTES, flat at -5
+        # for the three hours after, and the -14 mW at +190 min is a different
+        # event, the connector being reseated.
+        #
+        # So a residual that takes an hour to reach a fault level did not step,
+        # and whatever it is, it is not the failure this fault is for.  Faulting
+        # on it is the worst available outcome: a ramp-down, hours late, for
+        # something that was never sudden.  Slow degradation has its own fault
+        # and it is a different one -- authority exhausted, railed at the band
+        # with the error past `fault_error_k` (PID_PLAN.md section 1), which no
+        # window here gates.
+        #
+        # Measured as the RANGE of the residual inside `fault_window_s`, which
+        # also keeps working when a second event lands on top of a warning
+        # already in progress -- a level test anchored to the band crossing
+        # would have gone blind for the whole three hours the 09-10 warning was
+        # up, which is exactly when the connector was handled.
+        self._fault_hist.append((s.t_s, v.value))
+        floor_t = s.t_s - self.cfg.fault_window_s
+        while len(self._fault_hist) > 1 and self._fault_hist[0][0] < floor_t:
+            self._fault_hist.popleft()
+        recent = [x[1] for x in self._fault_hist]
+        step = max(recent) - min(recent)
+
         fault_at = max(self.cfg.fault_mw * 1e-3, self.cfg.warn_sigma * sigma)
-        beyond = abs(v.value) >= fault_at * (self.cfg.hysteresis_frac
-                                             if self._fault.leaning else 1.0)
-        fault.value, fault.sigma = v.value, fault_at
-        fault.state = self._fault.update(WARN if beyond else TYPICAL, s.t_s)
+        beyond = step >= fault_at * (self.cfg.hysteresis_frac
+                                     if self._fault.leaning else 1.0)
+        fault.value, fault.sigma = step, fault_at
+        # Latched: a step that happened does not stop having happened, and the
+        # window it was measured in scrolls past in half an hour.  Cleared by a
+        # new recording, which is the same thing that clears the baseline.
+        declared = self._fault.update(WARN if beyond else TYPICAL, s.t_s)
+        if declared == WARN and not self._fault_seen:
+            self._fault_seen = True
+            self._fault_note = (
+                f"the residual stepped {1e3 * step:.2f} mW inside "
+                f"{self.cfg.fault_window_s / 60:.0f} min, past a "
+                f"{1e3 * fault_at:.1f} mW fault level -- REPORTED, not acted on")
+        fault.state = WARN if self._fault_seen else declared
         fault.out_of_band_s = self._fault.held_s(s.t_s)
         if fault.state == WARN:
-            fault.reason = (f"{1e3 * v.value:+.2f} mW against a "
-                            f"{1e3 * fault_at:.1f} mW fault level "
-                            "-- REPORTED, not acted on")
+            fault.reason = self._fault_note
         return q_abs, v, fault
 
     # -- what a person reads ----------------------------------------------

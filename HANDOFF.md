@@ -10,7 +10,7 @@ and [HANDOFF-2026-09-13.md](HANDOFF-2026-09-13.md) (the thermal refit).
 >
 > The 218's analog output has been at **64.0100 %** since 2026-09-10 14:49 and
 > the sample flat at **118.3 K** since 09-11. Every number below comes from the
-> archive. **997 tests passing, `ruff` clean.**
+> archive. **1001 tests passing, `ruff` clean.**
 
 ## Jeff's two rulings, and what each one turned into
 
@@ -48,7 +48,7 @@ model is best.
 ## Phase 2 — the monitor — BUILT
 
 `ltspm3/monitor/`. Separate process, no port, no commands — structurally, not by
-configuration. 30 tests, eleven of them the replay on genuine data.
+configuration. 34 tests, eleven of them the replay on genuine data.
 
 ```
 python -m ltspm3.monitor --replay reference/cooldown-10/
@@ -148,13 +148,35 @@ Putting the floor in exposed two couplings, both found by the replay:
 With both fixed, the 09-10 event warns at **11:46, fourteen minutes**, at
 −5.08 mW.
 
-**The decision.** That excursion **peaks at 14.11 mW** three hours in, so under
-`fault_mw: 10` it *is* fault-level at about +190 min — and PID_PLAN §1 says in
-as many words that *the 09-10 event is a warning*. Those cannot both hold.
-Nothing is broken today because the monitor only reports, but **plan 3 §3.4
-turns this number into a ramp-down**, and under 10 mW the supervisor would have
-ramped that event down rather than warned about it. Either the fault level rises
-to about 15 mW, or §1's sentence changes. plans/pid-2-monitor.md §2.5 has it.
+**And a fault is a STEP, not a level** — Jeff, 2026-09-14: it should trigger
+fairly quickly or not at all. Under a level test the 09-10 event faulted at
++190 min, which looked like a slow creep. The archive says it is not one:
+
+```
+11:30  +0.13 mW    11:40  -5.18    12:00  -5.04    14:00  -5.31    14:30  -5.36
+14:40 -10.72  <- the connector being reseated, a DIFFERENT event
+```
+
+The residual reaches full size in **seven minutes** and then sits flat for three
+hours, which is identically what the physics does: `δQ = −(1 − a)·P(u)` from the
+instant the delivered fraction moves. The 14.11 mW was never the fault
+developing.
+
+So the fault is now a step of `fault_mw` **within `fault_window_s` = 30 min**,
+measured as the range of the residual in a trailing window. **This resolved the
+§1 conflict rather than trading numbers**: the 09-10 event is a warning at
++14 min and never a fault, which is what §1 said all along. Across 57 days the
+fault level fires **twice**, both genuine steps — 2026-08-28 (17.9 mW) and the
+09-10 reseat (16.4 mW). Slow degradation still has its own fault and it is a
+different one: authority exhausted, which no window gates.
+
+Three things it needed before it behaved, all in plans/pid-2-monitor.md §2.5:
+the **range** rather than a departure from the band crossing (the reseat landed
+three hours into an existing warning); the history **breaking** at every
+no-opinion sample (a range across a commanded move measures the command — 21 mW
+on the 09-05 ladder); and the transient gate **floored at the judge's own slope
+window** (below 30 K the plant settles in ten seconds while the slope is still
+regressed over five minutes — 99 mW on the ladder's cold end).
 
 ## Then, in order
 
@@ -163,9 +185,10 @@ to about 15 mW, or §1's sentence changes. plans/pid-2-monitor.md §2.5 has it.
    commit, names the safety rule it touches, and runs the bench before it lands.
    `pid_tuning.py --rows` already prints §3.2's schedule from the production fit
    with the shipped table's `FIT_KEY` on every row.
-   - **§3.4 inherits the fault-level decision above**, and it is the first
-     thing to settle there: 10 mW is below both measured wiring events and
-     below the 09-10 excursion's own peak.
+   - **§3.4 inherits the step rule**, not an open decision: `fault_mw` is
+     10 mW *as a step within 30 minutes*, and the supervisor's ramp-down
+     should be built on the same criterion. Slow degradation is authority
+     exhausted's to catch, and that is a different condition.
 2. **Phase 2's 72 h live soak is outstanding** and nothing about it is blocked
    on code — it needs the recorder restarted with the monitor beside it. Worth
    doing early: the monitor runs whether or not the loop is armed, which is most
