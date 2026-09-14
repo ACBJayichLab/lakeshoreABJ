@@ -10,7 +10,7 @@ and [HANDOFF-2026-09-13.md](HANDOFF-2026-09-13.md) (the thermal refit).
 >
 > The 218's analog output has been at **64.0100 %** since 2026-09-10 14:49 and
 > the sample flat at **118.3 K** since 09-11. Every number below comes from the
-> archive. **994 tests passing, `ruff` clean.**
+> archive. **997 tests passing, `ruff` clean.**
 
 ## Jeff's two rulings, and what each one turned into
 
@@ -48,7 +48,7 @@ model is best.
 ## Phase 2 — the monitor — BUILT
 
 `ltspm3/monitor/`. Separate process, no port, no commands — structurally, not by
-configuration. 27 tests, eleven of them the replay on genuine data.
+configuration. 30 tests, eleven of them the replay on genuine data.
 
 ```
 python -m ltspm3.monitor --replay reference/cooldown-10/
@@ -128,6 +128,34 @@ and a half after the reseat. HANDOFF-2026-09-13 measured **twice the wander over
 300–1200 s** in the same period by a completely different method. Two
 independent signatures: **reseated is not repaired.**
 
+## The thresholds, and the one decision they leave
+
+**Jeff, 2026-09-14: `warn_mw: 5`, `fault_mw: 10`.** They are floors under the
+3σ band rather than replacements — at a settled 118 K the floor binds (band
+1.4 mW), on a 5 K/min sweep at 180 K the band binds (8.8 mW).
+
+Putting the floor in exposed two couplings, both found by the replay:
+
+- **the baseline must freeze on the BAND, not on the warning.** Keyed to the
+  warning, the 09-10 event vanished completely — −5.01 mW against a 5 mW floor
+  kept the verdict typical, the baseline kept learning, and it walked onto the
+  fault within hours. Reporting and learning are different decisions.
+- **a residual sitting on its threshold needs hysteresis.** The 09-10 residual
+  crosses 5 mW at +4 min and then hovers; every dip reset the 600 s timer and
+  the warning did not land for **104 minutes**. With a Schmitt trigger at 0.8 it
+  lands at **14**.
+
+With both fixed, the 09-10 event warns at **11:46, fourteen minutes**, at
+−5.08 mW.
+
+**The decision.** That excursion **peaks at 14.11 mW** three hours in, so under
+`fault_mw: 10` it *is* fault-level at about +190 min — and PID_PLAN §1 says in
+as many words that *the 09-10 event is a warning*. Those cannot both hold.
+Nothing is broken today because the monitor only reports, but **plan 3 §3.4
+turns this number into a ramp-down**, and under 10 mW the supervisor would have
+ramped that event down rather than warned about it. Either the fault level rises
+to about 15 mW, or §1's sentence changes. plans/pid-2-monitor.md §2.5 has it.
+
 ## Then, in order
 
 1. **PID_PLAN phase 3 — the loop — is the next code**, and
@@ -135,10 +163,9 @@ independent signatures: **reseated is not repaired.**
    commit, names the safety rule it touches, and runs the bench before it lands.
    `pid_tuning.py --rows` already prints §3.2's schedule from the production fit
    with the shipped table's `FIT_KEY` on every row.
-   - **§3.4 has a decision waiting**, not a calculation: `fault_mw` seeded at
-     8 mW is smaller than either measured wiring event, so a ramp-down there
-     would fire every time somebody touches the heater. The two events are
-     −21.9 mW and −11.6 mW. Jeff's call, with those in front of it.
+   - **§3.4 inherits the fault-level decision above**, and it is the first
+     thing to settle there: 10 mW is below both measured wiring events and
+     below the 09-10 excursion's own peak.
 2. **Phase 2's 72 h live soak is outstanding** and nothing about it is blocked
    on code — it needs the recorder restarted with the monitor beside it. Worth
    doing early: the monitor runs whether or not the loop is armed, which is most
