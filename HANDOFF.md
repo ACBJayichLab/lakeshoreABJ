@@ -1,167 +1,177 @@
-# Handoff — 2026-09-14 (PID phase 1 is DONE; the monitor is next)
+# Handoff — 2026-09-14 (phase 1 done, phase 2 built; the loop is next)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
-route to a working loop is [PID_PLAN.md](PID_PLAN.md) and the model it stands
-on is [REFIT_PLAN.md](REFIT_PLAN.md). This goes stale.
+route to a working loop is [PID_PLAN.md](PID_PLAN.md). This goes stale.
 
-Previous: [HANDOFF-2026-09-13.md](HANDOFF-2026-09-13.md), which closed the
-thermal refit. This file is what was built on top of it.
+Previous: [HANDOFF-2026-09-14a.md](HANDOFF-2026-09-14a.md) (phase 1, the band)
+and [HANDOFF-2026-09-13.md](HANDOFF-2026-09-13.md) (the thermal refit).
 
-> ## THE HEATER IS STILL ON AND NOTHING WAS COMMANDED
+> ## NOTHING WAS COMMANDED, AND THE HEATER IS WHERE IT WAS
 >
-> The recorder is running `config-ltspm3-heater.yaml`. The 218's analog output
-> has been at **64.0100 %** since 2026-09-10 14:49 and the sample flat at
-> **118.3 K** since 09-11 00:00. Nothing in this session touched the cryostat —
-> every number below comes from the archive.
->
-> **It is still a reseat, not a repair.** Jeff ruled on 2026-09-14 that a
-> four-probe measurement of the heater circuit is **out of scope**, and that the
-> margins should be sized so that it is a non-issue. That ruling is now
-> load-bearing in the design and §3 below is what it turned into.
+> The 218's analog output has been at **64.0100 %** since 2026-09-10 14:49 and
+> the sample flat at **118.3 K** since 09-11. Every number below comes from the
+> archive. **994 tests passing, `ruff` clean.**
 
-## What this session did
+## Jeff's two rulings, and what each one turned into
 
-**PID phase 1 is complete: the model carries its own error band, and the two
-functions the monitor and the supervisor judge by exist.** 967 passing, `ruff`
-clean, the table byte-identical — the curves did not move, only what travels
-beside them.
+**1. A four-probe measurement of the heater circuit is out of scope; size the
+margins instead.** → `DELTA_P_FRAC` left the error band and became `bias_q_w`,
+reported on its own. In the band it makes 3σ at 118 K **14 mW**, three times the
+09-10 fault the monitor has to catch. Out of it, the band is **1.4 mW** and the
+loop never feels the bias anyway, because integral action absorbs a constant
+power offset exactly.
 
-| | |
-|---|---|
-| `analysis/band.py` | NEW. Measures the six terms of `σ_Q` from the archive the curves were fitted to, and owns phase 1's gate |
-| `ltspm3/model/_fitted_table.py` | carries the band, `FIT_KEY` and the gauge as machine-readable constants, each under the comment that says what it is |
-| `ltspm3/model/fitted_response.py` | `missing_power_w`, `sigma_q_w`, `sigma_q_terms`, `bias_q_w`, `conductance_w` |
-| `analysis/pid_tuning.py --rows` | phase 3 §3.2's schedule, from the production fit, cache key on every row |
-| `analysis/plan_sweep.py` | rungs above 192.6 K now say `PREDICTED ONLY` |
-| `tests_ltspm3/test_residual.py` | NEW, 29 tests. Plus 13 in `test_fitted_table.py` |
+**2. Recalibrate at most once per cooldown; typical erroring behaviour is so
+large as to be unmistakable from these variations.** → the monitor alarms on the
+**change** in the residual against a slow baseline, not on its level. The level
+carries the calibration and the unmodelled drift, which over a months-long
+cooldown reach **31 K**; the change does not grow with time at all. One gauge
+per cooldown is then enough, which is what was asked for.
 
-## The four things worth a reviewer's attention
+The second ruling also arrived from the data independently, in §2.4 of plan 2 —
+see the 09-09 event below.
 
-**1. The model's error is flat in KELVIN, and it took measuring it the other way
-round to find that out.** The band's model term was written as a fraction of the
-delivered power — the shape the campaign drift has, and the shape a heater-circuit
-error has. Measured, the same in-epoch residual is **0.07 % at 118 K and 17 % at
-5.4 K**, where 8 mW of heater holds the sample: a band built that way is blind at
-the cold end and hysterical at the warm one. Flat in kelvin is what it actually
-is — 0.107 K rms below 25 K, 0.183 K above 40 K — so it enters as
-`SIGMA_MODEL_K × Λ′`, the same shape as the thermometry terms beside it.
+## Phase 1 — the model — DONE
 
-The number is **0.135 K**, which is REFIT §1's own row 2 recomputed through the
-shipped grid rather than through the fit. That is deliberate: the band's model
-term and the gate the refit had to pass are now the same measurement, so the
-band cannot quietly claim the model is better than the scoreboard says.
+`analysis/band.py` measures the band; the constants ship in
+`_fitted_table.py`; `missing_power_w` and `sigma_q_w` are in
+`fitted_response.py`. 3σ settled is **1.4 mW at 118 K** and **0.4–0.9 K across
+10–180 K** at the local gain — the band is about a kelvin everywhere, which is
+where Jeff's "warn at a kelvin" lands when it is arrived at from measured terms.
+The gate is **0.583 mW worst over 40 K in-epoch**, met.
 
-**2. `DELTA_P_FRAC` came OUT of the band, and that is what Jeff's ruling means
-in practice.** The 0.7 % the heater circuit may not deliver is a **constant**.
-It changes when somebody handles the wiring — three such events are measured,
-all a few tenths of an ohm in series with a 75.5 Ω heater — and between them it
-does not change at all.
+Two findings worth keeping: the model's error is flat **in kelvin** (0.135 K),
+not in watts and not as a fraction of power; and a gate in watts on a cryostat
+whose Λ′ spans 14× is a kelvin gate in disguise, strictest exactly where the
+model is best.
 
-| | 3σ at 118 K | |
+## Phase 2 — the monitor — BUILT
+
+`ltspm3/monitor/`. Separate process, no port, no commands — structurally, not by
+configuration. 27 tests, eleven of them the replay on genuine data.
+
+```
+python -m ltspm3.monitor --replay reference/cooldown-10/
+python -m ltspm3.monitor -c config-ltspm3-heater.yaml
+```
+
+**The row that matters: the 2026-09-10 fault warns at 11:44 — eleven minutes
+after the event — at −5.01 mW against a required −4.9 ± 2 mW, and as a warning
+rather than a fault.** The recalibration moves no verdict, the three long holds
+and the 43 h sweep are quiet, and the false-alarm budget is met.
+
+### The baseline variable, which took two wrong answers
+
+What the baseline absorbs is the heater circuit's delivered fraction — the
+calibration, and the campaign drift, which REFIT §7.2 measured to be the *same
+quantity* moving slowly. So it is kept as a **fraction of delivered power**.
+
+| kept in | a 1 % calibration error is | |
 |---|---|---|
-| band with `δP` in it | **14.0 mW** | the 09-10 fault hides inside it |
-| band as shipped | **1.4 mW** | the fault is 3.5× out of band |
-| `bias_q_w`, on its own | 4.7 mW = 2.8 K | reported, not alarmed on |
+| watts | 12 mW at 18 K, 20 mW at 94 K | the baseline chases the sweep |
+| kelvin | 0.1 K at 18 K, 2.6 K at 94 K | a factor of **26** |
+| **fraction of P** | the same number everywhere | what a series resistance *is* |
 
-A band carrying a systematic that cannot move inside thirty minutes cannot see a
-fault that happens inside thirty minutes. So the bias is exported under its own
-name, for the three consumers that feel it: the monitor's **absolute** residual
-(whose answer is a trailing baseline, not a wider alarm), the velocity
-feedforward, and the open-loop ramp-down — 0.7 % of full power is a few kelvin
-of terminal error on an emergency descent to base, and an emergency descent to
-base does not care. **The closed loop never sees it**, because integral action
-absorbs a constant power offset exactly. That is the answer to "size the margins
-so it is a non-issue": α is a non-issue for the loop by construction, and making
-the alarm band swallow it would have been the one way to make it a real one.
+Kelvin is the trap, and it is worth remembering why: the model's **shape** error
+is flat in kelvin, which is a real measurement from phase 1. It looks like the
+right variable right up until the thing being absorbed is the **level** instead.
+Shape error and level error are different quantities with different shapes.
 
-**3. The band is about a kelvin everywhere, and nothing chose that.** Six
-measured terms — the coldplate's own residual through `Λ′(T_c)`, the median
-anchor bar, the diurnal amplitude, the in-epoch model error, the campaign drift,
-`σ_C·|dT/dt|` — and what they add up to at the local gain is:
+### Four defects the replay found that no unit test would have
 
-| T | 3σ day 0 | day 10 | at 5 K/min | in K, day 0 |
-|---|---|---|---|---|
-| 10 K | 9.66 mW | 9.74 | 9.66 | **0.41 K** |
-| 30 K | 3.99 | 7.05 | 4.03 | 0.44 |
-| 60 K | 1.54 | 7.56 | 3.23 | 0.68 |
-| 118 K | 1.44 | 8.78 | 6.70 | **0.87** |
-| 180 K | 1.61 | 10.13 | 8.80 | 0.86 |
+- a pole fitted to an hour of settled hold has no relaxation left in it and fits
+  the cryostat's **drift** — ratios of 62. The refit's own two grading rules now
+  apply here too.
+- the noise check measured scatter about a **line** over 300 s; a cryostat
+  relaxing through that window is a curve, so it reported 685 mK rms against an
+  expected 18 and warned for hours about a thermometer that was fine.
+- the noise and coldplate checks had no transient gate: a ladder rung read as
+  1626 mK of noise and 192 mK of sink.
+- a per-cycle window scan is 150 million operations a pass. `RollingFit` makes
+  the slope and the scatter O(1) and the replay 30 s instead of minutes. **The
+  live monitor would never have noticed** — one cycle a second, forever.
 
-Jeff asked for a warning at a kelvin; the measured band arrives at one from the
-other end. It also widens during a sweep, which §3 required, and grows with the
-days, which the "typical drifts" trap required.
+### Three rows not met, and §2.4 argues each
 
-**At the warm end the largest settled term is the SINK, not the sample** — 0.42
-mW against 0.027 mW of thermometry, because `Λ′` at 6.6 K is nine times `Λ′` at
-118 K. A reader who assumes the sample dominates will size the wrong term, so
-there is a test that says so.
+**The 2026-09-09 event is not visible in the channels the monitor has**, and
+this is the most interesting thing the phase found. Its coldplate step is
+**7.6 mK** — a quarter of that channel's own rms — and its 1st Stage step is
+90 mK. Adding the cold-head stages catches it at 18:17. But the replay then
+answered a question the plan had not asked: **a 70–170 mK step on the 1st Stage
+happens five times in the four settled days before it.** The 09-09 step is not
+exceptional in the only channel that shows it. Tuned to catch it the check costs
+nine warnings a week against a budget of one; set where ordinary steps are quiet
+it is silent across the archive and still catches what it exists for — a
+compressor degrading moves those channels by **kelvins**.
 
-**4. Phase 1's gate needed its one sentence read twice, and both readings are
-printed.** "`missing_power_w` < 1 mW at every settled anchor the fit was given."
+That is Jeff's second ruling arriving from the data rather than from the
+instruction. What stays on the record is the manifest's own conclusion, which
+this replay independently confirms: *something moves the sample's steady state
+at constant power that Λ(T_s) − Λ(T_c) cannot see.* REFIT §2.5's open
+diagnostic, and no threshold closes it.
 
-- *"Every anchor the fit was given"* is 136 anchors over 57 days and the level
-  is gauged to **one** of them. In-epoch the residual is 0.135 K; against the
-  whole campaign it is **4.7 K rms over 40 K**. The second number is the history
-  of the cryostat, not the model's error, and no fit that ships one level can
-  make it smaller. `band.py` prints both, in that order.
-- *"< 1 mW"* is a kelvin gate divided by `Λ′`, and `Λ′` runs 24 mW/K at 10 K
-  against 1.7 at 118 K. In-epoch the gate is **met above 40 K (0.583 mW)** and
-  missed below 25 K (3.4 mW) — while in kelvin the cold end is the **better**
-  half. A gate in watts is fourteen times stricter exactly where the model is
-  best.
+**The τ ratio** is 0.97–1.01 above 60 K and **0.84 at 45–58 K**. Waiting longer
+makes it worse, not better — at a reach of 8 the ladder's dwells are too short
+and nothing is measured at all. It is the monitor's one-pass pole fit on a short
+dwell, not the model (the refit's graded τ agree to 6.7 %). Left as it is rather
+than tuned into passing: τ never faults and is not what catches a heater event.
 
-The one figure the apparatus does not give is §1.2's "3σ at 118 K, day 0,
-settled, between 4 and 8 mW". It is **1.4 mW** measured. That figure was written
-before the terms were, and 4–8 mW is where the band lands about ten days after a
-gauge. Nothing was tuned to reach it.
+**The archive has two fault-level excursions** — 2026-09-04 and 2026-09-10, both
+real wiring events. The row expected none. What it actually says is that **8 mW
+is below the size of a reseated connector**, which matters before plan 3 turns
+`fault_mw` into a ramp-down.
+
+### And one thing it corroborated in passing
+
+Five cold-head steps in the four settled days before the fault; six in the one
+and a half after the reseat. HANDOFF-2026-09-13 measured **twice the wander over
+300–1200 s** in the same period by a completely different method. Two
+independent signatures: **reseated is not repaired.**
 
 ## Then, in order
 
-1. **PID_PLAN phase 2 — `ltspm3/monitor.py` — is the next work**, and
-   [plans/pid-2-monitor.md](plans/pid-2-monitor.md) is unchanged by any of the
-   above except that its two functions now exist. It is mostly plumbing plus the
-   replay table of §2.3, and the replay is what **sets** `fault_mw` and
-   `warn_after_s` rather than choosing them. It also earns its keep immediately:
-   it runs whether or not the loop is armed, which is most of this cryostat's
-   life so far.
-   - **The one thing the monitor has to solve that the model handed it**: the
-     absolute residual carries `bias_q_w`, up to 4.7 mW at 118 K, which is three
-     times the day-0 band. The monitor's answer is a **trailing baseline** —
-     judge the change, not the level — and that belongs in §2.2 beside the
-     persistence rule.
-2. **At about day 9 the band overtakes the 8 mW `fault_mw` seed.** That is not a
-   band problem, it is the drift with nothing subtracting it, and it is an
-   argument for **re-gauging on a cadence** — one programmed ladder, under five
-   hours, `export_response.py` — rather than for widening anything. Phase 2's
-   replay is where the number gets settled.
-3. **Phase 1.3's pipeline is proved and its ladder is not run.** `--hi 300`
-   builds the rung list and marks the four rungs above 192.6 K as predicted-only;
-   the top one asks 77.9 % = **991 mW** against a heater rated 1.68 W. The ladder
-   itself is commissioning stage 6 and needs Jeff at the cryostat.
+1. **PID_PLAN phase 3 — the loop — is the next code**, and
+   [plans/pid-3-loop.md](plans/pid-3-loop.md) is unchanged. Every step is one
+   commit, names the safety rule it touches, and runs the bench before it lands.
+   `pid_tuning.py --rows` already prints §3.2's schedule from the production fit
+   with the shipped table's `FIT_KEY` on every row.
+   - **§3.4 has a decision waiting**, not a calculation: `fault_mw` seeded at
+     8 mW is smaller than either measured wiring event, so a ramp-down there
+     would fire every time somebody touches the heater. The two events are
+     −21.9 mW and −11.6 mW. Jeff's call, with those in front of it.
+2. **Phase 2's 72 h live soak is outstanding** and nothing about it is blocked
+   on code — it needs the recorder restarted with the monitor beside it. Worth
+   doing early: the monitor runs whether or not the loop is armed, which is most
+   of this cryostat's life, and the soak is what turns the replay's false-alarm
+   budget into a measured one.
+3. `lschart status` and MATLAB `plant()` do not read `plant.json` yet. Phase 5's
+   work in the viewer and ten lines in `LakeShore.m`; neither blocks the soak,
+   which only needs the file to exist and be current.
 4. The 09-10 mask still goes in with the next archive export, not before.
 
 ## Traps this session added to the list
 
-- **A band term must be told what it is proportional to** — the sibling of the
-  campaign-drift trap already on this list. The residual's own error looked like
-  it should scale with the delivered power, because the mechanism that moves the
-  level does. It does not: it scales with `Λ′`. Measuring both and comparing them
-  took ten minutes and would have been invisible forever otherwise, because at
-  118 K the two forms agree.
-- **A systematic and a fluctuation must not be added in quadrature**, however
-  natural it looks in an error budget. What decides it is the timescale of the
-  question: an alarm that fires in thirty minutes may only carry terms that can
-  move in thirty minutes.
-- **A gate in watts on a cryostat whose `Λ′` spans 14× is a gate in kelvin in
-  disguise**, and it is strictest where the model is best. Quote both.
-- **`bath.fit()` returns `(Bath, diagnostics)`, not a dict** — and the diagnostic
-  key is `rms_k`, not `rms_K`. Both cost a run.
-- **The heredoc trap bit again and it is worth restating**: `\n` inside
-  `python - <<'PY'` lands a REAL newline in the file, quoted delimiter or not, so
-  a patch script written that way produces an unterminated f-string thirty lines
-  from where the mistake is. Write the script to a file. It also bit in a second
-  way — replacing a docstring's opening lines without its closing `"""` silently
-  swallows the next four functions.
+- **A band term must be told what it is proportional to** — and so must a
+  baseline. Three variables, three different answers, and at 118 K all three
+  agree, which is why only a record that crosses the range can choose between
+  them.
+- **A systematic and a fluctuation must not be added in quadrature.** What
+  decides it is the timescale of the question: an alarm that fires in thirty
+  minutes may only carry terms that can move in thirty minutes.
+- **A gate in watts on a cryostat whose Λ′ spans 14× is a gate in kelvin in
+  disguise.** Quote both.
+- **Short-term scatter is not long-term wander, on every channel and not just
+  the sample.** The 1st Stage is quiet to 4 mK over a minute and wanders 100 mK
+  over an hour; a bar set from the first warns twenty times on the second.
+- **A per-cycle window scan is invisible in the live path and fatal in the
+  replay**, which is an argument for having a replay rather than against having
+  a scan.
+- **`bath.fit()` returns `(Bath, diagnostics)`, not a dict**, and the key is
+  `rms_k`.
+- **Do not patch Python through a heredoc.** `\n` inside `python - <<'PY'` lands
+  a real newline in the file; and replacing a docstring's opening without its
+  closing `"""` silently swallows the next four functions. Both cost a revert
+  this session. Write the patch script to a file.
 
 ## Running it
 
@@ -170,18 +180,11 @@ The venv is Windows and lives at the **repository root**, not in a worktree:
 ```bash
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest -q
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ruff check .
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/measure.py
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ltspm3.monitor --replay reference/cooldown-10/
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/band.py
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --in-epoch
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/pid_tuning.py --rows
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/export_response.py --dry-run
 ```
 
-`band.py` is the one to run first now: it prints the band, what it is worth at
-five temperatures, phase 1's gate both ways, and the matched-output pair either
-side of the 09-10 fault. It needs `measure.py` to have been run once (11 s) and
-then costs about a minute for the production fit plus a few seconds for the
-coldplate pole.
-
-`analysis/measured.csv` and `analysis/.fit_cache/` do not exist on a fresh clone
-or in a new worktree.
+The replay needs nothing prepared — `reference/cooldown-10/` is versioned, and
+it is the one test here on genuine data. `analysis/` still needs `measure.py`
+run once (11 s) before anything that fits.

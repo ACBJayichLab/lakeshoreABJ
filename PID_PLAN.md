@@ -6,7 +6,13 @@ rows green, the table 4-5 K warmer at a given output than every number written
 before it, the level on a dated delivered-power gauge). §1.2 closed on 09-14:
 the band constants are in `_fitted_table.py`, `missing_power_w` and `sigma_q_w`
 are in `fitted_response.py`, and the two of them are what §3 below is now
-written against. **PHASE 2 — the monitor — is the next work.** Written
+written against.
+
+**PHASE 2 IS BUILT, 2026-09-14.** `ltspm3/monitor/` — report only, no port, no
+commands. The 2026-09-10 fault warns eleven minutes after it happened at
+−5.01 mW. **What is left of phase 2 is the 72 h live soak**, which needs the
+recorder restarted with the monitor beside it and is Jeff's to schedule.
+**PHASE 3 — the loop — is the next code.** Written
 2026-09-11 from Jeff's requirements (§1); revised the same day through four
 rounds of questions. Update this line as phases land.
 
@@ -21,7 +27,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 |---|---|---|---|
 | **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | **DONE 2026-09-14** — REFIT §1 green; in-epoch prediction 0.135 K rms; `missing_power_w` 0.58 mW worst in-epoch over 40 K; `sigma_q_w` exported. The 300 K half is a PIPELINE, run as a dry run; the ladder itself is stage 6 |
-| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | replay table all green; < 1 warning/week on a settled hold; 72 h live |
+| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 11 min at −5.01 mW; < 1 warning/week met; three rows argued in §2.4 rather than met. **72 h live outstanding** |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts | bench green at 6 temperatures; 8 rate fields → 2; hold jitter ≤ 0.02 %/min |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | 7 days unattended, hold criterion met, every warning explained; ladder graded to 300 K |
 | **5** | §6 here | warnings and faults in the viewer | verdict row visible, contrast-tested |
@@ -59,12 +65,15 @@ lschart/          GENERIC.  Recorder, viewer, file interface.  Never imports lts
 ltspm3/model/     THE CHARACTERISATION.  Every number describing the cryostat, the
                   typical band, the two residual functions.  Written by analysis/.
 ltspm3/control/   THE SOFTWARE PID.  Reads model/.  Eight rules.
-ltspm3/monitor.py THE JUDGE.  Separate process, no port, reads model/ and the
-                  recorder's files, writes plant.json.  Report only.
+ltspm3/monitor/   THE JUDGE.  Separate process, no port, reads model/ and the
+                  recorder's files, writes plant.json.  Report only.  Alarms on
+                  the CHANGE in the residual against a slow baseline kept as a
+                  FRACTION OF DELIVERED POWER, not on its level -- so one
+                  calibration lasts a cooldown.  BUILT 2026-09-14.
 analysis/         GENERATES model/_fitted_table.py.  Imports neither package.
 ```
 
-`control/` and `monitor.py` both read `model/`; neither reads the other. They
+`control/` and `monitor/` both read `model/`; neither reads the other. They
 call the **same two functions** for the residual and its band, so they cannot
 disagree about what typical means — only about what to do.
 
@@ -177,8 +186,19 @@ Median-3, low-pass off (`tau: 0`, class kept). Speed ratios 3 / 0.5. The
 end-rate grading question was moot. The 09-10 mask goes in with the next
 archive export, not before.
 
-**Open.** None that block Phase 0 or 1. Phase 3's `fault_mw` and Phase 2's
-`warn_after_s` are set by the replay, not chosen.
+**Settled 2026-09-14.** **Recalibrate at most once per cooldown**, and typical
+erroring behaviour is so large as to be unmistakable from ordinary variation
+(Jeff). Measuring the heater circuit four-wire is **out of scope**; the margins
+carry it instead. Both rulings are load-bearing: the first is why the monitor
+judges a *change* against a baseline rather than a level, and the second is why
+`DELTA_P_FRAC` is `bias_q_w` and not a band term.
+
+**Open.** `warn_after_s` is set — 600 s, which is what puts the 09-10 event at
+eleven minutes rather than at two. **`fault_mw` is NOT**, and the replay is why:
+the archive's two fault-sized excursions are both real wiring events, so 8 mW is
+below the size of a reseated connector and a ramp-down there would trigger every
+time somebody touched the heater. Phase 3 §3.4 decides it, with those two
+measured events in front of it.
 
 ---
 
