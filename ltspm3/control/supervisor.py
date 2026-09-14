@@ -212,6 +212,7 @@ class HeaterSupervisor:
         feedforward_config: FeedforwardConfig | None = None,
         tuning_config: TuningConfig | None = None,
         filter_kwargs: dict | None = None,
+        cadence_s: float | None = None,
         clock=time.monotonic,
     ) -> None:
         self.inst = instrument
@@ -222,8 +223,18 @@ class HeaterSupervisor:
         self.filter = MeasurementFilter(**(filter_kwargs or {}))
         self.clock = clock
 
+        # THE CADENCE IS MEASURED, and seeded from the config rather than taken
+        # from it.  The loop's dead time is derived from the cadence, and the
+        # cadence a config asks for is not the one the bus delivers: the real
+        # logs jitter, a retry costs a whole cycle, and `acquisition.interval_s`
+        # is a floor on the period rather than a promise about it.  So the
+        # config's number opens the account and the observed dt keeps it -- one
+        # slow EMA, because a tuning that jittered with the bus would be worse
+        # than either answer.
+        self._cadence_s = float(cadence_s) if cadence_s else None
         self.feedforward = Feedforward(feedforward_config)
         self.tuner = Tuner(tuning_config)
+        self.tuner.delay_s = self.delay_s
         self.pid = PID(
             pid_config or PIDConfig(),
             feedforward=self.feedforward,
@@ -258,6 +269,35 @@ class HeaterSupervisor:
         #: `off`/`idle` is also where a never-armed loop sits, and those
         #: are different things to read on a screen.
         self._disengaged_by = ""
+
+    # -- the loop's own dead time ------------------------------------------
+
+    #: How slowly the measured cadence follows the bus.  Not a limit: it is how
+    #: long one jittered cycle is remembered for, and it is long on purpose --
+    #: a tuning that moved because a single read retried would be worse than
+    #: either answer it moved between.
+    CADENCE_TAU_S = 300.0
+
+    @property
+    def delay_s(self) -> float:
+        """The loop's pure delay -- the filter chain at the measured cadence.
+
+        3.0 s on this cryostat: a median-3 at 2 s, plus the zero-order hold,
+        plus nothing for a low pass that is switched off.  Derived from the
+        chain that produces it (:meth:`MeasurementFilter.group_delay_s`) so it
+        cannot come to disagree with the filter it describes.
+        """
+        return self.filter.group_delay_s(self._cadence_s or 0.0)
+
+    def _learn_cadence(self, dt: float) -> None:
+        if dt <= 0:
+            return
+        if self._cadence_s is None:
+            self._cadence_s = dt
+        else:
+            alpha = 1.0 - math.exp(-dt / self.CADENCE_TAU_S)
+            self._cadence_s += alpha * (dt - self._cadence_s)
+        self.tuner.delay_s = self.delay_s
 
     # -- authority band ----------------------------------------------------
 
@@ -640,6 +680,7 @@ class HeaterSupervisor:
         """
         dt = 0.0 if self._last_t is None else max(0.0, t - self._last_t)
         self._last_t = t
+        self._learn_cadence(dt)
 
         self.pid.cfg.setpoint = self.smoother.update(t, self.ramp.value(t))
         s = SupervisorStatus(

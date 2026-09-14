@@ -127,7 +127,15 @@ def test_a_3_k_move_lands_above_60_k_and_does_THREE_THINGS_below_it(kelvin, benc
 
     if kelvin >= 60.0:
         assert last.state is SupervisorState.TRACKING
-        assert last.filtered_k == pytest.approx(kelvin + 3.0, abs=0.05)
+        # The MEAN of the last minute, against a tolerance that scales with the
+        # thermometer.  A single final sample was fine while a 60 s low pass
+        # was doing the averaging; with the pole switched off (§3.1) the
+        # measurement carries its own 1.36e-6*T^2 rms -- 44 mK at 180 K -- and
+        # a fixed 50 mK tolerance on one sample is a coin toss up there.
+        settled = statistics.fmean(
+            [s.filtered_k for s in h.history[-30:] if s.filtered_k is not None])
+        floor = 5e3 * M.FittedParams().noise_quadratic * kelvin ** 2
+        assert settled == pytest.approx(kelvin + 3.0, abs=max(0.05, floor))
         overshoot = (max(reached) - (kelvin + 3.0)) / 3.0
         assert overshoot < 0.10, f"{100 * overshoot:.1f} % overshoot at {kelvin} K"
     elif kelvin == 30.0:

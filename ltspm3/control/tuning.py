@@ -196,6 +196,14 @@ class Tuner:
         self.schedule = PlantSchedule(self.cfg.schedule)
         self.phase = ControlPhase.HOLD
         self._settled_since: float | None = None
+        #: The loop's pure delay, in seconds.  **Set by the supervisor from the
+        #: filter chain and the measured cadence** -- see
+        #: `MeasurementFilter.group_delay_s` -- because it is a property of that
+        #: chain and not a number anybody should type into a tuning section.
+        #: 0.0 means "nobody has said", which is what a bare `Tuner()` in a test
+        #: gets and is why section 3.2's floor is written `max(..., 4 * delay)`
+        #: rather than assuming a delay exists.
+        self.delay_s = 0.0
 
     @property
     def enabled(self) -> bool:

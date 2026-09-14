@@ -34,7 +34,7 @@ class Harness:
     DT = 4.0  # the cryostat's real poll cadence
 
     def __init__(self, *, start_k=None, sup_cfg=None, pid_cfg=None, guard_cfg=None,
-                 filter_kwargs=None, response=None, model=None):
+                 filter_kwargs=None, response=None, model=None, cadence_s=None):
         self.clock = VirtualClock()
         params = response or ResponseParams()
         # Start in equilibrium at the operating point: a cryostat still drifting
@@ -83,7 +83,12 @@ class Harness:
             config=sup_cfg or SupervisorConfig(),
             pid_config=pid_cfg or PIDConfig(setpoint=self.equilibrium_k, kp=0.02, ti=900.0),
             guard_config=guard_cfg or SensorGuardConfig(),
-            filter_kwargs=filter_kwargs or {"tau": 60.0},
+            # The SHIPPED chain, not a literal.  It was `{"tau": 60.0}` until
+            # phase 3 step 1 switched the low pass off; leaving it pinned here
+            # would have left every safety and glitch test in this directory
+            # exercising a filter the cryostat no longer runs.
+            filter_kwargs=filter_kwargs or {},
+            cadence_s=cadence_s,
             clock=self.clock,
         )
         self.history = []
@@ -160,8 +165,8 @@ BENCH_CONFIG = Path(__file__).resolve().parents[1] / "config-ltspm3-armed.yaml"
 BENCH_TEMPERATURES = (10.0, 30.0, 60.0, 100.0, 140.0, 180.0)
 
 
-def bench_control_config():
-    """The `control:` section of the armed config, loaded once per call.
+def bench_app_config():
+    """The armed config, loaded whole.
 
     Loaded through `lschart.config.load`, not read as YAML, so the bench proves
     the file the cryostat would be given -- unknown keys, validators and all.
@@ -169,7 +174,12 @@ def bench_control_config():
     import ltspm3.config  # noqa: F401  -- registers `control:` and `monitor:`
     from lschart.config import load
 
-    return load(str(BENCH_CONFIG)).section("control")
+    return load(str(BENCH_CONFIG))
+
+
+def bench_control_config():
+    """Just the `control:` section of it."""
+    return bench_app_config().section("control")
 
 
 class FittedHarness(Harness):
@@ -188,15 +198,18 @@ class FittedHarness(Harness):
       scenario here is a loop that was handed the right window in advance.
     """
 
-    DT = 2.0
-
     def __init__(self, *, kelvin: float, sup_cfg=None, pid_cfg=None,
-                 guard_cfg=None, filter_kwargs=None, **kw):
+                 guard_cfg=None, filter_kwargs=None, cadence_s=None, **kw):
         import dataclasses
 
         from ltspm3.model.fitted_response import FittedResponse
 
-        cfg = bench_control_config()
+        app = bench_app_config()
+        cfg = app.section("control")
+        # THE CADENCE IS THE CONFIG'S, not a number in this file.  The loop's
+        # dead time is derived from it, so a bench running at a different
+        # period is grading a loop with a different delay floor.
+        self.DT = float(app.acquisition.interval_s)
         self.bench_k = float(kelvin)
         # Start the plant AT the output that holds this temperature, so the
         # cryostat is in equilibrium on the first cycle.  One several kelvin
@@ -212,6 +225,7 @@ class FittedHarness(Harness):
         super().__init__(sup_cfg=sup, pid_cfg=pid,
                          guard_cfg=guard_cfg or cfg.guard,
                          filter_kwargs=filter_kwargs or dict(cfg.filter),
+                         cadence_s=self.DT if cadence_s is None else cadence_s,
                          start_k=self.bench_k, model=plant, **kw)
 
         # `Harness` sets the plant's output from the simulator's DAC, which

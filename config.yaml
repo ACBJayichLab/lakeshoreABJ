@@ -251,7 +251,18 @@ control:
     hold_settle_s: 120.0          # ...and only after settling this long
 
   filter:
-    tau: 60.0
+    # NO LOW PASS (Jeff, 2026-09-11).  `tau: 0` is pass-through and the
+    # class stays in the chain, so a cryostat whose noise moves into the band
+    # where a pole would help is a config edit away.  The 60 s it replaced was
+    # slower than the cryostat itself below 60 K, and measured on this
+    # cryostat's own holds it bought 0.41x and 0.73x, not the 0.18x a
+    # white-noise model promises.  docs/ltspm3/noise.md.
+    tau: 0.0
+    # Three, not five.  Five rejects a two-sample glitch silently; three lets
+    # it reach the guard, which rejects it by slew and SAYS SO.  It also halves
+    # the median's group delay, which is the largest term in the loop's
+    # derived dead time.
+    median_window: 3
     spike_sigma: 8.0
     stale_after_s: 30.0           # past this the stored trend is not about now
 

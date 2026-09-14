@@ -51,11 +51,21 @@ class ExponentialFilter:
     Plan with the measured numbers.  ``docs/ltspm3/noise.md`` has the bands, the
     tau sweep and the reasoning; ``python -m lschart.tools.noisespec`` re-derives
     all of it.
+
+    **``tau = 0`` IS PASS-THROUGH, and on this cryostat that is the setting.**
+    Jeff, 2026-09-11: no low pass, a median-3, and about one cycle of dead
+    time.  The paragraph above is why -- the filter was buying 0.41x and 0.73x
+    against a promised 0.18x, and paying 60 s of lag for it, which below 60 K is
+    slower than the cryostat itself.  The class stays rather than being deleted
+    from the chain: a cryostat whose noise moves into the band where a pole
+    *would* help is a config edit away, and the group delay
+    (:meth:`MeasurementFilter.group_delay_s`) already carries ``tau / 2`` so the
+    loop retunes itself when that happens.
     """
 
     def __init__(self, tau: float) -> None:
-        if tau <= 0:
-            raise ValueError("tau must be positive")
+        if tau < 0:
+            raise ValueError("tau must not be negative")
         self.tau = tau
         self.value: float | None = None
 
@@ -63,7 +73,7 @@ class ExponentialFilter:
         self.value = value
 
     def update(self, value: float, dt: float) -> float:
-        if self.value is None or dt <= 0:
+        if self.value is None or dt <= 0 or self.tau <= 0:
             self.value = value
             return value
         alpha = 1.0 - math.exp(-dt / self.tau)
@@ -72,6 +82,8 @@ class ExponentialFilter:
 
     def noise_gain(self, dt: float) -> float:
         """Ratio of output rms to white-noise input rms, for reporting."""
+        if self.tau <= 0:
+            return 1.0
         alpha = 1.0 - math.exp(-dt / self.tau)
         return math.sqrt(alpha / (2.0 - alpha))
 
@@ -125,8 +137,8 @@ class MeasurementFilter:
     def __init__(
         self,
         *,
-        tau: float = 60.0,
-        median_window: int = 5,
+        tau: float = 0.0,
+        median_window: int = 3,
         slope_window: int = 15,
         spike_sigma: float = 8.0,
         spike_floor_k: float = 0.02,
@@ -153,6 +165,37 @@ class MeasurementFilter:
         self._residuals.clear()
         self._slope_value = 0.0
         self.last_accept_t = None
+
+    def group_delay_s(self, cadence_s: float) -> float:
+        """The chain's pure delay, in seconds.  **Derived, never a constant.**
+
+        Three terms, and each one is a lag something in this chain really has::
+
+            median_window // 2 * cadence     the median's group delay: a
+                                             window of 3 reports the middle
+                                             sample, which is one cadence old
+            cadence / 2                      the zero-order hold -- on average
+                                             half a cycle passes between the
+                                             cryostat moving and a sample of it
+            tau / 2                          what is left of the low pass.
+                                             Zero while it is switched off, and
+                                             correct again the day it is not
+
+        3.0 s at the 2 s cadence and median-3 this cryostat runs.  It is the
+        floor under how fast the loop may be asked to go -- section 3.2's
+        ``tau_cl = max(speed * tau(T), 4 * delay_s)`` -- and below about 30 K
+        the plant's own tau is shorter than this, so it is the delay and not
+        the cryostat that sets the closed-loop speed.  Which is why the cold end
+        needs no schedule of its own.
+
+        It lives here rather than in :class:`TuningConfig` because it is a
+        property OF THIS CHAIN.  A number copied into the tuning section would
+        be right until somebody changed the median window, and then it would be
+        a tuning that quietly believed in a filter that no longer exists.
+        """
+        return ((self.median.window // 2) * cadence_s
+                + cadence_s / 2.0
+                + self.lowpass.tau / 2.0)
 
     def is_stale(self, t: float) -> bool:
         """True when no sample has been accepted recently enough to trust state."""

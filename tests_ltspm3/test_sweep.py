@@ -218,11 +218,19 @@ def test_the_band_caps_heat_without_compelling_it(armed):
     # has to, or it could never reach safe_output_pct).  Measuring its steps
     # here would assert something false about ramp-downs; this used to pass only
     # because the old single 0.5 %/min rate happened to fall under max_step_pct.
+    # Look at the state on BOTH sides of the cycle, not just after it.  The
+    # last ramp-down step lands on `safe_output_pct` and flips the state to
+    # `locked_out` inside the same `step()`, so a cycle that was a ramp-down
+    # when it wrote reads as a lockout when it is graded -- which is how a
+    # 0.07 % ramp-down step got counted as a trim.  It passed for as long as
+    # the arithmetic happened to make the last step small; phase 3's filter
+    # change moved the timing by two cycles and it stopped.
     biggest, prev = 0.0, h.inst.get_analog_percent()
     for _ in range(300):
+        was = h.sup.state
         h.step(1)
         now = h.inst.get_analog_percent()
-        if h.sup.state is not SupervisorState.RAMPING_DOWN:
+        if SupervisorState.RAMPING_DOWN not in (was, h.sup.state):
             biggest = max(biggest, abs(now - prev))
         prev = now
 

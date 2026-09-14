@@ -64,6 +64,11 @@ def controller_factory(app: Application):
         tuning_config=cfg.tuning,
         feedforward_config=cfg.feedforward,
         filter_kwargs=dict(cfg.filter),
+        # Seeds the measured cadence, which is what the loop's dead time is
+        # derived from.  The poll interval is a floor on the period rather than
+        # a promise about it, so the supervisor goes on measuring; this is the
+        # opening value, and it is the config's rather than a constant here.
+        cadence_s=app.cfg.acquisition.interval_s,
     )
 
 
