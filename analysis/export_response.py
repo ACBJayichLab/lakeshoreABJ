@@ -43,6 +43,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, "analysis")
+import band  # noqa: E402
 import fit_ode as F  # noqa: E402
 import holdout as H  # noqa: E402
 from plot_gain import N_CAP, N_DRIFT, N_LAM, coldplate_of  # noqa: E402
@@ -115,7 +116,7 @@ def evaluate():
     if Q[0] <= 0:
         raise SystemExit(f"Q({T[0]:.2f} K) = {Q[0]:.3e} W is not positive -- "
                          "the grid starts at or below the coldplate")
-    return r, {
+    g = {
         "T": T,
         "q": Q,
         "gauge": gauge,
@@ -125,6 +126,12 @@ def evaluate():
         "cap": r["cap"](r["pc"], T),
         "tc": Tc,
     }
+    # The band is measured AGAINST THE GRID, not against the fit -- its model
+    # term is the residual `missing_power_w` will actually make, and that is
+    # the grid's job as much as the fit's.  So it comes last, and it needs the
+    # rest of `g` to have been built.
+    g["band"] = band.measure(r, g)
+    return r, g
 
 
 def verify(r, g) -> None:
@@ -211,6 +218,118 @@ SUPERSEDED_NOTE = ""
 #: REFIT_PLAN.md section 7.3.
 
 
+#: One block comment per band constant, because a bare float in a generated
+#: file is a number nobody can check.  Each says what it is, what it is worth
+#: and which module measured it; ``analysis/band.py``'s docstring is the long
+#: form and this is the version that travels with the number.
+_BAND_DOC = {
+    "SIGMA_MODEL_K": (
+        "What the model gets wrong INSIDE ONE EPOCH, in kelvin, at the anchors",
+        "of the ladder it was gauged on plus the holds it then predicted.  This",
+        "is REFIT_PLAN.md section 1 row 2 recomputed through THIS grid, so the",
+        "band cannot claim the model is better than the scoreboard says.  In",
+        "kelvin because that is the shape it has: as a fraction of the",
+        "delivered power the same residual is 0.07 % at 118 K and 17 % at",
+        "5.4 K.  Enters as SIGMA_MODEL_K * Lambda'(T_s).",
+    ),
+    "SIGMA_TINF_K": (
+        "The median anchor error bar -- what a settled temperature is known to.",
+    ),
+    "DIURNAL_K": (
+        "The building's 24 h cycle as an rms: the median amplitude over the",
+        "holds that resolve a whole cycle, over sqrt(2).  Not a modelling error",
+        "and no fit removes it.",
+    ),
+    "TC_RMS_K": (
+        "The coldplate is not a bath.  What is left after bath.py fits it as a",
+        "TAU_BATH_S pole on a monotone curve in heater power, over the whole",
+        "43 h record -- excursion included, because a sweep looks like the",
+        "excursion.  Enters as TC_RMS_K * Lambda'(T_c), and Lambda' at 6.6 K is",
+        "nine times Lambda' at 118 K, which makes this the LARGEST term in a",
+        "settled band at the warm end.",
+    ),
+    "TAU_BATH_S": (
+        "The coldplate's own pole.  Not a term in the band: it is the monitor's",
+        "dT_c locus check (PID_PLAN.md section 3).",
+    ),
+    "SIGMA_C_FRAC": (
+        "How well C is known, from fitted tau against every measured one over",
+        "40-120 K -- tau = C/Lambda' and Lambda' is pinned by a hundred settled",
+        "anchors, so the tau spread IS C's error bar.  Enters only through",
+        "SIGMA_C_FRAC * C * |dT/dt|, so it is invisible at a hold and is what",
+        "widens the band during a sweep.  Quoted where a relaxation is graded",
+        "and nowhere else; see analysis/band.py for why the same figure is 25 %",
+        "over all 25 taus and why that is not a C error.",
+    ),
+    "DRIFT_W_PER_DAY": (
+        "The campaign drift, drift.py: the median of three independent output",
+        "bands spanning a factor of 1.6 in power.  Quoted at DRIFT_REF_W and",
+        "applied as a FRACTION of the delivered power -- the cold end refuses a",
+        "constant parasitic watt three ways (REFIT_PLAN.md section 7.2).",
+        "At its FULL rate rather than its uncertainty, because the shipped fit",
+        "carries no drift term and so nothing subtracts it; and symmetrically,",
+        "because section 7.3 found a staircase of handling events rather than a",
+        "rate, and a rate whose sign you trust is one you would subtract.",
+    ),
+    "DRIFT_SPREAD_W_PER_DAY": (
+        "The three bands the median came from.  Reported, not used.",
+    ),
+    "DRIFT_REF_W": (
+        "The power the drift is quoted at -- the middle of the three bands.",
+    ),
+    "DRIFT_T0": (
+        "The day the level was gauged, and the band's t = 0.  Not the export",
+        "date and not the fit's: the level is true at the moment it was",
+        "measured, and the export can be re-run a month later on the same",
+        "ladder.",
+    ),
+    "DELTA_P_FRAC": (
+        "THE BIAS, AND IT IS NOT IN THE BAND.  How far the whole curve's level",
+        "may sit from the truth because the heater circuit delivers a little",
+        "more or less than P(u) says -- 4.7 mW at 118 K, which is 2.8 K.  It is",
+        "CONSTANT over hours and days and changes when somebody handles the",
+        "wiring.  Put it in the noise band and 3 sigma at 118 K is 14 mW, and",
+        "the 2026-09-10 fault that has to warn was -4.9 mW.  Exported under its",
+        "own name so the consumers that feel it can carry it: the monitor's",
+        "absolute residual, the feedforward and the open-loop ramp-down.  The",
+        "closed loop has integral action and never sees it.",
+    ),
+}
+
+
+def _band_lines(b: dict) -> list:
+    """The band constants, each under the comment that says what it is."""
+    out = ["#: THE BAND.  Measured by analysis/band.py from the same archive the",
+           "#: curves were fitted to, and frozen here so control/ and monitor.py",
+           "#: read ONE source and cannot disagree about what typical means.",
+           "#: PID_PLAN.md section 3; the long form is analysis/band.py.",
+           "#:",
+           "#:     sigma_Q^2 = (TC_RMS_K Lambda'(T_c))^2 + (SIGMA_TINF_K Lambda')^2",
+           "#:               + (DIURNAL_K Lambda')^2 + (SIGMA_MODEL_K Lambda')^2",
+           "#:               + (DRIFT_W_PER_DAY days P/DRIFT_REF_W)^2",
+           "#:               + (SIGMA_C_FRAC C |dT/dt|)^2"]
+    for name in ("SIGMA_MODEL_K", "SIGMA_TINF_K", "DIURNAL_K", "TC_RMS_K",
+                 "TAU_BATH_S", "SIGMA_C_FRAC", "DRIFT_W_PER_DAY",
+                 "DRIFT_SPREAD_W_PER_DAY", "DRIFT_REF_W", "DRIFT_T0",
+                 "DELTA_P_FRAC"):
+        out.append("")
+        out.extend("#: " + line for line in _BAND_DOC[name])
+        value = b[name]
+        if name == "DRIFT_T0":
+            out.append(f"DRIFT_T0 = {value!r}")
+            out.append(f"DRIFT_T0_UNIX = {b['DRIFT_T0_UNIX']:.0f}")
+        elif isinstance(value, tuple):
+            out.append(f"{name} = {tuple(float(f'{x:.6g}') for x in value)!r}")
+        else:
+            out.append(f"{name} = {value:.6g}")
+        if name == "SIGMA_MODEL_K":
+            out.append(f"#: worst {1e3 * b['SIGMA_MODEL_MAX_K']:.0f} mK over "
+                       f"{b['SIGMA_MODEL_N']} anchors")
+        if name == "SIGMA_C_FRAC":
+            out.append(f"#: over {b['SIGMA_C_N']} measured relaxations")
+    return out
+
+
 def write(r, g, path: str) -> None:
     stamp = _dt.date.today().isoformat()
     lines = [
@@ -254,6 +373,20 @@ def write(r, g, path: str) -> None:
         f"V_FS = {F.V_FS}",
         f"GAIN = {F.GAIN}",
         "",
+        "#: WHICH FIT THIS IS.  fit_ode's cache key: the inputs, the knot counts,",
+        "#: the priors and every anchor's date, hashed.  A schedule row or a",
+        "#: pasted number that carries a different key was computed against a",
+        "#: different cryostat -- PID_PLAN.md trap 'pastes rot'.",
+        f"FIT_KEY = {r['key']!r}",
+        "",
+        "#: The delivered-power gauge applied to `q` above, and the window and day",
+        "#: it was measured on.  ONE number, and the one a wire reseat changes.",
+        f"GAUGE_FRAC = {g['gauge']:.6g}",
+        f"GAUGE_WINDOW = {g['gauge_window']!r}",
+        f"GAUGE_N = {g['gauge_n']}",
+        "",
+        *_band_lines(g["band"]),
+        "",
         "#: Outside this the table clamps rather than extrapolating.",
         f"T_MIN_K = {g['T'][0]:.6g}",
         f"T_MAX_K = {g['T'][-1]:.6g}",
@@ -288,6 +421,7 @@ def main() -> int:
     print(f"       holding 118 K takes {1e3 * float(np.interp(118.0, g['T'], g['q'])):.1f} mW "
           f"commanded, {1e3 * float(np.interp(118.0, g['T'], g['q'])) * g['gauge']:+.1f} mW "
           f"of which is the gauge")
+    band.report(r, g)
     if args.verify:
         verify(r, g)
     if args.dry_run:

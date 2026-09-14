@@ -81,3 +81,72 @@ def test_the_caveat_is_inside_the_docstring_where_it_will_be_read():
     text = TABLE.read_text(encoding="utf-8")
     assert text.index(first) < text.index("TABLE = ("), (
         "the caveat is outside the module docstring")
+
+
+# -- the band --------------------------------------------------------------
+#
+# PID phase 1 section 1.2: the table carries its own error band, so that
+# control/ and monitor.py read ONE source and cannot disagree about what
+# typical means.  A bare float in a generated file is a number nobody can
+# check, so each is asserted to be PRESENT and in a range that is physically
+# meaningful rather than merely non-empty -- the failure this guards against is
+# a refit exporting a plausible-looking band with a term collapsed to zero,
+# which reads as "the cryostat is very well behaved" and is how a monitor comes
+# to have no opinion about anything.
+
+import datetime as _dt  # noqa: E402
+
+from ltspm3.model import _fitted_table as T  # noqa: E402
+from ltspm3.model import fitted_response as M  # noqa: E402
+
+#: ``(name, low, high, unit)``.  The bounds are wide -- they are not a second
+#: opinion about the measurement, they are the range outside which the number
+#: cannot be what its name says.
+BAND = (
+    ("SIGMA_MODEL_K", 0.01, 0.5, "K"),
+    ("SIGMA_TINF_K", 1e-3, 0.1, "K"),
+    ("DIURNAL_K", 1e-3, 0.1, "K"),
+    ("TC_RMS_K", 1e-3, 0.2, "K"),
+    ("TAU_BATH_S", 30.0, 1000.0, "s"),
+    ("SIGMA_C_FRAC", 2e-3, 0.15, "-"),
+    ("DRIFT_W_PER_DAY", 0.0, 2e-3, "W/day"),
+    #: The heater is rated 1.68 W, so a reference power above it is a typo.
+    ("DRIFT_REF_W", 0.1, 1.68, "W"),
+    ("DELTA_P_FRAC", 0.0, 0.05, "-"),
+)
+
+
+@pytest.mark.parametrize("name,low,high,unit", BAND)
+def test_every_band_constant_is_present_and_in_range(name, low, high, unit):
+    value = getattr(M, name)
+    assert isinstance(value, float), f"{name} is {type(value).__name__}"
+    assert low <= value <= high, f"{name} = {value} {unit}, outside {low}-{high}"
+
+
+def test_the_drift_spread_brackets_the_drift():
+    """Three independent output bands, and the median has to be between them."""
+    lo, hi = T.DRIFT_SPREAD_W_PER_DAY
+    assert lo < M.DRIFT_W_PER_DAY < hi
+
+
+def test_the_gauge_epoch_and_its_date_are_the_same_moment():
+    """Two spellings of one instant, and a consumer may read either."""
+    stamp = _dt.datetime.utcfromtimestamp(M.DRIFT_T0_UNIX).strftime("%Y-%m-%d")
+    assert stamp == M.DRIFT_T0
+
+
+def test_the_table_says_which_fit_it_is():
+    """PID_PLAN.md's 'pastes rot' trap: a schedule row carries this key."""
+    key = T.FIT_KEY
+    assert len(key) == 32 and all(c in "0123456789abcdef" for c in key), key
+
+
+def test_the_gauge_is_a_calibration_and_not_a_refit():
+    """A delivered-power gauge of more than a few percent is not a gauge.
+
+    REFIT_PLAN.md section 7.2 measures the events at a few tenths of a percent
+    each; if this ever comes back at 10 % it is the fit's level that moved, and
+    dividing the curve by it would be hiding a refit inside a calibration.
+    """
+    assert abs(T.GAUGE_FRAC) < 0.05
+    assert T.GAUGE_N >= 10

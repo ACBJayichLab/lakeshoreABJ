@@ -20,12 +20,20 @@ one thing that crosses the whole range -- rehearse a 30-rung ladder against the
 old response and two thirds of the rungs come back cut off mid-relaxation, none
 of it telling you anything about the cryostat.
 
-**And this one has since been contradicted in its turn.**  The programmed ladder
-of 2026-09-05 measured the steady state low by up to 4.5 K across 40-98 K, and
-the refit has not been run.  Being the correction to ``sim_response`` is not the
-same as being right; see the header of :mod:`ltspm3.model._fitted_table` for what is
-known wrong and ``HANDOFF.md`` for the refit.  tau is unaffected -- it came back
-within 3% from 77 K to 114 K.
+**That contradiction has since been paid.**  The programmed ladder of
+2026-09-05 measured this table's predecessor low by up to 4.5 K across 40-98 K;
+the refit of 2026-09-13 reconciled the two and the shipped table is 4-5 K warmer
+at a given output than every number written before that date.  What remains true
+is narrower and does not expire: **the LEVEL is a calibration with a shelf
+life** -- handling the heater wiring moves it by up to 0.8 %, which is 3 K at
+118 K -- while the SHAPE does not.  See the header of
+:mod:`ltspm3.model._fitted_table` for the gauge, the window and the day it was
+measured.
+
+What the table also carries now is its own error band -- ``SIGMA_MODEL_K`` and
+the rest -- and the two functions that use it, :func:`missing_power_w` and
+:func:`sigma_q_w`.  Those are what the monitor and the supervisor judge the
+cryostat by; see PID_PLAN.md section 3 and ``analysis/band.py``.
 
 What this integrates
 --------------------
@@ -68,9 +76,34 @@ import random
 from bisect import bisect_right
 from dataclasses import dataclass
 
-from ._fitted_table import GAIN, R_OHM, T_MAX_K, T_MIN_K, TABLE, V_FS
+from ._fitted_table import (
+    DELTA_P_FRAC,
+    DIURNAL_K,
+    DRIFT_REF_W,
+    DRIFT_T0,
+    DRIFT_T0_UNIX,
+    DRIFT_W_PER_DAY,
+    GAIN,
+    R_OHM,
+    SIGMA_C_FRAC,
+    SIGMA_MODEL_K,
+    SIGMA_TINF_K,
+    T_MAX_K,
+    T_MIN_K,
+    TABLE,
+    TAU_BATH_S,
+    TC_RMS_K,
+    V_FS,
+)
 
-__all__ = ["FittedParams", "FittedResponse", "power_w", "percent_for_power"]
+__all__ = [
+    "FittedParams", "FittedResponse", "power_w", "percent_for_power",
+    "conductance_w", "missing_power_w", "sigma_q_w", "sigma_q_terms",
+    "bias_q_w", "days_since_gauge",
+    "DELTA_P_FRAC", "DIURNAL_K", "DRIFT_REF_W", "DRIFT_T0", "DRIFT_T0_UNIX",
+    "DRIFT_W_PER_DAY", "SIGMA_C_FRAC", "SIGMA_MODEL_K", "SIGMA_TINF_K",
+    "TAU_BATH_S", "TC_RMS_K",
+]
 
 
 def power_w(pct: float) -> float:
@@ -182,6 +215,180 @@ def steady_temperature_k(watts: float) -> float:
     if watts <= 0.0:
         return _T[0]
     return math.exp(_interp(math.log(watts), _LOG_Q, _LOG_T))
+
+
+# -- the residual, and its band -------------------------------------------
+#
+# PID_PLAN.md section 3.  The monitor and the supervisor judge the cryostat by
+# ONE number and they call THESE TWO FUNCTIONS to get it, so that they cannot
+# disagree about what typical means -- only about what to do about it.
+#
+# In watts at the sample node, because every measured disturbance on this
+# cryostat is a power -- the campaign drift is 0.281 mW/day and the 2026-09-10
+# fault was -4.9 mW -- while the gain runs 0.35 to 13.3 K/% across the band.  A
+# kelvin threshold is two different thresholds at the two ends of this
+# cryostat, and it is valid only at a hold; this one is valid during a sweep,
+# which is where the loop spends the interesting part of its life.
+
+
+def conductance_w(sample_k: float, sink_k: float | None = None) -> float:
+    """``Lambda(T_s) - Lambda(T_c)``: the power the link carries, in W.
+
+    With ``sink_k`` omitted this is the table's own ``q`` -- the sample sinking
+    to the coldplate where the settled dwells put it, which is what
+    :func:`steady_power_w` answers.  Pass the MEASURED coldplate and the
+    difference is corrected for, because the coldplate does not always sit on
+    its locus: it lags by ``TAU_BATH_S`` during a transient and it rises when
+    the compressor is unwell, and both are cases the monitor exists to tell
+    apart.
+
+    The correction is linear in ``Lambda'`` at the midpoint, and it is small in
+    kelvin and not small in watts: the coldplate moves 2.3 K across a range the
+    sample moves 190 K over, but ``Lambda'`` at 6.6 K is NINE TIMES ``Lambda'``
+    at 118 K, so 100 mK of sink is worth 1.5 mW where 100 mK of sample is worth
+    0.17 mW.  That asymmetry is why the sink term is the largest one in a
+    settled band at the warm end.
+    """
+    q = steady_power_w(sample_k)
+    if sink_k is None:
+        return q
+    locus = coldplate_k(sample_k)
+    if sink_k == locus:
+        return q
+    return q + lambda_slope_w_per_k(0.5 * (locus + sink_k)) * (locus - sink_k)
+
+
+def missing_power_w(sample_k: float, dt_dt_k_per_s: float,
+                    sink_k: float, pct: float) -> float:
+    """``dQ``: the watts the heater is not delivering.  The residual.
+
+    ::
+
+        dQ = C(T_s) dT_s/dt + [Lambda(T_s) - Lambda(T_c)] - P(u)      [W]
+
+    **Sign: NEGATIVE means power is missing**, which is the direction the name
+    is about and the direction of every fault measured on this cryostat.  The
+    2026-09-10 event reads **-4.9 mW**: a few tenths of an ohm appeared in
+    series with the heater, less heat arrived than ``P(u)`` claimed, and the
+    sample cooled.  Positive is the opposite and rarer -- heat arriving that
+    the model does not account for.
+
+    Zero at every settled point the model was fitted to, by construction, and
+    that is the whole trick: at a hold ``dT/dt`` is zero and this reduces to
+    "does the heater power match the steady-state curve", while during a sweep
+    the heat capacity term carries the difference.  **A kelvin check cannot do
+    the second half.**
+
+    **There is no D(t) term and its absence is a measurement.**  PID_PLAN.md
+    section 3 wrote the residual with a fitted campaign drift in it.
+    REFIT_PLAN.md section 7.3 then took the drift back out of the shipped fit:
+    inside one undisturbed epoch there is no drift to find, and what looks like
+    a rate across the campaign is a staircase of somebody handling the heater
+    wiring.  So nothing here predicts the drift -- and because nothing predicts
+    it, :func:`sigma_q_w` carries ALL of it rather than a quarter of it.
+    """
+    return (heat_capacity_j_per_k(sample_k) * dt_dt_k_per_s
+            + conductance_w(sample_k, sink_k)
+            - power_w(pct))
+
+
+def days_since_gauge(t: float) -> float:
+    """Days from the day the level was gauged to unix time ``t``.  Never below 0.
+
+    Clamped at zero because a residual computed against an archive window
+    recorded BEFORE the gauge is not entitled to a narrower band than one
+    recorded after it -- the level was no better known then, it was differently
+    known, and the sign of the difference is exactly what section 7.3 says
+    cannot be predicted.
+    """
+    return max(0.0, (t - DRIFT_T0_UNIX) / 86400.0)
+
+
+def sigma_q_terms(sample_k: float, pct: float, t: float,
+                  dt_dt_k_per_s: float = 0.0) -> dict:
+    """Every term of the band separately, in W.  One sigma each.
+
+    The monitor reports which term dominates when it warns, because "3.2 mW out
+    of band" is not a sentence anybody can act on and "3.2 mW, and the band is
+    nine days of undisturbed drift" is.
+    """
+    slope = lambda_slope_w_per_k(sample_k)
+    sink = lambda_slope_w_per_k(coldplate_k(sample_k))
+    watts = power_w(pct)
+    return {
+        # The sink, and it is the biggest one at a settled warm hold.
+        "sink": TC_RMS_K * sink,
+        # What a settled temperature is known to, and the building's day.
+        "thermometry": SIGMA_TINF_K * slope,
+        "diurnal": DIURNAL_K * slope,
+        # Where the curve sits, inside one epoch: section 1's own scoreboard.
+        "model": SIGMA_MODEL_K * slope,
+        # A fraction of the DELIVERED power per day, so it vanishes with the
+        # heater -- the cold end refuses a constant parasitic watt three ways.
+        "drift": (DRIFT_W_PER_DAY * watts / DRIFT_REF_W) * days_since_gauge(t),
+        # Zero at a hold; ~70 mW at 5 K/min and 118 K, of which this is 3 %.
+        # Without it every sweep warns, which is PID_PLAN.md section 3's point.
+        "dynamic": SIGMA_C_FRAC * heat_capacity_j_per_k(sample_k)
+        * abs(dt_dt_k_per_s),
+    }
+
+
+def sigma_q_w(sample_k: float, pct: float, t: float,
+              dt_dt_k_per_s: float = 0.0) -> float:
+    """One sigma on :func:`missing_power_w`, in W.  Quadrature of the terms.
+
+    Settled, on the day it was gauged, 3 sigma of this is **1.4 mW at 118 K**
+    and between 0.41 and 0.87 K across 10-180 K at the local gain -- so the
+    band is about a kelvin everywhere, which is where Jeff's "warn at a kelvin"
+    lands when it is arrived at from measured terms instead of chosen.  Ten
+    days later the same band is 8.8 mW, because the drift is the term that
+    grows and nothing subtracts it.
+
+    **`t` is required and it is unix seconds.**  A band that silently defaults
+    to day zero is a band that gets narrower the longer nobody re-gauges, which
+    is backwards.
+
+    What is NOT in here is :func:`bias_q_w`.  Read its docstring before adding
+    it: the two are different quantities and quadrature is the wrong operation
+    on them.
+    """
+    terms = sigma_q_terms(sample_k, pct, t, dt_dt_k_per_s)
+    return math.sqrt(sum(v * v for v in terms.values()))
+
+
+def bias_q_w(pct: float) -> float:
+    """The CALIBRATION offset on ``dQ``, in W.  Deliberately not in the band.
+
+    ``DELTA_P_FRAC`` of the delivered power: how far the whole curve's level
+    may sit from the truth because the heater circuit delivers a little more or
+    less than ``P(u)`` says.  4.7 mW at 118 K, which is 2.8 K.
+
+    **It is a constant, not a fluctuation.**  It changes when somebody handles
+    the heater wiring -- three such events are measured in REFIT_PLAN.md
+    section 7.2, all of them a few tenths of an ohm in series with a 75.5 ohm
+    heater -- and between those events it does not change at all.  Add it to
+    :func:`sigma_q_w` in quadrature and 3 sigma at 118 K becomes 14 mW, which
+    is larger than the fault threshold and three times the 2026-09-10 event
+    that phase 2's replay requires the monitor to catch.  A band carrying a
+    systematic that cannot move inside thirty minutes cannot see a fault that
+    happens inside thirty minutes.
+
+    So it is exported under its own name, for the three consumers that actually
+    feel it:
+
+    * the monitor's ABSOLUTE residual -- whose answer is a trailing baseline,
+      not a wider alarm;
+    * the velocity feedforward, which is open loop by definition;
+    * the fault ramp-down through the inverse curve, which is open loop on
+      purpose (safety rule 3: the fault may be the sensor).  0.7 % of full
+      power is a few kelvin of terminal error on an emergency descent to base,
+      and an emergency descent to base does not care.
+
+    **The closed loop never sees it.**  A PI controller's integral action
+    absorbs a constant power offset exactly, which is why measuring the heater
+    circuit four-wire is not on the critical path to a working software PID.
+    """
+    return DELTA_P_FRAC * power_w(pct)
 
 
 class FittedResponse:
