@@ -238,6 +238,22 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
   config.py          The `control:` section; registers itself on import.
   app.py             build() -- the only module that knows both halves.
   __main__.py        Swaps one BUILDER; everything else is shared with lschart.
+  monitor/           THE JUDGE, and a SEPARATE PROCESS -- no port, no commands,
+                     ever.  Runs armed or not, which is most of this cryostat's
+                     life so far.  `judge.py` is where the reasoning is; read it
+                     first.  It alarms on the CHANGE in the residual against a
+                     slow baseline, not on its level, because the level carries
+                     the calibration and the unmodelled drift -- and Jeff
+                     recalibrates once per cooldown (2026-09-14), over which the
+                     full band would reach 31 K.  **The baseline is a FRACTION
+                     OF DELIVERED POWER**, which is what a series resistance in
+                     a voltage-driven heater is; in watts or in kelvin the same
+                     1% calibration error is a different number at 40 K and at
+                     140 K and the baseline chases the sweep instead.  It
+                     FREEZES whenever the verdict is not typical, or it learns
+                     the fault it is judging.  source.py reads a live recorder
+                     CSV or the archive; report.py writes plant.json and a daily
+                     plant_*.csv.  -> plans/pid-2-monitor.md
   control/           supervisor (the envelope -- read first), health, coherence,
                      pid, tuning, feedforward, ramp, filters, dither.
                      `panic_hold()`/`panic_off()`/`arm()`/`acknowledge()` are

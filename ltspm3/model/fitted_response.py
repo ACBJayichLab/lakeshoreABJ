@@ -98,7 +98,8 @@ from ._fitted_table import (
 
 __all__ = [
     "FittedParams", "FittedResponse", "power_w", "percent_for_power",
-    "conductance_w", "missing_power_w", "sigma_q_w", "sigma_q_terms",
+    "conductance_w", "missing_power_w", "sigma_q_w", "sigma_q_fast_w",
+    "sigma_q_terms", "FAST_TERMS",
     "bias_q_w", "days_since_gauge",
     "DELTA_P_FRAC", "DIURNAL_K", "DRIFT_REF_W", "DRIFT_T0", "DRIFT_T0_UNIX",
     "DRIFT_W_PER_DAY", "SIGMA_C_FRAC", "SIGMA_MODEL_K", "SIGMA_TINF_K",
@@ -331,6 +332,43 @@ def sigma_q_terms(sample_k: float, pct: float, t: float,
         "dynamic": SIGMA_C_FRAC * heat_capacity_j_per_k(sample_k)
         * abs(dt_dt_k_per_s),
     }
+
+
+#: The terms that can move inside an alarm's own timescale.  Everything else in
+#: the band is a slow term, and a judge that works on the CHANGE in the
+#: residual rather than on its level has already removed those.
+#:
+#: **This split is what lets one calibration last a whole cooldown** (Jeff,
+#: 2026-09-14: recalibrate at most once per cooldown).  ``drift`` grows at
+#: 0.29 mW/day at 118 K with nothing subtracting it, so two months after a
+#: gauge the full band is 52 mW -- 31 K, which is wider than any fault worth
+#: naming.  Referenced to a trailing baseline instead, the drift is absorbed
+#: along with the calibration bias and what is left does not grow at all.
+#:
+#: The same instruction says why that is enough: **real faults are
+#: unmistakable.**  The 2026-09-10 event moved the sample 3 K.  Nothing here is
+#: trying to resolve a milliwatt.
+FAST_TERMS = ("sink", "thermometry", "model", "dynamic")
+
+
+def sigma_q_fast_w(sample_k: float, pct: float,
+                   dt_dt_k_per_s: float = 0.0) -> float:
+    """One sigma on a CHANGE in :func:`missing_power_w`, in W.
+
+    The band for a judge that watches the residual move rather than the
+    residual's level: :data:`FAST_TERMS` only, so no drift and no calibration.
+    **It takes no ``t``, and that is the point** -- it is the same number on the
+    day of a gauge and two months later, which is what makes one calibration
+    per cooldown workable.
+
+    3 sigma of this is 1.4 mW at 118 K settled and 6.7 mW at 5 K/min, against a
+    2026-09-10 fault of -4.9 mW and a fault threshold near 8 mW.  The consumer
+    is responsible for the baseline: it must be slow against a fault and fast
+    against the drift (hours, not minutes and not days), and it must FREEZE
+    while the verdict is not typical or it learns the fault it is judging.
+    """
+    terms = sigma_q_terms(sample_k, pct, DRIFT_T0_UNIX, dt_dt_k_per_s)
+    return math.sqrt(sum(terms[k] ** 2 for k in FAST_TERMS))
 
 
 def sigma_q_w(sample_k: float, pct: float, t: float,

@@ -1,4 +1,4 @@
-"""The ``control:`` config section, registered onto :mod:`lschart.config`.
+"""The ``control:`` and ``monitor:`` config sections, registered onto lschart.
 
 Importing this module is what makes ``control:`` a legal key in the YAML file.
 The generic recorder deliberately does not know the section exists -- see
@@ -25,6 +25,7 @@ from .control.pid import PIDConfig
 from .control.ramp import RampConfig
 from .control.supervisor import SupervisorConfig
 from .control.tuning import TuningConfig
+from .monitor.judge import MonitorConfig
 
 
 @dataclass
@@ -87,4 +88,29 @@ def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) ->
         )
 
 
+def validate_monitor(cfg, app: AppConfig, problems: list[str]) -> None:
+    """Limits that contradict each other -- what a type check cannot catch.
+
+    The monitor commands nothing, so nothing here is a safety limit in the
+    sense ``control:``'s are.  What it can do is be quietly useless, and these
+    are the three ways that has to be caught at load rather than discovered
+    from a week of green lights.
+    """
+    if cfg.baseline_tau_s <= cfg.warn_after_s:
+        problems.append(
+            f"monitor.baseline_tau_s {cfg.baseline_tau_s} s must be well above "
+            f"warn_after_s {cfg.warn_after_s} s -- a baseline that is not slow "
+            "against a fault absorbs the fault instead of reporting it")
+    if cfg.noise_window_s >= cfg.slope_window_s:
+        problems.append(
+            f"monitor.noise_window_s {cfg.noise_window_s} s should be shorter "
+            f"than slope_window_s {cfg.slope_window_s} s -- the noise is the "
+            "scatter about a LINE and a long window has the relaxation's "
+            "curvature in it")
+    if cfg.warn_sigma <= 0 or cfg.fault_mw <= 0:
+        problems.append(
+            "monitor.warn_sigma and monitor.fault_mw must be positive")
+
+
 register_section("control", ControlConfig, validator=validate_control)
+register_section("monitor", MonitorConfig, validator=validate_monitor)
