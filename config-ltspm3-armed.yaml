@@ -1,0 +1,262 @@
+# LTSPM3 -- the SOFTWARE PID.  `config-ltspm3-heater.yaml` plus a `control:`
+# section, which is the only difference and is the whole difference.
+#
+#   python -m lschart -c config-ltspm3-armed.yaml check    REFUSES -- see below
+#   python -m ltspm3  -c config-ltspm3-armed.yaml check    validate, touch nothing
+#   python -m ltspm3  -c config-ltspm3-armed.yaml run      record; loop NOT armed
+#   python -m ltspm3  -c config-ltspm3-armed.yaml run --arm    close the loop
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS FILE IS FOR TODAY
+# ---------------------------------------------------------------------------
+#
+# Phase 3's bench loads its LIMITS from here rather than inventing them in a
+# test, so that the numbers the harness proves are the numbers the cryostat
+# would run.  Nothing has been armed with it.  The loop has never closed on
+# this cryostat, and `run --arm` is a deliberate second act on top of choosing
+# this file -- choosing it is not arming.
+#
+# The gain and time-constant SCHEDULE is not here.  It lives in
+# `ltspm3/control/tuning.py`, pasted from
+# `python analysis/pid_tuning.py --rows` with the fit's cache key on every row,
+# because a table that must match the shipped `_fitted_table.FIT_KEY` is not
+# something to retype into a YAML file.  PID_PLAN.md's "pastes rot" trap.
+#
+# ---------------------------------------------------------------------------
+# WHY `lschart` REFUSES THIS FILE
+# ---------------------------------------------------------------------------
+#
+# `control:` is a section `ltspm3` registers on import.  Under plain `lschart`
+# it is an unknown key and the load fails, saying so.  That is the interlock:
+# a config file cannot quietly ask a recorder-only install to close a heater
+# loop.  Invariant 1, enforced at load time.
+#
+# ---------------------------------------------------------------------------
+# PHASE 3 IS IN PROGRESS AND THIS FILE MOVES WITH IT
+# ---------------------------------------------------------------------------
+#
+# Every field below is a field TODAY'S `SupervisorConfig` has.  Eight of the
+# rate fields become two, four premise fields become the watt residual, and the
+# authority band stops being a pair of constants -- one step at a time, each
+# step editing this file in the same commit as the code.  Until step 4 lands,
+# `operating_point_pct` is a FIXED CENTRE and the band does not follow the
+# setpoint: at +/-1 % it spans about 10 K at 63 % and no sweep below 60 K is
+# possible at all.  See plans/pid-3-loop.md section 3.0.A.
+
+log_level: INFO
+
+# ---------------------------------------------------------------- instruments
+
+instruments:
+  # The 218: three thermometers, and the sample heater on analog output 1.
+  - name: ls218
+    model: "218"
+    enabled: true
+    driver: visa
+    transport:
+      resource: GPIB0::15::INSTR
+      read_only: false
+      timeout_ms: 3000
+      read_termination: "\n"      # MEASURED: the 218 ends a reply with a bare LF
+      inter_command_delay: 0.05
+      reconnect: true
+      retry_min_s: 1.0
+      retry_max_s: 30.0
+
+    channels:
+      1: Sample
+      2: Coldplate
+      5: Magnet
+
+    # THE DIFFERENCE FROM THE MANUAL FILE.  The software loop steers by input
+    # 1, and this is what tells it so.  A `control:` section with
+    # `control_input: 0` is a loop with no sensor.
+    control_input: 1
+
+    analog_output: 1
+    analog_decimals: 3
+
+    allow_writes: true
+    max_output_pct: 70.0          # the ceiling.  ~13 K/% up here; see below
+    verify_writes: false          # the supervisor confirms its own writes
+                                  # (`verify_readback`); paying twice would put
+                                  # a second transaction in every cycle
+    readback_tol_pct: 0.02
+
+    read_status: true
+    status_every_n_cycles: 15
+
+  # The 336: loop 2 holds THE CHONKE at 290 K, heater 2 railed.  Not ours.
+  - name: ls336
+    model: "336"
+    enabled: true
+    driver: visa
+    transport:
+      resource: GPIB0::12::INSTR
+      read_only: false
+      timeout_ms: 3000
+      inter_command_delay: 0.05
+      reconnect: true
+      retry_min_s: 1.0
+      retry_max_s: 30.0
+
+    channels: {}
+    read_setpoints: true
+    read_heaters: true
+    read_analog_outputs: false
+    read_status: true
+    status_every_n_cycles: 15
+    allow_writes: true
+
+# ---------------------------------------------------------------- acquisition
+
+acquisition:
+  # 2 s, and the loop's derived dead time is computed FROM this number:
+  # `median_window // 2 * cadence + cadence / 2` is 3.0 s at a median of 3.
+  # Changing it changes the delay floor under `tau_cl`.
+  interval_s: 2.0
+  log_every_n: 1
+  ringbuffer_size: 43200
+
+recorder:
+  enabled: true
+  directory: data
+  # A THIRD prefix.  A run in which software moved the heater is a different
+  # kind of record from one in which a person did, and six months from now the
+  # filename is the only thing that will still say which.
+  filename_prefix: ltspm3-armed
+  flush_every_sample: true
+
+runtime:
+  lock_path: data/ltspm3.lock     # ONE GPIB board, one holder
+  single_instance: true
+
+# ------------------------------------------------------------------------ ipc
+
+ipc:
+  enabled: true
+  directory: data
+  accept_commands: true
+  command_ttl_s: 30.0
+  allow_analog_output: true
+  allow_heater_range: true
+
+# -------------------------------------------------------------------- control
+#
+# `enabled: true` builds the loop.  It does NOT close it: that is `run --arm`,
+# and it is the act that applies power.
+
+control:
+  enabled: true
+
+  supervisor:
+    # STEP 4 REPLACES THESE TWO WITH A BAND THAT FOLLOWS THE SETPOINT.  Until
+    # then they are a fixed window and the bench re-centres them per scenario,
+    # which is precisely the thing a cryostat cannot do for itself mid-sweep.
+    operating_point_pct: 63.960   # fitted: 63.960% settles at 118.3 K
+    authority_pct: 1.0
+    hard_min_pct: 0.0
+    hard_max_pct: 70.0            # above this the fit is extrapolation
+
+    max_step_pct: 0.02
+    max_rate_pct_per_min: 0.20
+
+    max_error_k: 1.0
+    anomaly_demand_pct: 0.50
+    anomaly_hold_s: 180.0
+    response_lag_s: 519.0         # tau at 118 K from the FITTED table.  Step 6
+                                  # deletes this field with the kelvin
+                                  # allowance it exists for
+    max_ramp_error_k: 6.0
+    approach_rate_k_per_min: 0.25
+
+    max_feedforward_pct: 0.40
+    # 1.00 IS TOO SMALL AND STEP 4 DERIVES IT.  Sustaining 5 K/min needs
+    # rate*tau/K: 1.53 % at 60 K, 3.28 % at 118 K, 4.10 % at 180 K.
+    max_velocity_ff_pct: 1.00
+    model_trust_k: 15.0
+    model_check_slope_k_per_s: 0.002
+
+    rampdown_pct_per_min: 1.0
+    rampdown_knee_pct: 40.0
+    rampdown_below_knee_pct_per_min: 2.0
+    safe_output_pct: 0.0
+    require_ack_after_fault: true
+
+    dac_step_pct: 0.01
+    dither: true
+    verify_readback: true         # UNVERIFIED ON THE 218 OVER GPIB -- invariant
+                                  # 5, and it is checked before arming
+    readback_tol_pct: 0.015
+    comms_fault_after_s: 60.0
+    on_exit: hold                 # zeroing a live sample heater is its own hazard
+
+  pid:
+    kp: 0.02                      # scheduled from `tuning:` whenever
+    ti: 900.0                     # control.tuning.enabled -- these are the
+    td: 0.0                       # starting values only
+    setpoint: 118.3               # `run --arm` with no --setpoint holds the
+                                  # present temperature instead of this
+
+  feedforward:
+    # STEP 2 REPOINTS THIS AT `fitted_response`.  Today it is the CD10
+    # steady-state curve, which the 09-13 refit found 4-5 K cold at a given
+    # output -- 60.597 % read 70.0 K and reads 75.09.
+    enabled: true
+    t_bath_k: 4.0
+    ref_pct: 63.076
+    ref_rise_k: 95.6
+    thermal_exponent: 3.158
+
+  guard:
+    valid_min_k: 1.0
+    valid_max_k: 400.0
+    # Two-tier: genuine cooldowns reach 1.63 K/s corroborated on all three
+    # inputs, while the observed glitch runs 7.3 K/s on input 1 alone.
+    max_slew_k_per_s: 5.0
+    corroborate_slew_k_per_s: 0.5
+    curvature_ratio: 1.5
+    curvature_floor_k: 0.5
+    fault_after_s: 600.0          # the longest observed glitch healed in 280 s
+    recover_samples: 5
+    recover_samples_from_fault: 15
+
+  coherence:
+    sigma: 4.0
+    window_s: 30.0
+    tau_s: 30.0
+
+  ramp:
+    rate_k_per_min: 0.5           # STEP 5: one rate, 5.0
+    max_rate_k_per_min: 5.0
+    smooth_tau_s: 300.0           # 464 mK of overshoot without it, 25 with
+
+  tuning:
+    enabled: true
+    # STEP 3 REPLACES THESE TWO ABSOLUTE TIMES WITH RATIOS to tau(T):
+    # hold_speed 3, move_speed 0.5, floored at 4 x the derived delay.
+    hold_tau_cl_s: 1800.0
+    move_tau_cl_s: 300.0
+    move_error_k: 0.25
+    hold_error_k: 0.10
+    hold_settle_s: 120.0
+
+  filter:
+    # STEP 1: median 5 -> 3 and tau 60 -> 0.  Jeff asked for no low-pass and
+    # about one cycle of dead time; today this chain is 60 s of lag, which is
+    # slower than the cryostat itself below 60 K.
+    tau: 60.0
+    spike_sigma: 8.0
+    stale_after_s: 30.0
+
+# -------------------------------------------------------------------- monitor
+#
+# The judge runs as its OWN PROCESS beside the recorder and never commands
+# anything.  Its section is here so one file describes the whole cryostat.
+
+monitor:
+  enabled: true
+  warn_mw: 5.0                    # Jeff, 2026-09-14, as a FLOOR under 3 sigma
+  fault_mw: 10.0                  # ...and a STEP inside fault_window_s
+  fault_window_s: 1800.0
+  warn_after_s: 600.0             # what puts the 09-10 event at 14 min
