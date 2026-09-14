@@ -1,13 +1,14 @@
 # Software PID — the plan
 
-**Status: PHASE 0 DONE. PHASE 1 UNDER WAY — §1.1's two "settle first" items
-are done, and REFIT_PLAN.md PHASE B IS COMPLETE.** `ltspm3/model/` exists and
-**`_fitted_table.py` has been regenerated** (2026-09-13): §1's three rows are
-green, `SUPERSEDED_NOTE` is cleared, and the table is 4-5 K warmer at a given
-output than the one every earlier number in this plan was computed against.
-**Its level now carries a dated delivered-power gauge** — work on the heater
-wiring expires it, the shape does not; REFIT_PLAN.md §7.3. Written 2026-09-11 from Jeff's requirements (§1); revised
-the same day through four rounds of questions. Update this line as phases land.
+**Status: PHASE 0 DONE. PHASE 1 DONE 2026-09-14 — the model is finished and it
+carries its own error band.** REFIT_PLAN.md Phase B closed on 09-13 (§1's three
+rows green, the table 4-5 K warmer at a given output than every number written
+before it, the level on a dated delivered-power gauge). §1.2 closed on 09-14:
+the band constants are in `_fitted_table.py`, `missing_power_w` and `sigma_q_w`
+are in `fitted_response.py`, and the two of them are what §3 below is now
+written against. **PHASE 2 — the monitor — is the next work.** Written
+2026-09-11 from Jeff's requirements (§1); revised the same day through four
+rounds of questions. Update this line as phases land.
 
 **Goal.** A software PID that holds and sweeps the LTSPM3 sample from 4 to
 300 K, fails gracefully, and judges from the thermal characterisation whether
@@ -19,7 +20,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 | phase | document | one-line goal | exit gate |
 |---|---|---|---|
 | **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
-| **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | REFIT §1 green; leave-one-epoch-out < 0.5 K; table to 300 K; `missing_power_w` < 1 mW at every anchor |
+| **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | **DONE 2026-09-14** — REFIT §1 green; in-epoch prediction 0.135 K rms; `missing_power_w` 0.58 mW worst in-epoch over 40 K; `sigma_q_w` exported. The 300 K half is a PIPELINE, run as a dry run; the ladder itself is stage 6 |
 | **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | replay table all green; < 1 warning/week on a settled hold; 72 h live |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts | bench green at 6 temperatures; 8 rate fields → 2; hold jitter ≤ 0.02 %/min |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | 7 days unattended, hold criterion met, every warning explained; ladder graded to 300 K |
@@ -93,16 +94,51 @@ power — drift +0.281 mW/day, the 09-10 fault −4.9 mW — while the gain runs
 0.35 to 13.3 K/% across the band. The residual
 
 ```
-δQ = C(T_s)·dT_s/dt + [Λ(T_s) − Λ(T_c)] − P(u) − D(t)      [W]
+δQ = C(T_s)·dT_s/dt + [Λ(T_s) − Λ(T_c)] − P(u)            [W]
 ```
 
 is valid at a hold **and during a sweep**, which a kelvin check is not.
+**Negative means power is missing**, which is the direction of every fault
+measured here. `ltspm3/model/fitted_response.missing_power_w`, DONE 2026-09-14.
 
-**Band** `σ_Q` (exported with the table): `δP` = 0.7 % of P(u) · drift ±25 %
-of 0.281 mW/day × days since fit · 14.2 mK × Λ′ · diurnal 16 mK × Λ′ ·
-coldplate 27.6 mK × Λ′(T_c) · **`σ_C × |dT_s/dt|`** — at 5 K/min and 118 K
-the dynamic term is ~70 mW, so a 5 % error in C is 3.5 mW and the band must
-widen during a sweep or every sweep warns.
+**There is no `D(t)` term, and its absence is a measurement.** This line
+carried a fitted campaign drift until §7.3 of [REFIT_PLAN.md](REFIT_PLAN.md)
+took the drift back out of the shipped fit: inside one undisturbed epoch there
+is no drift to find, and what reads as a rate across the campaign is a
+staircase of somebody handling the heater wiring. Nothing predicts it — so the
+band carries **all** of it rather than a quarter of it.
+
+**Band** `σ_Q`, exported with the table and measured by `analysis/band.py`
+(`sigma_q_w`, DONE 2026-09-14). Six terms in quadrature, every one measured:
+
+| term | | at 118 K, 1σ |
+|---|---|---|
+| `TC_RMS_K × Λ′(T_c)` | the coldplate is not a bath — `bath.py`'s residual | **0.42 mW** |
+| `SIGMA_MODEL_K × Λ′` | where the curve sits, in-epoch: §1's own row 2 | 0.22 mW |
+| `SIGMA_TINF_K × Λ′` · `DIURNAL_K × Λ′` | the median anchor bar, the building's day | 0.03 mW |
+| `DRIFT_W_PER_DAY × days × P/DRIFT_REF_W` | the campaign, at its **full** rate | 0.29 mW/day |
+| `SIGMA_C_FRAC × C × |dT_s/dt|` | 3.0 %, from fitted τ against measured τ | 0 at a hold, 2.2 mW at 5 K/min |
+
+3σ settled is **1.4 mW at 118 K**, 8.8 mW ten days later, 6.7 mW sweeping at
+5 K/min — so the band widens during a sweep, which §3 required, and it grows
+with the days, which the "typical drifts" trap required. In kelvin at the local
+gain it is **0.4 to 0.9 K across 10–180 K**: the band is about a kelvin
+everywhere, which is where Jeff's "warn at a kelvin" lands when it is arrived
+at from measured terms rather than chosen.
+
+**The 0.7 % `δP` is NOT in the band. It is `bias_q_w`, on its own.** It is a
+constant over hours and days — it changes when somebody handles the heater
+wiring — and in the band it would make 3σ at 118 K **14 mW**, three times the
+09-10 event phase 2 has to catch. The three consumers that feel it are the
+monitor's absolute residual (whose answer is a trailing baseline, not a wider
+alarm), the velocity feedforward and the open-loop ramp-down. **The closed loop
+never sees it**, because integral action absorbs a constant power offset
+exactly — which is why measuring the heater circuit four-wire is not on the
+critical path (Jeff, 2026-09-14: out of scope, size the margins instead).
+
+At day ~9 the band overtakes the 8 mW `fault_mw` seed. Phase 2's replay is what
+sets that number, and it is the argument for re-gauging on a cadence rather
+than for widening anything.
 
 **What the fit must get right, and how right.** Steady-state Λ(T) is what
 the residual needs: 0.3 K at 118 K is 0.5 mW, and the pre-refit table's

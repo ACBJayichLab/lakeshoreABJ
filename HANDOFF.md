@@ -1,252 +1,167 @@
-# Handoff — 2026-09-13 (the thermal refit is DONE; the table is regenerated)
+# Handoff — 2026-09-14 (PID phase 1 is DONE; the monitor is next)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
-refit's own state is [REFIT_PLAN.md](REFIT_PLAN.md) and the route to a working
-loop is [PID_PLAN.md](PID_PLAN.md). This goes stale.
+route to a working loop is [PID_PLAN.md](PID_PLAN.md) and the model it stands
+on is [REFIT_PLAN.md](REFIT_PLAN.md). This goes stale.
 
-Previous: [HANDOFF-2026-09-10.md](HANDOFF-2026-09-10.md). The earlier half of
-today — PID phase 0 closed, `send note` proved on the cryostat, the archive
-extended past the 09-10 fault — is in `git log 6ff126b..a2c8cd1` and in
-PID_PLAN.md; this file carries what came after it.
+Previous: [HANDOFF-2026-09-13.md](HANDOFF-2026-09-13.md), which closed the
+thermal refit. This file is what was built on top of it.
 
-> ## THE HEATER IS ON, AND THE 09-10 FAULT IS OVER — BUT RESEATED IS NOT REPAIRED
+> ## THE HEATER IS STILL ON AND NOTHING WAS COMMANDED
 >
 > The recorder is running `config-ltspm3-heater.yaml`. The 218's analog output
-> has been at **64.0100 %** since 2026-09-10 14:49 and the sample has been flat
-> at **118.3 K** since 09-11 00:00. Nothing will move it on its own — invariant
-> 6 — so move it deliberately or leave it.
+> has been at **64.0100 %** since 2026-09-10 14:49 and the sample flat at
+> **118.3 K** since 09-11 00:00. Nothing in this session touched the cryostat —
+> every number below comes from the archive.
 >
-> **It is a reseat, not a repair** (Jeff, 2026-09-12). The repair is changing
-> the op-amp driver to a robust, correct differential design; until then the
-> fault mode is present and `DELTA_P_FRAC = 0.007` stays a systematic on the
-> whole campaign. **Two independent signatures say the reseat left a deficit**:
-> at matched output the sample sits **0.30 K colder** than before the fault,
-> and it carries **twice the wander over 300–1200 s** (16.4 mK against 9.5 at
-> τ = 600 s) while the coldplate is unchanged at 0.24 mK.
->
-> **And the campaign drift now points at the same circuit** — see below. That
-> is a new reason to want it repaired, and the first one that is not about a
-> single afternoon.
+> **It is still a reseat, not a repair.** Jeff ruled on 2026-09-14 that a
+> four-probe measurement of the heater circuit is **out of scope**, and that the
+> margins should be sized so that it is a non-issue. That ruling is now
+> load-bearing in the design and §3 below is what it turned into.
 
 ## What this session did
 
-**REFIT_PLAN Phase B is complete and the thermal model is done.** It did not go
-the way step 8 expected: the step built a campaign drift term, measured it three
-ways, and then measured that it was the wrong shape and took it back out. What
-the cryostat actually needs is ONE calibration number, and two of its time
-constants were never measurements at all.
+**PID phase 1 is complete: the model carries its own error band, and the two
+functions the monitor and the supervisor judge by exist.** 967 passing, `ruff`
+clean, the table byte-identical — the curves did not move, only what travels
+beside them.
 
-The order it happened in, because each step turned on the one before:
-
-1. **Step 8 landed in full** — campaign ramp, trap T3 paid
-   (`ANCHOR_SIGMA_K` → `{prepython: 1.0, recorder: 1.0, postcal: 0.5}`),
-   `groups=`/`anchor_groups()` retired, `analysis/holdout.py` written.
-2. **Its gate failed at 3.45 K against 0.5 K — and cannot be passed**, because
-   it asks the fit to predict a wire being reseated.
-3. **The ramp came back out** (§7.3): inside one undisturbed epoch there is no
-   drift to find, and the ramp made the only honest prediction available worse.
-4. **The gate was reworded** to what the apparatus can answer — gauge on the
-   ladder, predict the holds — and it passes.
-5. **Two τ rules from Jeff** closed §1's last row.
-6. **Step 10 ran**: the table is regenerated and `SUPERSEDED_NOTE` is cleared.
-   Step 9 was dropped as moot.
-
-## PHASE B IS COMPLETE — 2026-09-13
-
-§1's three rows are green, `ltspm3/model/_fitted_table.py` is **regenerated**,
-`SUPERSEDED_NOTE` is **cleared**, 925 passing, `ruff` clean. The shipped table
-is **4-5 K warmer at a given output** than the one every earlier number was
-computed against — 60.597 % read 70.0 K and now reads 75.09 — which is the miss
-the 2026-09-05 ladder measured against it, finally paid.
-
-| row | target | result | |
-|---|---|---|---|
-| the three long settled holds | < 0.3 K | −0.25 / −0.08 / −0.01 K | **PASS** |
-| the 2026-09-05 ladder, 45 rungs | < 0.5 K rms | 0.139 K rms, 0.35 max | **PASS** |
-| every measured τ, 40–120 K | < 10 % | 6.7 % worst, 2.1 % median | **PASS** |
-
-The holds and the ladder are **predictions**: one gauge fitted on the ladder,
-the holds scored from it, disjoint anchors, days apart.
-
-**Your two rulings on the τ outliers became two rules in the grader**, not two
-exclusions: `steps.MAX_REACH = 20` (a window of twenty time constants has
-2e-9 of its transient left; past that a pole fits drift) and
-`MAX_AMPLITUDE_FRAC = 0.15` (an excursion wide enough to change τ across itself
-has no single pole to find). The manifest diff is 13 windows, all
-`tau → steady`, **no anchor lost** — a demoted dwell keeps its steady state.
-τ anchors 37 → 25. Both bars sit in gaps the archive already had: reach jumps
-16.7 → 32.5 with nothing between, and amplitude/T jumps 9.7 % → 19.4 %.
-
-**Trap T8 honoured**: the eight pinned points moved by up to 5 K and the 0.05 K
-tolerance stands. **Step 9 was dropped as moot** — it tests the aux channels
-against a fitted drift that §7.3 removed.
+| | |
+|---|---|
+| `analysis/band.py` | NEW. Measures the six terms of `σ_Q` from the archive the curves were fitted to, and owns phase 1's gate |
+| `ltspm3/model/_fitted_table.py` | carries the band, `FIT_KEY` and the gauge as machine-readable constants, each under the comment that says what it is |
+| `ltspm3/model/fitted_response.py` | `missing_power_w`, `sigma_q_w`, `sigma_q_terms`, `bias_q_w`, `conductance_w` |
+| `analysis/pid_tuning.py --rows` | phase 3 §3.2's schedule, from the production fit, cache key on every row |
+| `analysis/plan_sweep.py` | rungs above 192.6 K now say `PREDICTED ONLY` |
+| `tests_ltspm3/test_residual.py` | NEW, 29 tests. Plus 13 in `test_fitted_table.py` |
 
 ## The four things worth a reviewer's attention
 
-**1. The drift is not a constant parasitic watt, and the cold end refuses it
-three ways.** Written `camp = s × days`, the way step 5, trap T2 and Jeff's
-reading all assume, the fit takes **0.041 mW/day** against the 0.281 the warm
-bands measure, and a tenfold looser prior does not move it. It is the cold end,
-not the prior: the sweep's zero-output tail has **0.577 mW** between sample and
-coldplate at 4.90 K and sits 7–9 days before the reference epoch, so the
-measured rate asks the model's sample to sit below its own heat sink (pinned at
-0.15 mW/day the integrator overflows); at 4.75 K, 527 K/W, that rate is
-**1.35 K of base temperature in 12 days** against a measured ~0.1 K that the
-coldplate's own rise already explains; and the drift was **never measured below
-27 K** — no output band under 52 % holds 8 anchors over 10 days.
+**1. The model's error is flat in KELVIN, and it took measuring it the other way
+round to find that out.** The band's model term was written as a fraction of the
+delivered power — the shape the campaign drift has, and the shape a heater-circuit
+error has. Measured, the same in-epoch residual is **0.07 % at 118 K and 17 % at
+5.4 K**, where 8 mW of heater holds the sample: a band built that way is blind at
+the cold end and hysterical at the warm one. Flat in kelvin is what it actually
+is — 0.107 K rms below 25 K, 0.183 K above 40 K — so it enters as
+`SIGMA_MODEL_K × Λ′`, the same shape as the thermometry terms beside it.
 
-So `CAMPAIGN_FORM = "power"`: a fixed **fraction of the delivered heat**, which
-is the same milliwatts per day where the drift was measured and zero with the
-heater off. **The bands cannot tell the two shapes apart; the cold end can.**
+The number is **0.135 K**, which is REFIT §1's own row 2 recomputed through the
+shipped grid rather than through the fit. That is deliberate: the band's model
+term and the gate the refit had to pass are now the same measurement, so the
+band cannot quietly claim the model is better than the scoreboard says.
 
-**The mechanism that implies is the heater circuit, not the cryostat.** A
-constant load is "we are losing cooling power". A fixed fraction of the
-delivered heat is the heater delivering less than the readback says — trap
-T10's failure mode, slowly instead of all at once, on the circuit that is
-reseated and not repaired. The fit cannot separate a degrading heater from a
-degrading link; it can separate either from a constant watt, and it does.
+**2. `DELTA_P_FRAC` came OUT of the band, and that is what Jeff's ruling means
+in practice.** The 0.7 % the heater circuit may not deliver is a **constant**.
+It changes when somebody handles the wiring — three such events are measured,
+all a few tenths of an ohm in series with a 75.5 Ω heater — and between them it
+does not change at all.
 
-**2. What is left after the ramp is a step — and it is Jeff reseating a wire,
-not the recalibration.** Trap T7 asked for the test; Jeff supplied the cause.
-The anchors then confirm the mechanism, because a reseated wire and a disturbed
-heat leak predict different shapes and the 09-05 ladder spans 7–64 % of output
-right after the event:
+| | 3σ at 118 K | |
+|---|---|---|
+| band with `δP` in it | **14.0 mW** | the 09-10 fault hides inside it |
+| band as shipped | **1.4 mW** | the fault is 3.5× out of band |
+| `bias_q_w`, on its own | 4.7 mW = 2.8 K | reported, not alarmed on |
 
-| the step at 2026-09-04, fitted on the leftover | par | χ²/n | rms mW |
-|---|---|---|---|
-| constant watts | 2 | 0.1128 | 2.573 |
-| **a fraction of delivered power** | 2 | **0.0345** | **1.776** |
+A band carrying a systematic that cannot move inside thirty minutes cannot see a
+fault that happens inside thirty minutes. So the bias is exported under its own
+name, for the three consumers that feel it: the monitor's **absolute** residual
+(whose answer is a trailing baseline, not a wider alarm), the velocity
+feedforward, and the open-loop ramp-down — 0.7 % of full power is a few kelvin
+of terminal error on an emergency descent to base, and an emergency descent to
+base does not care. **The closed loop never sees it**, because integral action
+absorbs a constant power offset exactly. That is the answer to "size the margins
+so it is a non-issue": α is a non-issue for the loop by construction, and making
+the alarm band swallow it would have been the one way to make it a real one.
 
-**A factor of 3.3 for the same parameter count**, and tighter than the
-undisturbed pre-reseat half on its own. The heater is voltage-driven, so a
-series contact resistance takes a fixed fraction of the power: `α = 1 − 2R_s/R_h`.
-Three events, one scale:
+**3. The band is about a kelvin everywhere, and nothing chose that.** Six
+measured terms — the coldplate's own residual through `Λ′(T_c)`, the median
+anchor bar, the diurnal amplitude, the in-epoch model error, the campaign drift,
+`σ_C·|dT/dt|` — and what they add up to at the local gain is:
 
-| event | mW at 64 % | % of delivered | implied ΔR_s |
-|---|---|---|---|
-| 2026-09-04 wire reseat | **+5.31** | +0.79 % | **−0.30 Ω** |
-| 2026-09-10 11:33 fault | −6.03 | −0.90 % | +0.34 Ω |
-| 2026-09-10 14:40 reseat | −0.75 | −0.11 % | +0.04 Ω |
+| T | 3σ day 0 | day 10 | at 5 K/min | in K, day 0 |
+|---|---|---|---|---|
+| 10 K | 9.66 mW | 9.74 | 9.66 | **0.41 K** |
+| 30 K | 3.99 | 7.05 | 4.03 | 0.44 |
+| 60 K | 1.54 | 7.56 | 3.23 | 0.68 |
+| 118 K | 1.44 | 8.78 | 6.70 | **0.87** |
+| 180 K | 1.61 | 10.13 | 8.80 | 0.86 |
 
-**A few tenths of an ohm in series with a 75.5 Ω heater** — which is what a
-connector does, and which unifies the fault, both reseats and the "campaign
-drift" into one number: `α(t)`, the fraction of commanded power the circuit
-delivers. It is also the independent reason the ramp had to be proportional to
-`P(u)`: a series resistance only matters when current flows.
+Jeff asked for a warning at a kelvin; the measured band arrives at one from the
+other end. It also widens during a sweep, which §3 required, and grows with the
+days, which the "typical drifts" trap required.
 
-**The ramp is still real**, which is not a contradiction: inside the
-**pre-cutover half alone** — 47 anchors over 47 days, no calibration change in
-them — a slope of **+0.206 mW/day** takes χ²/n from 0.192 to 0.054. And one of
-`drift.py`'s three bands turns out to have been the step read as a rate: the
-62.9–64.4 % band has 5 of 9 anchors after the cutover and its 0.186 K/day falls
-to **0.050** once a step is allowed. The other two bands cannot be contaminated
-and are where the median 0.281 comes from.
+**At the warm end the largest settled term is the SINK, not the sample** — 0.42
+mW against 0.027 mW of thermometry, because `Λ′` at 6.6 K is nine times `Λ′` at
+118 K. A reader who assumes the sample dominates will size the wrong term, so
+there is a test that says so.
 
-**3. §1's target row and T10's error bar cannot both stand — and this is the one
-thing on this page still open.** At 118 K the three holds' bar is
-`hypot(Λ′σ, δP)` = **4.75 mW = 2.86 K**, so missing them by 3 K costs the fit
-**1.05σ** while §1 asks for 0.3 K — a tenth of the bar. The gauge sidesteps it
-(the holds are now predicted to 0.25 K) but does not answer it: `DELTA_P_FRAC`
-is still sized on the ONE fault that measured it, 0.7 %, and T10's own text says
-the ordinary margin is smaller by an amount the log cannot say. **A voltage
-reading across the heater would settle it and retire the bar**; until then every
-anchor over 40–120 K carries 2.9 K of uncertainty it may not deserve.
+**4. Phase 1's gate needed its one sentence read twice, and both readings are
+printed.** "`missing_power_w` < 1 mW at every settled anchor the fit was given."
 
-**4. So the ramp came back OUT.** Your
-instruction — don't model in fine detail what changes the next time someone
-touches it — has a measurable consequence, and it points the opposite way from
-step 8. `holdout.py --in-epoch` asks the question the apparatus can answer:
-**given one calibration number, does the model's SHAPE travel?** The gauge is
-fitted on the 45 ladder rungs of 09-05; the three long holds are then
-**predicted**, one to four days later, disjoint anchors, same epoch:
+- *"Every anchor the fit was given"* is 136 anchors over 57 days and the level
+  is gauged to **one** of them. In-epoch the residual is 0.135 K; against the
+  whole campaign it is **4.7 K rms over 40 K**. The second number is the history
+  of the cryostat, not the model's error, and no fit that ships one level can
+  make it smaller. `band.py` prints both, in that order.
+- *"< 1 mW"* is a kelvin gate divided by `Λ′`, and `Λ′` runs 24 mW/K at 10 K
+  against 1.7 at 118 K. In-epoch the gate is **met above 40 K (0.583 mW)** and
+  missed below 25 K (3.4 mW) — while in kelvin the cold end is the **better**
+  half. A gate in watts is fourteen times stricter exactly where the model is
+  best.
 
-| | the three holds, K | worst | the ladder |
-|---|---|---|---|
-| ramp ON, gauged | −0.242 −0.293 −0.467 | 0.467 | 0.144 K rms |
-| **ramp OFF, gauged** | **−0.234 −0.052 +0.012** | **0.234** | **0.137 K rms** |
-
-**The ramp makes the only honest prediction available worse** — it adds 0.7 mW
-of warming across six days in which the cryostat did not warm. So
-`PRODUCTION_CAMPAIGN = False`: it costs 2.6 % of `rms_k` and buys a prediction
-twice as good. The machinery stays, because it is how all of the above was
-established; nothing that ships carries a term for what a screwdriver changes.
-
-That table is where §1 stood before the two τ rules landed; the final numbers
-are at the top of this file. The lesson that outlives both is the two columns:
-**an anchor's absolute level is mostly the last person to touch the cryostat,
-and only the gauged column is what the model gets wrong.** ("31 rungs" was a
-count nobody could reproduce — the window holds 45.)
+The one figure the apparatus does not give is §1.2's "3σ at 118 K, day 0,
+settled, between 4 and 8 mW". It is **1.4 mW** measured. That figure was written
+before the terms were, and 4–8 mW is where the band lands about ten days after a
+gauge. Nothing was tuned to reach it.
 
 ## Then, in order
 
-**Every decision put to Jeff is answered and acted on** — the gauge and the τ
-row on 09-12/13, and the two τ outliers on 09-13, which became the two grading
-rules at the top of this file rather than two hand-removals.
-
-**The gauge is in** (your "calibrate now, date it"). `export_response.py`
-measures the delivered-power gauge from the most recent programmed ladder,
-applies it so `q` is in COMMANDED watts, and writes the number, the window and
-the date into the generated header along with the warning that any work on the
-heater circuit expires the level — while the shape does not. Today it reads
-**+0.935 %**, 6.2 mW at 118 K, from 45 rungs of `trace-ladder-20260905`.
-`--dry-run` measures without writing.
-
-**The τ row is drawn** (your "explain, ideally show"). `analysis/plot_tau.py`.
-The gap is two windows out of eleven and neither is a model error — a 14.5 K
-*cooling* excursion, and 1.1 K of motion across 33 hours. Nine of eleven agree
-to 6.9 %. Smoothing is not the fix and was tested: scoring at the mid-span
-temperature rescues the excursion and biases every ordinary step by −8 %.
-
-1. **PID_PLAN.md phase 1 §1.2 is the next work.** The thermal model is done;
-   what uses it is not. The band constants and the two residual functions, and
-   `missing_power_w` written against `pc-20260908-154814` vs
-   `pc-20260910-144849` — the matched-output pair either side of the fault,
-   which is the one measurement of what the reseat left.
-   - *(Useful but not blocking)* **When else was that circuit touched?**
-     09-04 and 09-10 are known and measured. The pre-reseat half's 0.206 mW/day
-     is 1.5 % of delivered power over 47 days — larger than any single event
-     above, and on this session's evidence a staircase of undocumented handling
-     rather than a rate. Those dates belong in the manifest the way `era`
-     records the recalibration, and they are the only thing that could bring a
-     drift term back.
-2. **Measuring α beats modelling it.** A voltage reading across the heater —
-   any four-wire measurement of that circuit — turns α from a fitted nuisance
-   into a logged input. Then `Q = α(t)·P(u)` is known per sample, the step and
-   the ramp both leave the objective, and `DELTA_P_FRAC` stops being a 2.86 K
-   bar on every anchor over 40–120 K. That is a bench job on the circuit you
-   are already rebuilding, and it is worth more than any term this plan can add.
-   **A per-epoch α is the fallback, not the plan**: it is worth 3.19 K at 118 K,
-   which is the whole remaining miss, but it is fitted from each epoch's own
-   anchors and so predicts nothing — it expires the next time anyone touches
-   the cryostat.
-3. **Step 9 is moot** — it tests the aux channels against the fitted drift and
-   there is no fitted drift any more. **Step 10 is one command from done**:
-   `export_response.py` (no `--dry-run`), clear `SUPERSEDED_NOTE`, and
-   regenerate `tests_ltspm3/test_fitted_response.py`'s eight pinned points
-   rather than loosening them — trap T8. It waits only on the τ wording.
-4. PID_PLAN phase 1 §1.2 is **not blocked by any of this** — the band constants
-   and the two residual functions. `DELTA_P_FRAC` is defined and in the cache
-   key; `missing_power_w` should still be written against `pc-20260908-154814`
-   vs `pc-20260910-144849`, the matched-output pair either side of the fault.
+1. **PID_PLAN phase 2 — `ltspm3/monitor.py` — is the next work**, and
+   [plans/pid-2-monitor.md](plans/pid-2-monitor.md) is unchanged by any of the
+   above except that its two functions now exist. It is mostly plumbing plus the
+   replay table of §2.3, and the replay is what **sets** `fault_mw` and
+   `warn_after_s` rather than choosing them. It also earns its keep immediately:
+   it runs whether or not the loop is armed, which is most of this cryostat's
+   life so far.
+   - **The one thing the monitor has to solve that the model handed it**: the
+     absolute residual carries `bias_q_w`, up to 4.7 mW at 118 K, which is three
+     times the day-0 band. The monitor's answer is a **trailing baseline** —
+     judge the change, not the level — and that belongs in §2.2 beside the
+     persistence rule.
+2. **At about day 9 the band overtakes the 8 mW `fault_mw` seed.** That is not a
+   band problem, it is the drift with nothing subtracting it, and it is an
+   argument for **re-gauging on a cadence** — one programmed ladder, under five
+   hours, `export_response.py` — rather than for widening anything. Phase 2's
+   replay is where the number gets settled.
+3. **Phase 1.3's pipeline is proved and its ladder is not run.** `--hi 300`
+   builds the rung list and marks the four rungs above 192.6 K as predicted-only;
+   the top one asks 77.9 % = **991 mW** against a heater rated 1.68 W. The ladder
+   itself is commissioning stage 6 and needs Jeff at the cryostat.
+4. The 09-10 mask still goes in with the next archive export, not before.
 
 ## Traps this session added to the list
 
-- **`\n` inside a heredoc on this box gets eaten a level.** Writing a patch
-  script with `python - <<'PY'` and a `"\\n"` in it lands a REAL newline in the
-  file and a syntax error, quoted delimiter or not. This is the sibling of the
-  UTF-8 trap already on the list: **write the script to a file** rather than to
-  stdin, or keep backslashes out of it.
-- **A campaign term must be told what it is proportional to.** The bands that
-  measured the drift span a factor of 1.6 in heater power and the rates scatter
-  by 1.5, so they cannot choose the shape. Anything that claims a drift in
-  watts is quietly claiming it at zero output too, where the base temperature
-  and the sweep's own cold tail are very much able to disagree.
-- **A fitted slope is not evidence; the profile is.** `holdout.py --profile`
-  pins the slope and refits everything else. Here the objective is within 2 %
-  of its best over 0.1–0.28 mW/day, so the fit determines the rate to about a
-  factor of two — which is worth knowing before quoting four figures of it.
-- **The anchors' dates are an input now, not a label.** They are in the cache
-  key for that reason; re-measuring a window's `t_mid` changes the fit.
+- **A band term must be told what it is proportional to** — the sibling of the
+  campaign-drift trap already on this list. The residual's own error looked like
+  it should scale with the delivered power, because the mechanism that moves the
+  level does. It does not: it scales with `Λ′`. Measuring both and comparing them
+  took ten minutes and would have been invisible forever otherwise, because at
+  118 K the two forms agree.
+- **A systematic and a fluctuation must not be added in quadrature**, however
+  natural it looks in an error budget. What decides it is the timescale of the
+  question: an alarm that fires in thirty minutes may only carry terms that can
+  move in thirty minutes.
+- **A gate in watts on a cryostat whose `Λ′` spans 14× is a gate in kelvin in
+  disguise**, and it is strictest where the model is best. Quote both.
+- **`bath.fit()` returns `(Bath, diagnostics)`, not a dict** — and the diagnostic
+  key is `rms_k`, not `rms_K`. Both cost a run.
+- **The heredoc trap bit again and it is worth restating**: `\n` inside
+  `python - <<'PY'` lands a REAL newline in the file, quoted delimiter or not, so
+  a patch script written that way produces an unterminated f-string thirty lines
+  from where the mistake is. Write the script to a file. It also bit in a second
+  way — replacing a docstring's opening lines without its closing `"""` silently
+  swallows the next four functions.
 
 ## Running it
 
@@ -256,16 +171,17 @@ The venv is Windows and lives at the **repository root**, not in a worktree:
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest -q
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ruff check .
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/measure.py
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/band.py
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --in-epoch
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --shapes
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/holdout.py --profile --campaign
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/drift.py
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/pid_tuning.py --rows
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/export_response.py --dry-run
 ```
 
-`--in-epoch` is the one to run first: it is section 1's scoreboard with the
-delivered-power gauge taken out, and the three holds as predictions.
+`band.py` is the one to run first now: it prints the band, what it is worth at
+five temperatures, phase 1's gate both ways, and the matched-output pair either
+side of the 09-10 fault. It needs `measure.py` to have been run once (11 s) and
+then costs about a minute for the production fit plus a few seconds for the
+coldplate pole.
 
-`analysis/measured.csv` and `analysis/.fit_cache/` do not exist on a fresh
-clone or in a new worktree. `measure.py` takes 11 s; the production fit then
-takes about a minute, and `--profile` runs seven of them.
+`analysis/measured.csv` and `analysis/.fit_cache/` do not exist on a fresh clone
+or in a new worktree.

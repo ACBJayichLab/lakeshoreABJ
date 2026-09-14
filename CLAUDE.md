@@ -224,6 +224,17 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      the day it was measured, because handling the heater wiring
                      moves it by up to 0.8%, which is 3 K at 118 K. The SHAPE
                      does not expire. -> REFIT_PLAN.md 7.3
+                     Also THE RESIDUAL AND ITS BAND, 2026-09-14:
+                     `missing_power_w` is what the monitor and the supervisor
+                     judge the cryostat by, and `sigma_q_w` is how wrong it is
+                     allowed to be -- ONE source, so the two cannot disagree
+                     about what typical means. The band's six terms are frozen
+                     into _fitted_table.py beside the curves.
+                     **`bias_q_w` is deliberately NOT in the band**: the 0.7%
+                     the heater circuit may not deliver is a constant that moves
+                     when somebody handles the wiring, and in the band it would
+                     make 3 sigma at 118 K 14 mW -- three times the 09-10 fault
+                     the monitor has to catch. -> PID_PLAN.md 3
   config.py          The `control:` section; registers itself on import.
   app.py             build() -- the only module that knows both halves.
   __main__.py        Swaps one BUILDER; everything else is shared with lschart.
@@ -325,6 +336,17 @@ analysis/            EXPLORATORY, not shipped. Fits the thermal model from the
                        carries an error bar with the residual's autocorrelation
                        in it and the measured long-term fluctuation under it.
                        `--verify` is REFIT_PLAN.md 6's exit gate.
+                     band.py        HOW WRONG THE RESIDUAL IS ALLOWED TO BE.
+                       Measures the six terms of sigma_Q from the same archive
+                       the curves were fitted to; export_response freezes them
+                       into the shipped table. Two error bars and keeping them
+                       apart is the whole design: a NOISE band, which is what
+                       dQ does while the cryostat behaves, and a CALIBRATION
+                       offset, which is where the level may sit. Also the
+                       phase-1 gate -- dQ at every settled anchor, in-epoch and
+                       across the campaign, in mW and in K, because a
+                       milliwatt gate is a kelvin gate divided by Lambda' and
+                       Lambda' runs 24 mW/K at 10 K against 1.7 at 118 K.
                      allan.py       THE HOLD'S FIGURE OF MERIT, and a different
                        question from measure.py's: not where a window was
                        heading but whether averaging for longer HELPS.  Those
