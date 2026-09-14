@@ -52,7 +52,11 @@ sys.path.insert(0, "analysis")
 import fit_ode as F  # noqa: E402
 from plot_gain import coldplate_of  # noqa: E402
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else "analysis/pid_tuning.png"
+OUT = "analysis/pid_tuning.png"
+#: The FIGURE's fit.  Coarser than the shipped one on purpose: the figure is a
+#: picture of WHICH LAG DOMINATES the loop, and 9 knots settles that in a
+#: fraction of the time.  ``--rows`` uses the production preset instead, because
+#: a number pasted into ``control/`` has to have come from the table that ships.
 N_LAM, N_CAP = 9, 4
 
 #: The loop, as configured today.
@@ -222,5 +226,137 @@ def main():
               f"{1e3 * allan_k(4 * th, T[i]):>10.1f}")
 
 
+# -- the schedule ----------------------------------------------------------
+#
+# PID phase 1 section 1.2's fourth row, and phase 3 section 3.2's input.  The
+# figure above is about the loop AS CONFIGURED -- a 60 s measurement filter
+# slower than the cryostat below 60 K, and the half rule needed to describe the
+# two comparable lags.  This is about the loop as phase 3 rebuilds it, where
+# the low-pass is switched off and the only thing left beside the plant is a
+# few seconds of dead time.  The half rule is then unnecessary, and its absence
+# is the point: `tau_eff` IS the plant's tau.
+#
+# What comes out is `ltspm3/control/tuning.py`'s OperatingPoint rows, ready to
+# paste, each carrying the fit's cache key -- PID_PLAN.md's "pastes rot" trap.
+# A schedule row whose key is not the shipped table's FIT_KEY was computed
+# against a different cryostat.
+
+
+#: The filter chain phase 3 section 3.1 leaves behind, and the cadence it runs
+#: at.  Used only as defaults for the command line: the delay is DERIVED from
+#: them and is never a constant.
+FILTER_DEFAULTS = {"median_window": 3, "cadence_s": 2.0, "tau_s": 0.0}
+
+
+def delay_s(median_window=3, cadence_s=2.0, tau_s=0.0) -> float:
+    """The loop's pure delay, from the filter configuration.
+
+    ``median_window // 2 * cadence`` is the median's group delay, ``cadence/2``
+    the zero-order hold, ``tau/2`` what is left of a low-pass that is switched
+    off.  About 3 s at phase 3's settings, and it is the floor on how fast the
+    loop may be asked to go: ``tau_cl = max(speed * tau(T), 4 * delay_s)``.
+    Below about 30 K the plant's own tau is under ten seconds and that floor is
+    what binds -- which is why the cold end needs no schedule of its own, and
+    why section 3's "tau within 30 %" does not matter there.
+    """
+    return (median_window // 2) * cadence_s + cadence_s / 2.0 + tau_s / 2.0
+
+
+def production_plant(step_k=10.0):
+    """``(r, T, u, K_u, tau)`` from the PRODUCTION fit, every ``step_k``.
+
+    The same preset ``export_response.py`` ships, so ``r["key"]`` is the
+    shipped table's ``FIT_KEY`` and every row printed here can be checked
+    against it by eye.
+    """
+    from plot_gain import N_CAP as P_CAP
+    from plot_gain import N_DRIFT as P_DRIFT
+    from plot_gain import N_LAM as P_LAM
+
+    rec, anchors, taus = F.production_inputs()
+    r = F.fit(P_LAM, P_CAP, rec, anchors, taus, n_drift=P_DRIFT,
+              campaign=F.PRODUCTION_CAMPAIGN)
+    rows = [x for x in F.load_rows()
+            if x.get("grade") and float(x["T_inf"]) <= float(rec.T.max())]
+    tc_of, _, _ = coldplate_of(rows)
+
+    T = np.arange(10.0, 190.0 + 0.5 * step_k, step_k)
+    Tc = np.clip(tc_of(T), 1.0, None)
+    Q = r["lam"](r["pl"], T) - r["lam"](r["pl"], Tc)
+    ok = Q > 0
+    T, Q = T[ok], Q[ok]
+    u = 100.0 * np.sqrt(Q * F.R_OHM) / (F.GAIN * F.V_FS)
+    slope = r["lam"].slope(r["pl"], T)
+    K_u = (1.0 / slope) * (2.0 * Q / u)        # dQ/du = 2P/u exactly
+    tau = r["cap"](r["pc"], T) / slope
+    return r, T, u, K_u, tau
+
+
+def schedule(step_k=10.0, hold_speed=3.0, move_speed=0.5, **filter_kw) -> int:
+    """Print the schedule phase 3 section 3.2 needs, and where it is floored."""
+    cfg = {**FILTER_DEFAULTS, **filter_kw}
+    lag = delay_s(**cfg)
+    r, T, u, K_u, tau = production_plant(step_k)
+    floor = 4.0 * lag
+
+    print(f"the plant, from the production fit -- key {r['key']}")
+    print(f"  sweep rms {r['rms_k']:.3f} K")
+    print(f"  delay {lag:.2f} s, DERIVED from median_window="
+          f"{cfg['median_window']}, cadence={cfg['cadence_s']} s, "
+          f"filter tau={cfg['tau_s']} s")
+    print(f"  so tau_cl is floored at 4 x delay = {floor:.1f} s")
+    print()
+    print(f"{'T K':>7}{'u %':>8}{'K_u K/%':>10}{'tau s':>9}"
+          f"{'hold cl':>10}{'hold kp':>10}{'hold ti':>9}"
+          f"{'move cl':>10}{'move kp':>10}{'move ti':>9}")
+    floored = []
+    for Tq, uq, Kq, tq in zip(T, u, K_u, tau):
+        hold_cl = max(hold_speed * tq, floor)
+        move_cl = max(move_speed * tq, floor)
+        if move_speed * tq < floor:
+            floored.append(Tq)
+        print(f"{Tq:>7.0f}{uq:>8.2f}{Kq:>10.3f}{tq:>9.1f}"
+              f"{hold_cl:>10.1f}{tq / (Kq * hold_cl):>10.4f}{tq:>9.0f}"
+              f"{move_cl:>10.1f}{tq / (Kq * move_cl):>10.4f}{tq:>9.0f}")
+    print("  kp = tau / (K_u tau_cl) and ti = tau -- pole cancellation, so the")
+    print("  loop is first order and cannot overshoot however tau_cl is")
+    print("  chosen.  Above the floor kp is simply 1 / (speed K_u).")
+    if floored:
+        span = (f"{floored[0]:.0f}-{floored[-1]:.0f} K" if len(floored) > 1
+                else f"{floored[0]:.0f} K")
+        print(f"  THE DELAY FLOOR BINDS in `move` at {span}, where the")
+        print(f"  cryostat's own tau is under {floor / move_speed:.0f} s.  "
+              "Nothing is scheduled")
+        print("  there that the loop could actually run.")
+
+    print()
+    print("paste into ltspm3/control/tuning.py:")
+    for Tq, Kq, tq in zip(T, K_u, tau):
+        print(f'    OperatingPoint({Tq:.1f}, {Kq:.3f}, {tq:.1f}, '
+              f'note="{r["key"]}"),')
+    return 0
+
+
 if __name__ == "__main__":
+    import argparse
+
+    _ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    _ap.add_argument("-o", "--out", default=OUT)
+    _ap.add_argument("--rows", action="store_true",
+                     help="print the schedule from the PRODUCTION fit instead "
+                          "of drawing the figure")
+    _ap.add_argument("--step-k", type=float, default=10.0)
+    _ap.add_argument("--median-window", type=int,
+                     default=FILTER_DEFAULTS["median_window"])
+    _ap.add_argument("--cadence-s", type=float,
+                     default=FILTER_DEFAULTS["cadence_s"])
+    _ap.add_argument("--filter-tau-s", type=float,
+                     default=FILTER_DEFAULTS["tau_s"])
+    _a = _ap.parse_args()
+    if _a.rows:
+        raise SystemExit(schedule(_a.step_k,
+                                  median_window=_a.median_window,
+                                  cadence_s=_a.cadence_s,
+                                  tau_s=_a.filter_tau_s))
+    OUT = _a.out
     main()

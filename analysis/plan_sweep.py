@@ -68,10 +68,19 @@ AIM = 0.5
 
 
 def model(hi_k: float = 190.0, n: int = 4000):
-    """``(T, u, tau, dTdu)`` along the fitted steady state.
+    """``(r, T, u, tau, dTdu, Q, measured_hi_k)`` along the fitted steady state.
 
     The production fit -- the one ``plot_gain.py`` draws -- on the adaptively
     decimated sweep, cached, so this costs seconds after the first run.
+
+    ``measured_hi_k`` is the top of the data the fit was given, and it is why
+    this returns seven things rather than six.  **The curves do not stop
+    there.**  They are monotone cubics with ``extrapolate=True``, so asking for
+    300 K gets a number -- a confident, smooth, entirely invented number, out
+    of a fit that has never seen this cryostat above 192.6 K.  PID phase 1
+    section 1.3 plans the ladder that will fix that, and until it has been run
+    every rung above this line is a PREDICTION and has to say so on screen and
+    in the CSV.
     """
     rec, anchors, taus = F.production_inputs()
     top = float(rec.T.max())
@@ -99,7 +108,7 @@ def model(hi_k: float = 190.0, n: int = 4000):
             - r["lam"].slope(r["pl"], Tc) * tc_of.derivative()(T))
     dudT = (50.0 / (F.GAIN * F.V_FS)) * np.sqrt(F.R_OHM / Q) * dQdT
     tau = r["cap"](r["pc"], T) / r["lam"].slope(r["pl"], T)
-    return r, T, u, tau, 1.0 / dudT, Q
+    return r, T, u, tau, 1.0 / dudT, Q, top
 
 
 def targets(lo: float, hi: float, n: int, space: str, T, u, Q):
@@ -179,7 +188,7 @@ def main() -> int:
     ap.add_argument("-o", "--out", default="analysis/sweep_plan.csv")
     args = ap.parse_args()
 
-    r, T, u, tau, dTdu, Q = model(hi_k=max(190.0, args.hi))
+    r, T, u, tau, dTdu, Q, measured_hi = model(hi_k=max(190.0, args.hi))
     if args.hi > T.max() or args.lo < T.min():
         print(f"note: the model covers {T.min():.2f}-{T.max():.1f} K; "
               f"the ladder is being clipped to it", file=sys.stderr)
@@ -193,6 +202,8 @@ def main() -> int:
 
     print(f"model: Lambda {N_LAM} knots, C {N_CAP}, drift {N_DRIFT} -- "
           f"sweep rms {r['rms_k']:.3f} K, tau(137 K) {r['tau_137_s']:.0f} s")
+    print(f"  measured to {measured_hi:.1f} K -- above that every column is an "
+          f"extrapolation")
     print(f"{'#':>3}{'u %':>9}{'T K':>8}{'dT':>7}{'K/%':>7}{'tau s':>8}"
           f"{'dwell s':>9}{'cum h':>8}")
 
@@ -207,11 +218,14 @@ def main() -> int:
                           min_s=args.min_dwell, max_s=args.max_dwell,
                           aim=args.aim)
         cum += dwell
+        predicted = float(Tq) > measured_hi
         rows.append({"u_pct": f"{uq:.3f}", "T_pred_k": f"{Tq:.3f}",
                      "d_t_k": f"{d_t:.3f}", "gain_k_per_pct": f"{gq:.3f}",
-                     "tau_pred_s": f"{tq:.1f}", "dwell_pred_s": f"{dwell:.0f}"})
+                     "tau_pred_s": f"{tq:.1f}", "dwell_pred_s": f"{dwell:.0f}",
+                     "predicted_only": "1" if predicted else ""})
         print(f"{i:>3}{uq:>9.3f}{Tq:>8.2f}{d_t:>7.2f}{gq:>7.2f}{tq:>8.0f}"
-              f"{dwell:>9.0f}{cum / 3600.0:>8.2f}")
+              f"{dwell:>9.0f}{cum / 3600.0:>8.2f}"
+              + ("   PREDICTED ONLY" if predicted else ""))
         prev = float(Tq)
 
     with open(args.out, "w", newline="", encoding="utf-8") as fh:
@@ -221,6 +235,19 @@ def main() -> int:
 
     print(f"\n{len(rows)} rungs, {cum / 3600.0:.2f} h if every dwell runs to "
           f"its predicted length.  Wrote {args.out}")
+    beyond = [x for x in rows if x["predicted_only"]]
+    if beyond:
+        top_u = float(beyond[-1]["u_pct"])
+        watts = (F.GAIN * F.V_FS * top_u / 100.0) ** 2 / F.R_OHM
+        print(f"\n  {len(beyond)} OF THESE RUNGS ARE ABOVE {measured_hi:.1f} K,"
+              " WHICH IS THE TOP OF THE DATA.")
+        print("  Their output, gain and dwell come from extrapolating a fit "
+              "that has never\n  seen this cryostat that warm.  Run them ONE "
+              "RUNG AT A TIME, grade each before\n  commanding the next, and "
+              "refit before the table's T_MAX_K moves -- PID phase 1\n  "
+              "section 1.3, and plan 4 section 4.4 owns the ladder itself.")
+        print(f"  The top rung asks for {top_u:.1f} % = {1e3 * watts:.0f} mW "
+              f"against a heater rated 1.68 W.")
     print("\nthe same ladder as bare percents, for --percents:")
     print("  " + ",".join(f"{x:.3f}" for x in U))
     return 0
