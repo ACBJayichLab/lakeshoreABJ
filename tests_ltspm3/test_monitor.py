@@ -299,11 +299,24 @@ def test_the_2026_09_10_fault_warns_within_thirty_minutes(archive_run):
     assert "-5." in hits[0][5] or "-4." in hits[0][5], hits[0][5]
 
 
-def test_the_09_10_event_is_not_a_fault_level_flag(archive_run):
-    """A warning, not a fault: the plan is explicit, and it sizes `fault_mw`."""
+def test_the_09_10_event_is_a_warning_for_the_first_hour(archive_run):
+    """It warns long before it is fault-sized, which is the point of warning.
+
+    **And then it becomes fault-sized, which is a conflict this test records
+    rather than resolves.**  PID_PLAN.md §1 says "the 09-10 event is a
+    warning"; Jeff set `fault_mw` to 10 mW on 2026-09-14; and the excursion
+    peaks at **14.11 mW**, three hours in, just before the connector was
+    reseated.  All three cannot hold.
+
+    Nothing here is broken by that -- this process only reports -- but plan 3
+    turns `fault_mw` into a ramp-down, and under 10 mW the supervisor would
+    have ramped this event down at about +190 min.  Either the fault level
+    rises to about 15 mW or §1's sentence changes; it is Jeff's, and
+    plans/pid-2-monitor.md §2.4 states it with the numbers.
+    """
     hits = warns(archive_run, "fault_level",
-                 "2026-09-10T11:33:00", "2026-09-10T12:30:00")
-    assert not hits, f"the 09-10 event read as fault-level: {hits}"
+                 "2026-09-10T11:33:00", "2026-09-10T12:33:00")
+    assert not hits, f"the 09-10 event read as fault-level within the hour: {hits}"
 
 
 def test_the_coldplate_is_typical_across_the_09_10_event(archive_run):
@@ -516,3 +529,67 @@ def test_the_cold_head_never_faults():
     r = stage_run(j, seconds=8000.0, t0=8000.0, first=40.0)
     assert state(r, "cold_head") == WARN
     assert state(r, "fault_level") != WARN
+
+
+def test_the_warning_threshold_is_a_floor_under_the_band_not_a_replacement():
+    """Jeff's 5 mW and 10 mW, 2026-09-14, and both constraints have to hold.
+
+    The band says do not alarm inside the model's own uncertainty; the floor
+    says do not alarm about anything smaller than this however confident the
+    model is.  At a settled 118 K the floor binds (band 1.4 mW); at 180 K on a
+    5 K/min sweep the BAND binds (8.8 mW), and a flat 5 mW there would warn
+    about every sweep.
+    """
+    cfg = MonitorConfig()
+    settled = 3 * M.sigma_q_fast_w(118.0, at(118.0))
+    sweeping = 3 * M.sigma_q_fast_w(180.0, at(180.0), 5.0 / 60.0)
+    assert settled < cfg.warn_mw * 1e-3, "the floor should bind at a hold"
+    assert sweeping > cfg.warn_mw * 1e-3, "the band should bind on a sweep"
+    assert max(settled, cfg.warn_mw * 1e-3) == pytest.approx(5e-3)
+
+
+def test_the_baseline_freezes_on_the_band_and_not_on_the_warning():
+    """The two came apart the moment a floor was put under the warning.
+
+    A 3 mW excursion at a settled 118 K is inside Jeff's 5 mW floor, so it is
+    deliberately NOT reported -- and it is outside the 1.4 mW band, so the
+    baseline must not learn it anyway.  Keyed to the warning instead, the
+    2026-09-10 event vanished completely: the baseline walked onto it inside a
+    few hours and the fault-level flag never fired either.
+
+    Being told to ignore small things must not teach a monitor that a large
+    thing is normal.
+    """
+    j = Judge()
+    run(j, kelvin=118.0, seconds=40000.0)
+    frozen_at = j.baseline
+    quiet = M.percent_for_power(M.power_w(at(118.0)) - 3e-3)
+    r = run(j, kelvin=118.0, pct=quiet, seconds=30000.0, t0=40000.0)
+    assert state(r, "missing_power") == TYPICAL, "3 mW is under the 5 mW floor"
+    assert j.baseline == pytest.approx(frozen_at, rel=1e-6), \
+        "the baseline learned an excursion it was outside the band for"
+
+
+def test_a_residual_sitting_on_its_threshold_still_declares_itself():
+    """Hysteresis, and the 2026-09-10 event is what asked for it.
+
+    Its residual crosses 5 mW four minutes after the event and then hovers
+    there.  Without a Schmitt trigger every dip back under reset the 600 s
+    persistence timer and the warning did not land for **104 minutes**; with
+    one it lands at **14**.  The alarm was not slow because the cryostat was
+    subtle.
+    """
+    j = Judge()
+    held = at(118.0)
+    run(j, kelvin=118.0, seconds=40000.0)
+    # Straddle the floor by moving the SAMPLE, not the heater: touching the
+    # output is a commanded move and the judge correctly has no opinion for
+    # three time constants afterwards.
+    over = M.steady_temperature_k(M.power_w(held) - 5.4e-3)
+    under = M.steady_temperature_k(M.power_w(held) - 4.6e-3)
+    t = 40000.0
+    for _ in range(40):            # 40 * 60 s = 40 min of toggling
+        run(j, kelvin=over, pct=held, seconds=30.0, t0=t)
+        r = run(j, kelvin=under, pct=held, seconds=30.0, t0=t + 30.0)
+        t += 60.0
+    assert state(r, "missing_power") == WARN

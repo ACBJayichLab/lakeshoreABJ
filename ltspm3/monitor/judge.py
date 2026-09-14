@@ -72,10 +72,10 @@ _RANK = {TYPICAL: 0, NO_OPINION: 1, WARN: 2}
 class MonitorConfig:
     """Everything the judge is allowed to know.  No limit is hardcoded below.
 
-    ``warn_after_s`` and ``fault_mw`` carry seeds rather than answers: plan 2
-    section 2.3 says the archive replay is what sets them, and a number chosen
-    before the replay would be a number the replay was then tuned to agree
-    with.
+    ``warn_after_s`` came out of the replay -- 600 s is what puts the
+    2026-09-10 event at eleven minutes rather than at two.  ``warn_mw`` and
+    ``fault_mw`` are Jeff's, 2026-09-14, with the replay's answers in front of
+    him: **5 mW and 10 mW**.
     """
 
     enabled: bool = True
@@ -83,13 +83,46 @@ class MonitorConfig:
     #: How far out of band before it is worth saying, and for how long.
     warn_sigma: float = 3.0
     warn_after_s: float = 600.0
+
+    #: TWO THRESHOLDS, AND THE ABSOLUTE ONES ARE FLOORS UNDER THE BAND.
+    #: Jeff, 2026-09-14: 5 mW to warn and 10 mW to fault.  At 118 K those are
+    #: 3.0 K and 6.0 K at the local gain, which is where his original "warn at
+    #: a kelvin, fault at five" lands once the band underneath it is measured
+    #: rather than guessed.
+    #:
+    #: They are a floor and not a replacement, because the two constraints say
+    #: different things and both have to hold:
+    #:
+    #:   the BAND says   do not alarm inside the model's own uncertainty.  3
+    #:                   sigma is 1.4 mW at a settled 118 K but **8.8 mW at
+    #:                   180 K during a 5 K/min sweep**, where the heat
+    #:                   capacity term dominates -- a flat 5 mW there would
+    #:                   warn about every sweep.
+    #:   the FLOOR says  do not alarm about anything smaller than this however
+    #:                   confident the model is.  Typical erroring behaviour is
+    #:                   unmistakable (Jeff, same day); a 2 mW excursion at a
+    #:                   settled hold is not what this exists to catch.
+    #:
+    #: So the threshold is ``max(warn_sigma * sigma_q_fast, warn_mw)``, and the
+    #: fault the same with ``fault_mw``.  Neither can fire inside the band and
+    #: neither can fire below Jeff's number.
+    warn_mw: float = 5.0
     #: Reported, NEVER acted on -- this process cannot act.  Plan 3's
-    #: supervisor is what turns this number into a ramp-down.
-    fault_mw: float = 8.0
+    #: supervisor is what turns this number into a ramp-down, and REFIT 7.2's
+    #: two measured wiring events (-21.9 and -11.6 mW) are both above it: a
+    #: connector being reseated will trip this, and that is the intended
+    #: behaviour rather than a false alarm.
+    fault_mw: float = 10.0
     fault_after_s: float = 180.0
 
     #: The trailing baseline.  Slow against a fault, fast against the drift.
     baseline_tau_s: float = 21600.0
+
+    #: Schmitt trigger: once a residual is out of band it has to come back to
+    #: this fraction of the threshold before the persistence timer restarts.
+    #: A residual sitting exactly on its threshold otherwise toggles, and each
+    #: toggle resets the timer -- see `_Persist.leaning`.
+    hysteresis_frac: float = 0.8
 
     #: No opinion within this many plant time constants of a heater move, and
     #: what counts as a move.
@@ -232,6 +265,20 @@ class _Persist:
 
     def held_s(self, t_s: float) -> float:
         return 0.0 if self.since is None else t_s - self.since
+
+    @property
+    def leaning(self) -> bool:
+        """Already warned, or on the way to warning.
+
+        What a caller needs in order to apply hysteresis, and it is not
+        optional.  Without it a residual sitting ON its threshold toggles, and
+        every toggle resets the persistence timer: the 2026-09-10 event crosses
+        5 mW **four minutes** after it happened and then hovers there, and a
+        strict continuous-600-s rule did not declare it until **104 minutes**
+        had passed.  The alarm was not slow because the cryostat was subtle, it
+        was slow because the arithmetic could not make up its mind.
+        """
+        return self.state == WARN or self.pending == WARN
 
 
 class RollingFit:
@@ -493,7 +540,9 @@ class Judge:
             self._tc_pred += alpha * (locus - self._tc_pred)
         v.value = s.coldplate_k - self._tc_pred
         v.sigma = M.TC_RMS_K
-        out = abs(v.value) > self.cfg.tc_sigma * v.sigma
+        bar = self.cfg.tc_sigma * v.sigma
+        out = abs(v.value) > bar * (self.cfg.hysteresis_frac
+                                    if self._tc.leaning else 1.0)
         v.state = self._tc.update(WARN if out else TYPICAL, s.t_s)
         v.out_of_band_s = self._tc.held_s(s.t_s)
         if v.state == WARN:
@@ -540,6 +589,8 @@ class Judge:
             if math.isnan(scatter):
                 continue
             band = self.cfg.stage_sigma * max(scatter, self.cfg.stage_floor_k)
+            if self._stage.leaning:
+                band *= self.cfg.hysteresis_frac
             excess = abs(value - base) / band if band > 0 else 0.0
             if worst is None or excess > worst[0]:
                 worst = (excess, name, value - base, band)
@@ -579,7 +630,9 @@ class Judge:
         expected = max(self.cfg.noise_floor_k,
                        self.cfg.noise_quadratic * s.sample_k ** 2)
         v.value, v.sigma = rms, expected
-        out = rms > self.cfg.noise_ratio * expected
+        bar = self.cfg.noise_ratio * expected
+        out = rms > bar * (self.cfg.hysteresis_frac
+                           if self._noise.leaning else 1.0)
         v.state = self._noise.update(WARN if out else TYPICAL, s.t_s)
         v.out_of_band_s = self._noise.held_s(s.t_s)
         if v.state == WARN:
@@ -730,30 +783,54 @@ class Judge:
         self.baseline_age_s = s.t_s - self.baseline_seeded_t
 
         v.value = (q_frac - self.baseline) * watts     # reported in watts
-        out = abs(v.value) > self.cfg.warn_sigma * sigma
+        threshold = max(self.cfg.warn_sigma * sigma, self.cfg.warn_mw * 1e-3)
+        release = threshold * (self.cfg.hysteresis_frac if self._q.leaning
+                               else 1.0)
+        out = abs(v.value) > release
         v.state = self._q.update(WARN if out else TYPICAL, s.t_s)
         v.out_of_band_s = self._q.held_s(s.t_s)
         if v.state == WARN:
+            why = ("the 3 sigma band" if threshold > self.cfg.warn_mw * 1e-3
+                   else f"the {self.cfg.warn_mw:.0f} mW floor")
             v.reason = (f"{1e3 * v.value:+.2f} mW from the baseline "
                         f"({100 * (q_frac - self.baseline):+.2f} % of "
-                        f"delivered), band {1e3 * self.cfg.warn_sigma * sigma:.2f} mW")
+                        f"delivered), over {why} at "
+                        f"{1e3 * threshold:.2f} mW")
 
-        # The baseline learns only while everything is typical.  Frozen at a
-        # warning, it cannot absorb the fault it is judging -- which is the one
-        # way this whole design fails silently.
+        # THE BASELINE FREEZES ON THE BAND, NOT ON THE WARNING, and the two
+        # came apart the moment Jeff set a 5 mW floor under the warning.
+        #
+        # What the floor says is "do not bother me about anything smaller than
+        # this".  That is a REPORTING decision.  Freezing the baseline is a
+        # LEARNING decision, and the right criterion for it is the model's own
+        # uncertainty: anything outside 3 sigma is, by construction, not
+        # something a model of ordinary behaviour should be absorbing.
+        #
+        # Keyed to the warning instead, the 2026-09-10 event disappears
+        # entirely.  Its residual is -5.01 mW against a 5 mW floor, so the
+        # verdict stayed typical, so the baseline kept learning, so it walked
+        # onto the fault inside a few hours -- and the fault-level flag never
+        # fired either, because by the time the excursion reached 11.6 mW the
+        # baseline had moved most of the way to meet it.  A monitor that is
+        # told to ignore small things must not thereby be taught that a large
+        # thing is normal.
+        learning = abs(v.value) <= self.cfg.warn_sigma * sigma
         dt = s.t_s - (self.baseline_t or s.t_s)
-        if v.state == TYPICAL and dt > 0:
+        if learning and dt > 0:
             alpha = 1.0 - math.exp(-dt / self.cfg.baseline_tau_s)
             self.baseline += alpha * (q_frac - self.baseline)
         self.baseline_t = s.t_s
 
-        beyond = abs(v.value) >= self.cfg.fault_mw * 1e-3
-        fault.value, fault.sigma = v.value, self.cfg.fault_mw * 1e-3
+        fault_at = max(self.cfg.fault_mw * 1e-3, self.cfg.warn_sigma * sigma)
+        beyond = abs(v.value) >= fault_at * (self.cfg.hysteresis_frac
+                                             if self._fault.leaning else 1.0)
+        fault.value, fault.sigma = v.value, fault_at
         fault.state = self._fault.update(WARN if beyond else TYPICAL, s.t_s)
         fault.out_of_band_s = self._fault.held_s(s.t_s)
         if fault.state == WARN:
-            fault.reason = (f"{1e3 * v.value:+.2f} mW, beyond fault_mw "
-                            f"{self.cfg.fault_mw:.1f} -- REPORTED, not acted on")
+            fault.reason = (f"{1e3 * v.value:+.2f} mW against a "
+                            f"{1e3 * fault_at:.1f} mW fault level "
+                            "-- REPORTED, not acted on")
         return q_abs, v, fault
 
     # -- what a person reads ----------------------------------------------

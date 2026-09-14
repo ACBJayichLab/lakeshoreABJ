@@ -46,7 +46,7 @@ until those are corrected.
 | sweep | **5 K/min** | default 0.5 | one rate, converted to heater %/min through the model's gain; ramp lag closed by velocity feedforward |
 | rate limits | **fewer** | eight | **two**: `max_rate_k_per_min: 5`, `min_rate_pct_per_min: 0.20` (floor) |
 | ramp-down | at the same **5 K/min** | 1 / 2 %/min with a knee | open loop through the model's inverse curve, so it needs no sensor |
-| premise | **warn at 1 K, fault at 5 K**; for the PID **in watts, from the fit** | hold at 1 K, ramp down after 180 s | kelvin thresholds in `hold` phase only; `δQ` in watts always; the 09-10 event is a warning |
+| premise | **warn at 1 K, fault at 5 K**; for the PID **in watts, from the fit** | hold at 1 K, ramp down after 180 s | **settled 2026-09-14: `warn_mw: 5`, `fault_mw: 10`** — 3.0 K and 6.0 K at 118 K, as floors under the 3σ band. "The 09-10 event is a warning" is now in tension with 10 mW: it peaks at 14.11 mW. §4 |
 | faults | a lost sensor, a runaway heater, a strange transient. **Not** a rising coldplate | — | `δT_c` warns only; **authority exhausted** (railed + error > 5 K) is the fault a compressor failure eventually causes |
 | unattended | a weekend; indefinitely in principle | never armed | 7 days is the gate, not the design life |
 | failure | **graceful** — a crashed PID disengages | poller keeps logging, loop does not disengage | `panic_hold()` on exception, state `crashed`, `ack` + `arm` to resume |
@@ -193,12 +193,22 @@ carry it instead. Both rulings are load-bearing: the first is why the monitor
 judges a *change* against a baseline rather than a level, and the second is why
 `DELTA_P_FRAC` is `bias_q_w` and not a band term.
 
-**Open.** `warn_after_s` is set — 600 s, which is what puts the 09-10 event at
-eleven minutes rather than at two. **`fault_mw` is NOT**, and the replay is why:
-the archive's two fault-sized excursions are both real wiring events, so 8 mW is
-below the size of a reseated connector and a ramp-down there would trigger every
-time somebody touched the heater. Phase 3 §3.4 decides it, with those two
-measured events in front of it.
+**Thresholds, 2026-09-14 (Jeff).** **`warn_mw: 5`, `fault_mw: 10`** — 3.0 K and
+6.0 K at 118 K, which is where the row above lands once the band under it is
+measured. Both are **floors under the 3σ band, not replacements**: at a settled
+118 K the floor binds (band 1.4 mW) and on a 5 K/min sweep at 180 K the band
+binds (8.8 mW), and a flat 5 mW there would warn about every sweep.
+`warn_after_s: 600` is the replay's, and is what puts the 09-10 event at
+fourteen minutes rather than at two.
+
+**Open, and it is one decision.** The 09-10 excursion **peaks at 14.11 mW**, so
+under `fault_mw: 10` it *is* fault-level at about +190 min — and the row above
+says **"the 09-10 event is a warning"**. All three of that sentence, 10 mW and
+14.11 mW cannot hold. The monitor only reports, so nothing is broken today; but
+**phase 3 §3.4 turns `fault_mw` into a ramp-down**, and under 10 mW the
+supervisor would have ramped that event down rather than warned about it. Either
+the fault level rises to about 15 mW or the sentence changes.
+plans/pid-2-monitor.md §2.5 has the numbers.
 
 ---
 

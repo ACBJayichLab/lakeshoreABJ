@@ -99,8 +99,8 @@ about 30 s. Pinned in `tests_ltspm3/test_monitor.py`.
 |---|---|
 | 2026-09-09 18:06: `δT_c` warn within 30 min | **NOT MET, and deliberately** — see below |
 | …and `δQ` typical or no opinion | **PASS** |
-| 2026-09-10 11:33: `δQ` warn within 30 min, −5 ± 2 mW | **PASS** — warns at **11:44**, eleven minutes, **−5.01 mW** (−0.75 % of delivered) |
-| …and **not** fault-level | **PASS** |
+| 2026-09-10 11:33: `δQ` warn within 30 min, −5 ± 2 mW | **PASS** — warns at **11:46**, fourteen minutes, **−5.08 mW** (−0.76 % of delivered) |
+| …and **not** fault-level | **PASS for an hour, then NOT** — the excursion peaks at 14.11 mW at +188 min. See §2.5 |
 | …and `δT_c` typical | **PASS** — the sink did not move, the heater did |
 | 2026-09-04 12:07 recalibration: no verdict change | **PASS** — a *reading* changed and the cryostat did not |
 | three post-recal holds: typical | **PASS** — 106 h of settled hold, no warning |
@@ -185,6 +185,59 @@ needs before it turns `fault_mw` into a ramp-down: a threshold there would ramp
 the cryostat down every time somebody touched the wiring. That is a decision for
 Jeff at plan 3 §3.4, with the two measured events in front of it, and it is the
 one thing this phase hands forward rather than settles.
+
+## 2.5 The two thresholds — Jeff, 2026-09-14
+
+**5 mW to warn, 10 mW to fault.** At 118 K those are 3.0 K and 6.0 K at the
+local gain, which is where §1's "warn at a kelvin, fault at five" lands once the
+band under it is measured rather than guessed.
+
+**They are floors under the band, not replacements for it**, because the two
+constraints say different things and both have to hold:
+
+| | |
+|---|---|
+| the **band** | do not alarm inside the model's own uncertainty. 3σ is **1.4 mW** at a settled 118 K but **8.8 mW at 180 K on a 5 K/min sweep**, where the heat-capacity term dominates — a flat 5 mW there warns about every sweep |
+| the **floor** | do not alarm about anything smaller than this however confident the model is. Typical erroring behaviour is unmistakable; a 2 mW excursion at a hold is not what this exists to catch |
+
+So the threshold is `max(warn_sigma × σ_fast, warn_mw)`. Neither constraint can
+be violated by the other.
+
+### Two defects the floor exposed, both of them coupling
+
+**1. The baseline must freeze on the BAND, not on the warning.** Keyed to the
+warning, the moment a 5 mW floor went in the 2026-09-10 event **disappeared
+entirely**: its residual is −5.01 mW against a 5 mW floor, so the verdict stayed
+typical, so the baseline kept learning, so it walked onto the fault within a few
+hours — and the fault-level flag never fired either, because by the time the
+excursion reached 11.6 mW the baseline had moved most of the way to meet it.
+
+Reporting and learning are different decisions. The floor says *do not bother me
+about small things*; the band says *this is outside what the model calls
+ordinary, do not absorb it*. **Being told to ignore small things must not teach
+a monitor that a large thing is normal.**
+
+**2. A residual sitting on its threshold needs hysteresis.** The 09-10 residual
+crosses 5 mW **four minutes** after the event and then hovers there. Under a
+strict continuous-600-s rule every dip back under reset the timer and the
+warning did not land for **104 minutes**. With a Schmitt trigger —
+`hysteresis_frac: 0.8` — it lands at **14**. The alarm was not slow because the
+cryostat was subtle.
+
+### And one thing 10 mW decides that needs Jeff
+
+The 09-10 excursion **peaks at 14.11 mW**, three hours in, just before the
+connector was reseated. So under `fault_mw: 10` it *is* fault-level, at about
++190 min.
+
+That contradicts PID_PLAN §1, which says in as many words that **the 09-10 event
+is a warning**. All three of {§1's sentence, 10 mW, a 14.11 mW peak} cannot
+hold. Nothing here is broken by it — this process only reports — but **plan 3
+§3.4 turns `fault_mw` into a ramp-down**, and under 10 mW the supervisor would
+have ramped this event down after three hours rather than warned about it.
+
+Either the fault level rises to about 15 mW, or §1's sentence changes. It is
+Jeff's, and it is the one decision phase 2 hands forward.
 
 ## Exit gate
 
