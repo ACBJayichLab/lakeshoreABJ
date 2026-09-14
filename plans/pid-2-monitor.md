@@ -12,8 +12,21 @@ in-loop check (plan 3 §3.4) is tested against.
 **Status: BUILT 2026-09-14.** `ltspm3/monitor/` — `source.py` (a live tail and
 an archive replay, one `Sample` shape), `judge.py` (the residuals and the
 verdicts), `report.py` (`plant.json` and the daily CSV), `__main__.py`.
-34 tests, of which 11 are the replay on genuine data. **The 72 h live soak is
+37 tests, of which 11 are the replay on genuine data. **The 72 h live soak is
 what is left**; §2.4 has the replay row by row and §2.5 the two thresholds.
+
+**And the soak WAS blocked on code, which this plan twice said it was not.**
+Checked against the cryostat's own `data/` on 2026-09-14 before starting it:
+`RecorderTail` took the last `*.csv` by name out of the whole directory, and
+that was `sweep-20260905-131753.csv` — the sweep tool's grading table, nine
+days stale, no `Sample` column. Worse, `plant_` sorts after `ltspm3-heater_`,
+so the first verdict this process wrote moved the tail onto **its own daily
+log** and it never read the recorder again. Both are one defect: the reader was
+choosing by name in a directory it does not own. It now selects on the
+recorder's own `filename_prefix`, and it prints which file it is reading every
+time that changes, because a monitor with nothing to read looks exactly like a
+monitor with nothing to say. Three tests, one of them the cryostat's real
+directory. Nothing else about the soak needs code.
 
 ### The one design decision this phase added
 
@@ -291,8 +304,14 @@ Three things the step test needed before it behaved:
   `fault_window_s`** rather than a level -- §2.5.
 - 72 h beside the live recorder, `plant.json` read by `lschart status` and
   MATLAB `plant()`, the post-repair residual inside the band throughout.
-  **NOT STARTED.** It needs the recorder restarted with the monitor beside it,
-  which is Jeff's to schedule; nothing about it is blocked on code.
+  **NOT STARTED, and no longer blocked.** The recorder does NOT need
+  restarting — the monitor is a separate process that tails the CSV, holds no
+  port and sends no commands. It needs the file-selection defect above (fixed
+  2026-09-14) and one command in a second window:
+
+  ```
+  cd /d C:\Coding\Python\lakeshoreABJ && git pull && .venv\Scripts\python.exe -m ltspm3.monitor -c config-ltspm3-heater.yaml
+  ```
 - `lschart status` and MATLAB `plant()` do not read `plant.json` yet. That is
   phase 5's work in the viewer and a ten-line reader in `LakeShore.m`; neither
   blocks the soak, which only needs the file to exist and be current.

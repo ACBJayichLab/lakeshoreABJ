@@ -97,6 +97,13 @@ def write_json(path, record: dict, **kw) -> bool:
     return atomic_write_json(path, payload(record, **kw))
 
 
+#: The daily log's filename prefix.  Named here rather than left as a default
+#: argument because :mod:`ltspm3.monitor.source` has to know it: the reader and
+#: the writer share a directory, and the reader must not pick up the writer's
+#: output.  See ``RecorderTail._current_path``.
+PLANT_PREFIX = "plant"
+
+
 class PlantLog:
     """``plant_YYYY-MM-DD.csv``: one row per cycle, rolled at midnight.
 
@@ -105,7 +112,7 @@ class PlantLog:
     back and look at is an alarm nobody believes the second time.
     """
 
-    def __init__(self, directory: str, prefix: str = "plant") -> None:
+    def __init__(self, directory: str, prefix: str = PLANT_PREFIX) -> None:
         self.directory = directory
         self.prefix = prefix
         self.path: str | None = None

@@ -77,16 +77,33 @@ def run_live(cfg_path: str, cfg: MonitorConfig, *, interval_s: float,
     plant_json = os.path.join(os.path.dirname(app.ipc.status_path()),
                               "plant.json")
 
-    tail = RecorderTail(directory, window_s=max(cfg.window_s * 4, 7200.0))
+    # The recorder's OWN prefix, from the same config the recorder loaded.  The
+    # data directory holds sweep tables, the read-only recorder's logs and this
+    # process's own plant log, and picking the newest name out of all of them
+    # followed a nine-day-old sweep table on the cryostat.
+    tail = RecorderTail(directory, window_s=max(cfg.window_s * 4, 7200.0),
+                        prefix=app.recorder.filename_prefix)
     judge = Judge(cfg)
     log = PlantLog(directory)
-    print(f"monitor: following {directory}")
+    print(f"monitor: following {directory}"
+          f"{os.sep}{app.recorder.filename_prefix}_*.csv")
     print(f"         plant.json -> {plant_json}")
     print("         REPORT ONLY -- this process holds no port and sends no "
           "commands")
+    following = None
     try:
         while True:
             added = tail.poll()
+            if tail.following != following:
+                # Say which file, every time it changes.  Silence is the one
+                # failure mode a report-only process cannot distinguish from
+                # working, and both ways of getting it wrong -- no log at all,
+                # and the wrong log -- are visible only here.
+                following = tail.following
+                where = following or (
+                    f"NOTHING: no {app.recorder.filename_prefix}_*.csv "
+                    f"in {directory}")
+                print(f"         reading {where}")
             record = None
             for s in list(tail.samples)[-added:] if added else ():
                 record = judge.step(s)

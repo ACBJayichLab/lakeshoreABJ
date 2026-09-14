@@ -49,6 +49,8 @@ import os
 from collections import deque
 from dataclasses import dataclass, field
 
+from .report import PLANT_PREFIX
+
 #: Columns of the recorder's CSV that are not a measurement.
 _NON_SERIES = ("Timestamp", "Time", "Validity", "State", "Notes")
 
@@ -145,10 +147,12 @@ class RecorderTail:
     BACKFILL_BYTES = 64 << 20
 
     def __init__(self, path: str, *, window_s: float = 86400.0,
+                 prefix: str | None = None,
                  sample: str = "Sample", coldplate: str = "Coldplate",
                  output: str = "ls218.aout1") -> None:
         self.path = path
         self.window_s = float(window_s)
+        self.prefix = prefix
         self.names = {"sample": sample, "coldplate": coldplate,
                       "output": output}
         self.samples: deque[Sample] = deque()
@@ -162,10 +166,42 @@ class RecorderTail:
 
     # -- following ---------------------------------------------------------
 
+    @property
+    def following(self) -> str | None:
+        """The log this is actually reading, or ``None`` if it found none.
+
+        A monitor with nothing to read looks exactly like a monitor with
+        nothing to say, which is the whole reason this is reportable rather
+        than internal.
+        """
+        return self._open_path
+
     def _current_path(self) -> str | None:
-        """The newest log matching the configured path or directory."""
+        """The newest log matching the configured path or directory.
+
+        ``prefix`` IS THE RECORDER'S OWN ``filename_prefix`` and leaving it out
+        is how this followed the wrong file.  "Newest" here means last by name,
+        because the names are date-stamped -- but a recorder's data directory is
+        not full of only its own logs, and every other thing that writes a CSV
+        beside it sorts wherever its name happens to sort.  Measured on the
+        cryostat, 2026-09-14: 28 files, and the last by name was
+        ``sweep-20260905-131753.csv``, the sweep tool's grading table from nine
+        days earlier.  Its header has no ``Sample`` column, so the monitor
+        would have followed it in silence for the whole soak.
+
+        Worse, THIS PROCESS IS ONE OF THOSE WRITERS.  ``plant_`` sorts after
+        ``ltspm3-heater_``, so the first verdict written moved the tail onto the
+        monitor's own daily log and it never read the recorder again.  That one
+        is why the fallback below still excludes :data:`PLANT_PREFIX` when no
+        prefix is configured: following your own output is not a
+        misconfiguration a caller should be able to make.
+        """
         if os.path.isdir(self.path):
-            logs = sorted(glob.glob(os.path.join(self.path, "*.csv")))
+            pattern = f"{self.prefix}_*.csv" if self.prefix else "*.csv"
+            logs = sorted(glob.glob(os.path.join(self.path, pattern)))
+            if not self.prefix:
+                logs = [p for p in logs if not os.path.basename(p).startswith(
+                    PLANT_PREFIX + "_")]
             return logs[-1] if logs else None
         return self.path if os.path.exists(self.path) else None
 

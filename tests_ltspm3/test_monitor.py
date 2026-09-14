@@ -498,6 +498,63 @@ def test_the_live_path_writes_plant_json_and_a_daily_csv(tmp_path):
     assert len(rows) == 401
 
 
+def test_the_tail_follows_the_recorder_and_not_the_neighbours(tmp_path):
+    """MEASURED ON THE CRYOSTAT, 2026-09-14, and it made the monitor useless.
+
+    A recorder's data directory is not full of only its own logs.  This one had
+    28 CSVs in it and the last BY NAME was `sweep-20260905-131753.csv` -- the
+    sweep tool's grading table, nine days stale, with no `Sample` column.  The
+    live monitor followed it in silence.
+
+    The second file here is the worse one, because this process writes it:
+    `plant_` sorts after `ltspm3-heater_`, so the monitor moved onto its own
+    daily log the instant it wrote a verdict and never read the cryostat again.
+    """
+    from ltspm3.monitor.source import RecorderTail
+    log = tmp_path / "ltspm3-heater_2026-09-14.csv"
+    write_log(log, rows=50, kelvin=118.0, pct=at(118.0))
+    # Everything else that really shares that directory, all sorting after it.
+    (tmp_path / "sweep-20260905-131753.csv").write_text(
+        "u_pct,t_start,T_inf,grade\n64.0,0,118.3,tau\n", encoding="utf-8")
+    (tmp_path / "plant_2026-09-14.csv").write_text(
+        "Timestamp,t_s,segment,Sample\n2026-09-14T00:00:00,0,0,118.3\n",
+        encoding="utf-8")
+    (tmp_path / "ltspm3_2026-08-28.csv").write_text(
+        "Timestamp,Time,Sample\n2026-08-28T00:00:00,0,4.7\n", encoding="utf-8")
+
+    tail = RecorderTail(str(tmp_path), prefix="ltspm3-heater")
+    assert tail.poll() == 50
+    assert tail.following == str(log)
+    assert tail.samples[-1].sample_k == pytest.approx(118.0)
+
+    # And it stays there when the recorder rolls over -- the prefix selects,
+    # the date still orders.
+    write_log(tmp_path / "ltspm3-heater_2026-09-15.csv", rows=10,
+              kelvin=118.0, pct=at(118.0), t0=1.7886e9 + 86400.0)
+    assert tail.poll() == 10
+    assert tail.following.endswith("ltspm3-heater_2026-09-15.csv")
+
+
+def test_the_tail_never_follows_its_own_plant_log(tmp_path):
+    """The no-prefix fallback, which is the one a caller can get wrong."""
+    from ltspm3.monitor.source import RecorderTail
+    log = tmp_path / "ltspm3-heater_2026-09-14.csv"
+    write_log(log, rows=20, kelvin=118.0, pct=at(118.0))
+    (tmp_path / "plant_2026-09-14.csv").write_text(
+        "Timestamp,t_s,segment,Sample\n2026-09-14T00:00:00,0,0,118.3\n",
+        encoding="utf-8")
+    tail = RecorderTail(str(tmp_path))          # no prefix configured
+    assert tail.poll() == 20
+    assert tail.following == str(log)
+
+
+def test_a_tail_with_nothing_to_read_says_so_rather_than_looking_idle(tmp_path):
+    from ltspm3.monitor.source import RecorderTail
+    tail = RecorderTail(str(tmp_path), prefix="ltspm3-heater")
+    assert tail.poll() == 0
+    assert tail.following is None
+
+
 # -- the cold head ---------------------------------------------------------
 
 def stage_run(judge, *, seconds: float, t0: float, first: float,
