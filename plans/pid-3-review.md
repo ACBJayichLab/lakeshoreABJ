@@ -5,6 +5,10 @@ Part of [PID_PLAN.md](../PID_PLAN.md), after [pid-3-loop.md](pid-3-loop.md).
 before phase 4 arms anything. Nothing here is a new feature: every step
 restores a property the code already claims to have.
 
+**Status, 2026-09-15: step 1 of ten landed.**  The step-order table at the
+bottom carries the rest; a step is landed when its gate is green and its commit
+names the rule it touched.
+
 **The rules of phase 3 still apply.** One commit per step, each naming the
 safety rule it touches, each with a bench test that FAILS before the change
 and passes after it, and a line in `PID_PLAN.md`. The confirmed items each

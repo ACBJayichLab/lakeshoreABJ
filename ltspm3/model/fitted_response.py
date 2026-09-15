@@ -466,12 +466,35 @@ class FittedResponse:
     ``advance`` and ``observe`` -- and it is duck-typed by
     :class:`~lschart.instruments.sim.SimulatedCryostat`, which is what keeps
     invariant 1 intact: ``lschart`` never learns that this class exists.
+
+    **Two knobs make this plant differ from the model that describes it**, and
+    that difference is the only way to simulate a cryostat that is genuinely
+    faulty rather than a controller that is merely mistuned.  Perturbing the
+    controller's schedule or curve is the other test and it is not this one:
+    a controller wrong about ``K`` must NOT fault, and a heater delivering less
+    power than ``P(u)`` claims MUST (plans/pid-3-review.md 3R.1).
+
+    * ``delivered_frac`` -- the fraction of ``P(u)`` that actually reaches the
+      sample.  0.88 is the 12 % loss the bench faults on; a few tenths of an
+      ohm in series with the 75.5 ohm heater is 0.7 % and is what the
+      2026-09-10 event was.
+    * ``sink_offset_k`` -- how far the coldplate sits ABOVE the fitted locus,
+      which is what a cooler losing ground looks like from here.  The sample's
+      own steady state rises with it, through ``Lambda'`` at the sink.
+      Linearised in ``conductance_w``, so a few kelvin is the honest range.
+
+    Both default to "the model is right", and with the defaults the ODE is
+    arithmetically the one that was integrated before they existed.
     """
 
     def __init__(self, params: FittedParams | None = None, *,
-                 start_k: float | None = None, start_pct: float = 0.0) -> None:
+                 start_k: float | None = None, start_pct: float = 0.0,
+                 delivered_frac: float = 1.0,
+                 sink_offset_k: float = 0.0) -> None:
         self.p = params or FittedParams()
         self.pct = float(start_pct)
+        self.delivered_frac = float(delivered_frac)
+        self.sink_offset_k = float(sink_offset_k)
         self._t = float(self.steady_state(start_pct) if start_k is None else start_k)
 
     # -- the model --------------------------------------------------------
@@ -514,13 +537,20 @@ class FittedResponse:
     def advance(self, dt: float) -> None:
         if dt <= 0:
             return
-        q_in = power_w(self.pct)
+        q_in = power_w(self.pct) * self.delivered_frac
         n = max(1, min(self.MAX_SUBSTEPS,
                        int(dt / (self.SUBSTEP_FRACTION * tau_s(self._t))) + 1))
         step = dt / n
+        offset = self.sink_offset_k
         for _ in range(n):
             t = self._t
-            net = q_in - steady_power_w(t)
+            # The fast path is the one that runs on every unperturbed cycle,
+            # and it is `steady_power_w` exactly -- `conductance_w` with the
+            # sink ON its locus returns that same number by construction, so
+            # branching here changes the cost and not the answer.
+            loss = (steady_power_w(t) if offset == 0.0
+                    else conductance_w(t, coldplate_k(t) + offset))
+            net = q_in - loss
             tau = tau_s(t)
             # Exponential Euler, as the fit itself integrates: exact for the
             # linearised relaxation and stable at any step size.  Its fixed

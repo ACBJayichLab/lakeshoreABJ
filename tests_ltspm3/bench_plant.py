@@ -76,7 +76,7 @@ class FittedHarness(Harness):
 
     def __init__(self, *, kelvin: float, sup_cfg=None, pid_cfg=None,
                  guard_cfg=None, filter_kwargs=None, cadence_s=None,
-                 ff_cfg=None, **kw):
+                 ff_cfg=None, delivered_frac=1.0, sink_offset_k=0.0, **kw):
         import dataclasses
 
         from ltspm3.model.fitted_response import FittedResponse
@@ -91,7 +91,17 @@ class FittedHarness(Harness):
         # Start the plant AT the output that holds this temperature, so the
         # cryostat is in equilibrium on the first cycle.  One several kelvin
         # from it is a genuine anomaly and would mask every test here.
-        plant = FittedResponse(start_k=self.bench_k)
+        #
+        # **THE TWO KNOBS ARE WHAT MAKES THE CRYOSTAT WRONG** rather than the
+        # controller -- `delivered_frac` is a heater that does not deliver what
+        # `P(u)` claims and `sink_offset_k` is a coldplate off its locus, and
+        # both are things the loop is supposed to notice.  The controller's own
+        # model is perturbed by a different test, and the difference between
+        # the two is the whole argument of §3.7's last row: mistuned must not
+        # fault, broken must.
+        plant = FittedResponse(start_k=self.bench_k,
+                               delivered_frac=delivered_frac,
+                               sink_offset_k=sink_offset_k)
         self.bench_pct = plant.percent_for(self.bench_k)
         plant.pct = self.bench_pct
 
@@ -115,8 +125,9 @@ class FittedHarness(Harness):
         h = 0.5
         slope = (_M.coldplate_k(self.bench_k + h)
                  - _M.coldplate_k(max(self.bench_k - h, _M.T_MIN_K))) / (2 * h)
+        self._sink_locus_k = _M.coldplate_k(self.bench_k)
         kw.setdefault("aux_base", {**_SC.DEFAULT_AUX_BASE,
-                                   "218.2": _M.coldplate_k(self.bench_k)})
+                                   "218.2": self._sink_locus_k + sink_offset_k})
         kw.setdefault("aux_coupling", {**LTSPM3_AUX_COUPLING, "218.2": slope})
 
         sup = sup_cfg or dataclasses.replace(
@@ -149,6 +160,33 @@ class FittedHarness(Harness):
     @property
     def plant(self):
         return self.cryostat.response
+
+    def deliver(self, frac: float) -> None:
+        """The heater starts delivering ``frac`` of the power ``P(u)`` claims.
+
+        A genuine fault: the watts stop adding up, the residual steps by
+        ``-(1-frac) P(u)`` immediately, and the loop rails trying to make it up
+        because restoring the power needs ``1/sqrt(frac)`` of the output and
+        the band is one percent wide.
+        """
+        self.plant.delivered_frac = float(frac)
+
+    def sink_offset(self, offset_k: float) -> None:
+        """Put the coldplate ``offset_k`` above its fitted locus.
+
+        **The reading follows the plant**, which is the half the old
+        rising-coldplate row was missing: `_aux_base` alone moves what the
+        thermometer says and leaves the sample where it was, so the residual
+        saw a sink it could correct for and the loop saw no disturbance at all.
+        Moving both is a cooler that is genuinely losing ground -- scenario 1
+        of plans/pid-3-review.md, which warns however far it goes and never
+        faults, because less heat needed is the safe direction.
+
+        `_aux_base` is the simulator's own dictionary and there is no public
+        setter; the bench has always reached in here.
+        """
+        self.plant.sink_offset_k = float(offset_k)
+        self.cryostat._aux_base["218.2"] = self._sink_locus_k + float(offset_k)
 
     def minutes(self, n, dt=None):
         """`n` minutes of closed loop, at the bench cadence."""

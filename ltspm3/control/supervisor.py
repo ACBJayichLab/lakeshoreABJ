@@ -169,7 +169,9 @@ class SupervisorConfig:
     #: residual immediately; anything that takes hours to reach a level did not
     #: step, and the fault slow degradation eventually causes is
     #: authority-exhausted below.  10 mW is Jeff's, 2026-09-14, and it is a
-    #: FLOOR under the 3 sigma band rather than a replacement for it.
+    #: FLOOR under the 3 sigma band rather than a replacement for it -- the
+    #: FAST band, `sigma_q_fast_w`, which carries no drift and no calibration
+    #: because neither can move inside the window a step is measured over.
     fault_mw: float = 10.0
     #: The window the step is measured over, as a range.
     fault_window_s: float = 1800.0
@@ -296,6 +298,7 @@ class HeaterSupervisor:
         filter_kwargs: dict | None = None,
         cadence_s: float | None = None,
         clock=time.monotonic,
+        wall_clock=time.time,
     ) -> None:
         self.inst = instrument
         self.channel = channel
@@ -304,6 +307,19 @@ class HeaterSupervisor:
         self.coherence = CoherenceMonitor(coherence_config)
         self.filter = MeasurementFilter(**(filter_kwargs or {}))
         self.clock = clock
+        #: **The second clock, and it is not interchangeable with the first.**
+        #: `clock` is monotonic and every interval in this file is measured on
+        #: it.  This one is unix seconds, and exactly one thing needs it: the
+        #: band's DRIFT term is dated, so `sigma_q_w` has to know how long ago
+        #: the level was gauged.
+        #:
+        #: It is injected because a bench that reads the real calendar is a
+        #: different grader on every day it runs -- 3 sigma at 118 K is 1.4 mW
+        #: on the gauge day and 52 mW two months later, so a fault row would
+        #: eventually stop faulting and a "quiet through a sweep" row would get
+        #: easier every morning.  CLAUDE.md: a test must not depend on the time
+        #: of day.  The recorder passes nothing and keeps real time.
+        self.wall_clock = wall_clock
 
         # THE CADENCE IS MEASURED, and seeded from the config rather than taken
         # from it.  The loop's dead time is derived from the cadence, and the
@@ -1419,7 +1435,21 @@ class HeaterSupervisor:
                 f"demand railed at {self.band[1]:.3f} %")
 
         # -- the watt rows --------------------------------------------------
-        dq, sigma, why = self._missing_power(s)
+        #
+        # **TWO BANDS, AND KEEPING THEM APART IS THE POINT.**  `sigma` is the
+        # whole band, drift and all, and it is what a LEVEL is judged against:
+        # a level genuinely does get less well known as the gauge ages, the
+        # warning keeps tracking, and the monitor's trailing baseline is what
+        # judges the drift itself.  `fast` has no date in it and it is what a
+        # STEP is judged against, because a step is a CHANGE and nothing that
+        # grows at 0.29 mW/day can happen inside thirty minutes.
+        #
+        # The monitor has always judged its step this way (`sigma_q_fast_w`,
+        # judge.py).  This is the loop agreeing with it, which this method's
+        # docstring has always claimed it did and which it did not: a month
+        # after the gauge the loop would not have faulted on a step five times
+        # the 2026-09-10 event, and the monitor still would.
+        dq, sigma, fast, why = self._missing_power(s)
         s.missing_power_w, s.sigma_q_w, s.residual_reason = dq, sigma, why
         if dq is None:
             # **THE STEP HISTORY BREAKS HERE**, and clearing it is the point
@@ -1466,7 +1496,7 @@ class HeaterSupervisor:
                 self._dq_slow + alpha * (dq - self._dq_slow))
         if self._dq_slow is None:
             return
-        self._dq_hist.append((t, self._dq_slow, sigma))
+        self._dq_hist.append((t, self._dq_slow, fast))
         floor_t = t - cfg.fault_window_s
         while len(self._dq_hist) > 1 and self._dq_hist[0][0] < floor_t:
             self._dq_hist.popleft()
@@ -1477,8 +1507,10 @@ class HeaterSupervisor:
         # the floor binds (band 1.4 mW) and on a 5 K/min sweep at 180 K the
         # band does (8.8 mW), and a flat 10 mW there would fault every sweep.
         #
-        # **The band is the WIDEST it was anywhere in the window**, not its
-        # value at this instant, because the range is a statement about the
+        # **The band is the WIDEST it was anywhere in the window**, and it is
+        # the FAST band -- no drift, no calibration -- because the range is a
+        # statement about a change over half an hour.  Not its value at this
+        # instant, because the range is a statement about the
         # whole window.  Evaluated at the instant, a window that contains a
         # sweep gets judged against the settled band: measured at 180 K, a 3 K
         # move whose residual swung -7.07 to +4.68 mW -- an 11.75 mW range, and
@@ -1493,11 +1525,19 @@ class HeaterSupervisor:
                 f"{cfg.fault_window_s / 60:.0f} min, past {1e3 * fault_at:.1f} mW")
 
     def _missing_power(self, s):
-        """``(dQ, sigma, why)``.  ``dQ`` is None when there is no opinion.
+        """``(dQ, sigma, sigma_fast, why)``.  ``dQ`` is None for no opinion.
 
         The same two model functions the monitor calls, so the loop and the
         judge cannot disagree about what typical means -- only about what to do
         about it.
+
+        **Two bands come back, and they answer different questions.**  ``sigma``
+        is :func:`~ltspm3.model.fitted_response.sigma_q_w`, the whole band, and
+        it carries the drift since the level was gauged -- the band for a
+        LEVEL.  ``sigma_fast`` is
+        :func:`~ltspm3.model.fitted_response.sigma_q_fast_w`, which has no date
+        in it at all -- the band for a CHANGE, and the one the monitor judges
+        its own step test by.
 
         **No transient gate here, unlike the monitor's.**  The monitor holds its
         opinion for 3 tau after any heater move because it is fitting poles and
@@ -1508,11 +1548,11 @@ class HeaterSupervisor:
         """
         cfg = self.cfg
         if s.filtered_k is None or self.output_pct is None:
-            return None, 0.0, "no reading"
+            return None, 0.0, 0.0, "no reading"
         if self.output_pct < cfg.min_output_pct:
-            return None, 0.0, f"output below {cfg.min_output_pct:.0f} %"
+            return None, 0.0, 0.0, f"output below {cfg.min_output_pct:.0f} %"
         if not _M.T_MIN_K <= s.filtered_k <= _M.T_MAX_K:
-            return None, 0.0, "sample outside the table"
+            return None, 0.0, 0.0, "sample outside the table"
         # **NO OPINION WHERE THE PLANT IS FASTER THAN THE SLOPE IS MEASURED.**
         # `dQ` carries `C dT/dt`, and dT/dt here is a regression over the
         # slope window -- 30 s at this cadence.  Where tau is shorter than
@@ -1529,15 +1569,17 @@ class HeaterSupervisor:
         # conditioned on moving at all.
         window_s = self.filter.slope.window * (self._cadence_s or 0.0)
         if s.slope_k_per_s and _M.tau_s(s.filtered_k) < window_s:
-            return None, 0.0, "the plant is faster than the slope window"
+            return None, 0.0, 0.0, "the plant is faster than the slope window"
         sink = self._coldplate_k
         if sink is None:
             sink = _M.coldplate_k(s.filtered_k)
         dq = _M.missing_power_w(s.filtered_k, s.slope_k_per_s, sink,
                                 self.output_pct)
-        sigma = _M.sigma_q_w(s.filtered_k, self.output_pct, time.time(),
+        sigma = _M.sigma_q_w(s.filtered_k, self.output_pct, self.wall_clock(),
                              dt_dt_k_per_s=s.slope_k_per_s)
-        return dq, sigma, ""
+        fast = _M.sigma_q_fast_w(s.filtered_k, self.output_pct,
+                                 dt_dt_k_per_s=s.slope_k_per_s)
+        return dq, sigma, fast, ""
 
     def _check_model(self, s: SupervisorStatus) -> None:
         """Report how far the settled measurement is from the curve.

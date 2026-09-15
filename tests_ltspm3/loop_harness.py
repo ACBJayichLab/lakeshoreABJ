@@ -22,6 +22,7 @@ from ltspm3.control import (
 from ltspm3.control.feedforward import FeedforwardConfig
 from lschart.instruments import LS218
 from lschart.instruments.sim import Sim218, SimulatedCryostat
+from ltspm3.model.fitted_response import DRIFT_T0_UNIX
 from ltspm3.model.sim_response import LTSPM3_AUX_COUPLING, ResponseParams, ThermalModel
 from lschart.transport import LoopbackTransport
 
@@ -45,10 +46,20 @@ class Harness:
 
     DT = 4.0  # the cryostat's real poll cadence
 
+    #: **The bench's wall clock, pinned.**  The supervisor needs unix seconds
+    #: for one thing only -- the age of the band's drift term -- and a bench
+    #: that reads the real calendar grades differently every day it runs: 3
+    #: sigma at 118 K is 1.44 mW on the gauge day, 8.7 ten days later and 52 at
+    #: +60 d.  So the default is the day the level was gauged, and a test that
+    #: wants to prove a fault still faults two months on passes
+    #: `wall_t0=DRIFT_T0_UNIX + 60 * 86400` rather than waiting for November.
+    WALL_T0 = DRIFT_T0_UNIX
+
     def __init__(self, *, start_k=None, sup_cfg=None, pid_cfg=None, guard_cfg=None,
                  filter_kwargs=None, response=None, model=None, cadence_s=None,
-                 ff_cfg=None, aux_base=None, aux_coupling=None):
+                 ff_cfg=None, aux_base=None, aux_coupling=None, wall_t0=None):
         self.clock = VirtualClock()
+        self.wall_t0 = self.WALL_T0 if wall_t0 is None else float(wall_t0)
         params = response or ResponseParams()
         # Start in equilibrium at the operating point: a cryostat still drifting
         # several kelvin is a genuine anomaly and would mask the real tests.
@@ -123,6 +134,9 @@ class Harness:
             feedforward_config=ff_cfg or FeedforwardConfig(source="cd10"),
             cadence_s=cadence_s,
             clock=self.clock,
+            # Virtual seconds since the gauge, so the band the loop judges by
+            # is the same one on any day this suite runs.
+            wall_clock=lambda: self.wall_t0 + self.clock.t,
         )
         self.history = []
 
