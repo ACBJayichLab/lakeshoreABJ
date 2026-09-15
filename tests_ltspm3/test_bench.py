@@ -20,7 +20,7 @@ import statistics
 
 import pytest
 
-from conftest import BENCH_TEMPERATURES, FittedHarness, bench_control_config
+from bench_plant import BENCH_TEMPERATURES, FittedHarness, bench_control_config
 from ltspm3.control import LoopMode, SupervisorState
 from ltspm3.model import fitted_response as M
 

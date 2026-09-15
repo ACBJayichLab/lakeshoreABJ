@@ -188,6 +188,11 @@ control:
   # integral do the work.  It is slower, and it is always correct.
   feedforward:
     enabled: true
+    # `fitted` (the shipped ODE fit) or `cd10` (the steady-state curve this
+    # loop was built on).  They disagree by 13 K below 64 %, where CD10 never
+    # measured and was extrapolating a power law.  The three fields below
+    # configure `cd10` only.
+    source: fitted
     t_bath_k: 4.0
     ref_pct: 63.076
     ref_rise_k: 95.6

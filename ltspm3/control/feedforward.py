@@ -49,12 +49,42 @@ and the power law only extrapolates beyond them.
 Accuracy is not critical either way -- any residual is absorbed by the
 integral.  What feedforward buys is the *shape*, so the output moves when the
 setpoint moves instead of lagging it by a thermal time constant.
+
+Two curves, and the default changed
+-----------------------------------
+
+Everything above describes ``source: cd10``, which is what this module was
+built on and is kept for reading the pre-refit record.  **The default is now
+``source: fitted``** -- ``ltspm3.model.fitted_response``, the ODE fitted to the
+43 h sweep and refitted 2026-09-13.  Phase 3 step 2.
+
+They do not agree, and outside the band CD10 actually measured they do not
+nearly agree.  The 4-5 K quoted in REFIT_PLAN 7.3 is the disagreement at the
+top, where both have data:
+
+======  ==========  ==========
+pct     cd10        fitted
+======  ==========  ==========
+24.20     4.81 K      9.99 K
+52.40    41.99 K     29.98 K
+59.20    73.72 K     60.41 K
+62.60    96.06 K    100.12 K
+65.60   133.22 K    139.63 K
+68.70   173.92 K    179.67 K
+======  ==========  ==========
+
+**Thirteen kelvin at 59 %**, because CD10's 24 settled points span 64.3-68.5 %
+and everything below that is a power law extrapolating out of its own range.
+The local gain is as bad: 7.3 K/% against 13.0 at 62.6 %, which is the number
+the loop tunes itself with.  The fit is not an improvement on the old curve
+down there; it is the only measurement there has ever been.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..model import fitted_response as _M
 from ..model.thermal_response import (
     MEASURED_CURVE,
     REF_PCT,
@@ -65,14 +95,23 @@ from ..model.thermal_response import (
     fit_thermal_exponent,
 )
 
-__all__ = ["Feedforward", "FeedforwardConfig", "MEASURED_CURVE", "fit_thermal_exponent"]
+__all__ = ["Feedforward", "FeedforwardConfig", "FittedCurve", "MEASURED_CURVE",
+           "fit_thermal_exponent"]
 
 
 @dataclass
 class FeedforwardConfig:
-    """The measured steady-state curve.  See :mod:`ltspm3.model.thermal_response`."""
+    """Which steady-state curve, and the CD10 one's parameters."""
 
     enabled: bool = True
+
+    #: ``fitted`` (the shipped ODE fit, :mod:`ltspm3.model.fitted_response`) or
+    #: ``cd10`` (the 2026 steady-state curve this module was built on).  The
+    #: fields below configure ``cd10`` only; ``fitted`` has no free parameters
+    #: at all, which is the point of it -- it is a table with a cache key, and
+    #: a loop tuned against a curve nobody can trace is how the 4-5 K got in.
+    source: str = "fitted"
+
     t_bath_k: float = T_BATH_K
 
     #: Anchor for the pure power-law form, used outside the calibration table.
@@ -97,18 +136,74 @@ class FeedforwardConfig:
         return 2.0 * self.thermal_exponent
 
 
+class FittedCurve:
+    """The shipped fit, behind the four methods :class:`Feedforward` asks for.
+
+    An adapter rather than a rewrite, so the two curves are interchangeable and
+    a test can put either one under the same loop -- which is how the "model
+    wrong on purpose" row of §3.7 works.
+
+    Nothing here extrapolates.  ``fitted_response``'s table clamps at its ends
+    (4.7-195 K, 0.72-69.95 %) because past them the curves are flat and the
+    physics is fiction, and a feedforward that invents an output for 300 K is
+    exactly the thing PID_PLAN's "nothing above 180.6 K is measured" trap warns
+    about.  Clamped, the worst it can do is propose too little heat, which the
+    integral then supplies slowly.
+    """
+
+    def __init__(self, ref_pct: float = REF_PCT) -> None:
+        self.ref_pct = ref_pct
+
+    def relative_power(self, pct: float) -> float:
+        """Heater power as a fraction of power at ``ref_pct``.  Exact -- the
+        218's output is a voltage into a stable resistance, so P ~ pct**2 and
+        this half of the model is not fitted at all."""
+        ref = _M.power_w(self.ref_pct)
+        return _M.power_w(pct) / ref if ref > 0 else 0.0
+
+    def kelvin_for(self, pct: float) -> float:
+        return _M.steady_temperature_k(_M.power_w(pct))
+
+    def percent_for(self, kelvin: float) -> float:
+        return _M.percent_for_power(_M.steady_power_w(kelvin))
+
+    def gain_at(self, pct: float) -> float:
+        """``dT/d(pct)`` in K/%, central difference on the table."""
+        h = max(pct * 1e-3, 1e-3)
+        lo = max(pct - h, 0.0)
+        return (self.kelvin_for(pct + h) - self.kelvin_for(lo)) / ((pct + h) - lo)
+
+    def local_exponent(self, pct: float) -> float:
+        """The lumped ``n`` in ``dT ~ pct**n`` right here.  Not a constant, and
+        on this cryostat not even nearly one: it is the slope of log dT against
+        log pct, and it runs from about 20 at the cold end to 4 at the top."""
+        t_bath = _M.T_MIN_K
+        rise = self.kelvin_for(pct) - t_bath
+        if rise <= 0 or pct <= 0:
+            return 0.0
+        return self.gain_at(pct) * pct / rise
+
+
 class Feedforward:
     """Steady-state output for a temperature, and the local gain there."""
 
     def __init__(self, config: FeedforwardConfig | None = None) -> None:
         self.cfg = config or FeedforwardConfig()
-        self.curve = SteadyStateCurve(
-            self.cfg.calibration,
-            t_bath_k=self.cfg.t_bath_k,
-            thermal_exponent=self.cfg.thermal_exponent,
-            ref_pct=self.cfg.ref_pct,
-            ref_rise_k=self.cfg.ref_rise_k,
-        )
+        if self.cfg.source == "fitted":
+            self.curve = FittedCurve(self.cfg.ref_pct)
+        elif self.cfg.source == "cd10":
+            self.curve = SteadyStateCurve(
+                self.cfg.calibration,
+                t_bath_k=self.cfg.t_bath_k,
+                thermal_exponent=self.cfg.thermal_exponent,
+                ref_pct=self.cfg.ref_pct,
+                ref_rise_k=self.cfg.ref_rise_k,
+            )
+        else:
+            raise ValueError(
+                f"feedforward.source must be 'fitted' or 'cd10', got "
+                f"{self.cfg.source!r}"
+            )
 
     @property
     def enabled(self) -> bool:

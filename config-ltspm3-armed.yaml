@@ -199,10 +199,17 @@ control:
                                   # present temperature instead of this
 
   feedforward:
-    # STEP 2 REPOINTS THIS AT `fitted_response`.  Today it is the CD10
-    # steady-state curve, which the 09-13 refit found 4-5 K cold at a given
-    # output -- 60.597 % read 70.0 K and reads 75.09.
     enabled: true
+    # THE SHIPPED FIT, not the CD10 steady-state curve.  They agree to 4-5 K
+    # where CD10 measured (64.3-68.5 %) and to THIRTEEN KELVIN where it did
+    # not: 59.2 % is 73.72 K on the old curve and 60.41 K on the fit, and the
+    # local gain there is 5.9 K/% against 9.1.  Everything below 64 % was a
+    # power law extrapolating out of its own range.
+    #
+    # `fitted` has no parameters at all -- it is a table with a cache key.  The
+    # three below configure `cd10` only and are kept so the pre-refit record
+    # can still be read back.
+    source: fitted
     t_bath_k: 4.0
     ref_pct: 63.076
     ref_rise_k: 95.6

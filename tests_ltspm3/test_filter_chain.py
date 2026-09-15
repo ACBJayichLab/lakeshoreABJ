@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import BENCH_TEMPERATURES, FittedHarness
+from bench_plant import BENCH_TEMPERATURES, FittedHarness
 from ltspm3.control import LoopMode, SupervisorState
 from ltspm3.control.filters import ExponentialFilter, MeasurementFilter
 
@@ -171,3 +171,52 @@ def test_the_loop_measures_its_own_cadence_rather_than_trusting_the_config():
     assert h.sup.delay_s > 3.0, "the delay never noticed"
     assert h.sup.delay_s == pytest.approx(h.sup.tuner.delay_s)
     assert h.sup.delay_s < 9.0, "...and it must not chase a single slow cycle"
+
+
+# -- §3.0.C / step 2: the curve the loop stands on ---------------------------
+
+
+def test_the_loop_reads_the_FITTED_curve_and_not_cd10():
+    """Step 2.  What `control/` believes about this cryostat is the shipped fit.
+
+    Before this, `feedforward.py` imported `model/thermal_response.py` -- CD10's
+    24 settled points over 64.3-68.5 %, with a power law for everything else.
+    The loop's whole idea of "what output holds what temperature" came from a
+    curve that had never seen 30 K.
+    """
+    from ltspm3.control.feedforward import Feedforward, FeedforwardConfig, FittedCurve
+    from ltspm3.model import fitted_response as M
+
+    assert FeedforwardConfig().source == "fitted"
+    ff = Feedforward()
+    assert isinstance(ff.curve, FittedCurve)
+
+    # The loop's answer IS the model's answer, to the last digit.
+    for kelvin in BENCH_TEMPERATURES:
+        assert ff.percent_for(kelvin) == pytest.approx(
+            M.percent_for_power(M.steady_power_w(kelvin)), abs=1e-9)
+
+    # And it clamps rather than extrapolating.  The table ends at 195 K, so a
+    # 300 K setpoint gets the top of the table and not an invented number --
+    # too little heat, which the integral supplies slowly, rather than a
+    # feedforward step into a region nobody has measured.
+    assert ff.percent_for(300.0) == pytest.approx(ff.percent_for(M.T_MAX_K))
+    assert ff.percent_for(300.0) < 70.0
+
+
+def test_the_supervisor_regime_check_now_uses_the_fitted_curve():
+    """`_check_model` asks the feedforward what this output should settle at.
+
+    On the fitted plant that comparison is now like-for-like, so a settled hold
+    reads a model error of about zero.  Under CD10 the same hold at 118 K read
+    several kelvin out, and `model_trust_k: 15` was sized around exactly that
+    kind of disagreement rather than around a real regime change.
+    """
+    h = FittedHarness(kelvin=118.0)
+    h.settle_filter(60)
+    h.sup.set_mode(LoopMode.PID)
+    h.minutes(5)
+    s = h.sup.status
+    assert s.model_error_k is not None, "the check never ran"
+    assert abs(s.model_error_k) < 0.5
+    assert s.model_trusted

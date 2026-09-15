@@ -107,23 +107,48 @@ def test_dithering_voltage_does_not_exactly_average_power():
 
 # -- simulator and controller must not drift apart --------------------------
 
-def test_simulator_and_feedforward_share_one_curve():
-    """They are calibrated from the same measurements on purpose: a mismatch
-    between them should be something a test opts into, not an accident."""
-    params = ResponseParams()
-    ff = Feedforward()
+def test_each_simulator_shares_one_curve_with_its_own_feedforward():
+    """A plant and the controller's model of it must come from the same
+    measurements: a mismatch should be something a test opts into, not an
+    accident.  There are now TWO such pairs and they are not interchangeable.
+    """
+    from ltspm3.model import fitted_response as M
+
+    # The two-pole CD10 simulator, with the CD10 curve.
+    params, cd10 = ResponseParams(), Feedforward(FeedforwardConfig(source="cd10"))
     for pct in (63.076, 64.5, 66.0, 68.0):
-        assert params.steady_state(pct) == pytest.approx(ff.kelvin_for(pct), abs=0.01)
+        assert params.steady_state(pct) == pytest.approx(cd10.kelvin_for(pct), abs=0.01)
+
+    # The shipped fit, with the fitted curve -- which is what the cryostat runs.
+    fitted = Feedforward()
+    for pct in (24.2, 52.4, 62.6, 68.7):
+        assert M.steady_temperature_k(M.power_w(pct)) == pytest.approx(
+            fitted.kelvin_for(pct), abs=1e-9)
 
 
 def test_model_mismatch_can_be_injected():
-    """Dropping the calibration falls back to the pure power law, which is how
-    a controller that is wrong about its response gets tested."""
-    exact = Feedforward()
-    wrong = Feedforward(FeedforwardConfig(calibration=()))
+    """Two ways, and the second one is a mismatch that really happened.
+
+    Dropping the calibration still falls back to CD10's pure power law.  But
+    the realistic injection is now the two curves themselves: the loop ran on
+    `cd10` until phase 3 step 2, and where CD10 never measured -- below 64 % --
+    the two disagree by **thirteen kelvin**, with local gains of 3.6 against
+    2.0 K/%.  That is a controller wrong about its response in exactly the way
+    this cryostat's controller was wrong.
+    """
+    exact = Feedforward(FeedforwardConfig(source="cd10"))
+    wrong = Feedforward(FeedforwardConfig(source="cd10", calibration=()))
     assert wrong.kelvin_for(66.0) != pytest.approx(exact.kelvin_for(66.0), abs=0.5)
     # Still the right shape, though -- it must not be nonsense.
     assert wrong.kelvin_for(66.0) > wrong.kelvin_for(64.0)
+
+    fitted = Feedforward()
+    assert abs(fitted.kelvin_for(59.2) - exact.kelvin_for(59.2)) > 12.0
+    assert fitted.gain_at(52.4) == pytest.approx(1.96, abs=0.05)
+    assert exact.gain_at(52.4) == pytest.approx(3.61, abs=0.05)
+
+    with pytest.raises(ValueError):
+        Feedforward(FeedforwardConfig(source="whatever"))
 
 
 def test_gain_rises_steeply_with_output():
