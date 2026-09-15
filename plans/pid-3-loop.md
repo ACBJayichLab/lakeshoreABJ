@@ -235,11 +235,22 @@ because a one-rate sweep the band forbids cannot be tested.
 | 7 | §3.5 `FROZEN` / `CRASHED`, schema bump | 6, 7 | §3.5 |
 | 8 | §3.6 quiet hold, the full matrix, finding E, the docs | 4 | the exit gate below |
 
-## Exit gate
+## Exit gate — MET 2026-09-14, except the bench's two soak rows
 
-- All eight scenarios green at all six temperatures.
-- `SupervisorConfig` has 2 rate fields where it had 8; `check` prints them.
-- Plan 2's replay still green with the new tables, and the monitor **keeps an
-  opinion while the loop is armed** (finding E).
-- `safety.md` rules 3, 4 and 5 reworded; `control.md` and `running.md` state
-  the two ratios, the one rate, the moving band and the state names.
+- **All eight scenarios green at all six temperatures** ✔ — 3 K move, 5 K/min
+  sweep, glitch, lost sensor, rising coldplate, crash, quiet hold, and the
+  model wrong on purpose in five ways. `tests_ltspm3/test_bench.py`.
+- **2 rate fields where there were 8** ✔ — `ramp.max_rate_k_per_min` and
+  `supervisor.min_rate_pct_per_min`.
+- **Plan 2's replay still green** ✔ (37 tests, the 09-10 event still at
+  +14 min) **and the monitor keeps an opinion while the loop is armed** ✔ —
+  finding E, fixed by making the transient gate `move_k` rather than a
+  `move_pct` of half a DAC code.
+- **`safety.md` rules 4, 5 and 8 reworded** ✔; `control.md` and `running.md`
+  state the ratios, the one rate, the moving band and the state names ✔.
+
+**What is NOT done**: the hour-long quiet hold is measured over one simulated
+hour at each temperature rather than as a soak, and §3.6's Allan criterion
+(`σ_y(τ) ≤ σ_y(10 s)`) is not yet run against a closed-loop record —
+`analysis/allan.py` grades archive and live runs alike and there is no
+closed-loop run to grade. That is phase 4's first hour.

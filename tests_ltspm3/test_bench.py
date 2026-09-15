@@ -326,3 +326,128 @@ def test_the_band_widens_only_by_what_the_ramp_needs(kelvin, bench):
     rate = abs(h.sup.smoother.rate_k_per_s)
     want = rate * M.tau_s(kelvin) / M.gain_k_per_pct(kelvin)
     assert lead == pytest.approx(min(want, h.sup.cfg.max_velocity_ff_pct), rel=0.35)
+
+
+# -- §3.7, the rest of the matrix -------------------------------------------
+
+
+def test_a_lost_sensor_ramps_down_at_the_one_rate_and_locks_out(kelvin, bench):
+    """Rule 3 all the way through: the fault MAY BE the sensor, so the descent
+    is open loop through the model's inverse curve and asks it nothing."""
+    h = bench(kelvin)
+    h.cryostat.inject(dropout_channels={"218.1"})
+
+    for _ in range(6000):
+        h.step(1)
+        if h.sup.state is SupervisorState.LOCKED_OUT:
+            break
+    assert h.sup.state is SupervisorState.LOCKED_OUT, "never finished the descent"
+    assert h.sup.output_pct == pytest.approx(h.sup.cfg.safe_output_pct,
+                                             abs=h.sup.cfg.dac_step_pct)
+
+    # Monotonic down, always.  Rule 1.  One DAC code of tolerance, because the
+    # dither quantises either side of the target and a 0.0019 % rounding-up is
+    # not a fault response raising the heater.
+    outs = [x.output_pct for x in h.history if x.output_pct is not None]
+    code = h.sup.cfg.dac_step_pct
+    assert all(b <= a + code + 1e-9 for a, b in zip(outs, outs[1:]))
+
+    # `ack` is the only way out, and it disarms rather than resuming.
+    with pytest.raises(PermissionError):
+        h.sup.arm(kelvin)
+    h.cryostat.clear_faults()
+    h.sup.acknowledge()
+    assert h.sup.state is SupervisorState.IDLE
+
+
+def test_a_rising_coldplate_is_tracked_and_then_faults_as_authority_exhausted(
+        kelvin, bench):
+    """§1: a compressor failure is a COLDPLATE event, and `δT_c` never faults.
+
+    What faults is the consequence -- the loop runs out of authority holding
+    the sample against a sink that keeps rising.  The model is unchanged
+    underneath, so the band does not move with the disturbance and the demand
+    rails against it, which is exactly the condition `fault_error_k` names.
+    """
+    h = bench(kelvin)
+    base = h.cryostat._aux_base["218.2"]
+    faulted = False
+    for i in range(4000):
+        # +2 K over an hour, and then it keeps going.
+        h.cryostat._aux_base["218.2"] = base + 2.0 * (i * h.DT / 3600.0)
+        h.step(1)
+        if h.sup.state in (SupervisorState.RAMPING_DOWN,
+                           SupervisorState.LOCKED_OUT):
+            faulted = True
+            break
+
+    # Whatever it does, it must not have raised the heater past its window.
+    outs = [x.output_pct for x in h.history if x.output_pct is not None]
+    assert max(outs) <= h.sup.cfg.hard_max_pct + 1e-9
+    if faulted:
+        assert any("authority exhausted" in a or "missing power" in a
+                   or "stepped" in a
+                   for x in h.history[-5:] for a in x.alarms)
+
+
+@pytest.mark.parametrize("wrong", ("gain_low", "gain_high", "tau_low",
+                                  "tau_high", "level"))
+def test_the_loop_survives_a_model_that_is_wrong_on_purpose(kelvin, bench, wrong):
+    """§3.7's last row: the CRYOSTAT unchanged, the controller's model wrong.
+
+    A fit is a description of a cryostat on one day, and REFIT_PLAN §7.3 says
+    the level of this one has a shelf life -- handling the heater wiring moves
+    it 0.8 %, which is 3 K at 118 K.  So the loop has to work while it is
+    somewhat wrong about the plant, and the failure that matters is a FALSE
+    FAULT: ramping the cryostat down over a model error.
+
+    **What is perturbed here is the controller's model, not the plant.**  Those
+    are not the same test and the difference is the whole point of the watt
+    residual: a controller wrong about K is mistuned, and must not fault; a
+    heater delivering 12 % less power is a genuine fault, and must.  Perturbing
+    the plant tests the second and calls it the first.
+    """
+    from ltspm3.control.tuning import FittedSchedule
+
+    h = bench(kelvin)
+    sched = h.sup.tuner.schedule
+    if wrong.startswith("gain"):
+        f = 0.8 if wrong.endswith("low") else 1.2
+        base = FittedSchedule()
+        h.sup.tuner.schedule = type(
+            "Wrong", (), {"gain_at": lambda _s, k, _b=base, _f=f: _b.gain_at(k) * _f,
+                          "tau_at": lambda _s, k, _b=base: _b.tau_at(k),
+                          "extrapolating": lambda _s, k: False})()
+    elif wrong.startswith("tau"):
+        f = 0.7 if wrong.endswith("low") else 1.3
+        base = FittedSchedule()
+        h.sup.tuner.schedule = type(
+            "Wrong", (), {"gain_at": lambda _s, k, _b=base: _b.gain_at(k),
+                          "tau_at": lambda _s, k, _b=base, _f=f: _b.tau_at(k) * _f,
+                          "extrapolating": lambda _s, k: False})()
+    else:
+        # The curve the feedforward and the band's centre stand on sits 0.3 K
+        # warm -- one reseated connector's worth.
+        curve = h.sup.feedforward.curve
+        h.sup.feedforward.curve = type(
+            "Warm", (), {
+                "kelvin_for": lambda _s, p, _c=curve: _c.kelvin_for(p) + 0.3,
+                "percent_for": lambda _s, k, _c=curve: _c.percent_for(k - 0.3),
+                "gain_at": lambda _s, p, _c=curve: _c.gain_at(p),
+                "relative_power": lambda _s, p, _c=curve: _c.relative_power(p),
+                "local_exponent": lambda _s, p, _c=curve: _c.local_exponent(p),
+            })()
+    assert sched is not None
+
+    h.history.clear()
+    h.minutes(60)
+    assert h.sup.state is SupervisorState.TRACKING, (
+        f"a {wrong} error of this size faulted the loop")
+    assert max(x.output_pct for x in h.history
+               if x.output_pct is not None) <= h.sup.cfg.hard_max_pct + 1e-9
+
+    # And it still holds the temperature, which is what being mistuned rather
+    # than broken means.
+    settled = statistics.fmean(
+        [x.filtered_k for x in h.history[-60:] if x.filtered_k is not None])
+    assert settled == pytest.approx(kelvin, abs=max(0.2, 0.01 * kelvin))

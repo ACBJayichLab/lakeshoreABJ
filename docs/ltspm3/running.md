@@ -79,7 +79,7 @@ Distinct from a fault: this is an operator asking, not the supervisor deciding.
 ```bash
 python -m ltspm3 -c config.yaml send hold          # loop OPEN, heater frozen
 python -m ltspm3 -c config.yaml send heaters_off   # loop DISARMED, heater to 0
-python -m ltspm3 -c config.yaml send arm           # closed again, holding here
+python -m ltspm3 -c config.yaml send arm           # closed again, holds here
 ```
 
 **Both of these disengage the loop.** A person reaching for either has decided
@@ -149,8 +149,9 @@ against a live armed recorder:
 The software loop is the **last row of the loop table**, marked `sw`, beneath
 whatever loops the 336 has. It carries the channel it controls, that channel's
 temperature, the setpoint, the output percent, the gains in force, and the
-supervisor's own state — `tracking`, `idle`, `holding`, `ramping down`,
-`locked out`. The loop mode (`off` / `manual` / `pid`) is in the hover, because
+supervisor's own state — `tracking`, `idle`, `frozen`, `ramping down`,
+`locked out`, `crashed`. (`frozen` was `holding` until 2026-09-14; it collided
+with the `hold` phase and the `hold` command, which are different things.) The loop mode (`off` / `manual` / `pid`) is in the hover, because
 `idle` alone cannot tell a loop that was never armed from one that was armed
 and then held.
 
@@ -167,8 +168,9 @@ before you read the warning marks:
 - **It rails against the authority band, not against 99 %.** The band is about
   a percent wide here, so the fixed rails a heater output is judged by could
   never light the mark. On the shipped numbers a *tracking* loop cannot rail
-  at all — `max_error_k` is 1.0 K against roughly ±7 K of authority, so the
-  anomaly hold fires first and what you see is `holding`.
+  at all while the setpoint is steady. A *sweeping* loop rails routinely and
+  legitimately — that is what the velocity feedforward produces — which is why
+  `fault_error_k` only applies in the `hold` phase.
 - **When health goes bad both marks go quiet**, because the loop has stopped
   trying. The row is coloured red instead. An unhealthy loop is not a loop
   failing to reach a setpoint; it is a loop that has stopped chasing one.

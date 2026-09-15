@@ -84,9 +84,29 @@ bus jitters and a retry can cost a cycle.
 **The output is sigma-delta dithered**, because one 0.01% DAC code is ~100 mK at
 the operating point. See [thermal-response.md](thermal-response.md#the-consequence-that-shapes-the-whole-design).
 
-**Setpoints ramp, never step** — rule 8. A step larger than `max_error_k` is
-indistinguishable from a broken premise and would stall the loop rather than
-move it.
+**Setpoints ramp, never step** — rule 8. A step larger than `warn_error_k`
+**becomes** a ramp at the one rate, in `set_setpoint`. It used to stall the
+loop instead: the error it produced was read as a broken premise, so rule 8 was
+protecting the cryostat by breaking the loop, and it only worked because the
+premise check could not tell a commanded move from a fault.
+
+**There is one rate** — `ramp.max_rate_k_per_min`, 5 K/min — and a sweep, the
+post-fault approach and the fault ramp-down all use it. The heater's rate limit
+in percent is derived from it through the gain, `max_rate_k_per_min / K(T)`:
+0.38 %/min at 118 K and 14.6 %/min at 10 K, which is the same five kelvin a
+minute at both. A rate in percent cannot be, because the gain spans forty-fold.
+
+**The closed-loop speed is a ratio, not a time** — `hold_speed: 3` and
+`move_speed: 0.5` against `tau(T)`, floored at four dead times. τ runs from
+0.1 s at 10 K to 611 s at 180 K, so the 1800 s / 300 s this replaced was three
+times the plant at the top and eighteen thousand times it at the bottom.
+
+**The premise check is in watts.** `δQ` against the model's own band, the same
+residual the monitor judges by — see [safety.md](safety.md) rule 4.
+
+**The authority band follows the setpoint**, centred on the output the model
+says holds it, widened while a ramp runs by the lead that ramp needs — rule 5.
+Nothing needs re-centring by hand before arming.
 
 ## Configuration
 

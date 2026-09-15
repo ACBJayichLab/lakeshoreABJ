@@ -1612,7 +1612,21 @@ class HeaterSupervisor:
         if self._rampdown_from_k is not None and self.feedforward.enabled:
             elapsed = max(0.0, t - (self._rampdown_t0 or t))
             target_k = self._rampdown_from_k - rate * (elapsed / 60.0)
-            proposed = self.feedforward.percent_for(target_k)
+            if target_k <= _M.T_MIN_K:
+                # **THE INVERSE CURVE BOTTOMS OUT ABOVE ZERO**, and the descent
+                # has to know that.  `percent_for` clamps at the table's cold
+                # end, which is 4.7 K and 0.72 % of output -- so a ramp-down
+                # that only ever asked the curve would stop there and never
+                # reach `safe_output_pct`, never complete, and never lock out.
+                # Measured: RAMPING_DOWN still, three hours after a lost sensor
+                # at 60 K.
+                #
+                # Once the target is at the bottom of the table there is
+                # nothing left to ramp: the sample is at base temperature and
+                # the remaining 0.72 % is worth a fraction of a kelvin.
+                proposed = safe
+            else:
+                proposed = self.feedforward.percent_for(target_k)
         else:
             # No trusted temperature and no curve: the one rate through the
             # gain at the present output, which is the same conversion the rate

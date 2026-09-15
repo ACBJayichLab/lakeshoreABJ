@@ -130,10 +130,22 @@ class MonitorConfig:
     #: toggle resets the timer -- see `_Persist.leaning`.
     hysteresis_frac: float = 0.8
 
-    #: No opinion within this many plant time constants of a heater move, and
-    #: what counts as a move.
+    #: No opinion within this many plant time constants of a heater move.
     settle_taus: float = 3.0
-    move_pct: float = 0.005
+    #: **What counts as a move, in KELVIN.**  It was `move_pct: 0.005` -- half
+    #: a DAC code -- which is right for an archive of typed commands and is
+    #: useless the moment a software loop is running: a closed loop with dither
+    #: moves the output by a code most cycles, so the gate would be refreshed
+    #: every cycle, `in_transient` would never expire, and the judge that
+    #: exists to watch the loop would report `no opinion` for the whole of its
+    #: life.  Nothing in the archive is closed loop, so the replay cannot see
+    #: this.
+    #:
+    #: In kelvin it means the same thing at both ends and at both cadences: a
+    #: move worth a kelvin of sample is 0.076 % of output at 118 K -- seven
+    #: codes, far above anything a settled loop commands -- and 2.9 % at 10 K,
+    #: where a percent is worth almost nothing.  A ladder rung is worth tens.
+    move_k: float = 1.0
 
     #: The trailing window the pole fit may reach back over, and the one the
     #: rate is regressed on.
@@ -519,8 +531,11 @@ class Judge:
     def _track_move(self, s) -> None:
         if s.u_pct is None:
             return
-        if self._last_u is not None and abs(s.u_pct - self._last_u) > self.cfg.move_pct:
-            self._move_t = s.t_s
+        if self._last_u is not None and s.sample_k is not None:
+            gain = M.gain_k_per_pct(
+                min(max(s.sample_k, M.T_MIN_K), M.T_MAX_K))
+            if abs(s.u_pct - self._last_u) * gain > self.cfg.move_k:
+                self._move_t = s.t_s
         self._last_u = s.u_pct
 
     # -- the residuals -----------------------------------------------------

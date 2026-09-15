@@ -754,3 +754,54 @@ def test_a_commanded_heater_move_is_not_a_residual_step():
     run(j, kelvin=60.0, seconds=40000.0)
     r = run(j, kelvin=140.0, seconds=40000.0, t0=40000.0)
     assert state(r, "fault_level") != WARN
+
+
+# -- the monitor beside a RUNNING LOOP --------------------------------------
+
+
+def test_the_judge_keeps_an_opinion_while_a_closed_loop_is_running():
+    """plans/pid-3-loop.md §3.0.E, and nothing in the archive could have found
+    it.
+
+    `move_pct: 0.005` is half a DAC code.  A closed loop with dither moves the
+    output by a code most cycles, so the transient gate was refreshed every
+    cycle, `in_transient` never expired, and the judge that exists to watch the
+    loop would have reported `no opinion` for the whole of its life -- which is
+    most of this cryostat's life, since the monitor runs armed or not.
+
+    The replay cannot see this: the archive is typed commands and long holds,
+    and nothing in it is closed loop.  So this drives the judge from the phase
+    3 bench instead -- a real supervisor, dithering, on the fitted plant.
+    """
+    from bench_plant import FittedHarness
+
+    from ltspm3.control import LoopMode
+    from ltspm3.monitor.source import Sample
+
+    h = FittedHarness(kelvin=118.0)
+    h.settle_filter(60)
+    h.sup.set_mode(LoopMode.PID)
+    h.step(10)
+
+    judge = Judge(MonitorConfig())
+    states, moved = [], 0
+    last_u = None
+    for _ in range(1200):                      # 40 minutes of closed loop
+        st = h.step(1)
+        if st.output_pct is None or st.filtered_k is None:
+            continue
+        if last_u is not None and st.output_pct != last_u:
+            moved += 1
+        last_u = st.output_pct
+        record = judge.step(Sample(
+            t_s=h.clock.t, epoch_s=1.788e9 + h.clock.t,
+            sample_k=st.filtered_k, coldplate_k=h.cryostat.value("218.2", 6.64),
+            u_pct=st.output_pct))
+        states.append(record["verdicts"][0].state)
+
+    assert moved > 100, "the loop never dithered; this proves nothing"
+    opinions = [x for x in states if x != NO_OPINION]
+    assert opinions, "the judge had no opinion for the whole run"
+    assert len(opinions) > 0.5 * len(states), (
+        f"only {len(opinions)}/{len(states)} samples got an opinion")
+    assert all(x == TYPICAL for x in opinions), "a quiet hold was judged atypical"
