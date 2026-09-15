@@ -221,9 +221,11 @@ Three columns need an answer an instrument loop gets for free:
 | `Rng` | `n/a`. It genuinely has none: the 218 has no inert half — no loop, no range, one `ANALOG` command whose percentage *is* the power |
 
 `State` carries the **supervisor's** state rather than `OUTMODE?`'s mode —
-`tracking`, `idle`, `holding`, `ramping down`, `locked out`. `ramping down` is
-never shortened to `ramping`: it is a fault backing the heater off, not a
-setpoint traversal. The loop mode (`off` / `manual` / `pid`) is in the hover,
+`tracking`, `idle`, `frozen`, `ramping down`, `locked out`, `crashed`.
+`ramping down` is never shortened to `ramping`: it is a fault backing the
+heater off, not a setpoint traversal. `frozen` was `holding` until 2026-09-14,
+when it collided with the `hold` phase and the `hold` command — three different
+things under one word. The loop mode (`off` / `manual` / `pid`) is in the hover,
 because `idle` alone cannot tell a loop that was never armed from one that was
 armed and then held.
 

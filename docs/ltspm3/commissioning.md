@@ -182,16 +182,23 @@ worse from where the cryostat sits today:
 | cycle | | |
 |---|---|---|
 | 1 | heater 66.600 → **64.070%** | the ceiling, applied at once |
-| 5 | `holding` | the loop cannot reach 148.75 K from 64.076% |
-| 300 | `ramping_down` | the anomaly hold expired |
+| 5 | `frozen` | the loop cannot reach 148.75 K from 64.076% |
+| 300 | `ramping_down` | the fault had persisted `fault_after_s` |
 | 2000 | heater 1.14%, sample ~13 K | ~2.2 h later, then locked out |
+
+> Simulated on the August loop, whose premise check was a kelvin error and
+> whose fault response was a percent rate. The arithmetic of the first line is
+> unchanged — the ceiling is still applied at once, and that is the point of
+> the section — but today the loop would warn rather than freeze on the error
+> alone, and fault as **authority exhausted**: railed at the ceiling, past
+> `fault_error_k`, with the setpoint not moving.
 
 **And there is a second trap up here that did not exist at 63%: headroom.**
 `hard_max_pct` is 70.0 and the output is 69.027%, so the band has **0.97%**
 of room above it — about 12.6 K. Any band centred on the present output is
 clipped by the ceiling on one side, so it is lopsided by construction and the
 loop has far less authority to *add* heat than to remove it. That is the safe
-asymmetry, but know it is there before you read a `holding` as a fault.
+asymmetry, but know it is there before you read a `frozen` as a fault.
 
 The ceiling is doing its job. The point is that doing its job, from here, is a
 35 K step down followed by a fault — so this is not a lopsided envelope to work
@@ -939,9 +946,11 @@ The steady-state curve was measured **with the cooler running and the shields
 cold**, and nothing in a temperature log distinguishes that regime from a warm
 one. This is the check that says whether the curve describes today's cryostat.
 
-**Updates:** `model_trust_k`, `max_feedforward_pct`, and — if the disagreement
-is large — `feedforward.enabled: false`, letting the integral do the work. That
-is slower, and it is always correct.
+**Updates:** `max_feedforward_pct`, and — if the disagreement is large —
+`feedforward.enabled: false`, letting the integral do the work. That is slower,
+and it is always correct. There is no kelvin trust threshold to widen any
+more: the watt residual subsumed it, and `model_error_k` is reported on the
+status line for a person to read rather than judged against a number.
 
 ---
 

@@ -104,6 +104,18 @@ times the plant at the top and eighteen thousand times it at the bottom.
 **The premise check is in watts.** `δQ` against the model's own band, the same
 residual the monitor judges by — see [safety.md](safety.md) rule 4.
 
+**With two kelvin rows underneath it, for the cold end.** The residual has no
+opinion below `min_output_pct` or where the plant is faster than the slope is
+measured, which between them is everything under about 40 K — so while the
+setpoint is not moving, the tracking error warns at `warn_error_k` and, past
+`fault_error_k`, the two edges of the band part company: **railed at the
+ceiling is a fault** (the loop is giving everything it is allowed to and the
+sample still will not come up), **railed at the floor is a warning however far
+it goes** (less heat than the model expects is the safe direction, and a rising
+coldplate is exactly that). Both rows were gated on the tuner's `hold` phase
+until 2026-09-15 and were unreachable in consequence, because any error over
+`move_error_k` = 0.25 K leaves that phase by construction.
+
 **The authority band follows the setpoint**, centred on the output the model
 says holds it, widened while a ramp runs by the lead that ramp needs — rule 5.
 Nothing needs re-centring by hand before arming.

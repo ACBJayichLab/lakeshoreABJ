@@ -101,9 +101,12 @@ disagree about what typical means — only about what to do.
 | disengaged | `off` / `manual` | `idle` | — | hold, panic, or never armed |
 
 The guard keeps its own sensor state: `unknown / ok / suspect / fault /
-recovering`. **The phase decides the gains and which premise check applies:**
-kelvin thresholds in `hold`; in `move` the error is the ramp's lag by design
-and only the watt residual judges.
+recovering`. **The phase decides the gains and nothing else** (2026-09-15):
+which premise check applies is decided by the TRAJECTORY — the kelvin
+thresholds apply while the setpoint is not moving, and while it is moving the
+error is the ramp's lag by design and only the watt residual judges. Gating
+them on the phase made both unreachable, because an error over `move_error_k`
+= 0.25 K puts the tuner in `move` by construction. → plans/pid-3-review.md
 
 ---
 

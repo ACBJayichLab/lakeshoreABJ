@@ -35,10 +35,13 @@
 # PHASE 3 IS IN PROGRESS AND THIS FILE MOVES WITH IT
 # ---------------------------------------------------------------------------
 #
-# Steps 1 to 6 have landed: the filter chain has no low pass and the loop's
-# dead time is derived from it, `control/` reads the fitted curve, the tuning
-# is a ratio to the plant's own tau, the band follows the setpoint, there is
-# ONE RATE in kelvin, and the premise check is in WATTS.
+# All eight steps have landed, and so have the ten review fixes of
+# 2026-09-15 (plans/pid-3-review.md): the filter chain has no low pass and the
+# loop's dead time is derived from it, `control/` reads the fitted curve, the
+# tuning is a ratio to the plant's own tau, the band follows the setpoint,
+# there is ONE RATE in kelvin, and the premise check is in WATTS -- with the
+# two kelvin rows underneath it for the cold end, where the watt residual has
+# nothing to say.
 
 log_level: INFO
 
@@ -189,17 +192,29 @@ control:
     # cryostat whose gain spans forty-fold, and the ramp allowance that propped
     # it up was excusing the loop's own 60 s filter as much as anything about
     # the cryostat.
-    warn_error_k: 1.0             # in `hold`, and below min_output_pct.  ALARMS
+    warn_error_k: 1.0             # WHILE THE SETPOINT IS NOT MOVING.  ALARMS
                                   # and keeps tracking; it does not freeze.
+                                  # Under about 40 K -- below min_output_pct,
+                                  # or where the plant is faster than the slope
+                                  # is measured -- it is the only check there
+                                  # is, which is why it is not optional.
     warn_sigma: 3.0               # sigma_q_w from the model
     fault_mw: 10.0                # Jeff, 2026-09-14.  A FLOOR under 3 sigma...
     fault_window_s: 1800.0        # ...and a STEP within half an hour, not a
                                   # level: a change in delivered power lands in
                                   # the residual immediately, and anything that
                                   # takes hours did not step.
-    fault_error_k: 5.0            # with the demand RAILED: authority exhausted,
-                                  # which is what a compressor failure becomes.
-                                  # No window gates it.
+    fault_error_k: 5.0            # where the two edges of the band part
+                                  # company, while the setpoint is not moving.
+                                  # RAILED AT THE CEILING (demand and output
+                                  # both) is a FAULT: the loop is giving
+                                  # everything it is allowed to and the sample
+                                  # still will not come up.  Railed at the
+                                  # FLOOR is a WARNING however far it goes --
+                                  # less heat than the model expects is the
+                                  # safe direction, and a rising coldplate is
+                                  # exactly that (Jeff, 2026-09-15).
+                                  # No window gates either.
     fault_after_s: 180.0
     min_output_pct: 28.0          # the monitor's number.  Below it dQ is the
                                   # difference of two large numbers and has no

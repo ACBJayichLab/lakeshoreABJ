@@ -121,8 +121,11 @@ control:
     # Premise checks, IN WATTS: `dQ` against the model's own band, the same
     # residual the monitor judges by.  Beyond 3 sigma it alarms and keeps
     # tracking; a STEP of fault_mw inside fault_window_s faults, as does an
-    # error past fault_error_k with the demand railed.
-    warn_error_k: 1.0             # in `hold`, and below min_output_pct
+    # error past fault_error_k with the loop railed at the CEILING of its band
+    # (railed at the floor with the same error is a warning: less heat than the
+    # model expects is the safe direction).
+    warn_error_k: 1.0             # while the setpoint is not moving.  Under
+                                  # about 40 K it is the only check there is
     warn_sigma: 3.0
     fault_mw: 10.0
     fault_window_s: 1800.0
@@ -177,8 +180,9 @@ control:
   #
   # Three things limit the damage: feedforward enters as a *difference* from
   # the arming point, so a whole-curve offset cancels; max_feedforward_pct caps
-  # what a wrong slope can do; and the supervisor alarms when a settled
-  # measurement disagrees with the curve by more than model_trust_k.
+  # what a wrong slope can do; and the supervisor alarms when the watt
+  # residual leaves its band, which is the same disagreement measured in the
+  # variable that means the same thing at 10 K and at 180 K.
   #
   # In a regime this curve was not measured in, set enabled: false and let the
   # integral do the work.  It is slower, and it is always correct.

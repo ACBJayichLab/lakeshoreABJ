@@ -85,7 +85,7 @@ client can tell "no such loop" from "a loop with nothing to say".
 
 | Field | |
 |---|---|
-| `state` | the supervisor's own state: `tracking`, `idle`, `holding`, `ramping_down`, `locked_out` |
+| `state` | the supervisor's own state: `tracking`, `idle`, `frozen`, `ramping_down`, `locked_out`, `crashed`. `frozen` was `holding` until 2026-09-14 (it collided with the `hold` phase and the `hold` command); `crashed` arrived with it and means an exception escaped the loop, the output is held where it was, and `ack` is the way back |
 | `mode` | the loop mode: `off`, `manual`, `pid`. `idle` alone cannot tell a loop that was never armed from one that was armed and then held |
 | `health` | `ok`, `suspect`, `fault`, `recovering`, `unknown` |
 | `sensor` | the channel it controls, by the same name the trace and the readout carry |
