@@ -145,7 +145,11 @@ def test_model_check_is_silent_while_ramping(harness):
     h.sup.sweep_to(h.equilibrium_k + 2.0, rate_k_per_min=0.5)
     st = h.step(20)
     assert st.model_error_k is None
-    assert st.model_trusted is True
+    # **AND NO OPINION ABOUT TRUST EITHER.**  This read `is True`, which was
+    # the default rather than an answer: `_check_model` is the only writer and
+    # it does not run while the setpoint is moving, so during a sweep nothing
+    # had established anything.  No opinion is not trust (3R.8).
+    assert st.model_trusted is None
 
 
 def test_model_check_passes_in_the_regime_it_was_measured_in(harness):

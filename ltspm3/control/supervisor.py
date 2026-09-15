@@ -308,7 +308,13 @@ class SupervisorStatus:
     corroborated: bool | None = None
     #: measured - model, once settled.  None while ramping or still moving.
     model_error_k: float | None = None
-    model_trusted: bool = True
+    #: Has the residual an opinion about the model, and is it inside the band?
+    #: **None means no opinion**, which is neither trust nor distrust, and it
+    #: is the DEFAULT -- `_check_model` is the only thing that ever writes it,
+    #: and it only runs at a settled hold.  It defaulted to True, so a status
+    #: written during a ramp or a frozen fault hold reported trust that nothing
+    #: had established: PID_PLAN.md section 7's trap, one field along.
+    model_trusted: bool | None = None
     #: THE PREMISE, in watts.  `None` means no opinion, which is not the same
     #: as typical -- `residual_reason` says which.
     missing_power_w: float | None = None
@@ -1306,8 +1312,16 @@ class HeaterSupervisor:
                 self.smoother.reset(s.filtered_k)
                 s.setpoint_k = self.pid.cfg.setpoint = self.smoother.update(
                     t, self.ramp.value(t))
+                # **A PERCENT, NEVER A TEMPERATURE.**  `prime` takes the
+                # output the loop is starting from, and the fallback here was
+                # `s.filtered_k` -- 118 would have primed the PID's bias at
+                # 118 % of output, clamped to the band's ceiling, which is the
+                # loop opening at full authority for no reason.  The operating
+                # point is the answer for a loop that does not know where the
+                # heater is; it is what `_enter_mode` already falls back to.
                 self.pid.prime(self.clamp(
-                    self.output_pct if self.output_pct is not None else s.filtered_k
+                    self.output_pct if self.output_pct is not None
+                    else self.cfg.operating_point_pct
                 ))
                 log.warning(
                     "arming %+.3f K from target; ramping in at %.2f K/min",

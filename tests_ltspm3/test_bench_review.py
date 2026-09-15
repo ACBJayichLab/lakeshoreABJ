@@ -570,3 +570,47 @@ def test_a_coldplate_that_drops_out_takes_the_residual_with_it():
     assert h.sup.state is SupervisorState.TRACKING
     assert h.history[-1].missing_power_w is not None, "never spoke again"
     assert not alarms_matching(h, "stepped"), "the sink's return read as a step"
+
+
+# -- 3R.8, two small truths -------------------------------------------------
+
+
+def test_a_ramping_loop_has_no_opinion_about_its_model():
+    """3R.0.H: `model_trusted` defaulted to True and `_check_model` is the only
+    thing that writes it -- and that only runs at a settled hold.
+
+    So every status written during a ramp, or while a fault was frozen, carried
+    a trust nothing had established.  None is the honest answer, and it is the
+    default now: no opinion is not trust.
+    """
+    h = armed(118.0)
+    assert h.history[-1].model_trusted is True, "a settled hold should judge"
+
+    h.sup.sweep_to(128.0, 5.0)
+    h.history.clear()
+    h.minutes(1)
+    assert h.history[-1].ramping
+    assert h.history[-1].model_trusted is None
+
+
+def test_a_loop_that_has_never_read_an_output_primes_on_a_percent():
+    """3R.0.H's other half: the prime fallback was `s.filtered_k`.
+
+    `prime` takes the output the loop starts from, so at 118 K that primed the
+    PID's bias at 118 % of output -- clamped to the band's ceiling, which is a
+    loop opening at full authority for no reason at all.  The operating point
+    is what a loop with no idea where the heater is has to assume, and it is
+    what `_enter_mode` already assumed one line away.
+    """
+    h = armed(118.0)
+    h.sup.acknowledge()
+    h.sup.arm(118.0)
+    h.sup.output_pct = None                  # nothing read, nothing remembered
+    h.sup._pending_approach = True
+    h.sup.ramp.jump_to(108.0)                # a gap big enough to re-approach
+    # Long enough for the filter and the guard to come back after the `ack`,
+    # which is what the deferred approach is waiting for.
+    h.step(40)
+    assert h.sup.pid.bias == pytest.approx(
+        h.sup.clamp(h.sup.cfg.operating_point_pct), abs=1e-9)
+    assert h.sup.pid.bias <= h.sup.cfg.hard_max_pct
