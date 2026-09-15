@@ -265,3 +265,92 @@ def test_a_descent_with_nothing_to_descend_from_holds():
     assert h.sup.state is SupervisorState.RAMPING_DOWN
     assert not h.sup._rampdown_complete
     assert any("RAMP-DOWN HELD" in a for a in s.alarms)
+
+
+# -- 3R.4, the descent is bounded per cycle ---------------------------------
+
+
+def assert_descent_obeys_the_one_rate(h):
+    """No write of a ramp-down may take the sample faster than the one rate.
+
+    Two statements, because the rule is written in kelvin and applied in
+    percent and the conversion is a curve rather than a constant:
+
+    * **in percent**, every pair: `max_rate_k_per_min` through the gain WHERE
+      THE HEATER IS, plus two DAC codes for the dither, which writes either
+      side of the exact value so consecutive writes can differ by a code in
+      each direction.  Recomputed here from the curve rather than asked of the
+      supervisor, so it is a statement about the contract and not an echo of
+      the arithmetic.
+    * **in kelvin**, which is the variable the rule is written in and the only
+      one that means the same thing at both ends of this cryostat -- a percent
+      is 0.335 K at 10 K and 12.6 K at 118 K.  A tenth of slack for the curve's
+      curvature across a single write, and not asked at all once the modelled
+      temperature is within half a kelvin of the bottom of the table: down
+      there the whole remaining descent is a fraction of a kelvin and
+      `kelvin_for` is nearly flat, so the rate has nothing left to constrain.
+    """
+    from ltspm3.model import fitted_response as M
+
+    sup = h.sup
+    ff = sup.feedforward
+    rate = sup.ramp.cfg.max_rate_k_per_min
+    dac = sup.cfg.dac_step_pct
+    rows = [x for x in h.history
+            if x.state is SupervisorState.RAMPING_DOWN and x.output_pct is not None]
+    assert len(rows) > 5, "no descent to grade"
+    for a, b in zip(rows, rows[1:]):
+        dt = b.t - a.t
+        gain = ff.gain_at(a.output_pct)
+        allowed_pct = max(sup.cfg.min_rate_pct_per_min,
+                          rate / gain if gain > 0 else 0.0) * dt / 60.0 + 2 * dac
+        assert a.output_pct - b.output_pct <= allowed_pct + 1e-9, (
+            f"{a.output_pct:.3f} -> {b.output_pct:.3f} % in one cycle, "
+            f"against {allowed_pct:.4f} % allowed")
+        # And never upward.  Rule 1.
+        assert b.output_pct <= a.output_pct + dac + 1e-9
+
+        if ff.kelvin_for(b.output_pct) > M.T_MIN_K + 0.5:
+            fell = ff.kelvin_for(a.output_pct) - ff.kelvin_for(b.output_pct)
+            allowed_k = 1.1 * rate * dt / 60.0 + 2 * ff.gain_at(b.output_pct) * dac
+            assert fell <= allowed_k + 1e-9, (
+                f"{a.output_pct:.3f} -> {b.output_pct:.3f} % took the sample "
+                f"{fell:.3f} K in one cycle, against {allowed_k:.3f} K allowed")
+
+
+@pytest.mark.parametrize("kelvin", WATT_TEMPERATURES)
+def test_the_first_write_of_a_descent_obeys_the_one_rate(kelvin):
+    """3R.0.C, on the public path: a heater delivering 12 % less leaves the
+    sample 14 to 21 K low, and the descent then starts from the curve's answer
+    for THAT temperature rather than from anywhere near the present output.
+
+    Measured before this step -- first write, in one 2 s cycle:
+
+        60 K   59.250 -> 55.630 %   3.62 %, against 0.047 allowed
+        100 K  62.640 -> 60.920 %   1.72 %, against 0.015
+        140 K  65.680 -> 64.260 %   1.42 %, against 0.013
+        180 K  68.840 -> 67.630 %   1.21 %, against 0.014
+
+    The lost-sensor row cannot see any of this: its plant IS the model and its
+    sample is on setpoint, so the curve's answer equals the output it is
+    already at.
+    """
+    h = armed(kelvin)
+    h.deliver(0.88)
+    cfg = h.sup.cfg
+    assert run_until_fault(h, cfg.fault_window_s + cfg.fault_after_s)
+    h.history.clear()
+    h.minutes(20)
+    assert_descent_obeys_the_one_rate(h)
+
+
+@pytest.mark.parametrize("kelvin", BENCH_TEMPERATURES)
+def test_the_lost_sensor_descent_is_bounded_too(kelvin):
+    """The same bound on §3.7's own row, which asserted monotone and not
+    bounded.  Where the plant is the model this changes nothing, which is the
+    point: the descent time is unchanged and the bound is now stated."""
+    h = armed(kelvin)
+    assert ramping_down(h)
+    h.history.clear()
+    h.minutes(20)
+    assert_descent_obeys_the_one_rate(h)

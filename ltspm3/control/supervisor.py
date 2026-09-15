@@ -1695,6 +1695,7 @@ class HeaterSupervisor:
         safe = self.cfg.safe_output_pct
         rate = self.ramp.cfg.max_rate_k_per_min
 
+        target_k = None
         if self._rampdown_from_k is not None and self.feedforward.enabled:
             elapsed = max(0.0, t - (self._rampdown_t0 or t))
             target_k = self._rampdown_from_k - rate * (elapsed / 60.0)
@@ -1722,6 +1723,23 @@ class HeaterSupervisor:
         # Never upward.  Rule 1, and the one line that makes a wrong model
         # harmless here.
         proposed = min(proposed, current)
+        # **AND NEVER FASTER THAN THE ONE RATE, INCLUDING ON THE FIRST CYCLE.**
+        # RAMPING_DOWN skips `_rate_limit` -- it has to, or the descent could
+        # never leave the authority band -- and the rate it descends at is
+        # supposed to be the one rate through the curve.  It was, from the
+        # SECOND write on: the first one jumped straight to
+        # `percent_for(last trusted T)`, which is only near the present output
+        # when the sample is on its setpoint and the model is right.  Measured
+        # on a heater delivering 12 % less, which leaves the sample 14 to 21 K
+        # low before it faults: the first write moved 1.21 % at 180 K and
+        # 3.62 % at 60 K, against the 0.013 and 0.047 % the one rate allows.
+        # At 10 K with the sample 5 K low it is 21.6 % in one cycle.
+        #
+        # There is no separate descent rate (Jeff, 2026-09-15): the knee rates
+        # were superseded by the one rate, and the first write obeys it like
+        # every later one.  The curve still sets the PATH; this only says no
+        # single write may jump along it.
+        proposed = max(proposed, current - self._rampdown_step_pct(current, dt))
         # `current` is known by now -- read, or the value we last commanded and
         # confirmed.  That is what makes this a statement about the heater
         # rather than about a failed transaction.
@@ -1731,6 +1749,37 @@ class HeaterSupervisor:
             self._rampdown_complete = True
             return safe
         return proposed
+
+    def _rampdown_step_pct(self, current: float, dt: float) -> float:
+        """The most one write of a descent may move, in percent.
+
+        **The one rate, through the gain WHERE THE HEATER IS** -- on the curve
+        the descent is walking down, not on the tuner's schedule, even though
+        on this cryostat those are the same table.  Two reasons for each half:
+
+        * the gain at the present OUTPUT, because that is what converts a step
+          in percent into the kelvin the rule is written in.  The target's gain
+          is the wrong one whenever the output is still above the curve's
+          answer -- which is exactly the case this bound exists for, a descent
+          catching up with a target that started far below it.  It is the same
+          choice :meth:`_rate_limit` makes, which converts at where the sample
+          is rather than where it is going.
+        * the steady-state CURVE rather than the schedule, because a controller
+          whose two disagree (the legacy harness, CD10 against the fit) would
+          otherwise be throttled by one curve while following another and
+          arrive late by the difference between them.
+
+        Falls back to :meth:`_rate_pct_per_min` where there is no curve to ask,
+        which is the same conversion the tracking rate limiter uses and carries
+        the same `min_rate_pct_per_min` floor.
+        """
+        if self.feedforward.enabled:
+            gain = self.feedforward.gain_at(current)
+            if gain > 0:
+                rate = max(self.cfg.min_rate_pct_per_min,
+                           self.ramp.cfg.max_rate_k_per_min / gain)
+                return rate * (dt / 60.0)
+        return self._rate_pct_per_min(None) * (dt / 60.0)
 
     def _rate_pct_per_min(self, kelvin: float | None) -> float:
         """**The one rate, converted through the gain.**
