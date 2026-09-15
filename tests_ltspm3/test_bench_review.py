@@ -149,3 +149,119 @@ def test_a_one_off_exception_stays_crashed_until_acknowledged(kelvin):
         h.sup.arm(kelvin)
     h.sup.acknowledge()
     assert h.sup.state is SupervisorState.IDLE
+
+
+# -- 3R.3, a failed read does not finish a ramp-down ------------------------
+
+
+def ramping_down(h, *, limit=2000):
+    """Drop the sensor and step until the open-loop descent has started."""
+    h.cryostat.inject(dropout_channels={"218.1"})
+    for _ in range(limit):
+        h.step(1)
+        if h.sup.state is SupervisorState.RAMPING_DOWN:
+            return True
+    return False
+
+
+def step_blind(h, n):
+    """Cycles with the bus down: the frame read raises, so the loop is handed
+    no reading at all -- the shape `test_safety.py` established."""
+    from lschart.transport import TransportError
+
+    last = None
+    for _ in range(n):
+        h.clock.advance(h.DT)
+        try:
+            reading = h.read().get("Sample")
+        except TransportError:
+            reading = None
+        last = h.sup.step(h.clock.t, reading)
+        h.history.append(last)
+    return last
+
+
+def test_one_failed_read_does_not_finish_the_descent():
+    """3R.0.D, measured: output 63.96 %, one `TransportError`, target 0.0,
+    complete.
+
+    `_rampdown_target` read the heater with `default=safe_output_pct`, so a
+    failed read said the heater was already at zero: `min(proposed, current)`
+    was zero and the descent declared itself finished.  If the write failed
+    too, the loop locked out with the heater still at 64 % and a log line
+    saying it had reached base.  This shape predates step 5.
+    """
+    from lschart.transport import TransportError
+
+    h = armed(118.0)
+    assert ramping_down(h), "the lost sensor never started a descent"
+    h.minutes(5)
+    before = h.sup.output_pct
+    assert before > 10.0, "the descent is over already; nothing left to test"
+
+    real = h.inst.get_analog_percent
+    h.inst.get_analog_percent = lambda: (_ for _ in ()).throw(
+        TransportError("simulated read failure"))
+    # The cycle has to be one that actually READS.  `_where_the_heater_is`
+    # trusts `output_pct` while the previous cycle wrote and was confirmed, and
+    # a descent at 118 K writes on most cycles but not all -- 0.013 % a cycle
+    # against a 0.01 % code means the quantised value sometimes does not move.
+    # This is that cycle, and it is where the defect lived.
+    h.sup._wrote_last_cycle = False
+    try:
+        s = h.step(1)
+    finally:
+        h.inst.get_analog_percent = real
+
+    assert h.sup.state is SupervisorState.RAMPING_DOWN
+    assert not h.sup._rampdown_complete
+    assert s.output_pct == pytest.approx(before, abs=0.5), (
+        "the descent jumped on a failed read")
+    assert h.sup.output_pct > h.sup.cfg.safe_output_pct + 1.0
+
+
+def test_a_dead_bus_holds_the_descent_and_says_so():
+    """Neither reading nor writing works: the loop stays in RAMPING_DOWN, the
+    heater keeps the value it has -- nothing can move it -- and `COMMS LOST`
+    appears once `comms_fault_after_s` of it has passed."""
+    h = armed(118.0)
+    assert ramping_down(h)
+    h.minutes(5)
+    before = h.sup.output_pct
+
+    h.cryostat.inject(comms_fail=True)
+    s = step_blind(h, int(2 * h.sup.cfg.comms_fault_after_s / h.DT))
+    assert h.sup.state is SupervisorState.RAMPING_DOWN
+    assert not h.sup._rampdown_complete
+    assert h.sup.output_pct == pytest.approx(before, abs=1e-9)
+    assert any("COMMS LOST" in a for a in s.alarms)
+
+    # And when the bus comes back the descent picks up where it was and
+    # finishes -- the latch was never cleared, so there is nothing to re-arm.
+    h.cryostat.clear_faults()
+    for _ in range(6000):
+        h.step(1)
+        if h.sup.state is SupervisorState.LOCKED_OUT:
+            break
+    assert h.sup.state is SupervisorState.LOCKED_OUT
+    assert h.sup.output_pct == pytest.approx(h.sup.cfg.safe_output_pct,
+                                             abs=h.sup.cfg.dac_step_pct)
+
+
+def test_a_descent_with_nothing_to_descend_from_holds():
+    """The last rung: no readback and no remembered output either.
+
+    There is no number to descend from, so there is no descent -- one cycle
+    held, the latch still on, and the alarm says which of the two is missing
+    rather than inventing a zero and calling it arrival.
+    """
+    h = armed(118.0)
+    assert ramping_down(h)
+    h.minutes(5)
+
+    h.cryostat.inject(comms_fail=True)
+    h.sup.output_pct = None                  # nothing remembered either
+    s = step_blind(h, 1)
+    assert h.sup.state is SupervisorState.RAMPING_DOWN
+    assert not h.sup._rampdown_complete
+    assert any("RAMP-DOWN HELD" in a for a in s.alarms)

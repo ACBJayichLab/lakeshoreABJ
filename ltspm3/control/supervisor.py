@@ -924,8 +924,14 @@ class HeaterSupervisor:
                 raise
             return default
 
-    def _where_the_heater_is(self, *, default: float) -> float:
+    def _where_the_heater_is(self, *, default: float | None) -> float:
         """Where the output actually is -- read, not remembered.
+
+        ``default`` may be ``None``, and then a failed read RAISES rather than
+        inventing a number.  Every caller that has something to fall back on
+        passes it; the one that does not is the fault ramp-down, where a made-up
+        current output is worse than no answer at all -- see
+        :meth:`_rampdown_target`.
 
         ``self.output_pct`` is what this supervisor last *commanded*, and it is
         authoritative only while this supervisor is the only thing writing to
@@ -1664,7 +1670,28 @@ class HeaterSupervisor:
             self._rampdown_t0 = t
         s.alarms.append(f"ramping down: {why}")
 
-        current = self._where_the_heater_is(default=self.cfg.safe_output_pct)
+        # **A FAILED READ MUST NOT FINISH THE DESCENT.**  This used to read
+        # with `default=safe_output_pct`, so one `TransportError` made
+        # `current` zero, `min(proposed, current)` zero, and
+        # `_rampdown_complete` True: measured at an output of 63.96 %, one
+        # failed read, target 0.0, complete.  If the write then failed too the
+        # loop locked out with the heater still at 64 % and a log line saying
+        # the descent had finished -- and if only the read had failed, the
+        # heater went to zero in a single write, which is the one thing rule 1
+        # says a fault response may not do.
+        #
+        # So: fall back to what we last commanded, and if there is not even
+        # that, HOLD.  A descent that has to guess where it is descending from
+        # is not a descent, and staying in RAMPING_DOWN costs nothing but a
+        # cycle -- the latch is still on, and the next cycle tries again.
+        try:
+            current = self._where_the_heater_is(default=self.output_pct)
+        except (TransportError, ValueError) as exc:
+            self._note_comms_failure(s, f"ramp-down cannot read the heater: {exc}")
+            s.alarms.append(
+                "RAMP-DOWN HELD: nothing knows where the heater is, so there is "
+                "nothing to descend from")
+            return None
         safe = self.cfg.safe_output_pct
         rate = self.ramp.cfg.max_rate_k_per_min
 
@@ -1695,6 +1722,9 @@ class HeaterSupervisor:
         # Never upward.  Rule 1, and the one line that makes a wrong model
         # harmless here.
         proposed = min(proposed, current)
+        # `current` is known by now -- read, or the value we last commanded and
+        # confirmed.  That is what makes this a statement about the heater
+        # rather than about a failed transaction.
         if proposed <= safe + self.cfg.dac_step_pct / 2:
             # Reached the safe value: hand it back this cycle and lock out on the
             # next one, so step() still writes it before the early-return kicks in.
