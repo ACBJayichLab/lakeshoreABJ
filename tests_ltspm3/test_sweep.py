@@ -253,7 +253,7 @@ def test_the_band_caps_heat_without_compelling_it(armed):
 
     # Two DAC codes of headroom: the dither legitimately moves a code either
     # side of the rate-limited target.
-    assert biggest <= h.sup.cfg.max_step_pct + 2 * h.sup.cfg.dac_step_pct
+    assert biggest <= h.sup._rate_limit_step(h.DT) + 2 * h.sup.cfg.dac_step_pct
     # It ends at the safe output, having walked there.  The old form of this
     # compared against `band[0]`, which stopped meaning anything at step 4: the
     # floor falls back to `hard_min_pct` whenever the window is somewhere the

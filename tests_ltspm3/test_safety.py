@@ -54,20 +54,25 @@ def test_sustained_dropout_ramps_down_slowly(armed):
     h.step(150)                                  # 10 more minutes
     dropped = start - h.sup.output_pct
     assert dropped > 0, "must actually be reducing heat"
-    # rampdown_pct_per_min=1.0 above the knee, over the ~10 min actually spent
-    # ramping.  It was 0.5, which from the 63.076% operating point took 126
-    # minutes to reach zero -- long enough to stop being a fault response.
-    assert dropped <= 1.0 * 11.5, f"ramped too fast: {dropped:.3f}%"
+    # THE RATE IS IN KELVIN NOW.  Ten minutes at `max_rate_k_per_min` is 50 K
+    # of sample, and what that costs in percent is the model's business -- 3.9 %
+    # from the 63 K the harness holds.  Asserting a percent here would be
+    # asserting the gain.
+    minutes = 150 * h.DT / 60.0
+    fell_k = (h.sup.feedforward.kelvin_for(start)
+              - h.sup.feedforward.kelvin_for(h.sup.output_pct))
+    assert fell_k <= h.sup.ramp.cfg.max_rate_k_per_min * (minutes + 1.5), (
+        f"ramped too fast: {fell_k:.1f} K in {minutes:.1f} min")
     outs = [s.output_pct for s in h.history if s.output_pct is not None]
     assert all(b <= a + 1e-9 for a, b in zip(outs, outs[1:])), "ramp must be monotonic down"
 
 
 def test_ramp_down_reaches_safe_value_and_locks_out(armed):
-    cfg = SupervisorConfig(rampdown_pct_per_min=60.0, safe_output_pct=62.5,
-                           authority_pct=2.0, require_ack_after_fault=True)
+    cfg = SupervisorConfig(safe_output_pct=62.5, authority_pct=2.0,
+                           require_ack_after_fault=True)
     h = armed(sup_cfg=cfg)
     h.cryostat.inject(dropout_channels={"218.1"})
-    h.step(200)
+    h.step(1200)
     assert h.sup.state is SupervisorState.LOCKED_OUT
     assert h.sup.output_pct == pytest.approx(62.5, abs=0.011)
 
@@ -156,8 +161,8 @@ def test_output_can_never_exceed_the_hard_ceiling(armed):
         if a.output_pct is None or b.output_pct is None:
             continue
         if b.state is not SupervisorState.RAMPING_DOWN:
-            assert b.output_pct - a.output_pct <= (
-                cfg.max_step_pct + 2 * cfg.dac_step_pct), "jumped upward"
+            allowed = h.sup._rate_limit_step(h.DT) + 2 * cfg.dac_step_pct
+            assert b.output_pct - a.output_pct <= allowed, "jumped upward"
 
 
 def test_nothing_moves_the_output_down_except_a_ramp_down(armed):
@@ -179,7 +184,10 @@ def test_nothing_moves_the_output_down_except_a_ramp_down(armed):
 
 
 def test_per_step_rate_limit_is_respected_while_tracking(armed):
-    cfg = SupervisorConfig(max_step_pct=0.02, max_error_k=1000, anomaly_demand_pct=1000)
+    """The limit is DERIVED now -- `max_rate_k_per_min / K(T)` -- so the test
+    asks the loop what it is rather than quoting a constant that no longer
+    exists."""
+    cfg = SupervisorConfig(max_error_k=1000, anomaly_demand_pct=1000)
     h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=200.0, kp=5.0, ti=50.0))
     h.sup.set_setpoint(200.0, ramp=False)
     h.step(100)
@@ -192,8 +200,9 @@ def test_per_step_rate_limit_is_respected_while_tracking(armed):
     # jumps to the band ceiling in one cycle and then sits there, so every step
     # recorded here is exactly zero and the ceiling below passes trivially.
     assert max(steps) > 0, "the output never moved: the limiter was not exercised"
-    # one dither code (0.01) of slack on top of the 0.02 step limit
-    assert max(steps) <= 0.02 + 0.01 / 2 + 1e-9, f"largest step {max(steps):.4f}%"
+    # one dither code of slack on top of the DERIVED per-cycle step
+    allowed = h.sup._rate_limit_step(h.DT) + cfg.dac_step_pct / 2
+    assert max(steps) <= allowed + 1e-9, f"largest step {max(steps):.4f}%"
 
 
 def test_off_mode_never_writes(harness):

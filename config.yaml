@@ -112,8 +112,11 @@ control:
     authority_pct: 1.0            # the window's HALF-WIDTH, in output percent
     hard_min_pct: 0.0
     hard_max_pct: 70.0
-    max_step_pct: 0.02            # ~200 mK per update: ample for trim
-    max_rate_pct_per_min: 0.20
+    # The output rate is `ramp.max_rate_k_per_min / K(T)` -- the one rate
+    # through the gain, 0.38 %/min at 118 K and 14.6 at 10 K.  This is only
+    # the floor under it where the model has no opinion.  It replaces
+    # `max_step_pct` and `max_rate_pct_per_min`, both trim rates.
+    min_rate_pct_per_min: 0.20
 
     # Premise checks.  An error this large means something is wrong with the
     # CRYOSTAT, not with the control, so hold -- and ramp down only if it persists.
@@ -125,21 +128,17 @@ control:
     # extra and nothing else.  Decays away once the ramp stops.
     response_lag_s: 620.0            # measured; ONE step response only
     max_ramp_error_k: 6.0
-    approach_rate_k_per_min: 0.25
 
     # Fault response.  Nothing here ever raises the heater.
     #
-    # Two rates with a knee between them.  A single 0.50 %/min took 126 minutes
-    # to get from the operating point to zero, which stops being a fault
-    # response and starts being a shrug.  Power goes as pct**2, so below the
-    # knee the thermal shock per percent is much smaller: 63.076% -> 40% takes
-    # 23 min, 40% -> 0% takes 20 min, ~43 minutes end to end.
+    # It descends at THE ONE RATE, in kelvin, through the model's inverse
+    # curve, so it needs no sensor -- rule 3 says the fault may BE the sensor.
+    # Three percent-rate fields and a knee at 40 % are gone with it: a rate in
+    # percent is a different descent at every temperature, and the knee was an
+    # attempt to patch that by hand.  118 K to base takes about 23 minutes.
     #
     # Still not an emergency stop.  A fault here is not an emergency, and a
     # fast change remains the larger risk (invariant 6).
-    rampdown_pct_per_min: 1.0             # above the knee
-    rampdown_knee_pct: 40.0
-    rampdown_below_knee_pct_per_min: 2.0  # at or below it
     safe_output_pct: 0.0
     # Once a ramp-down starts, AUTOMATION may not undo it -- a recovering sensor
     # does not resume the loop.  An operator still can: `send hold` freezes the
@@ -219,13 +218,12 @@ control:
     tau_s: 30.0
 
   ramp:
-    rate_k_per_min: 0.5           # default sweep rate
+    # THE ONE RATE: sweeps, the post-fault approach and the fault ramp-down.
     max_rate_k_per_min: 5.0
-    # Round the corners off the ramp.  A linear ramp has a discontinuous
-    # derivative at each end; the loop cannot follow a corner, so it lags in
-    # and overshoots out, and no retuning fixes that.  Measured on a 3 K sweep:
-    # 464 mK overshoot without, 25 mK with -- and independent of sweep rate.
-    smooth_tau_s: 300.0
+    # The corner IS the closed-loop response time, `move_speed * tau(T)`, and
+    # this is the floor under it in dead times.  A trajectory with corners
+    # sharper than the loop's own response cannot be followed.
+    smooth_delays: 8.0
 
   # Gain scheduling.  The controller is tuned from two LOCAL numbers -- gain
   # K(T) in K/% and time constant tau(T) -- because those are what a step test

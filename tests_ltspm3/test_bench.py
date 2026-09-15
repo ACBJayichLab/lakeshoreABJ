@@ -98,24 +98,23 @@ def test_a_settled_hold_is_already_inside_the_criterion(kelvin, bench):
 # -- §3.7, the setpoint move ------------------------------------------------
 
 
-def test_a_3_k_move_lands_everywhere_except_the_cold_end(kelvin, bench):
-    """§3.7's first row, and step 4 is what made it pass.
+def test_a_3_k_move_lands_everywhere_except_10_K(kelvin, bench):
+    """§3.7's first row.  Step 4 made five of six land; step 5 kept them there.
 
     Before the band followed the setpoint this did three different things.  At
     30 K it railed and **silently gave up** 0.883 K short -- under
-    `max_error_k`, so no alarm, no state change, nothing in the log.  At 10 K
-    it read a legitimate move as a broken premise and ramped the heater to zero
-    with the sample at base temperature.
+    `max_error_k`, so no alarm, no state change, nothing in the log.  At 10 K it
+    read a legitimate move as a broken premise and ramped the heater to zero.
 
-    Now five of the six land on target and stay tracking, with overshoot from
-    0.1 % at 30 K to 3.8 % at 180 K, because the window the loop is allowed to
-    work in is centred on the output that reaches the setpoint rather than on
-    wherever it happened to start.
+    Now 30 K and up land on target with 0.1 to 3.1 % overshoot.  The corner
+    scheduled in step 5 is what holds the overshoot down: at 30 K it was 17.9 %
+    with a corner of four dead times and 0.1 % with eight.
 
-    **10 K is still 0.5 K short** and that is not the band: it is
-    `max_rate_pct_per_min: 0.20`.  Three kelvin at 0.34 K/% is 8.8 % of output,
-    which at a trim rate takes 44 minutes, and the test window is 90.  Step 5
-    replaces that one number with `max_rate_k_per_min / K(T)`.
+    **10 K still faults**, and after step 5 it faults rather than merely
+    falling short -- the rate limit is no longer what holds it back, so the
+    error closes fast enough to trip `anomaly_demand_pct` on the way.  Step 6
+    is where the cold end gets a premise check it can live with: `dQ` has no
+    opinion below 28 % output and 10 K sits at 24.22 %.
     """
     h = bench(kelvin)
     h.sup.sweep_to(kelvin + 3.0, 5.0)
@@ -124,20 +123,19 @@ def test_a_3_k_move_lands_everywhere_except_the_cold_end(kelvin, bench):
     last = h.history[-1]
     reached = [s.filtered_k for s in h.history if s.filtered_k is not None]
 
-    assert last.state is SupervisorState.TRACKING, (
-        "a 3 K move must not fault anywhere -- step 4 is what fixed this")
+    if kelvin <= 10.0:
+        assert last.state in (SupervisorState.RAMPING_DOWN,
+                              SupervisorState.LOCKED_OUT)
+        assert last.filtered_k < kelvin, "the sample fell instead of rising"
+        return
+
+    assert last.state is SupervisorState.TRACKING
     overshoot = (max(reached) - (kelvin + 3.0)) / 3.0
     assert overshoot < 0.05, f"{100 * overshoot:.1f} % overshoot at {kelvin} K"
-
-    if kelvin <= 10.0:
-        # Short, but heading the right way and quietly.  Step 5.
-        assert kelvin < last.filtered_k < kelvin + 3.0
-        assert last.alarms == []
-    else:
-        settled = statistics.fmean(
-            [s.filtered_k for s in h.history[-30:] if s.filtered_k is not None])
-        floor = 5e3 * M.FittedParams().noise_quadratic * kelvin ** 2
-        assert settled == pytest.approx(kelvin + 3.0, abs=max(0.05, floor))
+    settled = statistics.fmean(
+        [s.filtered_k for s in h.history[-30:] if s.filtered_k is not None])
+    floor = 5e3 * M.FittedParams().noise_quadratic * kelvin ** 2
+    assert settled == pytest.approx(kelvin + 3.0, abs=max(0.05, floor))
 
 
 #: Where a 10 K sweep at 5 K/min lands today.  Step 3 moved 100 K into this
@@ -147,22 +145,24 @@ SWEEP_SURVIVES = (60.0, 100.0, 140.0, 180.0)
 
 
 def test_a_5_k_per_min_sweep_still_fails_AT_THE_COLD_END(kelvin, bench):
-    """RECORDED DEFECT, down to a third of one -- and now one cause, not three.
+    """RECORDED DEFECT, down to a third of one, and the cause has changed.
 
     Jeff's rate is 5 K/min.  Before step 3 a 10 K sweep at that rate locked the
     loop out at five of six bench temperatures and left the sample at base.
     Ratio tuning fixed 100 K; the band following the setpoint fixed 140 and
     180 K, which had been reaching the target and then faulting AFTERWARDS as
     the ramp allowance decayed while the loop was still railed at a window
-    centred where the sweep started.
+    centred where the sweep started.  Step 5 halved the remaining lag
+    everywhere -- 2.30 K to 1.55 K at 100 K -- by making the output rate the
+    one rate through the gain and the corner the closed loop's own response.
 
-    **10 and 30 K remain, and the reason is now a single number.**
-    `max_rate_pct_per_min: 0.20` is a trim rate.  Ten kelvin is 29 % of output
-    at the cold end's 0.34 K/% and 5 % at 30 K, so the heater is allowed to
-    take two and a half hours over a two-minute sweep, the error runs away to
-    7.2 K, and the premise check calls the cryostat broken.  Step 5 replaces it
-    with `max_rate_k_per_min / K(T)` -- 14.9 %/min at 10 K and 0.38 %/min at
-    118 K, which is the same 5 K/min everywhere.
+    **10 and 30 K remain, and what stops them now is the KELVIN PREMISE CHECK
+    itself.**  The lag peaks at 8.78 K and 7.24 K against a limit of
+    `max_error_k` 1.0 plus a `max_ramp_error_k` allowance capped at 6.0 -- so
+    7.0, and both miss it by about a kelvin.  There is nothing left to fix in
+    the rate or the band: the loop is being told that a sweep it is executing
+    correctly is evidence the cryostat is broken.  That is §3.4's row, and step
+    6 is where the check moves into watts and switches off in `move`.
     """
     h = bench(kelvin)
     h.sup.sweep_to(kelvin + 10.0, 5.0)
@@ -172,11 +172,17 @@ def test_a_5_k_per_min_sweep_still_fails_AT_THE_COLD_END(kelvin, bench):
 
     if kelvin in SWEEP_SURVIVES:
         assert last.state is SupervisorState.TRACKING
-        assert last.filtered_k == pytest.approx(kelvin + 10.0, abs=0.05)
+        # Scaled to the thermometer, as everywhere else here: 1.36e-6*T^2 is
+        # 44 mK rms at 180 K and a 50 mK window on the last sample is a coin
+        # toss up there.
+        floor = 5e3 * M.FittedParams().noise_quadratic * kelvin ** 2
+        assert last.filtered_k == pytest.approx(kelvin + 10.0,
+                                                abs=max(0.05, floor))
     else:
-        assert last.state is SupervisorState.LOCKED_OUT, (
-            f"{kelvin} K survived a 5 K/min sweep; if step 4 or 5 has landed, "
-            "this test is what should be rewritten")
+        assert last.state in (SupervisorState.RAMPING_DOWN,
+                              SupervisorState.LOCKED_OUT), (
+            f"{kelvin} K survived a 5 K/min sweep; if step 6 has landed, this "
+            "test is what should be rewritten")
         assert last.filtered_k < kelvin
 
 

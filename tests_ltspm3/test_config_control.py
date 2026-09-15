@@ -92,18 +92,41 @@ def _with_control(**kw):
     return cfg
 
 
-def test_empty_authority_band_is_rejected():
+def test_an_empty_output_range_is_rejected():
+    """The band follows the setpoint now, so an "empty band" is no longer a
+    thing a config can express -- but hard limits that cross each other is."""
     cfg = _with_control()
-    cfg.extensions["control"].supervisor.hard_max_pct = 10.0
-    with pytest.raises(ConfigError, match="authority band"):
+    cfg.extensions["control"].supervisor.hard_max_pct = 0.0
+    with pytest.raises(ConfigError, match="empty output range"):
         cfg.validate()
 
 
-def test_safe_output_above_operating_point_is_rejected():
-    """A fault ramp toward a *higher* output would add heat on a fault."""
+def test_a_band_of_zero_width_is_rejected():
     cfg = _with_control()
-    cfg.extensions["control"].supervisor.safe_output_pct = 70.0
-    with pytest.raises(ConfigError, match="ramp would .*raise"):
+    cfg.extensions["control"].supervisor.authority_pct = 0.0
+    with pytest.raises(ConfigError, match="authority_pct must be positive"):
+        cfg.validate()
+
+
+def test_a_safe_output_the_ramp_down_could_never_reach_is_rejected():
+    """It used to be "above the operating point", which was the band's centre.
+    The centre moves now; the hard limits do not."""
+    cfg = _with_control()
+    cfg.extensions["control"].supervisor.safe_output_pct = 99.0
+    with pytest.raises(ConfigError, match="outside the hard limits"):
+        cfg.validate()
+
+
+def test_a_non_positive_one_rate_is_rejected():
+    """One rate means one place for this to go wrong, rather than five."""
+    cfg = _with_control()
+    cfg.extensions["control"].ramp.max_rate_k_per_min = 0.0
+    with pytest.raises(ConfigError, match="max_rate_k_per_min must be positive"):
+        cfg.validate()
+
+    cfg = _with_control()
+    cfg.extensions["control"].supervisor.min_rate_pct_per_min = 0.0
+    with pytest.raises(ConfigError, match="min_rate_pct_per_min must be positive"):
         cfg.validate()
 
 

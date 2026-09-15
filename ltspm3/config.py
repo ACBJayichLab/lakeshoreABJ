@@ -46,29 +46,34 @@ class ControlConfig:
 def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) -> None:
     """Limits that contradict each other -- what a type check cannot catch."""
     s = cfg.supervisor
-    lo = max(s.hard_min_pct, s.operating_point_pct - s.authority_pct)
-    hi = min(s.hard_max_pct, s.operating_point_pct + s.authority_pct)
-    if lo > hi:
+    if s.hard_min_pct >= s.hard_max_pct:
         problems.append(
-            f"empty authority band: operating point {s.operating_point_pct}% is "
-            f"outside hard limits [{s.hard_min_pct}, {s.hard_max_pct}]"
+            f"empty output range: hard limits are [{s.hard_min_pct}, "
+            f"{s.hard_max_pct}] and nothing can be commanded between them"
         )
-    if s.safe_output_pct > s.operating_point_pct:
+    if s.authority_pct <= 0:
         problems.append(
-            f"safe_output_pct {s.safe_output_pct}% is above the operating point "
-            f"{s.operating_point_pct}% -- a fault ramp would *raise* the heater"
+            "control.supervisor.authority_pct must be positive -- a band of "
+            "zero width pins the loop to the model's answer and gives the "
+            "integral nowhere to go"
         )
-    for name in ("rampdown_pct_per_min", "rampdown_below_knee_pct_per_min"):
-        if getattr(s, name) <= 0:
-            problems.append(
-                f"control.supervisor.{name} must be positive -- a non-positive "
-                "rate is a ramp-down that never reaches safe_output_pct"
-            )
-    if not s.hard_min_pct <= s.rampdown_knee_pct <= s.hard_max_pct:
+    if not s.hard_min_pct <= s.safe_output_pct <= s.hard_max_pct:
         problems.append(
-            f"rampdown_knee_pct {s.rampdown_knee_pct}% is outside the hard limits "
-            f"[{s.hard_min_pct}, {s.hard_max_pct}] -- one of the two rates could "
-            "never apply"
+            f"safe_output_pct {s.safe_output_pct}% is outside the hard limits "
+            f"[{s.hard_min_pct}, {s.hard_max_pct}] -- the fault ramp-down could "
+            "never reach it"
+        )
+    if cfg.ramp.max_rate_k_per_min <= 0:
+        problems.append(
+            "control.ramp.max_rate_k_per_min must be positive -- it is the one "
+            "rate, and a non-positive one is a sweep that never arrives and a "
+            "fault ramp-down that never reaches safe_output_pct"
+        )
+    if s.min_rate_pct_per_min <= 0:
+        problems.append(
+            "control.supervisor.min_rate_pct_per_min must be positive -- it is "
+            "the floor under the rate where the model has no opinion, and at "
+            "zero the output cannot move there at all"
         )
     if s.on_exit not in ("hold", "zero"):
         problems.append(

@@ -169,8 +169,17 @@ control:
     # extrapolation and nobody has measured what happens.
     hard_max_pct: 70.0
 
-    max_step_pct: 0.02
-    max_rate_pct_per_min: 0.20
+    # THE OUTPUT RATE FLOOR, and the second of the two rate fields left of
+    # eight (the first is control.ramp.max_rate_k_per_min).  The heater's
+    # percent rate is `max_rate_k_per_min / K(T)` -- the one rate through the
+    # gain, so 5 K/min means 5 K/min everywhere -- and this is the floor under
+    # it where the model has no opinion.  0.38 %/min at 118 K, 14.6 at 10 K.
+    #
+    # It replaces `max_step_pct: 0.02` and `max_rate_pct_per_min: 0.20`, which
+    # were trim rates: ten kelvin is 29 % of output at the cold end, so
+    # 0.2 %/min allowed two and a half hours for a two-minute sweep and the
+    # premise check called the cryostat broken long before it arrived.
+    min_rate_pct_per_min: 0.20
 
     max_error_k: 1.0
     anomaly_demand_pct: 0.50
@@ -179,7 +188,6 @@ control:
                                   # deletes this field with the kelvin
                                   # allowance it exists for
     max_ramp_error_k: 6.0
-    approach_rate_k_per_min: 0.25
 
     max_feedforward_pct: 0.40
     # A CEILING ON THE DERIVED VELOCITY FEEDFORWARD, not the value.  What a
@@ -191,9 +199,11 @@ control:
     model_trust_k: 15.0
     model_check_slope_k_per_s: 0.002
 
-    rampdown_pct_per_min: 1.0
-    rampdown_knee_pct: 40.0
-    rampdown_below_knee_pct_per_min: 2.0
+    # The fault ramp-down descends at THE SAME ONE RATE, in kelvin, through the
+    # model's inverse curve -- so it needs no sensor (rule 3: the fault may BE
+    # the sensor).  Three percent-rate fields and a knee at 40 % are gone with
+    # it; they existed because a rate in percent is a different descent at
+    # every temperature, and the knee was patching that by hand.
     safe_output_pct: 0.0
     require_ack_after_fault: true
 
@@ -248,9 +258,23 @@ control:
     tau_s: 30.0
 
   ramp:
-    rate_k_per_min: 0.5           # STEP 5: one rate, 5.0
+    # THE ONE RATE (Jeff, 2026-09-11).  It is the default sweep rate, the rate
+    # the post-fault approach walks in at, the rate the open-loop fault
+    # ramp-down descends at, and the ceiling on anything a client asks for --
+    # four numbers that used to disagree by a factor of twenty.
     max_rate_k_per_min: 5.0
-    smooth_tau_s: 300.0           # 464 mK of overshoot without it, 25 with
+    # Corner rounding.  The corner IS the closed-loop response time,
+    # `move_speed * tau(T)` -- 24 s at 30 K, 260 s at 118 K -- because a
+    # trajectory with corners sharper than the loop's own response is one the
+    # loop cannot follow, and what comes out is lag in and overshoot out.  This
+    # is the FLOOR under it, in dead times, for the cold end where tau is
+    # shorter than the measurement.  Eight, measured: a 3 K move at 30 K
+    # overshoots 17.9 % at four and 0.1 % at eight.
+    #
+    # It replaced a flat 300 s, which was measured at 0.5 K/min where a ramp
+    # lasts hours.  At 5 K/min a 10 K sweep lasts 120 s and a 300 s corner
+    # meant the loop never approached the rate it was given.
+    smooth_delays: 8.0
 
   tuning:
     enabled: true

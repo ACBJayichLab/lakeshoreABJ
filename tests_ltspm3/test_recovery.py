@@ -28,8 +28,20 @@ def test_guard_escapes_fault_after_the_plant_has_moved(armed):
     assert h.sup.output_pct < 63.076              # the cryostat is now cooling
 
     h.cryostat.clear_faults()
-    h.step(40)
-    assert h.sup.guard.state is HealthState.OK, "guard deadlocked on a stale prediction"
+    # Until it recovers, not for a fixed number of cycles.  The guard
+    # legitimately alternates OK and RECOVERING while the cryostat is still
+    # falling under the latched ramp-down -- the slew check is doing its job on
+    # a plant that really is moving -- so sampling at one arbitrary cycle asks
+    # a question with no stable answer.  What must be true is that it escapes
+    # FAULT at all, which is the deadlock this test exists for.
+    seen_ok = False
+    for _ in range(60):
+        h.step(1)
+        assert h.sup.guard.state is not HealthState.FAULT, "fell back to FAULT"
+        seen_ok = seen_ok or h.sup.guard.state is HealthState.OK
+        if seen_ok:
+            break
+    assert seen_ok, "guard deadlocked on a stale prediction"
 
 
 def test_filter_reseeds_rather_than_rejecting_forever(armed):
@@ -55,11 +67,10 @@ def test_acknowledge_then_rearm_actually_resumes_control(armed):
     """acknowledge() used to leave mode at PID, so the operator's set_mode(PID)
     hit the 'already in this mode' short-circuit and never re-primed.  The loop
     held on a phantom demand step and locked out again minutes later."""
-    cfg = SupervisorConfig(rampdown_pct_per_min=60.0, safe_output_pct=62.5,
-                           authority_pct=2.0)
+    cfg = SupervisorConfig(safe_output_pct=62.5, authority_pct=2.0)
     h = armed(sup_cfg=cfg)
     h.cryostat.inject(dropout_channels={"218.1"})
-    h.step(250)
+    h.step(1200)
     assert h.sup.state is SupervisorState.LOCKED_OUT
 
     h.cryostat.clear_faults()
@@ -78,11 +89,10 @@ def test_recovery_does_not_ratchet_further_down(armed):
     """A ramp-down cools the cryostat, which grows the error, which used to trigger
     another ramp-down.  That positive feedback ran the heater to zero from a
     single transient."""
-    cfg = SupervisorConfig(rampdown_pct_per_min=60.0, safe_output_pct=62.5,
-                           authority_pct=2.0)
+    cfg = SupervisorConfig(safe_output_pct=62.5, authority_pct=2.0)
     h = armed(sup_cfg=cfg)
     h.cryostat.inject(dropout_channels={"218.1"})
-    h.step(250)
+    h.step(1200)
     h.cryostat.clear_faults()
     h.sup.acknowledge()
     h.sup.set_mode(LoopMode.PID)

@@ -16,62 +16,84 @@ from ltspm3.control.health import HealthState
 from ltspm3.control.supervisor import SupervisorConfig
 
 
-# -- 0.1  two rates, and the knee between them -----------------------------
+# -- 0.1  ONE rate, in kelvin, through the model's inverse curve -----------
 
-def test_the_ramp_down_crosses_the_knee_and_changes_slope(armed):
-    """Above the knee 1 %/min, at or below it 2 %/min.
+def test_the_ramp_down_descends_at_the_one_rate_in_KELVIN(armed):
+    """Phase 3 step 5.  Three percent-rates and a knee at 40 % are gone.
 
-    Power goes as pct**2, so at 40% the heater delivers about 40% of the power
-    it had at the operating point: the thermal shock per percent is much
-    smaller down there and there is less reason to crawl.
+    They existed because a rate in percent is a different descent at every
+    temperature -- 1 %/min is 13 K/min at 140 K and 0.34 K/min at 10 K -- and
+    the knee was an attempt to patch that by hand.  The ramp-down now walks a
+    TARGET TEMPERATURE down at `max_rate_k_per_min` from the last trusted
+    reading and turns it into an output with `percent_for`, which asks the
+    cryostat nothing: rule 3 says the fault may BE the sensor.
+
+    What this asserts is the property that replaces the knee: the SAMPLE falls
+    at the one rate, and it is the same rate wherever the descent starts.
     """
-    cfg = SupervisorConfig(rampdown_knee_pct=40.0,
-                           rampdown_pct_per_min=1.0,
-                           rampdown_below_knee_pct_per_min=2.0,
-                           anomaly_hold_s=60.0, authority_pct=30.0)
+    cfg = SupervisorConfig(anomaly_hold_s=60.0, authority_pct=30.0)
     h = armed(sup_cfg=cfg)
+    started = h.sup.filter.value
     h.cryostat.inject(dropout_channels={"218.1"})
 
-    above, below = [], []
-    prev = h.sup.output_pct
-    for _ in range(2000):
+    outs = []
+    for _ in range(3000):
         h.step(1)
-        now = h.sup.output_pct
-        if h.sup.state is SupervisorState.RAMPING_DOWN and now is not None and prev is not None:
-            drop = prev - now
-            if drop > 0:
-                (above if prev > cfg.rampdown_knee_pct else below).append(drop)
-        prev = now
+        if h.sup.state is SupervisorState.RAMPING_DOWN:
+            outs.append((h.clock.t, h.sup.output_pct))
         if h.sup.state is SupervisorState.LOCKED_OUT:
             break
 
-    assert above and below, "the ramp must be seen on both sides of the knee"
-    fast = sum(below) / len(below)
-    slow = sum(above) / len(above)
-    assert fast == pytest.approx(2.0 * slow, rel=0.15), (
-        f"below the knee should be twice as fast: {slow:.4f} -> {fast:.4f} %/cycle"
-    )
+    assert outs, "never ramped down"
+    assert h.sup.state is SupervisorState.LOCKED_OUT
+    # The model's own reckoning of where the sample was being taken, sampled a
+    # third and two thirds of the way down, against the one rate.
+    rate = h.sup.ramp.cfg.max_rate_k_per_min
+    for frac in (0.34, 0.67):
+        t, pct = outs[int(frac * len(outs))]
+        want = started - rate * ((t - outs[0][0]) / 60.0)
+        got = h.sup.feedforward.kelvin_for(pct)
+        assert got == pytest.approx(want, abs=max(2.0, 0.05 * abs(want)))
+
+    # And it only ever went down.  Rule 1.
+    for (_, a), (_, b) in zip(outs, outs[1:]):
+        assert b <= a + 1e-9, "a fault response raised the heater"
 
 
-def test_a_non_positive_rampdown_rate_is_refused():
+def test_the_ramp_down_needs_no_sensor_at_all(armed):
+    """Rule 3's point: the thing a feedback ramp-down would steer by is the
+    thing that is broken.  Here the sensor is dead for the whole descent."""
+    h = armed(sup_cfg=SupervisorConfig(anomaly_hold_s=60.0, authority_pct=30.0))
+    h.cryostat.inject(dropout_channels={"218.1"})
+    for _ in range(3000):
+        h.step(1)
+        if h.sup.state is SupervisorState.LOCKED_OUT:
+            break
+    assert h.sup.state is SupervisorState.LOCKED_OUT
+    assert h.sup.output_pct == pytest.approx(h.sup.cfg.safe_output_pct,
+                                             abs=h.sup.cfg.dac_step_pct)
+
+
+def test_a_non_positive_one_rate_is_refused():
     from lschart.config import AppConfig
     from ltspm3.config import ControlConfig, validate_control
+    from ltspm3.control.ramp import RampConfig
 
     problems: list[str] = []
-    cfg = ControlConfig(supervisor=SupervisorConfig(rampdown_pct_per_min=0.0))
+    cfg = ControlConfig(ramp=RampConfig(max_rate_k_per_min=0.0))
     validate_control(cfg, AppConfig(), problems)
-    assert any("rampdown_pct_per_min must be positive" in p for p in problems)
+    assert any("max_rate_k_per_min must be positive" in p for p in problems)
 
 
-def test_a_knee_outside_the_hard_limits_is_refused():
+def test_a_safe_output_outside_the_hard_limits_is_refused():
     from lschart.config import AppConfig
     from ltspm3.config import ControlConfig, validate_control
 
     problems: list[str] = []
-    cfg = ControlConfig(supervisor=SupervisorConfig(rampdown_knee_pct=90.0,
+    cfg = ControlConfig(supervisor=SupervisorConfig(safe_output_pct=90.0,
                                                     hard_max_pct=70.0))
     validate_control(cfg, AppConfig(), problems)
-    assert any("rampdown_knee_pct" in p for p in problems)
+    assert any("safe_output_pct" in p for p in problems)
 
 
 # -- 0.2  the latch, and the human exemption from it -----------------------
@@ -113,13 +135,14 @@ def test_set_mode_pid_is_refused_while_ramping_down(armed):
 
 
 def test_the_ramp_down_completes_and_locks_out_and_only_ack_clears_it(armed):
-    cfg = SupervisorConfig(rampdown_pct_per_min=60.0,
-                           rampdown_below_knee_pct_per_min=60.0,
-                           safe_output_pct=62.5, authority_pct=2.0,
+    cfg = SupervisorConfig(safe_output_pct=62.5, authority_pct=2.0,
                            require_ack_after_fault=True)
     h = armed(sup_cfg=cfg)
     h.cryostat.inject(dropout_channels={"218.1"})
-    h.step(200)
+    # Long enough for the one rate to walk the model's target down past 62.5 %.
+    # There is no `rampdown_pct_per_min` to turn up any more: the descent is
+    # 5 K/min of SAMPLE, whatever that costs in percent here.
+    h.step(1200)
     assert h.sup.state is SupervisorState.LOCKED_OUT
 
     h.cryostat.clear_faults()

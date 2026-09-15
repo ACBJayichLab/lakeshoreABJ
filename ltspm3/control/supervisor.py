@@ -110,8 +110,18 @@ class SupervisorConfig:
     #: arithmetic says, the output cannot exceed this.
     hard_max_pct: float = 70.0
 
-    max_step_pct: float = 0.02
-    max_rate_pct_per_min: float = 0.20
+    #: **THE OUTPUT RATE FLOOR, and one of the two rate fields left of eight.**
+    #: The heater's percent rate is `max_rate_k_per_min / K(T)` -- the one rate
+    #: converted through the gain, so 5 K/min means 5 K/min everywhere -- and
+    #: this is what it falls back to where the model has no opinion.  0.38 %/min
+    #: at 118 K, 14.6 %/min at 10 K.
+    #:
+    #: What it replaces is `max_step_pct: 0.02` and `max_rate_pct_per_min:
+    #: 0.20`, both of which were trim rates: ten kelvin is 29 % of output at
+    #: the cold end's 0.34 K/%, so 0.2 %/min allowed two and a half hours for a
+    #: two-minute sweep and the premise check called the cryostat broken long
+    #: before it arrived.
+    min_rate_pct_per_min: float = 0.20
 
     # Premise checks -- "this should only ever be a small correction".
     max_error_k: float = 1.0
@@ -159,25 +169,16 @@ class SupervisorConfig:
     model_trust_k: float = 15.0
     #: "Settled" for that check: slope below this and no ramp in progress.
     model_check_slope_k_per_s: float = 0.002
-    #: Re-arming after a fault ramp-down is the hardest approach: the cryostat is
-    #: still settling toward the output the ramp-down left it at, so the gap
-    #: grows for a while before it closes.  Approach more gently than a sweep.
-    approach_rate_k_per_min: float = 0.25
-
-    # Fault response.  Two rates, because a single slow one stops being a fault
-    # response and starts being a shrug: from the 63.076% operating point at
-    # 0.50 %/min, reaching zero took 126 minutes.  Power goes as pct**2, so at
-    # 40% the heater delivers about 40% of the power it had at the operating
-    # point -- the thermal shock per percent is much smaller down there and
-    # there is less reason to crawl.  63.076% -> 40% now takes 23 min and
-    # 40% -> 0% takes 20 min: ~43 minutes end to end.
+    # Fault response.  THE SAME ONE RATE, in kelvin, through the model's
+    # inverse curve -- `_rampdown_target`.  Three percent-rate fields and a
+    # knee are gone with it: they existed because a rate in percent means a
+    # different thing at every temperature, and the knee at 40 % was an attempt
+    # to patch that by hand.  Descending at `max_rate_k_per_min` by the model's
+    # reckoning is the same descent everywhere, and it needs no sensor.
     #
     # Still nothing like an emergency stop.  A fault on this cryostat is not an
     # emergency, and the risk of a fast change remains larger than the risk of a
-    # slow one (invariant 6).
-    rampdown_pct_per_min: float = 1.0             # above the knee
-    rampdown_knee_pct: float = 40.0
-    rampdown_below_knee_pct_per_min: float = 2.0  # at or below it
+    # slow one (invariant 6).  118 K to base takes about 23 minutes.
     safe_output_pct: float = 0.0
     require_ack_after_fault: bool = True
 
@@ -271,7 +272,10 @@ class HeaterSupervisor:
             ff_limit_pct=self.cfg.max_feedforward_pct,
         )
         self.ramp = SetpointRamp(self.pid.cfg.setpoint, ramp_config)
-        self.smoother = SetpointSmoother(self.ramp.cfg.smooth_tau_s,
+        # The corner is DERIVED from the loop's dead time, so it is short
+        # against any sweep worth commanding.  `delay_s` needs the filter and
+        # the cadence, both of which exist by now.
+        self.smoother = SetpointSmoother(self._smooth_tau_s(),
                                          value=self.pid.cfg.setpoint)
         #: Set BEFORE the first `_apply_band_to_pid`, because the band's floor
         #: now asks where the heater is.
@@ -289,6 +293,11 @@ class HeaterSupervisor:
         self._last_t: float | None = None
         self._locked_reason = ""
         self._rampdown_complete = False
+        #: Where the open-loop fault ramp-down is descending FROM, and when it
+        #: started.  Captured at the fault, because after that the sensor is
+        #: not trusted.
+        self._rampdown_from_k: float | None = None
+        self._rampdown_t0: float | None = None
         self._ramp_allowance_k = 0.0
         self._pending_approach = False
         self._model_warned = False
@@ -320,6 +329,46 @@ class HeaterSupervisor:
         cannot come to disagree with the filter it describes.
         """
         return self.filter.group_delay_s(self._cadence_s or 0.0)
+
+    def _smooth_tau_s(self, kelvin: float | None = None) -> float:
+        """How long the corner of a commanded ramp is rounded over.
+
+        **The closed-loop response time in `move`**, floored on the loop's dead
+        time.  ``move_speed * tau(T)``: 4.5 s at 30 K, 260 s at 118 K, 306 s at
+        180 K.
+
+        That is not a tuning knob dressed up -- it is the same number
+        ``tau_cl`` is, and it has to be.  A setpoint trajectory with corners
+        sharper than the closed loop's own response is one the loop cannot
+        follow by construction, and what comes out is lag going in and
+        overshoot coming out, which no retuning fixes.  Rounding over exactly
+        `tau_cl` asks for the fastest trajectory that IS followable.
+
+        Measured on the fitted plant, a 10 K sweep at 118 K with the premise
+        check out of the way, against corner length:
+
+            12 s     8.46 K of lag, 5.3 % overshoot, arrives in 11.3 min
+            60 s     6.24 K,        5.6 %,            10.8 min
+            180 s    2.65 K,        0.3 %,            30.4 min
+            450 s    0.80 K,       -0.3 %,            50.6 min
+
+        and ``move_speed * tau`` is 260 s there.  The two flat values this
+        replaced are both visible in that table: 300 s was measured at
+        0.5 K/min where it is about right at 118 K and eighty times too long at
+        30 K, and the 12 s the first draft of step 5 derived from the dead time
+        alone is the top row.
+
+        **A rate is a ceiling, not a promise.**  What the table also says is
+        that a 519 s plant does not move 10 K in the two minutes 5 K/min
+        implies, whatever anybody configures; it takes about eleven at best,
+        and thirty if you want the trajectory followed.
+        """
+        floor = self.ramp.cfg.smooth_delays * self.delay_s
+        if kelvin is None:
+            kelvin = self.filter.value if self.filter.primed else None
+        if kelvin is None or not self.tuner.enabled:
+            return floor
+        return max(floor, self.tuner.cfg.move_speed * self.tuner.schedule.tau_at(kelvin))
 
     def _learn_cadence(self, dt: float) -> None:
         if dt <= 0:
@@ -363,7 +412,7 @@ class HeaterSupervisor:
     #: unlimited centre opens the ceiling in one cycle.  **Limiting it is
     #: unnecessary and it breaks arming**: a loop armed with the heater at 0 %
     #: gets a window at 0 % that then crawls toward the setpoint at
-    #: `max_rate_pct_per_min`, and 0 to 63 % at 0.2 %/min is five hours during
+    #: the output rate limit, and 0 to 63 % at a trim rate is hours during
     #: which the loop cannot reach anything.  Measured: 115 tests.
     #:
     #: The band opening is not what moves the heater.  Three things bound the
@@ -552,7 +601,7 @@ class HeaterSupervisor:
         """
         # An explicit setpoint command takes charge of the trajectory: the
         # deferred post-fault approach must not silently re-rate an operator's
-        # sweep to approach_rate_k_per_min behind their back.
+        # sweep to the post-fault approach rate behind their back.
         self._pending_approach = False
         if not ramp:
             # A step means a step: bypass the smoother too.  Otherwise
@@ -816,6 +865,9 @@ class HeaterSupervisor:
         self._last_t = t
         self._learn_cadence(dt)
 
+        # The corner is the closed-loop response time HERE, so it moves with
+        # temperature exactly as tau_cl does.
+        self.smoother.tau_s = self._smooth_tau_s()
         self.pid.cfg.setpoint = self.smoother.update(t, self.ramp.value(t))
         # EVERY CYCLE, because the band moves with the setpoint now.  It was
         # called once, in __init__, which is what made `operating_point_pct` a
@@ -911,9 +963,9 @@ class HeaterSupervisor:
         if self.state is SupervisorState.RAMPING_DOWN:
             # A ramp-down has to be able to leave the authority band -- otherwise
             # it can never reach safe_output_pct.  Its rate is already set by
-            # rampdown_pct_per_min in _rampdown_target, so the trim-sized limiter
-            # (which is ~30x slower) must not apply on top of it.  Only the
-            # absolute hard limits still hold.
+            # the one rate in _rampdown_target, through the model's inverse
+            # curve, so the tracking limiter must not apply on top of it.
+            # Only the absolute hard limits still hold.
             target = max(self.cfg.hard_min_pct, min(self.cfg.hard_max_pct, target))
         else:
             target = self._rate_limit(current, target, dt)
@@ -921,8 +973,7 @@ class HeaterSupervisor:
             # if it did is what undid the rate limiter completely: `clamp` used
             # to run here and raise anything below the floor straight to it, so
             # a `hold` at 20% wrote 62.08% on the next cycle and an `arm` at 0%
-            # went to 62.076% in a single step -- past `max_step_pct`, which
-            # exists for exactly that.
+            # went to 62.076% in a single step, past any rate limit at all.
             #
             # Down to the ceiling is still instant: less heat is never the
             # dangerous direction, and the post-quantise re-application below
@@ -1011,7 +1062,7 @@ class HeaterSupervisor:
             if abs(gap) > self.cfg.max_error_k:
                 self.ramp.start(
                     t, self.ramp.target, from_k=s.filtered_k,
-                    rate_k_per_min=self.cfg.approach_rate_k_per_min,
+                    rate_k_per_min=self.ramp.cfg.max_rate_k_per_min,
                 )
                 # Put the ramped setpoint in force *before* priming.  prime()
                 # captures the feedforward reference at the setpoint then in
@@ -1026,7 +1077,7 @@ class HeaterSupervisor:
                 ))
                 log.warning(
                     "arming %+.3f K from target; ramping in at %.2f K/min",
-                    gap, self.cfg.approach_rate_k_per_min,
+                    gap, self.ramp.cfg.max_rate_k_per_min,
                 )
 
         # Snapshot so a hold can restore the integral bit-for-bit: PID.update
@@ -1177,39 +1228,90 @@ class HeaterSupervisor:
     def _rampdown_target(
         self, t: float, s: SupervisorStatus, why: str, dt: float
     ) -> float | None:
+        """Descend at the one rate, **open loop, through the model's inverse
+        curve** -- so it needs no sensor.
+
+        Rule 3 says the fault may BE the sensor, which is what makes a feedback
+        ramp-down the wrong shape: the thing it would steer by is the thing
+        that is broken.  So a target temperature is walked down from the last
+        trusted reading at ``max_rate_k_per_min`` and turned into an output by
+        ``percent_for``, which is arithmetic on a fitted table and asks the
+        cryostat nothing.
+
+        This replaces three percent-rate fields and a knee at 40 %.  They
+        existed because a rate in percent is a different descent at every
+        temperature -- 1 %/min is 13 K/min at 140 K and 0.34 K/min at 10 K --
+        and the knee was an attempt to patch that by hand.  In kelvin there is
+        nothing to patch: 118 K to base takes about 23 minutes and the sample
+        falls at the one rate the whole way.
+
+        **It only ever lowers the heater** (rule 1).  A model that is wrong
+        high cannot turn a fault response into a heat-up.
+        """
         if self.state is not SupervisorState.RAMPING_DOWN:
             log.error("heater RAMPING DOWN (%s)", why)
             self.state = SupervisorState.RAMPING_DOWN
             self._locked_reason = why
+            # The last temperature anybody believed, and the clock it falls
+            # from.  Captured once, at the fault, because after that the sensor
+            # is not trusted -- which is the whole point.
+            self._rampdown_from_k = (
+                self.filter.value if self.filter.primed else None)
+            self._rampdown_t0 = t
         s.alarms.append(f"ramping down: {why}")
 
         current = self._where_the_heater_is(default=self.cfg.safe_output_pct)
-
-        # Deliberately slow.  A fault is not an emergency on this cryostat; the risk
-        # of a fast change is greater than the risk of a slow one.  The rate is
-        # chosen on where the heater is NOW, so a long ramp changes slope as it
-        # crosses the knee rather than being fixed when the fault began.
-        rate = (self.cfg.rampdown_pct_per_min if current > self.cfg.rampdown_knee_pct
-                else self.cfg.rampdown_below_knee_pct_per_min)
-        step = rate * (max(dt, 0.0) / 60.0)
         safe = self.cfg.safe_output_pct
-        if abs(current - safe) <= step:
+        rate = self.ramp.cfg.max_rate_k_per_min
+
+        if self._rampdown_from_k is not None and self.feedforward.enabled:
+            elapsed = max(0.0, t - (self._rampdown_t0 or t))
+            target_k = self._rampdown_from_k - rate * (elapsed / 60.0)
+            proposed = self.feedforward.percent_for(target_k)
+        else:
+            # No trusted temperature and no curve: the one rate through the
+            # gain at the present output, which is the same conversion the rate
+            # limiter uses.
+            proposed = current - self._rate_pct_per_min(None) * (dt / 60.0)
+
+        # Never upward.  Rule 1, and the one line that makes a wrong model
+        # harmless here.
+        proposed = min(proposed, current)
+        if proposed <= safe + self.cfg.dac_step_pct / 2:
             # Reached the safe value: hand it back this cycle and lock out on the
             # next one, so step() still writes it before the early-return kicks in.
             self._rampdown_complete = True
             return safe
-        return current - step if current > safe else current + step
+        return proposed
+
+    def _rate_pct_per_min(self, kelvin: float | None) -> float:
+        """**The one rate, converted through the gain.**
+
+        ``max_rate_k_per_min / K(T)``, floored at ``min_rate_pct_per_min``
+        where the model has no opinion: 14.6 %/min at 10 K, 0.38 %/min at
+        118 K, 0.40 %/min at 180 K.  The same five kelvin a minute at every one
+        of them, which is what a rate limit in percent can never be -- the gain
+        spans forty-fold across this cryostat.
+        """
+        floor = self.cfg.min_rate_pct_per_min
+        if kelvin is None or not self.tuner.enabled:
+            return floor
+        gain = self.tuner.schedule.gain_at(kelvin)
+        if gain <= 0:
+            return floor
+        return max(floor, self.ramp.cfg.max_rate_k_per_min / gain)
 
     def _rate_limit_step(self, dt: float) -> float:
         """The most the output may move this cycle.  Also what the band's
         centre may move, so the window can never open faster than the heater
         could travel into it."""
-        step = self.cfg.max_step_pct
-        if dt > 0:
-            # No `or step` fallback here: that made the limiter loosest exactly
-            # when dt was smallest, which is backwards.
-            step = min(step, self.cfg.max_rate_pct_per_min * (dt / 60.0))
-        return step
+        if dt <= 0:
+            # A cycle with no elapsed time may not move the output at all.
+            # There used to be a `max_step_pct` fallback here, and it made the
+            # limiter loosest exactly when dt was smallest, which is backwards.
+            return 0.0
+        here = self.filter.value if self.filter.primed else None
+        return self._rate_pct_per_min(here) * (dt / 60.0)
 
     def _rate_limit(self, current: float, target: float, dt: float) -> float:
         step = self._rate_limit_step(dt)
