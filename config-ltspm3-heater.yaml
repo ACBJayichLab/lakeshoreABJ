@@ -151,7 +151,7 @@
 #
 # Note K: it is much steeper than the 10.0 K/% quoted at the 63% operating
 # point, so a step that would be a trim down there is not one up here.
-# See docs/ltspm3/commissioning.md.
+# See docs/ltspm3/thermal-response.md.
 
 log_level: INFO
 

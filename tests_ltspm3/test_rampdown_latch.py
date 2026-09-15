@@ -1,7 +1,8 @@
-"""Stage 0.1 and 0.2 of the commissioning path: the two-rate ramp-down, and
-the rule that once one starts, **automation** may not call it off.
+"""The fault ramp-down, and the rule that once one starts, **automation** may
+not call it off.
 
-Both are exit-gate items in ``docs/ltspm3/commissioning.md``.  The latch is a
+The descent is ONE RATE in kelvin through the model's inverse curve (phase 3
+step 5); the two-rate percent descent with a knee at 40 % is gone.  The latch is a
 behaviour change, not a tuning change: before it, a ramp-down whose cause
 cleared was quietly abandoned mid-way and the loop went back to tracking, and
 only a ramp that ran all the way to ``safe_output_pct`` ever locked out.

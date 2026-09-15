@@ -19,7 +19,8 @@ limit forcing slower polling on long runs, not a cryostat constraint.
 > recorder has run against both boxes over GPIB, and the 218's analog output has
 > been moved by hand. What has *never* run on this cryostat is the closed loop.
 > Numbers here that predate 08-24 still come from the reference logs — see
-> [commissioning](commissioning.md) for which ones have since been measured.
+> [thermal-response](thermal-response.md) for which ones have since been
+> measured.
 
 ## The 218's thermometers, and the seam at 2026-09-04 12:07
 
@@ -59,8 +60,7 @@ number*, and what was loaded was another thermometer's calibration in full,
 not a corrupted copy of the Coldplate's own.)
 
 **Every Coldplate figure timestamped before that cutover is wrong**, including
-the dated blocks in the two LTSPM3 configs, the numbers in
-[commissioning](commissioning.md), and all of `reference/logs/`. But it is
+the dated blocks in the two LTSPM3 configs and all of `reference/logs/`. But it is
 wrong by a *knowable* amount, because both curve files exist and the
 conversion the box did is invertible. Kelvin → resistance → kelvin:
 
@@ -179,6 +179,42 @@ AOUT? 1                                 # readback, in percent
 seven fields byte-identical to that known-good string rather than recomputing
 them — a recomputed field that happens to differ would change the output's
 *mode*, not just its level.
+
+### The `AOUT?` flicker, characterised
+
+`AOUT?` reads back 0.003 % away from what was commanded on some samples — but
+**only at some commanded values**, which is why the one-line version of this was
+true and misleading:
+
+| held at | samples | flicker |
+|---|---|---|
+| 66.598 % | 117,000 over 65 h | reads **66.595 on 3.2 %** of samples — 3,372 excursions, ~104/h, almost all exactly one sample long |
+| 69.027 % | 46,050 over 25.6 h | **none at all.** 46,050 identical readings |
+
+So it is not a general property of the box. At 0.003 % it is smaller than one
+DAC code (0.01 %), which puts it in the instrument's own formatting of that code
+rather than in the output.
+
+**Nothing is done about it and nothing needs to be**, but know where it lands:
+
+- **Write verification is unaffected.** `readback_tol_pct` is 0.02 % in the
+  instrument config and 0.015 % in `SupervisorConfig`; both are far larger, so
+  `_confirm` accepts it.
+- **`_where_the_heater_is()` sees it**, and that is the only live-loop exposure.
+  It re-reads `AOUT?` after any cycle that wrote nothing — exactly the steady
+  holding regime where the flicker occurs — and that value is the base for the
+  rate limiter's step, the fault ramp-down's step, and the value a manual hold
+  adopts. Against a per-cycle step of 0.013 % at 118 K it is a quarter of one
+  cycle's move; it is zero-mean and one sample long, so it does not accumulate,
+  and it can only shift the quantised code when the target already sits within
+  0.003 % of a code boundary. Bounded at one code, ~0.13 K.
+- **Analysis of the CSV must allow for it.** `steptest` has a 0.005 % deadband
+  for exactly this; anything else reading `ls218.aout1` and looking for steps
+  needs its own. Without one, the 08-24 → 09-03 data shows 14,509 apparent
+  output changes instead of 99.
+
+The recorder logs the flicker faithfully, and that is correct — it should record
+what the instrument said, not what we think it meant.
 
 ## The other two cryostats in this repo, for contrast
 

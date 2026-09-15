@@ -282,7 +282,7 @@ Two of the four resolved differently from how this section imagined them.
    by a test; no power gate, but `accept_commands` and the source policy apply,
    and it is deliberately **not** a panic kind.
 4. ~~**Correct** four documents.~~ **DONE**, and the fourth was not a stale
-   sentence but a missing measurement: commissioning's stability figures were a
+   sentence but a missing measurement: the stability figures were a
    1/√N *prediction* with no drift term in it. `analysis/allan.py` measures it
    instead — **averaging stops helping at about two minutes**, floor 7.38 mK at
    τ = 130 s, rising to 24.5 mK at 6.6 h, and the prediction was optimistic by

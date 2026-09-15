@@ -20,7 +20,7 @@ gave one:
 ``reach``
     ``span / tau``, how many time constants the dwell actually ran.  A fit
     over less than about 3 tau returns tau far too small at an R^2 that still
-    reads as healthy (see docs/ltspm3/commissioning.md), so this is the column
+    reads as healthy (see docs/ltspm3/thermal-response.md), so this is the column
     that decides whether a tau may be believed, and R^2 is not.
 
 The fit is ``T(t) = T_inf + A exp(-t/tau)``: nonlinear in tau alone, so tau is

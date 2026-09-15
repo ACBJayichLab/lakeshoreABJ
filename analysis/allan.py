@@ -55,7 +55,7 @@ head is what a contact whose resistance moves looks like.  The other signature i
 the 0.30 K steady-state offset at matched power; see the note on
 ``pc-20260910-144849`` in the manifest.
 
-Beware of comparing against a PREDICTION.  ``docs/ltspm3/commissioning.md`` used
+Beware of comparing against a PREDICTION.  ``plans/pid-4-commissioning.md`` C6 used
 to quote 6.1 / 4.1 / 2.5 mK at 4 / 60 / 600 s from a 1/sqrt(N) model corrected
 for lag-1 correlation.  That model has no drift term, so it goes on promising
 improvement through the region where this cryostat has stopped improving, and at

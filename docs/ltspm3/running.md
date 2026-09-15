@@ -204,7 +204,8 @@ fake applies writes synchronously.
 
 The GPIB path and the write path both have, since 2026-08-24 — but by hand, with
 no controller in the way. Arming is the step nothing has rehearsed on this
-hardware. [commissioning.md](commissioning.md) is the staged way in; start with
+hardware. [plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md)
+is the staged way in; start with
 `probe`, which forces every transport read-only regardless of the config:
 
 ```bash
@@ -224,15 +225,17 @@ reaches 181 K and gives **K ≈ 13.0 K/% across 155–181 K**, so the *gain* now
 a shape; τ still rests on that single 2026-08-24 step, because every heater move
 since has been an up-down doublet thrashed within minutes rather than a step
 held. The descending staircase in
-[commissioning.md](commissioning.md#the-descending-staircase--the-campaign-to-actually-run)
-is the campaign that fixes it.
+campaign in
+[plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md) is what
+fixes it, with the rung list from `analysis/plan_sweep.py`.
 
 **Hold each point about 3τ — roughly 30 minutes up here, and do not fit
 anything held under 20 minutes.** A short window does not give a noisy answer,
 it gives a confident wrong one, and R² will not warn you.
 `ltspm3/tools/steptest.py` holds the protocol; see
-[commissioning.md](commissioning.md) for the two rules the existing hand data
-teaches about step size and doublets.
+[thermal-response.md](thermal-response.md#how-long-to-hold-a-step--and-why-r-will-not-tell-you)
+for the table behind that rule, and for what the existing hand data teaches
+about step size and doublets.
 
 ## The monitor: a judge that never commands
 

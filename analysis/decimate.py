@@ -57,7 +57,7 @@ TOL_K = 0.05
 DT_MAX_S = 300.0
 
 #: A heater move smaller than this is the 218's readback flicker, not a
-#: command.  Measured at 0.003% in docs/ltspm3/commissioning.md.
+#: command.  Measured at 0.003% in docs/ltspm3/cryostat.md.
 U_EPS_PCT = 0.005
 
 

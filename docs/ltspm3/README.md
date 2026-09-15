@@ -32,8 +32,10 @@ ltspm3     LTSPM3 only          IS the loop, on the 218's analog output
    1,510 hours of logs.
 4. **[control.md](control.md)** — how the loop is built out of those numbers.
 5. **[running.md](running.md)** — `check`, `run --arm`, replay, step test.
-6. **[commissioning.md](commissioning.md)** — the staged procedure for getting
-   this onto the real cryostat, and the calibration campaign that follows.
+
+The staged procedure for getting onto the real cryostat, and the calibration
+campaign that follows, are in
+[plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md).
 
 ## Status
 
@@ -46,7 +48,7 @@ Two things are worth knowing before it runs against the real cryostat:
 - **The GPIB path is exercised; the closed loop is not.** The recorder has run
   against both boxes since 2026-08-24 and the 218's analog output has been moved
   by hand, but the software loop has never driven this cryostat. See
-  [commissioning.md](commissioning.md) for what the live data has since
+  [thermal-response.md](thermal-response.md) for what the live data has since
   measured, and what still comes from the reference logs.
 - **`verify_readback` on the 218 may be confirming a stale value.** See
   [running.md](running.md#before-the-first-armed-run) — this is the highest-value

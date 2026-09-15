@@ -114,8 +114,8 @@ two models disagree by up to 17 K in the middle of it. Regenerate the table with
 > response, a 5-minute window returns τ five times too small and K three times
 > too small *at R² = 0.947* — a fit that reads as healthy and is not. The
 > reliable region starts around 20 minutes and the working rule is to hold
-> about 3τ. The full table is in
-> [commissioning.md](commissioning.md#how-long-to-hold--and-why-r-will-not-tell-you).
+> about 3τ. The full table is
+> [below](#how-long-to-hold-a-step--and-why-r-will-not-tell-you).
 > Record the fit window with any τ added here.
 
 **Heater resistance: 75.5 Ω, measured (2026-09-03).** This supersedes the 50 Ω
@@ -188,6 +188,78 @@ an NTC loses sensitivity as it warms.
 new wiring, the Magnet on input 5, the 218's filter on, 4 Hz per input. They
 describe fixed logs and remain true of them; they are not a description of the
 cryostat as it now stands.
+
+## How long to hold a step — and why R² will not tell you
+
+Measuring `K` and `τ` is the highest-value hardware measurement there is, and the
+window you fit over decides whether the answer means anything. **A short hold
+does not give a noisy answer. It gives a confident wrong one.**
+
+Fitting a single exponential over a window much shorter than τ cannot separate
+"slow rise, large amplitude" from "fast rise, small amplitude" — the early part
+of both is a straight line — so the fit trades τ against K and lands somewhere
+plausible. Simulated against the calibrated two-pole response (τ_fast = 620 s
+carrying 90 % of the step, τ_slow = 14400 s the rest), stepping 1.0 % at 65 %
+output where the true steady-state K is 13.38 K/%:
+
+| hold | K (K/%) | τ (s) | R² | K vs truth | τ/K |
+|---|---|---|---|---|---|
+| 5 min | 4.53 | 126 | **0.947** | 34 % | 27.7 |
+| 10 min | 7.38 | 234 | **0.968** | 55 % | 31.7 |
+| 15 min | 9.15 | 328 | **0.981** | 68 % | 35.9 |
+| 20 min | 10.26 | 406 | 0.989 | 77 % | 39.6 |
+| **30 min** | **11.42** | **520** | 0.997 | **85 %** | **45.5** |
+| 45 min | 12.03 | 606 | 1.000 | 90 % | 50.4 |
+| 60 min | 12.23 | 642 | 1.000 | 91 % | 52.5 |
+| 90 min | 12.39 | 674 | 0.999 | 93 % | 54.4 |
+| *truth* | *13.38* | *620* | | | *46.3* |
+
+At five minutes the fit reports τ five times too small and K three times too
+small, **at R² = 0.95** — which reads as a good fit and is not one. R² measures
+how well an exponential describes the window you gave it, and a rising line is
+described beautifully by the early part of any exponential you like.
+
+Two things follow, and they pull in opposite directions:
+
+- **Do not fit anything held for under ~20 minutes** at these temperatures, no
+  matter what R² says. Below that the numbers are not merely imprecise, they are
+  wrong by factors.
+- **90 minutes is not necessary either.** IMC tuning uses `Kp = τ/(K·τ_cl)`, and
+  the two biases run in the same direction, so they largely cancel in the ratio:
+  τ/K passes through its true value at **around 30 minutes** and drifts *away*
+  again by 45–90 min as the slow pole leaks in. A 30-minute hold gives a better
+  `Kp` than a 90-minute one, while the individual K and τ it prints are each
+  about 15 % low.
+
+**So: hold ≈ 3τ, and record the window with every number.** Thirty minutes is
+right where τ ≈ 620 s. Where τ is genuinely shorter the window shrinks with it,
+which is the whole point of the section above — τ runs from under a second at
+10 K to 489 s at 110 K, so one dwell is wrong at both ends. In practice: watch
+the viewer, find the time to reach about two thirds of the move, and hold three
+times that.
+
+**Read the R², every time, before you believe a τ.** A 0.061 % step held for
+21 hours in the archive "identifies" τ = 137,345 s — 38 hours — at **R² =
+0.162**. There is no exponential in it; the fit is describing noise, and the
+number it produces is confidently, catastrophically wrong. `analyse_step`
+returns the R² in `OperatingPoint.note` and refuses a gain of the wrong sign,
+but nothing stops a poor fit with a plausible-looking gain from being pasted
+into a schedule.
+
+Two more rules the existing hand data teaches:
+
+- **Step big enough to be seen.** At ~14 K/% and a few tens of mK of noise, a
+  0.06 % step is ~0.85 K of signal spread over an hour and the drift wins. The
+  0.5 % step that identified cleanly moved 10.8 K. Below ~0.2 % is not worth
+  the hour.
+- **Step once and hold.** Several hand steps in the archive are up-down doublets
+  held for tens of seconds, and every one fails identification with "the
+  temperature moved against the step" — the segment begins after a *down* step
+  while the cryostat is still rising from the preceding *up* step. Doublets test
+  hysteresis only after each leg has settled.
+
+**Any τ in these documents without a stated fit window should be read with that
+table in hand**, including the τ = 709 s above.
 
 ## The consequence that shapes the whole design
 
