@@ -35,13 +35,12 @@
 # PHASE 3 IS IN PROGRESS AND THIS FILE MOVES WITH IT
 # ---------------------------------------------------------------------------
 #
-# Every field below is a field TODAY'S `SupervisorConfig` has.  Eight of the
-# rate fields become two, four premise fields become the watt residual, and the
-# authority band stops being a pair of constants -- one step at a time, each
-# step editing this file in the same commit as the code.  Until step 4 lands,
-# `operating_point_pct` is a FIXED CENTRE and the band does not follow the
-# setpoint: at +/-1 % it spans about 10 K at 63 % and no sweep below 60 K is
-# possible at all.  See plans/pid-3-loop.md section 3.0.A.
+# Steps 1 to 4 have landed: the filter chain has no low pass and the loop's
+# dead time is derived from it, `control/` reads the fitted curve, the tuning
+# is a ratio to the plant's own tau, and THE BAND FOLLOWS THE SETPOINT.
+#
+# Still to come, and still visible below: eight rate fields become two (step 5)
+# and four kelvin premise fields become the watt residual (step 6).
 
 log_level: INFO
 
@@ -150,13 +149,25 @@ control:
   enabled: true
 
   supervisor:
-    # STEP 4 REPLACES THESE TWO WITH A BAND THAT FOLLOWS THE SETPOINT.  Until
-    # then they are a fixed window and the bench re-centres them per scenario,
-    # which is precisely the thing a cryostat cannot do for itself mid-sweep.
+    # THE BAND FOLLOWS THE SETPOINT.  It is centred on the output the model
+    # says holds the setpoint the loop is chasing right now, widened while a
+    # ramp is running by exactly the lead that ramp needs, and clamped by the
+    # two hard limits.  So `operating_point_pct` is no longer the band: it is
+    # only the fallback centre for a loop with no model, and the output a loop
+    # adopts when it has never read one.  NOTHING HERE NEEDS RE-CENTRING when
+    # the cryostat is moved to a new temperature, which is what the old comment
+    # in this place asked an operator to remember.
     operating_point_pct: 63.960   # fitted: 63.960% settles at 118.3 K
+    # The window's HALF-WIDTH.  A percent of output either side of the model's
+    # answer.  The one systematic that moves the centre is the heater circuit's
+    # delivered fraction, 0.7 % of POWER = 0.35 % of output, so this leaves
+    # 0.65 % of genuine margin.
     authority_pct: 1.0
     hard_min_pct: 0.0
-    hard_max_pct: 70.0            # above this the fit is extrapolation
+    # THE ONE CAP NOTHING MOVES.  Whatever the model, the setpoint or the
+    # arithmetic says, the output cannot exceed this.  Above it the fit is
+    # extrapolation and nobody has measured what happens.
+    hard_max_pct: 70.0
 
     max_step_pct: 0.02
     max_rate_pct_per_min: 0.20
@@ -171,9 +182,12 @@ control:
     approach_rate_k_per_min: 0.25
 
     max_feedforward_pct: 0.40
-    # 1.00 IS TOO SMALL AND STEP 4 DERIVES IT.  Sustaining 5 K/min needs
-    # rate*tau/K: 1.53 % at 60 K, 3.28 % at 118 K, 4.10 % at 180 K.
-    max_velocity_ff_pct: 1.00
+    # A CEILING ON THE DERIVED VELOCITY FEEDFORWARD, not the value.  What a
+    # ramp needs is rate*tau/K and the loop computes it -- 0.02 % at 10 K,
+    # 3.28 % at 118 K, 4.10 % at 180 K -- and the band widens by the same
+    # number, so the drive a ramp needs and the authority it is granted cannot
+    # disagree.  This is only the most it may ever come to.
+    max_velocity_ff_pct: 6.00
     model_trust_k: 15.0
     model_check_slope_k_per_s: 0.002
 

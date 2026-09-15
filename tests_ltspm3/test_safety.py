@@ -122,26 +122,57 @@ def test_anomaly_hold_does_not_wind_up_the_integral(armed):
 
 # -- hard limits ------------------------------------------------------------
 
-def test_output_can_never_exceed_the_authority_band_upward(armed):
-    """The band caps *heat*, unconditionally.
+def test_output_can_never_exceed_the_hard_ceiling(armed):
+    """Rule 5, as phase 3 step 4 rewords it.
 
-    Going below the band is allowed, but only as a fault ramp-down -- that is
-    the one case where leaving the band is the safe direction to leave it in.
+    The band caps heat and now FOLLOWS THE SETPOINT, so "the band" is no longer
+    a pair of constants a test can quote.  What is still absolute is
+    `hard_max_pct`: whatever the model, the setpoint or the arithmetic says,
+    the output cannot go above it.
+
+    This test used to assert `max(outs) <= 63.25` with the setpoint at 300 K --
+    and passing that was the bug, not the safety property.  A loop asked for
+    300 K and clamped 5 % below the output that reaches it is not being safe,
+    it is being unable to do its job, and the same arithmetic made every sweep
+    below 60 K impossible.  Here the loop now walks up toward the ceiling and
+    stops there, which is what a ceiling is for.
     """
     cfg = SupervisorConfig(operating_point_pct=63.0, authority_pct=0.25,
+                           hard_max_pct=68.0,
                            max_error_k=1000, anomaly_demand_pct=1000)
     h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=300.0, kp=5.0, ti=10.0))
     h.sup.set_setpoint(300.0, ramp=False)
     h.step(400)
     outs = [s.output_pct for s in h.history if s.output_pct is not None]
-    assert max(outs) <= 63.25 + 1e-9, "exceeded upward authority"
-    # Sitting below the band is fine once a ramp has taken us there (a hold just
-    # freezes wherever we are).  What must never happen is *moving* below the
-    # band for any reason other than a fault ramp-down.
+    assert max(outs) <= cfg.hard_max_pct + 1e-9, "exceeded the hard ceiling"
+    assert max(outs) > 63.25, (
+        "never left the old fixed band -- has step 4 been reverted?")
+
+    # And it gets there at the rate limit, not in one write.  A band that opens
+    # is not heat; the rate limiter is what decides how fast the heater travels
+    # into it, and that is the whole reason the centre needs no slew limit of
+    # its own.
     for a, b in zip(h.history, h.history[1:]):
         if a.output_pct is None or b.output_pct is None:
             continue
-        if b.output_pct < 62.75 - 1e-9 and b.output_pct < a.output_pct - 1e-9:
+        if b.state is not SupervisorState.RAMPING_DOWN:
+            assert b.output_pct - a.output_pct <= (
+                cfg.max_step_pct + 2 * cfg.dac_step_pct), "jumped upward"
+
+
+def test_nothing_moves_the_output_down_except_a_ramp_down(armed):
+    """Below the band is less heat, which is never the dangerous direction --
+    but *moving* there is still only a fault response's business."""
+    cfg = SupervisorConfig(operating_point_pct=63.0, authority_pct=0.25,
+                           max_error_k=1000, anomaly_demand_pct=1000)
+    h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=300.0, kp=5.0, ti=10.0))
+    h.sup.set_setpoint(300.0, ramp=False)
+    h.step(400)
+    for a, b in zip(h.history, h.history[1:]):
+        if a.output_pct is None or b.output_pct is None:
+            continue
+        floor = h.sup.band[0]
+        if b.output_pct < floor - 1e-9 and b.output_pct < a.output_pct - 1e-9:
             assert b.state is SupervisorState.RAMPING_DOWN, (
                 f"moved below the band in state {b.state.value}"
             )

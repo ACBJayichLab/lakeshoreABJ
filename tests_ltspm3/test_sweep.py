@@ -89,14 +89,31 @@ def test_sweep_actually_moves_the_heater_in_the_right_direction(armed):
     assert h.sup.output_pct <= 63.076 + h.sup.cfg.authority_pct + 1e-9
 
 
-def test_sweep_stays_inside_the_authority_band(armed):
-    """A sweep is not a licence to leave the band -- the band caps heat
-    unconditionally, so an out-of-reach target simply saturates."""
+def test_a_sweep_stays_inside_the_band_THAT_FOLLOWS_IT(armed):
+    """A sweep is not a licence to leave the band.  The band moves with it.
+
+    Phase 3 step 4.  This used to quote `63.076 + authority_pct` -- the band as
+    two constants -- and a sweep of +40 K simply saturated against it.  That is
+    not a safety property, it is a loop that cannot sweep: at the fitted gain
+    40 K is about 3 % of output and the window was 1 % wide.
+
+    What must still hold, and does, is that the output is inside the window in
+    force at the time, and under the hard ceiling always.
+    """
     h = armed()
     h.sup.sweep_to(h.equilibrium_k + 40.0, rate_k_per_min=5.0)
-    h.step(400)
+    for _ in range(400):
+        h.step(1)
+        lo, hi = h.sup.band
+        out = h.sup.output_pct
+        if out is not None and h.sup.state is not SupervisorState.RAMPING_DOWN:
+            assert out <= hi + h.sup.cfg.dac_step_pct, (
+                f"left the band upward: {out:.3f} > {hi:.3f}")
+            assert out <= h.sup.cfg.hard_max_pct + 1e-9
+
     outs = [s.output_pct for s in h.history[-400:] if s.output_pct is not None]
-    assert max(outs) <= 63.076 + h.sup.cfg.authority_pct + 1e-9
+    assert max(outs) > 63.076 + h.sup.cfg.authority_pct, (
+        "the sweep never left the old fixed band -- has step 4 been reverted?")
 
 
 def test_abort_mid_sweep_holds_temperature(armed):
@@ -237,7 +254,14 @@ def test_the_band_caps_heat_without_compelling_it(armed):
     # Two DAC codes of headroom: the dither legitimately moves a code either
     # side of the rate-limited target.
     assert biggest <= h.sup.cfg.max_step_pct + 2 * h.sup.cfg.dac_step_pct
-    assert h.inst.get_analog_percent() < h.sup.band[0], "jumped into the band"
+    # It ends at the safe output, having walked there.  The old form of this
+    # compared against `band[0]`, which stopped meaning anything at step 4: the
+    # floor falls back to `hard_min_pct` whenever the window is somewhere the
+    # loop is not, precisely so it cannot compel heat -- so "below the floor"
+    # became "below zero" and could not be true.
+    assert h.inst.get_analog_percent() == pytest.approx(
+        h.sup.cfg.safe_output_pct, abs=h.sup.cfg.dac_step_pct)
+    assert h.sup.state is SupervisorState.LOCKED_OUT
 
 
 # The ceiling needs no test of its own here: only the floor changed, and

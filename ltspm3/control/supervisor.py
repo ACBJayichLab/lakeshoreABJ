@@ -13,13 +13,21 @@ The layers, outermost first -- a proposal must survive all of them:
    error exceeds ``max_error_k``, or the PID suddenly wants ``anomaly_demand_pct``
    more output than it currently has, the premise is broken -- something is wrong
    with the cryostat, not with the control -- so hold, and ramp down if it persists.
-4. **Authority band.**  ``operating_point +/- authority_pct``, intersected with
-   an absolute never-exceed range.  The **ceiling** is hard and immediate:
-   however wrong everything else goes, the heater cannot go above this window.
+4. **Authority band.**  A window ``authority_pct`` wide either side of THE
+   OUTPUT THAT HOLDS THE PRESENT SETPOINT, widened while a ramp is running by
+   exactly the lead that ramp needs, and intersected with an absolute
+   never-exceed range.  It used to be two config constants and it could not
+   span 4 to 300 K: 10 K is 24 % of output and 180 K is 69 %, against a window
+   one point wide.  See :meth:`HeaterSupervisor.band`.
+   The **ceiling** is hard and immediate: however wrong everything else goes,
+   the heater cannot go above this window, and ``hard_max_pct`` is the part of
+   it that nothing moves.
    The **floor** bounds what the PID may *ask* for, not what the DAC must
    carry -- enforcing it on the output too meant the clamp ran after the rate
    limiter and undid it, so a loop told to freeze at 20% wrote 62% on the next
    cycle.  Below the band is less heat, which is never the dangerous direction.
+   And it is never above where the heater already is: a floor that is would
+   COMPEL heat, which is invariant 4 broken by the safety layer itself.
 5. **Rate limit.**  Per-update step and per-minute rate caps.
 6. **Dither.**  Sub-code resolution, since one 0.01% code is ~76 mK here.
 7. **Readback verification.**  ``AOUT?`` must agree with what we sent.
@@ -68,20 +76,38 @@ class SupervisorState(enum.Enum):
 class SupervisorConfig:
     """All limits are in output percent unless the name says kelvin.
 
-    The defaults assume the cryostat's measured operating point (~63.1% for ~96 K)
-    and the local gain of ~10.0 K/% there.  At that gain the 1.0% authority band
-    is about +/-10 K of ultimate authority, and ``max_step_pct`` of 0.02 is about
-    200 mK of movement per 4 s update -- generous for trim, useless for damage.
+    **The band is no longer centred here.**  Phase 3 step 4: it is centred on
+    the model's answer for the present setpoint, so there is nothing to
+    re-centre by hand and nothing that goes stale when the cryostat is moved to
+    a new temperature.  What is left in this class is the WIDTH of the window
+    and the absolute limits around it.
 
-    These scale with the gain, which is NOT constant: ~13.8 K/% was measured at
-    66.6%, so the same band is worth ~+/-14 K up there.  Re-centre the operating
-    point on the output that actually holds the intended temperature, and
-    consider narrowing ``authority_pct`` with it.
+    The width is in percent and the gain is not constant -- 0.34 K/% at 10 K
+    against 12.7 at 140 K -- so one percent of authority is worth 0.34 K down
+    there and 13 K up here.  That asymmetry is correct rather than unfortunate:
+    what the band is protecting against is the loop wandering away from the
+    output the model says is right, and a percent of output is a percent of
+    output wherever it happens.
     """
 
+    #: The band's centre when there is NO model to ask -- feedforward
+    #: disabled, or a cryostat with no fitted curve.  It is no longer the band
+    #: itself: see `HeaterSupervisor.band_centre_pct`, which asks the model
+    #: what output holds the present setpoint.  Also the output a loop adopts
+    #: when it has never read one.
     operating_point_pct: float = 63.076
+    #: Half-width of the band, around whatever the centre is, PLUS the lead a
+    #: commanded ramp needs (`ramp_lead_pct`).
+    #:
+    #: One percent is not arbitrary against the one systematic that moves the
+    #: centre: the heater circuit may fail to deliver `DELTA_P_FRAC` = 0.7 % of
+    #: the POWER, and u goes as sqrt(P), so that is 0.35 % of output.  The
+    #: remaining 0.65 % is genuine margin, and the model's own shape error
+    #: (0.135 K in-epoch) is far smaller than either.
     authority_pct: float = 1.0
     hard_min_pct: float = 0.0
+    #: **The one cap nothing moves.**  Whatever the model, the setpoint or the
+    #: arithmetic says, the output cannot exceed this.
     hard_max_pct: float = 70.0
 
     max_step_pct: float = 0.02
@@ -116,13 +142,17 @@ class SupervisorConfig:
     #: those regimes apart.  Feedforward enters incrementally so a whole-curve
     #: offset cancels; this bounds what a wrong local *slope* can do.
     max_feedforward_pct: float = 0.40
-    #: Velocity feedforward gets its own, larger budget.  It is derived from a
-    #: trajectory *we commanded*, not from extrapolating a curve, so it is a
-    #: different kind of risk -- and following a ramp of rate r genuinely needs
-    #: r*tau/K, which at 0.6 K/min and tau=620 s is already 0.6%.  Capping it at
-    #: the positional limit does not prevent the drive, it just makes the
-    #: integral supply it instead and then overshoot when the ramp ends.
-    max_velocity_ff_pct: float = 1.00
+    #: **A ceiling on the DERIVED velocity feedforward, not the value itself.**
+    #: What a ramp needs is `rate*tau/K` and the loop computes it
+    #: (`ramp_lead_pct`); this is the most it may ever come to, for a rate
+    #: nobody meant to command.  It was 1.00 and that was the value rather than
+    #: the ceiling -- against the 4.10 % a 5 K/min sweep needs at 180 K, which
+    #: meant the feedforward supplied a quarter of the drive and the integral
+    #: wound up the rest and then overshot when the ramp ended.
+    #:
+    #: 6.0 is above the 4.10 % the fastest commanded rate needs at the worst
+    #: temperature, with margin, and far below `hard_max_pct`.
+    max_velocity_ff_pct: float = 6.00
     #: Once settled, the measurement should agree with kelvin_for(output).  If
     #: it disagrees by more than this the calibration does not describe the
     #: present regime -- say so loudly rather than quietly trusting it.
@@ -243,6 +273,9 @@ class HeaterSupervisor:
         self.ramp = SetpointRamp(self.pid.cfg.setpoint, ramp_config)
         self.smoother = SetpointSmoother(self.ramp.cfg.smooth_tau_s,
                                          value=self.pid.cfg.setpoint)
+        #: Set BEFORE the first `_apply_band_to_pid`, because the band's floor
+        #: now asks where the heater is.
+        self.output_pct: float | None = None   # last value we commanded
         self._apply_band_to_pid()
 
         self.dither = SigmaDeltaDither(self.cfg.dac_step_pct)
@@ -250,7 +283,6 @@ class HeaterSupervisor:
         self.state = SupervisorState.IDLE
         self.status = SupervisorStatus()
 
-        self.output_pct: float | None = None   # last value we commanded
         self.manual_pct: float = self.cfg.operating_point_pct
         self._anomaly_since: float | None = None
         self._comms_bad_since: float | None = None
@@ -301,16 +333,118 @@ class HeaterSupervisor:
 
     # -- authority band ----------------------------------------------------
 
+    def target_band_centre_pct(self) -> float:
+        """The output that holds the setpoint the loop is chasing RIGHT NOW.
+
+        **The band follows the setpoint (phase 3 step 4, rule 5 reworded).**
+        It used to be ``operating_point_pct`` -- one config constant, fixed for
+        the life of the process, with ``_apply_band_to_pid()`` called once in
+        ``__init__``.  On a cryostat that is asked to run from 4 to 300 K that
+        cannot work: 10 K is 24.22 % of output and 180 K is 68.73 %, a span of
+        44 points, against a window one point wide.  No sweep below 60 K was
+        arithmetically possible, and above 100 K a completed sweep faulted
+        afterwards because the window was still centred where it started.
+
+        This is where the centre is HEADING.  :meth:`band_centre_pct` is where
+        it has got to, and the difference between the two is the whole safety
+        argument -- see there.
+
+        The centre is the MODEL's answer, not the loop's opinion of itself, so
+        a loop that has wandered cannot drag its own window along behind it.
+        """
+        if self.feedforward is not None and self.feedforward.enabled:
+            return self.feedforward.percent_for(self.pid.cfg.setpoint)
+        return self.cfg.operating_point_pct
+
+    #: Kept as an alias because the centre is not slew limited and there is
+    #: exactly one answer.  It was, for one draft of step 4, and that is worth
+    #: recording because the reasoning looked right: `set_setpoint(x,
+    #: ramp=False)` steps the setpoint and resets the smoother, so an
+    #: unlimited centre opens the ceiling in one cycle.  **Limiting it is
+    #: unnecessary and it breaks arming**: a loop armed with the heater at 0 %
+    #: gets a window at 0 % that then crawls toward the setpoint at
+    #: `max_rate_pct_per_min`, and 0 to 63 % at 0.2 %/min is five hours during
+    #: which the loop cannot reach anything.  Measured: 115 tests.
+    #:
+    #: The band opening is not what moves the heater.  Three things bound the
+    #: consequence of a stepped setpoint and none of them is the centre's
+    #: speed: `hard_max_pct`, which nothing moves; the OUTPUT rate limiter,
+    #: which is what actually governs how fast the heater travels into a newly
+    #: opened window; and rule 8's premise check, which refuses a setpoint step
+    #: larger than `max_error_k` outright.  A band that opens instantly onto an
+    #: output that can only move 0.2 %/min has not applied any heat.
+    band_centre_pct = target_band_centre_pct
+
+    def ramp_lead_pct(self) -> float:
+        """The output lead a commanded ramp genuinely needs, in percent.
+
+        A first-order plant following a ramp of rate ``r`` sits at an output
+        ``r*tau/K`` above the one that would HOLD where it is -- that is what
+        makes it move.  At 5 K/min this is 0.02 % at 10 K and **4.10 % at
+        180 K**, which is four times the authority band and is why
+        ``max_velocity_ff_pct: 1.00`` could not have worked: the feedforward
+        was capped at a quarter of the drive, the integral had to supply the
+        rest, and it then overshot when the ramp ended.
+
+        So the band widens by exactly this while a ramp is running, and by
+        nothing when one is not.  The authority is granted to the TRAJECTORY,
+        which is a commanded thing with a rate limit on it, rather than to the
+        loop in general.
+
+        Taken from the smoother rather than the ramp, so it decays with the
+        smoother's own time constant when a sweep ends instead of falling off
+        a cliff while the cryostat is still catching up.
+        """
+        rate = abs(getattr(self.smoother, "rate_k_per_s", 0.0) or 0.0)
+        if rate <= 0 or not self.tuner.enabled:
+            return 0.0
+        here = self.filter.value
+        if here is None:
+            here = self.pid.cfg.setpoint
+        gain = self.tuner.schedule.gain_at(here)
+        if gain <= 0:
+            return 0.0
+        lead = rate * self.tuner.schedule.tau_at(here) / gain
+        return min(lead, self.cfg.max_velocity_ff_pct)
+
     @property
     def band(self) -> tuple[float, float]:
         c = self.cfg
-        lo = max(c.hard_min_pct, c.operating_point_pct - c.authority_pct)
-        hi = min(c.hard_max_pct, c.operating_point_pct + c.authority_pct)
+        half = c.authority_pct + self.ramp_lead_pct()
+        centre = self.band_centre_pct()
+        lo = max(c.hard_min_pct, centre - half)
+        hi = min(c.hard_max_pct, centre + half)
+        # **THE FLOOR MAY NEVER BE ABOVE WHERE THE HEATER ALREADY IS.**  The
+        # floor bounds what the PID may ASK for -- it is anti-windup, not a
+        # demand -- and with a fixed centre that distinction never mattered
+        # because the loop lived inside its own window.  With a centre that
+        # follows the setpoint it matters immediately: in a regime the model
+        # does not describe, the centre lands somewhere the cryostat is not,
+        # and a floor above the present output makes `out_min` compel heat the
+        # loop never asked for.  Measured on the cooler-off regime: a loop
+        # holding steadily at 63.09 % was walked up to 64.68 % by its own
+        # envelope, which is invariant 4 -- nothing raises the heater as a side
+        # effect of anything -- broken by the safety layer itself.
+        # And it must not be pinned TO it either, which is what `min(lo, here)`
+        # does and it is a RATCHET: `out_min` equal to the present output means
+        # the PID can never ask for less than it is already producing, so every
+        # upward wiggle is locked in.  Measured in the cooler-off regime, where
+        # the centre clamps to the ceiling and the nominal floor sits above the
+        # loop entirely: the output walked 63.11 -> 63.51 % in seven minutes
+        # with the error oscillating around zero and nothing asking for heat.
+        #
+        # So when the window is somewhere the loop is not, the floor is simply
+        # the hard one.  Full downward freedom, which is the safe direction.
+        here = self.output_pct
+        if here is not None and lo > here:
+            lo = c.hard_min_pct
         if lo > hi:
-            raise ValueError(
-                f"empty authority band: operating point {c.operating_point_pct} "
-                f"is outside hard limits [{c.hard_min_pct}, {c.hard_max_pct}]"
-            )
+            # Only reachable by a centre outside the hard limits, which means
+            # the model is asking for an output this cryostat is not allowed to
+            # produce.  Clamp to the ceiling rather than raising: refusing to
+            # have a band at all would take the loop out mid-sweep, and less
+            # heat is never the dangerous direction.
+            lo = hi = min(max(centre, c.hard_min_pct), c.hard_max_pct)
         return lo, hi
 
     def _apply_band_to_pid(self) -> None:
@@ -683,6 +817,10 @@ class HeaterSupervisor:
         self._learn_cadence(dt)
 
         self.pid.cfg.setpoint = self.smoother.update(t, self.ramp.value(t))
+        # EVERY CYCLE, because the band moves with the setpoint now.  It was
+        # called once, in __init__, which is what made `operating_point_pct` a
+        # window the cryostat could never leave.
+        self._apply_band_to_pid()
         s = SupervisorStatus(
             t=t,
             mode=self.mode,
@@ -923,7 +1061,12 @@ class HeaterSupervisor:
             tau = self.tuner.schedule.tau_at(s.filtered_k)
             if gain > 0:
                 vel = self.smoother.rate_k_per_s * tau / gain
-                limit = self.cfg.max_velocity_ff_pct
+                # THE SAME NUMBER THE BAND WIDENED BY, so the drive a ramp
+                # needs and the authority it is granted cannot disagree.  They
+                # did: the cap was a flat 1.00 % against the 4.10 % a 5 K/min
+                # sweep needs at 180 K, so the feedforward supplied a quarter
+                # of the drive and the integral wound up the rest.
+                limit = self.ramp_lead_pct()
                 vel = max(-limit, min(limit, vel))
         self.pid.velocity_ff_pct = vel
         s.velocity_ff_pct = vel
@@ -1057,12 +1200,19 @@ class HeaterSupervisor:
             return safe
         return current - step if current > safe else current + step
 
-    def _rate_limit(self, current: float, target: float, dt: float) -> float:
+    def _rate_limit_step(self, dt: float) -> float:
+        """The most the output may move this cycle.  Also what the band's
+        centre may move, so the window can never open faster than the heater
+        could travel into it."""
         step = self.cfg.max_step_pct
         if dt > 0:
             # No `or step` fallback here: that made the limiter loosest exactly
             # when dt was smallest, which is backwards.
             step = min(step, self.cfg.max_rate_pct_per_min * (dt / 60.0))
+        return step
+
+    def _rate_limit(self, current: float, target: float, dt: float) -> float:
+        step = self._rate_limit_step(dt)
         delta = target - current
         if abs(delta) <= step:
             return target

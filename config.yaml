@@ -104,19 +104,12 @@ control:
   enabled: false
 
   supervisor:
-    # RE-CENTRE THIS BEFORE ARMING, and read the band from `check`, not here.
-    # The band is operating_point_pct +/- authority_pct, and arming while the
-    # present output sits outside it is the trap in commissioning.md 0.3: above
-    # the ceiling the clamp is instant, so the first cycle takes out
-    # (present - ceiling) * K kelvin of heat in one write.  These two numbers
-    # are centred for a ~99.6 K hold; on 2026-09-03 the cryostat sat at 69.027%
-    # and 180.6 K, which is 4.95% above this ceiling and about 64 K of heat at
-    # the measured gain up there.
-    #
-    # The gain is NOT constant: ~10 K/% at 63%, ~13 K/% at 66-69%.  So
-    # re-centring is not only moving the band -- narrow it as you go up.
+    # THE BAND FOLLOWS THE SETPOINT (phase 3 step 4).  It is centred on the
+    # output the model says holds the present setpoint, so this number is only
+    # the fallback for a loop with no model and the value a loop adopts when it
+    # has never read an output.  There is nothing to re-centre before arming.
     operating_point_pct: 63.076   # measured: 63.076% settles at 99.60 K
-    authority_pct: 1.0            # +/-1% ~= +/-10 K at 63%, ~14 K at 69%
+    authority_pct: 1.0            # the window's HALF-WIDTH, in output percent
     hard_min_pct: 0.0
     hard_max_pct: 70.0
     max_step_pct: 0.02            # ~200 mK per update: ample for trim

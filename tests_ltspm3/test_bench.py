@@ -98,30 +98,24 @@ def test_a_settled_hold_is_already_inside_the_criterion(kelvin, bench):
 # -- §3.7, the setpoint move ------------------------------------------------
 
 
-def test_a_3_k_move_lands_above_60_k_and_does_THREE_THINGS_below_it(kelvin, bench):
-    """RECORDED DEFECT -- §3.0.A and §3.4.  Steps 4 and 6 replace this.
+def test_a_3_k_move_lands_everywhere_except_the_cold_end(kelvin, bench):
+    """§3.7's first row, and step 4 is what made it pass.
 
-    One move, three behaviours, and the band is the only thing that differs.
+    Before the band followed the setpoint this did three different things.  At
+    30 K it railed and **silently gave up** 0.883 K short -- under
+    `max_error_k`, so no alarm, no state change, nothing in the log.  At 10 K
+    it read a legitimate move as a broken premise and ramped the heater to zero
+    with the sample at base temperature.
 
-    **Above 60 K it works**: 0.1 to 7.7 % overshoot, on target, because 3 K is
-    0.23 % of output up there and the band is a full percent wide.
+    Now five of the six land on target and stay tracking, with overshoot from
+    0.1 % at 30 K to 3.8 % at 180 K, because the window the loop is allowed to
+    work in is centred on the output that reaches the setpoint rather than on
+    wherever it happened to start.
 
-    **At 30 K it silently gives up.**  3 K needs +1.53 % at a gain of 1.96 K/%,
-    the band is ±1 %, so the loop rails: demand 53.412 % against a ceiling of
-    53.410, output 53.400, and it settles **0.883 K short** of the setpoint --
-    under `max_error_k`, so there is no alarm, no state change and nothing in
-    the log.  Authority exhausted with no opinion about it.  PID_PLAN §1 gives
-    that condition a fault (railed AND error past `fault_error_k`); today it
-    does not even warn.
-
-    **At 10 K it crashes the sample.**  3 K is +8.8 % at 0.342 K/%, the error
-    never closes, and an error standing past `max_error_k` for `anomaly_hold_s`
-    is by rule 4's present wording a broken premise: tracking, `holding` at
-    922 s, ramping down at 1102 s, locked out at 1858 s, heater 0.000 %, sample
-    at base temperature 4.700 K.
-
-    None of this is a bug.  The loop reasoned correctly from two limits that
-    are wrong for this cryostat.
+    **10 K is still 0.5 K short** and that is not the band: it is
+    `max_rate_pct_per_min: 0.20`.  Three kelvin at 0.34 K/% is 8.8 % of output,
+    which at a trim rate takes 44 minutes, and the test window is 90.  Step 5
+    replaces that one number with `max_rate_k_per_min / K(T)`.
     """
     h = bench(kelvin)
     h.sup.sweep_to(kelvin + 3.0, 5.0)
@@ -129,61 +123,46 @@ def test_a_3_k_move_lands_above_60_k_and_does_THREE_THINGS_below_it(kelvin, benc
     h.minutes(90)
     last = h.history[-1]
     reached = [s.filtered_k for s in h.history if s.filtered_k is not None]
-    _, band_hi = h.sup.band
 
-    if kelvin >= 60.0:
-        assert last.state is SupervisorState.TRACKING
-        # The MEAN of the last minute, against a tolerance that scales with the
-        # thermometer.  A single final sample was fine while a 60 s low pass
-        # was doing the averaging; with the pole switched off (§3.1) the
-        # measurement carries its own 1.36e-6*T^2 rms -- 44 mK at 180 K -- and
-        # a fixed 50 mK tolerance on one sample is a coin toss up there.
+    assert last.state is SupervisorState.TRACKING, (
+        "a 3 K move must not fault anywhere -- step 4 is what fixed this")
+    overshoot = (max(reached) - (kelvin + 3.0)) / 3.0
+    assert overshoot < 0.05, f"{100 * overshoot:.1f} % overshoot at {kelvin} K"
+
+    if kelvin <= 10.0:
+        # Short, but heading the right way and quietly.  Step 5.
+        assert kelvin < last.filtered_k < kelvin + 3.0
+        assert last.alarms == []
+    else:
         settled = statistics.fmean(
             [s.filtered_k for s in h.history[-30:] if s.filtered_k is not None])
         floor = 5e3 * M.FittedParams().noise_quadratic * kelvin ** 2
         assert settled == pytest.approx(kelvin + 3.0, abs=max(0.05, floor))
-        overshoot = (max(reached) - (kelvin + 3.0)) / 3.0
-        assert overshoot < 0.10, f"{100 * overshoot:.1f} % overshoot at {kelvin} K"
-    elif kelvin == 30.0:
-        # Railed, short, and quiet about it.  Fixing the band is what breaks
-        # this; until then the silence is the finding.
-        assert last.state is SupervisorState.TRACKING
-        assert last.demand_pct > band_hi, "not railed -- has step 4 landed?"
-        assert 0.5 < abs(last.error_k) < 1.0
-        assert last.alarms == [], "if this now warns, §3.4's row has landed"
-    else:
-        assert last.state is SupervisorState.LOCKED_OUT
-        assert last.output_pct == pytest.approx(0.0, abs=1e-9)
-        assert last.filtered_k < kelvin, "the sample fell instead of rising"
 
 
-#: Where a 10 K sweep at 5 K/min lands today.  Step 3 moved 100 K from the
-#: second group into this one; steps 4 and 5 are what the other four wait on.
-SWEEP_SURVIVES = (60.0, 100.0)
+#: Where a 10 K sweep at 5 K/min lands today.  Step 3 moved 100 K into this
+#: group and step 4 moved 140 and 180 K; 10 and 30 K wait on step 5, and it is
+#: a different limit that holds them back.
+SWEEP_SURVIVES = (60.0, 100.0, 140.0, 180.0)
 
 
-def test_a_5_k_per_min_sweep_fails_BELOW_60_K_AND_ABOVE_100_K(kelvin, bench):
-    """RECORDED DEFECT, now two thirds of one -- §3.0.A and §3.4.
+def test_a_5_k_per_min_sweep_still_fails_AT_THE_COLD_END(kelvin, bench):
+    """RECORDED DEFECT, down to a third of one -- and now one cause, not three.
 
     Jeff's rate is 5 K/min.  Before step 3 a 10 K sweep at that rate locked the
-    loop out at five of the six bench temperatures and left the sample at base
-    temperature.  **Ratio tuning fixed 100 K**, and why is worth keeping: the
-    loop's job during a ramp is to keep up, `move_tau_cl` was a fixed 300 s
-    against a plant tau of 441 s there, and a ratio makes it 221 s.  The
-    tracking error peaks at 2.30 K instead of running away from the allowance.
+    loop out at five of six bench temperatures and left the sample at base.
+    Ratio tuning fixed 100 K; the band following the setpoint fixed 140 and
+    180 K, which had been reaching the target and then faulting AFTERWARDS as
+    the ramp allowance decayed while the loop was still railed at a window
+    centred where the sweep started.
 
-    The remaining four fail for TWO different reasons and neither is the gains.
-
-    **10 and 30 K cannot be reached at all**: ten kelvin is 29 % of output at
-    the cold end's 0.34 K/%, against a band one percent wide.
-
-    **140 and 180 K get all the way there and then fault afterwards.**  Peak
-    error 2.8 and 3.2 K, well inside the 7 K the premise check allows a
-    commanded ramp.  But the allowance decays once the ramp stops, the loop is
-    still railed at the band catching the last kelvin up, and at t = 984 s the
-    check sees 2.50 K against a decayed allowance of 1.48 K and calls the
-    cryostat broken.  That is the band again -- the window is centred where the
-    sweep STARTED -- and not the tuning.
+    **10 and 30 K remain, and the reason is now a single number.**
+    `max_rate_pct_per_min: 0.20` is a trim rate.  Ten kelvin is 29 % of output
+    at the cold end's 0.34 K/% and 5 % at 30 K, so the heater is allowed to
+    take two and a half hours over a two-minute sweep, the error runs away to
+    7.2 K, and the premise check calls the cryostat broken.  Step 5 replaces it
+    with `max_rate_k_per_min / K(T)` -- 14.9 %/min at 10 K and 0.38 %/min at
+    118 K, which is the same 5 K/min everywhere.
     """
     h = bench(kelvin)
     h.sup.sweep_to(kelvin + 10.0, 5.0)
@@ -245,3 +224,64 @@ def test_an_exception_in_step_ESCAPES_the_supervisor(kelvin, bench):
         h.step(1)
     assert h.sup.state is SupervisorState.TRACKING, "step 7 makes this `crashed`"
     assert h.sup.output_pct == pytest.approx(before, abs=1e-9)
+
+
+# -- §3.0.A / step 4: the band ----------------------------------------------
+
+
+def test_the_band_is_centred_on_the_output_that_reaches_the_setpoint(kelvin, bench):
+    """Rule 5, reworded.  The window follows the setpoint."""
+    h = bench(kelvin)
+    lo, hi = h.sup.band
+    assert h.sup.band_centre_pct() == pytest.approx(h.bench_pct, abs=1e-6)
+    assert lo == pytest.approx(h.bench_pct - h.sup.cfg.authority_pct, abs=1e-6)
+    assert hi == pytest.approx(
+        min(h.bench_pct + h.sup.cfg.authority_pct, h.sup.cfg.hard_max_pct),
+        abs=1e-6)
+
+    # And it MOVES with the setpoint, which is the whole change.
+    h.sup.set_setpoint(kelvin + 20.0, ramp=False)
+    h.step(1)
+    assert h.sup.band_centre_pct() > h.bench_pct
+
+
+def test_the_hard_ceiling_is_the_one_thing_the_band_cannot_move(kelvin, bench):
+    """A setpoint nobody has measured must not open the ceiling."""
+    h = bench(kelvin)
+    h.sup.set_setpoint(1000.0, ramp=False)
+    h.minutes(30)
+    lo, hi = h.sup.band
+    assert hi <= h.sup.cfg.hard_max_pct + 1e-9
+    outs = [s.output_pct for s in h.history if s.output_pct is not None]
+    assert max(outs) <= h.sup.cfg.hard_max_pct + 1e-9
+
+
+def test_the_band_widens_only_by_what_the_ramp_needs(kelvin, bench):
+    """§3.0.B: sustaining 5 K/min needs `rate*tau/K`, which is 0.02 % at 10 K
+    and 4.10 % at 180 K.  The band grants exactly that and nothing else, and
+    takes it back when the sweep stops."""
+    h = bench(kelvin)
+    settled_width = h.sup.band[1] - h.sup.band[0]
+    assert h.sup.ramp_lead_pct() == 0.0
+
+    h.sup.sweep_to(kelvin + 10.0, 5.0)
+    h.step(5)
+    lead = h.sup.ramp_lead_pct()
+    assert lead > 0.0
+    assert h.sup.band[1] - h.sup.band[0] == pytest.approx(
+        settled_width + 2 * lead, abs=1e-6) or h.sup.band[1] >= h.sup.cfg.hard_max_pct
+
+    # `rate * tau / K` at the rate ACTUALLY being commanded, which is the
+    # smoother's and not the ramp's.
+    #
+    # **Those are very different numbers and that is a finding, not a detail.**
+    # `smooth_tau_s` is 300 s -- chosen to take the corners off a 0.5 K/min
+    # sweep, where a ramp lasts hours.  A 10 K sweep at Jeff's 5 K/min lasts
+    # 120 s, so the smoother never gets anywhere near the commanded rate: five
+    # cycles in it is at 0.0027 K/s against the ramp's 0.0833, and the band
+    # widens by 0.14 % where 5 K/min at 180 K would need 4.23 %.  The loop is
+    # not sweeping at 5 K/min; it is sweeping at whatever the smoother lets
+    # through.  Step 5's business, with the one rate.
+    rate = abs(h.sup.smoother.rate_k_per_s)
+    want = rate * M.tau_s(kelvin) / M.gain_k_per_pct(kelvin)
+    assert lead == pytest.approx(min(want, h.sup.cfg.max_velocity_ff_pct), rel=0.35)

@@ -17,9 +17,38 @@ correct aggressively.
    `max_error_k`, or a PID demand that jumps by more than `anomaly_demand_pct`,
    means something is wrong *with the cryostat*, not with the control — so hold, and
    ramp down only if it persists.
-5. **The authority band caps heat unconditionally.** Output can never exceed
-   `operating_point + authority_pct`. It may go *below* the band, but only as a
-   fault ramp-down — the one direction where leaving the band is the safe one.
+5. **The authority band caps heat unconditionally, and it follows the
+   setpoint.** The window is `authority_pct` either side of *the output the
+   model says holds the setpoint the loop is chasing*, widened while a ramp is
+   running by exactly the lead that ramp needs (`rate·τ/K`), and intersected
+   with `hard_min_pct` / `hard_max_pct`. **`hard_max_pct` is the part nothing
+   moves**: whatever the model, the setpoint or the arithmetic says, the output
+   cannot go above it.
+
+   It was two config constants until 2026-09-14, and that could not span 4 to
+   300 K — 10 K is 24 % of output and 180 K is 69 %, against a window one point
+   wide. No sweep below 60 K was arithmetically possible, and a completed sweep
+   above 100 K faulted *afterwards* because the window was still centred where
+   it started.
+
+   Two things the rewrite had to learn, both measured rather than reasoned:
+
+   - **The floor may never be above where the heater already is.** It bounds
+     what the PID may *ask* for; above the present output it compels heat
+     instead, which is invariant 4 broken by the safety layer itself. In a
+     regime the model does not describe, a loop holding steadily at 63.09 %
+     was walked to 64.68 % by its own envelope.
+   - **Nor may it be pinned *to* the output**, which is a ratchet: `out_min`
+     equal to the present output means the PID can never ask for less than it
+     is already producing, and every upward wiggle is locked in. When the
+     window is somewhere the loop is not, the floor is simply `hard_min_pct`.
+
+   The band opening is not itself heat. What governs how fast the heater
+   travels into a newly opened window is the output rate limiter, and what
+   refuses an absurd setpoint step is rule 8.
+
+   It may go *below* the band, but only as a fault ramp-down — the one
+   direction where leaving the band is the safe one.
 6. **On exit, hold.** Zeroing a sample heater on a live cryostat is its own
    hazard. `on_exit: hold` is the default; `zero` is opt-in.
 7. **Recovery is always the operator's call.** A completed fault ramp-down locks
