@@ -240,13 +240,28 @@ control:
 
   tuning:
     enabled: true
-    # STEP 3 REPLACES THESE TWO ABSOLUTE TIMES WITH RATIOS to tau(T):
-    # hold_speed 3, move_speed 0.5, floored at 4 x the derived delay.
-    hold_tau_cl_s: 1800.0
-    move_tau_cl_s: 300.0
+    # RATIOS TO THE PLANT'S OWN TIME CONSTANT, not absolute times.  tau(T) runs
+    # from 0.1 s at 10 K to 611 s at 180 K, so the 1800 s / 300 s this replaced
+    # was three times the plant at the top and eighteen THOUSAND times it at
+    # the bottom -- one pair of numbers meaning "gentle" up there and "asleep"
+    # down here.
+    #
+    #   tau_cl = max(speed * tau(T), delay_floor * delay_s)
+    #
+    # and above the floor kp is simply 1 / (speed * K(T)).  The floor binds in
+    # `move` from 10 to 30 K, where the cryostat settles faster than this loop
+    # can see it.
+    hold_speed: 3.0               # slower than the plant: noise never amplified
+    move_speed: 0.5               # faster than the plant: bandwidth is the point
+    delay_floor: 4.0              # x the DERIVED dead time, 3.0 s -> 12 s
     move_error_k: 0.25
     hold_error_k: 0.10
     hold_settle_s: 120.0
+    # The gain and time-constant schedule is NOT here and is not a table
+    # anywhere: `FittedSchedule` reads K(T) and tau(T) from
+    # ltspm3/model/fitted_response.py, so a refit moves the controller and the
+    # simulator together and there is no paste to rot.  Agrees with
+    # `python analysis/pid_tuning.py --rows` to better than 0.5 %.
 
   filter:
     # NO LOW PASS (Jeff, 2026-09-11), and the class stays in the chain so that

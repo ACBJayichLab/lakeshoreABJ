@@ -54,8 +54,23 @@ def test_imc_rejects_nonsense():
 
 # -- the schedule -----------------------------------------------------------
 
+TABLE = (
+    OperatingPoint(18.2, 1.6, 300.0),
+    OperatingPoint(99.6, 10.0, 620.0),
+    OperatingPoint(137.3, 13.0, 620.0),
+    OperatingPoint(170.7, 13.4, 620.0),
+)
+"""The retired `PROVISIONAL_SCHEDULE`, kept HERE as a fixture.
+
+`PlantSchedule` is still the class a cryostat with a measured table uses, so it
+still needs testing -- but LTSPM3 no longer has a table, and leaving these four
+rows in `control/` as a default was how one measured step response at 137 K
+came to be quoted as a schedule for the whole range.
+"""
+
+
 def test_schedule_interpolates_between_measured_points():
-    s = PlantSchedule()
+    s = PlantSchedule(TABLE)
     g = s.gain_at(120.0)
     assert s.gain_at(99.6) < g < s.gain_at(137.3)
 
@@ -63,18 +78,55 @@ def test_schedule_interpolates_between_measured_points():
 def test_schedule_clamps_rather_than_extrapolating_gain():
     """Extrapolating a gain is how a controller ends up violently wrong at a
     temperature nobody measured."""
-    s = PlantSchedule()
+    s = PlantSchedule(TABLE)
     assert s.gain_at(2.0) == pytest.approx(s.gain_at(18.2))
     assert s.gain_at(500.0) == pytest.approx(s.gain_at(170.7))
     assert s.extrapolating(2.0) and s.extrapolating(500.0)
     assert not s.extrapolating(120.0)
 
 
+def test_an_empty_schedule_means_the_shipped_fit():
+    """§3.2: `K(T)` and `tau(T)` come from the model, not from a paste."""
+    from ltspm3.control.tuning import FittedSchedule
+    from ltspm3.model import fitted_response as M
+
+    t = Tuner(TuningConfig())
+    assert isinstance(t.schedule, FittedSchedule)
+    assert t.schedule.key == M.FIT_KEY
+    for kelvin in (10.0, 60.0, 118.0, 180.0):
+        assert t.schedule.gain_at(kelvin) == pytest.approx(M.gain_k_per_pct(kelvin))
+        assert t.schedule.tau_at(kelvin) == pytest.approx(M.tau_s(kelvin))
+    # And it clamps at the table's ends, like any other schedule here.
+    assert t.schedule.gain_at(1.0) == pytest.approx(t.schedule.gain_at(M.T_MIN_K))
+    assert t.schedule.extrapolating(300.0)
+
+
+def test_the_schedule_agrees_with_what_pid_tuning_would_have_pasted():
+    """PID_PLAN.md's "pastes rot" trap, closed by not having a paste.
+
+    These are the rows `python analysis/pid_tuning.py --rows` printed from the
+    PRODUCTION fit on 2026-09-14, which under §3.2 as first written would have
+    been pasted into this package by hand.  The model's own functions reproduce
+    them to better than 1 %, so the paste is unnecessary -- and this test is
+    what would notice if the two ever came apart.
+    """
+    from ltspm3.model import fitted_response as M
+
+    rows = {10: (0.337, 0.1), 20: (0.748, 1.2), 30: (1.877, 9.0),
+            60: (8.629, 166.5), 100: (12.488, 441.3), 140: (12.740, 589.8),
+            180: (12.085, 611.2), 190: (11.968, 607.2)}
+    for kelvin, (gain, tau) in rows.items():
+        assert M.gain_k_per_pct(kelvin) == pytest.approx(gain, rel=0.01)
+        assert M.tau_s(kelvin) == pytest.approx(tau, rel=0.01, abs=0.05)
+
+
 def test_gains_are_bounded_even_with_an_absurd_schedule():
     cfg = TuningConfig(schedule=(OperatingPoint(100.0, 1e-6, 1e6),))
-    kp, ti = Tuner(cfg).gains_for(100.0)
+    tuner = Tuner(cfg)
+    tuner.delay_s = 3.0
+    kp, ti = tuner.gains_for(100.0)
     assert cfg.min_kp_pct_per_k <= kp <= cfg.max_kp_pct_per_k
-    assert cfg.min_ti_s <= ti <= cfg.max_ti_s
+    assert cfg.min_ti_delays * tuner.delay_s <= ti <= cfg.max_ti_s
 
 
 # -- HOLD vs MOVE -----------------------------------------------------------

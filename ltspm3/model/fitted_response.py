@@ -83,6 +83,7 @@ from ._fitted_table import (
     DRIFT_T0,
     DRIFT_T0_UNIX,
     DRIFT_W_PER_DAY,
+    FIT_KEY,
     GAIN,
     R_OHM,
     SIGMA_C_FRAC,
@@ -98,6 +99,7 @@ from ._fitted_table import (
 
 __all__ = [
     "FittedParams", "FittedResponse", "power_w", "percent_for_power",
+    "gain_k_per_pct", "FIT_KEY",
     "conductance_w", "missing_power_w", "sigma_q_w", "sigma_q_fast_w",
     "sigma_q_terms", "FAST_TERMS",
     "bias_q_w", "days_since_gauge",
@@ -230,6 +232,34 @@ def steady_temperature_k(watts: float) -> float:
 # kelvin threshold is two different thresholds at the two ends of this
 # cryostat, and it is valid only at a hold; this one is valid during a sweep,
 # which is where the loop spends the interesting part of its life.
+
+
+def gain_k_per_pct(kelvin: float) -> float:
+    """``dT/du`` at the settled point, in kelvin per output percent.
+
+    The controller's gain, and the model's own answer for it rather than a
+    table anybody has to keep in step::
+
+        dQ/du = 2 P / u         exactly -- the 218's output is a voltage into a
+                                stable resistance, so P is proportional to u^2
+        dT/dQ = 1 / Lambda'(T)  the linearised steady state
+
+    so ``K_u = 2 Q / (u Lambda')``.  **0.335 K/% at 10 K and 12.68 at 140 K** --
+    a span of thirty-eight, which is the whole reason there is a schedule at
+    all and the reason a rate limit in percent cannot be one number.
+
+    Matches ``analysis/pid_tuning.py --rows`` to better than 0.5 % at every
+    temperature it prints; the residue is the shipped table's interpolation
+    against the fit's continuous functions, and section 3 asks for K within
+    20 %.  That agreement is what lets the schedule be COMPUTED here instead of
+    pasted -- PID_PLAN.md's "pastes rot" trap closed by not having a paste.
+    """
+    q = steady_power_w(kelvin)
+    u = percent_for_power(q)
+    slope = lambda_slope_w_per_k(kelvin)
+    if u <= 0 or slope <= 1e-12:
+        return 0.0
+    return (2.0 * q / u) / slope
 
 
 def conductance_w(sample_k: float, sink_k: float | None = None) -> float:

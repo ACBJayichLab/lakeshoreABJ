@@ -70,17 +70,23 @@ def test_the_loop_arms_and_tracks_on_the_fitted_plant(kelvin):
 def test_a_settled_hold_is_already_inside_the_criterion(kelvin, bench):
     """§3.6: ≤ 0.02 %/min commanded over an hour.
 
-    Today it is 0.0100 %/min at every one of the six -- ONE DAC CODE per
-    minute, which is the dither and not the loop.  Worth having as a baseline
-    before the gains change: step 3 makes the loop faster at the cold end and
-    this is the number that says whether that cost anything.
+    **The criterion IS two DAC codes a minute**, which is worth saying out loud
+    because it means this can only ever return one of three answers.  Before
+    step 3 it was one code at all six -- the dither, not the loop.  After it,
+    30 K and 180 K sit at two codes and the rest are still at one: ratio tuning
+    is faster at the cold end (kp 0.16 against 0.089 at 30 K, ti 9 s against
+    333) and it works the heater slightly harder against the same noise.  Two
+    codes at 30 K is 37 mK/min commanded, and the hold itself measures **1.66
+    mK rms over 12 mK of range** -- the limit being approached, not the hold
+    getting worse.
     """
     h = bench(kelvin)
     h.history.clear()
     h.minutes(60)
     out = h.outputs()
     per_minute = max(abs(out[i + 30] - out[i]) for i in range(len(out) - 30))
-    assert per_minute <= 0.02, f"{per_minute:.4f} %/min at {kelvin} K"
+    assert per_minute <= 2 * h.sup.cfg.dac_step_pct + 1e-9, (
+        f"{per_minute:.4f} %/min at {kelvin} K")
 
     temps = [s.filtered_k for s in h.history if s.filtered_k is not None]
     rms_mk = 1e3 * statistics.pstdev(temps)
@@ -151,23 +157,33 @@ def test_a_3_k_move_lands_above_60_k_and_does_THREE_THINGS_below_it(kelvin, benc
         assert last.filtered_k < kelvin, "the sample fell instead of rising"
 
 
-def test_a_5_k_per_min_sweep_CANNOT_BE_DONE_by_this_loop(kelvin, bench):
-    """RECORDED DEFECT -- the requirement phase 3 exists for, measured failing.
+#: Where a 10 K sweep at 5 K/min lands today.  Step 3 moved 100 K from the
+#: second group into this one; steps 4 and 5 are what the other four wait on.
+SWEEP_SURVIVES = (60.0, 100.0)
 
-    Jeff's rate is 5 K/min.  A 10 K sweep at that rate locks the loop out at
-    FIVE of the six bench temperatures and leaves the sample at base
-    temperature; only 60 K survives, and by luck rather than design.
 
-    The arithmetic is not subtle.  A first-order plant following a ramp of rate
-    r settles at a tracking error of exactly r*tau, and at 118 K that is
-    5/60 * 519 s = **43 K**.  `max_ramp_error_k` caps the allowance the premise
-    check grants a commanded ramp at **6 K**.  So the loop is required to read
-    every legitimate 5 K/min sweep as a broken cryostat, and it does.
+def test_a_5_k_per_min_sweep_fails_BELOW_60_K_AND_ABOVE_100_K(kelvin, bench):
+    """RECORDED DEFECT, now two thirds of one -- §3.0.A and §3.4.
 
-    Three things fix it together and none of them alone: velocity feedforward
-    sized from the one rate (§3.3, the cap is 1.00 % against the 3.28 % that
-    118 K needs), a band that follows the setpoint (§3.0.A), and a premise
-    check in watts that does not have a kelvin cap to exceed (§3.4).
+    Jeff's rate is 5 K/min.  Before step 3 a 10 K sweep at that rate locked the
+    loop out at five of the six bench temperatures and left the sample at base
+    temperature.  **Ratio tuning fixed 100 K**, and why is worth keeping: the
+    loop's job during a ramp is to keep up, `move_tau_cl` was a fixed 300 s
+    against a plant tau of 441 s there, and a ratio makes it 221 s.  The
+    tracking error peaks at 2.30 K instead of running away from the allowance.
+
+    The remaining four fail for TWO different reasons and neither is the gains.
+
+    **10 and 30 K cannot be reached at all**: ten kelvin is 29 % of output at
+    the cold end's 0.34 K/%, against a band one percent wide.
+
+    **140 and 180 K get all the way there and then fault afterwards.**  Peak
+    error 2.8 and 3.2 K, well inside the 7 K the premise check allows a
+    commanded ramp.  But the allowance decays once the ramp stops, the loop is
+    still railed at the band catching the last kelvin up, and at t = 984 s the
+    check sees 2.50 K against a decayed allowance of 1.48 K and calls the
+    cryostat broken.  That is the band again -- the window is centred where the
+    sweep STARTED -- and not the tuning.
     """
     h = bench(kelvin)
     h.sup.sweep_to(kelvin + 10.0, 5.0)
@@ -175,12 +191,12 @@ def test_a_5_k_per_min_sweep_CANNOT_BE_DONE_by_this_loop(kelvin, bench):
     h.minutes(120)
     last = h.history[-1]
 
-    if kelvin == 60.0:
+    if kelvin in SWEEP_SURVIVES:
         assert last.state is SupervisorState.TRACKING
         assert last.filtered_k == pytest.approx(kelvin + 10.0, abs=0.05)
     else:
         assert last.state is SupervisorState.LOCKED_OUT, (
-            f"{kelvin} K survived a 5 K/min sweep; if step 3/4/5 has landed, "
+            f"{kelvin} K survived a 5 K/min sweep; if step 4 or 5 has landed, "
             "this test is what should be rewritten")
         assert last.filtered_k < kelvin
 

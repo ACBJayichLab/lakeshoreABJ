@@ -37,25 +37,58 @@ buys on a cryostat where overshoot is wasted hours::
     Ti = tau
     Kp = tau / (K * tau_cl)          =>   closed loop = 1 / (1 + tau_cl*s)
 
-``tau_cl`` is chosen directly: it *is* the closed-loop response time.  That is
-the whole appeal -- one number with a physical meaning, rather than two gains
-that interact.
+``tau_cl`` is chosen directly: it *is* the closed-loop response time.
+
+A ratio, not a time -- phase 3 §3.2
+-----------------------------------
+
+``tau_cl`` used to be configured as two absolute times, 1800 s holding and
+300 s moving.  An absolute time is the one thing it must not be here, because
+**tau(T) runs from 0.1 s at 10 K to 611 s at 180 K**: 1800 s is three times the
+plant at the top of the range and eighteen thousand times it at the bottom, so
+the same pair of numbers meant "gentle" up there and "asleep" down here.
+
+So it is a ratio to the plant's own time constant::
+
+    tau_cl = max(speed * tau(T), delay_floor * delay_s)
+    Kp     = tau / (K(T) * (tau_cl + theta))     -> 1 / (speed * K(T))
+    Ti     = min(tau, 4 * (tau_cl + theta))      SIMC, floored on the delay
+
+and above the floor ``Kp`` is simply ``1 / (speed * K)``, which is the whole
+argument for configuring a ratio.
+
+``theta`` is the loop's own dead time, derived from the filter chain and the
+measured cadence (``MeasurementFilter.group_delay_s``, about 3 s).  **It is
+not decoration.**  Pole cancellation is right only while the plant's pole is
+the slowest thing in the loop, and below about 30 K it is not: cancelling a
+0.1 s pole against a 3 s delay is a loop integrating a measurement it has not
+seen yet.  SIMC's ``min`` and the delay floor are what handle that, and
+together they are why the cold end needs no schedule of its own.
 
 Two phases
 ----------
 
-Holding and moving want opposite things, so they get different ``tau_cl``:
+Holding and moving want opposite things, so they get different ``speed``:
 
 * **HOLD** -- stabilising at temperature for hours.  Disturbances are slow
   (bath drift, radiation) and the measurement floor is a few mK of *correlated*
   noise.  A slow loop rejects that noise; a fast one amplifies it into the
-  heater.  So ``tau_cl`` is long.
+  heater.  ``hold_speed: 3`` -- three times slower than the cryostat.
 * **MOVE** -- following a commanded sweep, or approaching setpoint after a
   fault.  Here bandwidth is the point, and a few mK of extra noise on the way
-  is irrelevant.  So ``tau_cl`` is short.
+  is irrelevant.  ``move_speed: 0.5`` -- twice as fast as the cryostat.
 
 Switching between them is hysteretic, because a loop that oscillates between
 tunings is worse than either.
+
+Where the numbers come from
+---------------------------
+
+``FittedSchedule`` reads ``K(T)`` and ``tau(T)`` out of
+:mod:`ltspm3.model.fitted_response` -- there is no table in this file to keep
+in step with the fit, which is PID_PLAN.md's "pastes rot" trap closed by not
+having a paste.  It agrees with ``analysis/pid_tuning.py --rows`` to better
+than 0.5 % everywhere that prints.
 """
 
 from __future__ import annotations
@@ -89,31 +122,56 @@ class OperatingPoint:
     note: str = ""
 
 
-#: Provisional schedule.  Only the 137 K row is measured -- one clean step
-#: response (65.9% -> 137.3 K, tau ~= 620 s, gain ~13 K/%) out of ~200 heater
-#: commands in the reference logs; every other command there is a sub-2 K trim
-#: that drift swamps.  The other rows are the steady-state curve's local slope,
-#: which is a much weaker claim.
-#:
-#: **This is the table a step test should replace.**  See tools/steptest.py.
-PROVISIONAL_SCHEDULE: tuple[OperatingPoint, ...] = (
-    OperatingPoint(18.2, 1.6, 300.0, note="slope only, tau guessed"),
-    OperatingPoint(99.6, 10.0, 620.0, coldplate_k=8.2, note="slope only, tau from 137 K"),
-    OperatingPoint(137.3, 13.0, 620.0, coldplate_k=8.25, note="MEASURED step response"),
-    OperatingPoint(170.7, 13.4, 620.0, coldplate_k=8.3, note="slope only, tau from 137 K"),
-)
+# `PROVISIONAL_SCHEDULE` was four rows, of which ONE was measured -- the
+# 65.9% -> 137.3 K step, tau ~= 620 s -- and the other three were the CD10
+# steady-state curve's local slope with that tau copied onto them.  Phase 3
+# step 3 deleted it.  Nothing replaced it with a better table: the gain and the
+# time constant are now read from `ltspm3.model.fitted_response`, which is the
+# 43 h sweep fitted over the whole range, and `FittedSchedule` below is the
+# whole of what that takes.
+#
+# For the record, what the provisional table claimed against what the fit
+# measures at the same temperatures:
+#
+#     18.2 K   1.6 K/%,  tau 300 s (guessed)   ->   0.66 K/%,  tau 0.8 s
+#     99.6 K  10.0 K/%,  tau 620 s (copied)    ->  12.42 K/%,  tau 440 s
+#    137.3 K  13.0 K/%,  tau 620 s (MEASURED)  ->  12.68 K/%,  tau 586 s
+#    170.7 K  13.4 K/%,  tau 620 s (copied)    ->  12.25 K/%,  tau 616 s
+#
+# The one measured row was good to 2.5 %.  The guessed tau at the cold end was
+# out by a factor of 375.
 
 
 @dataclass
 class TuningConfig:
-    """Closed-loop response times, and the bounds that keep them sane."""
+    """Closed-loop speed as a RATIO to the plant's own, and the sane bounds.
+
+    Phase 3 §3.2.  ``hold_tau_cl_s: 1800`` and ``move_tau_cl_s: 300`` were
+    absolute times, and an absolute time is the one thing a closed-loop target
+    must not be on this cryostat: tau(T) runs from **0.1 s at 10 K to 611 s at
+    180 K**, so 1800 s is three times the plant at the top and eighteen
+    THOUSAND times it at the bottom.  The same two numbers meant "gentle" up
+    there and "asleep" down here.
+
+    A ratio means the same thing everywhere::
+
+        tau_cl = max(speed * tau(T), 4 * delay_s)
+    """
 
     enabled: bool = True
 
-    #: Stabilising.  Long: the disturbances are slow and the noise is not.
-    hold_tau_cl_s: float = 1800.0
-    #: Sweeping or approaching.  Short enough to follow a ramp.
-    move_tau_cl_s: float = 300.0
+    #: Stabilising: SLOWER than the plant, so measurement noise is never
+    #: amplified into the heater.  3 is Jeff's, 2026-09-11.
+    hold_speed: float = 3.0
+    #: Sweeping or approaching: faster than the plant, because bandwidth is the
+    #: point and a few mK of extra noise on the way is irrelevant.
+    move_speed: float = 0.5
+
+    #: How many dead times the closed loop must be slower than, whatever the
+    #: ratios ask for.  Four is the usual engineering floor for a PI loop with
+    #: a delay, and below about 30 K it is what binds -- the plant is faster
+    #: than the measurement, so nothing else can set the speed.
+    delay_floor: float = 4.0
 
     #: Enter MOVE when a ramp is running or the error exceeds this.
     move_error_k: float = 0.25
@@ -123,12 +181,25 @@ class TuningConfig:
 
     #: Absolute bounds on the scheduled gains.  A bad schedule entry, or an
     #: operating point far outside the table, must not produce a violent loop.
+    #:
+    #: **`max_kp` was 0.50 and the fitted schedule wants 0.519 at 40 K in
+    #: `move`**, so it clamped -- silently, which is the worst way for a limit
+    #: to bind.  1.0 is above every row the model produces (the largest is
+    #: 0.52) and still far below anything violent: at the 1.96 K/% gain of
+    #: 30 K, kp = 1.0 is a loop gain of 2.
     min_kp_pct_per_k: float = 0.002
-    max_kp_pct_per_k: float = 0.50
-    min_ti_s: float = 60.0
+    max_kp_pct_per_k: float = 1.0
+    #: **`min_ti` was 60 s against a plant tau of 0.1 s at 10 K.**  An integral
+    #: time floored at 600x the plant is not a floor, it is a different
+    #: controller.  `Ti` is now floored on the loop's own delay instead --
+    #: `min_ti_delays * delay_s` -- which is the only timescale that means
+    #: anything down there.  See `Tuner.gains_for`.
+    min_ti_delays: float = 1.0
     max_ti_s: float = 7200.0
 
-    schedule: tuple[OperatingPoint, ...] = PROVISIONAL_SCHEDULE
+    #: An explicit table, for a cryostat that has one.  **Empty means read the
+    #: shipped fit**, which is what LTSPM3 does: see :class:`FittedSchedule`.
+    schedule: tuple[OperatingPoint, ...] = ()
 
 
 def imc_pi(gain_k_per_pct: float, tau_s: float, tau_cl_s: float) -> tuple[float, float]:
@@ -145,10 +216,44 @@ def imc_pi(gain_k_per_pct: float, tau_s: float, tau_cl_s: float) -> tuple[float,
     return tau_s / (gain_k_per_pct * tau_cl_s), tau_s
 
 
+def simc_pi(gain_k_per_pct: float, tau_s: float, tau_cl_s: float,
+            delay_s: float = 0.0, *, min_ti_s: float = 0.0) -> tuple[float, float]:
+    """PI gains for a first-order plant **with a dead time**.
+
+    :func:`imc_pi` above is this with ``delay_s = 0``, and it is what phase 3
+    §3.2 was first written as.  It is wrong at the cold end, and not by a
+    little::
+
+        Kc = tau_eff / (K (tau_c + theta))
+        Ti = min(tau_eff, 4 (tau_c + theta))        Skogestad's SIMC
+
+    Pole cancellation sets ``Ti = tau`` so that the controller's zero removes
+    the plant's pole.  That is exactly right while the plant's pole is the
+    slowest thing in the loop -- and below about 30 K it is not.  tau(10 K) is
+    **0.1 s** against a measurement dead time of 3 s, so cancelling it leaves
+    an integral time thirty times shorter than the delay, which is a loop that
+    integrates a measurement it has not seen yet.  SIMC's ``min`` is what
+    handles that, and the floor below is what keeps ``Ti`` above the delay
+    itself.
+
+    ``min_ti_s`` is derived by the caller from the loop's own dead time, never
+    a constant: a fixed 60 s floor was 600x the plant at 10 K.
+    """
+    if gain_k_per_pct <= 0:
+        raise ValueError("response gain must be positive")
+    if tau_s <= 0 or tau_cl_s <= 0:
+        raise ValueError("time constants must be positive")
+    if delay_s < 0:
+        raise ValueError("delay must not be negative")
+    kp = tau_s / (gain_k_per_pct * (tau_cl_s + delay_s))
+    ti = min(tau_s, 4.0 * (tau_cl_s + delay_s))
+    return kp, max(ti, min_ti_s)
+
+
 class PlantSchedule:
     """Local gain and time constant as functions of temperature."""
 
-    def __init__(self, points=PROVISIONAL_SCHEDULE) -> None:
+    def __init__(self, points=()) -> None:
         pts = sorted(points, key=lambda p: p.kelvin)
         if not pts:
             raise ValueError("schedule needs at least one operating point")
@@ -188,12 +293,55 @@ class PlantSchedule:
         return kelvin < self._k[0] or kelvin > self._k[-1]
 
 
+class FittedSchedule:
+    """The same two questions, answered by the model instead of by a table.
+
+    **There is no paste, so there is nothing to rot.**  PID_PLAN.md's trap says
+    a schedule row carries the fit's cache key and a test diffs it against a
+    fresh export, which is a good answer to a table that has to be copied by
+    hand.  Not copying it is a better one: ``gain_k_per_pct`` and ``tau_s`` are
+    functions of the shipped table, so a re-export moves the controller and the
+    simulator together, in the same commit, by construction.
+
+    It agrees with ``analysis/pid_tuning.py --rows`` -- the thing that would
+    have been pasted -- to better than 0.5 % at every temperature that prints.
+
+    Clamps at the table's ends rather than extrapolating, exactly as
+    :class:`PlantSchedule` does, and for the same reason: past 195 K nobody has
+    measured this cryostat and a confident gain there is a fiction.
+    """
+
+    def __init__(self) -> None:
+        from ..model import fitted_response as M
+
+        self._M = M
+        self.points = ()
+
+    def _clamp(self, kelvin: float) -> float:
+        return min(max(kelvin, self._M.T_MIN_K), self._M.T_MAX_K)
+
+    def gain_at(self, kelvin: float) -> float:
+        return self._M.gain_k_per_pct(self._clamp(kelvin))
+
+    def tau_at(self, kelvin: float) -> float:
+        return self._M.tau_s(self._clamp(kelvin))
+
+    def extrapolating(self, kelvin: float) -> bool:
+        return not (self._M.T_MIN_K <= kelvin <= self._M.T_MAX_K)
+
+    @property
+    def key(self) -> str:
+        """The shipped table's cache key, so a status line can carry it."""
+        return self._M.FIT_KEY
+
+
 class Tuner:
     """Picks (kp, ti) for the present temperature and phase."""
 
     def __init__(self, config: TuningConfig | None = None) -> None:
         self.cfg = config or TuningConfig()
-        self.schedule = PlantSchedule(self.cfg.schedule)
+        self.schedule = (PlantSchedule(self.cfg.schedule) if self.cfg.schedule
+                         else FittedSchedule())
         self.phase = ControlPhase.HOLD
         self._settled_since: float | None = None
         #: The loop's pure delay, in seconds.  **Set by the supervisor from the
@@ -209,9 +357,22 @@ class Tuner:
     def enabled(self) -> bool:
         return self.cfg.enabled
 
-    def tau_cl_for(self, phase: ControlPhase) -> float:
-        return (self.cfg.move_tau_cl_s if phase is ControlPhase.MOVE
-                else self.cfg.hold_tau_cl_s)
+    def speed_for(self, phase: ControlPhase) -> float:
+        return (self.cfg.move_speed if phase is ControlPhase.MOVE
+                else self.cfg.hold_speed)
+
+    def tau_cl_for(self, phase: ControlPhase, kelvin: float | None = None) -> float:
+        """The closed-loop time constant here: a RATIO to the plant's own.
+
+        Floored at ``delay_floor * delay_s``, which is what binds below about
+        30 K -- there the plant settles faster than the loop can see it, so the
+        measurement and not the cryostat decides how fast this may go.
+        `analysis/pid_tuning.py --rows` prints where that happens: `move` is
+        floored from 10 to 30 K at the 2 s cadence.
+        """
+        speed = self.speed_for(phase)
+        tau = self.schedule.tau_at(kelvin) if kelvin is not None else 0.0
+        return max(speed * tau, self.cfg.delay_floor * self.delay_s)
 
     def update_phase(self, t: float, *, error_k: float, ramping: bool) -> ControlPhase:
         """Hysteretic HOLD/MOVE selection.
@@ -237,14 +398,19 @@ class Tuner:
 
     def gains_for(self, kelvin: float, phase: ControlPhase | None = None
                   ) -> tuple[float, float]:
-        """``(kp, ti)`` for this temperature and phase, bounded."""
+        """``(kp, ti)`` for this temperature and phase, bounded.
+
+        Above the delay floor ``kp`` reduces to ``1 / (speed * K(T))`` -- one
+        number, and the reason a ratio was the right thing to configure.
+        """
         c = self.cfg
         phase = phase or self.phase
         gain = self.schedule.gain_at(kelvin)
         tau = self.schedule.tau_at(kelvin)
-        kp, ti = imc_pi(gain, tau, self.tau_cl_for(phase))
+        kp, ti = simc_pi(gain, tau, self.tau_cl_for(phase, kelvin), self.delay_s,
+                         min_ti_s=c.min_ti_delays * self.delay_s)
         kp = max(c.min_kp_pct_per_k, min(c.max_kp_pct_per_k, kp))
-        ti = max(c.min_ti_s, min(c.max_ti_s, ti))
+        ti = min(c.max_ti_s, ti)
         return kp, ti
 
 
