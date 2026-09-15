@@ -26,18 +26,37 @@ correct aggressively.
    - a **step** of `fault_mw` inside `fault_window_s`: fault. Inherited from
      the monitor, not re-decided — a change in delivered power lands in the
      residual immediately, and anything that takes hours did not step;
-   - **authority exhausted** — error past `fault_error_k` with the demand
-     railed, **in `hold` only**. Railed with a large error is the normal state
-     of a loop following a ramp; what makes it a fault is that it persists once
-     the setpoint has stopped moving;
-   - the tracking error in kelvin warns in `hold`, and below `min_output_pct`
-     — where the residual has no opinion — it is the only check there is;
+   - **authority exhausted** — error past `fault_error_k` with the demand *and
+     the output* railed at the **ceiling**, **while the setpoint is not
+     moving**. Railed with a large error is the normal state of a loop
+     following a ramp, and a loop still travelling up to its window at the rate
+     limit has authority it has not applied yet; what makes it a fault is that
+     the loop is giving everything it is allowed to give, the sample still will
+     not come up, and the setpoint has stopped moving;
+   - **railed at the FLOOR with the same error is a WARNING, however far it
+     goes** (Jeff, 2026-09-15). Less heat than the model expects for this
+     setpoint means the bath has changed or the model is wrong high, and the
+     worst case is a sample colder than intended — the safe direction. A
+     ramp-down would not improve it and a lockout would stop the loop resuming
+     when the bath recovers. A rising coldplate is exactly this;
+   - the tracking error in kelvin warns **while the setpoint is not moving**,
+     and under about 40 K — below `min_output_pct`, or where the plant is
+     faster than the slope is measured — it is the only check there is;
    - a PID demand that jumps by `anomaly_demand_pct` in one cycle still freezes
      the loop. That one is about the *reading*, not about the cryostat.
 
    **No opinion is not typical.** Outside the table, below `min_output_pct`, or
-   where the plant is faster than the slope window, the residual is silent —
-   and silent must never read as green.
+   where the plant is faster than the slope window *while moving*, the residual
+   is silent — and silent must never read as green.
+
+   **The gate on the two kelvin rows is the TRAJECTORY, not the tuner's
+   phase.** "In `hold` only" meant "while the setpoint is not moving", and the
+   tuner's phase was a fair proxy until the error itself started driving it:
+   `update_phase` enters `move` on any error over `move_error_k` = 0.25 K, so
+   an error of 1 K — let alone 5 — was by construction in the phase that
+   switched both rows off. Measured 2026-09-15: a heater delivering half its
+   power at 30 K left the sample 14.3 K low, railed at the ceiling, for an
+   hour, in `tracking`, with no alarm of any kind.
 
    `max_error_k`, `anomaly_hold_s`, `max_ramp_error_k`, `response_lag_s` and
    `model_trust_k` are gone. One kelvin threshold cannot serve a cryostat whose

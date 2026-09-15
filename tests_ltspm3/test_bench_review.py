@@ -405,3 +405,131 @@ def test_a_descent_that_starts_at_t_zero_still_descends():
     assert sup._rampdown_t0 == 0.0
     assert later < first, (
         f"two minutes of descent moved the target {first:.3f} -> {later:.3f} %")
+
+
+# -- 3R.6, the kelvin rows are reachable, and they answer the two scenarios --
+
+
+def alarms_matching(h, needle):
+    return [a for x in h.history for a in x.alarms if needle in a]
+
+
+def test_a_heater_at_half_power_at_10_k_warns_and_never_faults():
+    """Scenario 2 at the coldest bench point -- and it stops at a warning
+    because the consequence is small, not because nothing noticed.
+
+    The residual cannot speak here at all: 24.2 % of output is below
+    `min_output_pct`, so `dQ` has no opinion whatever the heater does.  The
+    kelvin rows are the only check there is, and before this step BOTH were
+    gated on the tuner's `hold` phase, which any error over 0.25 K leaves.
+
+    Measured: the sample settles 2.03 K low, railed at the ceiling, and warns
+    on every cycle for two hours.  Past five kelvin it would fault; two is not
+    five, and a loop that ramps the cryostat down over two kelvin is worse than
+    one that says so and keeps holding.
+    """
+    h = armed(10.0)
+    h.deliver(0.5)
+    h.history.clear()
+    h.minutes(120)
+
+    assert h.sup.state is SupervisorState.TRACKING
+    assert h.history[-1].missing_power_w is None, "the residual should be silent"
+    assert alarms_matching(h, "warn_error_k"), "nothing warned at 2 K of error"
+    assert alarms_matching(h, "below min_output_pct"), (
+        "the warning should say why kelvin is the only check here")
+    worst = max(abs(x.error_k) for x in h.history if x.error_k is not None)
+    assert worst < h.sup.cfg.fault_error_k, f"{worst:.2f} K -- this should fault"
+
+
+def test_a_heater_at_half_power_at_30_k_faults_as_authority_exhausted():
+    """Scenario 2 where the consequence is real, and the case the review
+    measured: an hour at 14.3 K low, railed at the ceiling, in `tracking`, with
+    no alarm of any kind.
+
+    30 K is above `min_output_pct` and below the 40 K where the plant is slower
+    than the slope window, so this is the gap where the watt residual has no
+    opinion and the kelvin rows are the whole safety case.
+    """
+    h = armed(30.0)
+    h.deliver(0.5)
+    h.history.clear()
+    assert run_until_fault(h, 3600.0), "14 K low and railed, and it never faulted"
+
+    assert alarms_matching(h, "warn_error_k")
+    assert alarms_matching(h, "authority exhausted")
+    assert not alarms_matching(h, "at its floor"), "railed HIGH, not low"
+
+    # And it goes the whole way: descend, lock out, refuse `arm`, clear on ack.
+    for _ in range(6000):
+        h.step(1)
+        if h.sup.state is SupervisorState.LOCKED_OUT:
+            break
+    assert h.sup.state is SupervisorState.LOCKED_OUT
+    with pytest.raises(PermissionError):
+        h.sup.arm(30.0)
+    h.sup.acknowledge()
+    assert h.sup.state is SupervisorState.IDLE
+
+
+@pytest.mark.parametrize("kelvin,per_hour,minutes", [(118.0, 2.0, 180),
+                                                    (30.0, 20.0, 90)])
+def test_a_rising_sink_warns_however_far_it_goes(kelvin, per_hour, minutes):
+    """**Scenario 1, and it never faults** (Jeff, 2026-09-15).
+
+    The bath moves, the loop needs less heat, and the worst case is a sample
+    colder than intended -- the safe direction.  A ramp-down would not improve
+    it and a lockout would stop the loop resuming when the bath recovers.
+
+    Two cases, both measured.  At 118 K and 2 K/h the error reaches 2.7 K and
+    the output falls 63.96 -> 57.18 %: the error row warns and nothing else
+    happens.  At 30 K and 20 K/h the output reaches the hard minimum after
+    58 minutes and the sample then runs 16 K over setpoint: the FLOOR warning
+    is what says so, and it is a warning precisely because there is nothing
+    left for the loop to do about it.  Ninety minutes for that one: the sink
+    correction is linear in `Lambda'` at the midpoint, and twenty kelvin an
+    hour leaves the range that is honest in soon after.
+
+    Before this step the sink was scenery -- `_aux_base` moved the thermometer
+    and left the plant where it was -- so the disturbance the loop was supposed
+    to react to did not exist, and the old row hedged with `if faulted`.
+    """
+    h = armed(kelvin)
+    h.history.clear()
+    for i in range(int(minutes * 60 / h.DT)):
+        h.sink_offset(per_hour * (i * h.DT / 3600.0))
+        h.step(1)
+        assert h.sup.state is SupervisorState.TRACKING, (
+            f"scenario 1 must never stop the loop: {h.history[-1].alarms}")
+
+    outs = [x.output_pct for x in h.history if x.output_pct is not None]
+    assert outs[-1] < outs[0], "the loop should need LESS heat, not more"
+    for a, b in zip(outs, outs[1:]):
+        assert b <= a + 2 * h.sup.cfg.dac_step_pct + 1e-9, "the output rose"
+    assert alarms_matching(h, "warn_error_k"), "a kelvin of error and no warning"
+    if min(outs) <= h.sup.cfg.hard_min_pct + h.sup.cfg.dac_step_pct:
+        assert alarms_matching(h, "at its floor"), (
+            "the heater reached its floor and nothing said so")
+    assert not alarms_matching(h, "authority exhausted")
+
+
+@pytest.mark.parametrize("kelvin", BENCH_TEMPERATURES)
+def test_a_commanded_sweep_raises_no_kelvin_alarm(kelvin):
+    """The trajectory gate is not the old ramp allowance under another name.
+
+    A 10 K sweep at Jeff's 5 K/min lags by `r*tau` -- 7.6 K at 10 K and 1.3 K
+    at 140 K -- and every bit of that is commanded.  The kelvin rows must be
+    silent for all of it, which is what gating them on the trajectory rather
+    than on the size of the error buys.
+    """
+    h = armed(kelvin)
+    h.sup.sweep_to(kelvin + 10.0, 5.0)
+    h.history.clear()
+    h.minutes(20)
+
+    assert h.sup.state is SupervisorState.TRACKING
+    moving = [x for x in h.history if x.ramping]
+    assert moving, "the sweep was over before it started"
+    for x in moving:
+        assert not [a for a in x.alarms if "warn_error_k" in a or "at its floor" in a
+                    or "authority exhausted" in a], x.alarms

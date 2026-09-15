@@ -360,34 +360,49 @@ def test_a_lost_sensor_ramps_down_at_the_one_rate_and_locks_out(kelvin, bench):
     assert h.sup.state is SupervisorState.IDLE
 
 
-def test_a_rising_coldplate_is_tracked_and_then_faults_as_authority_exhausted(
-        kelvin, bench):
+def test_a_rising_coldplate_is_tracked_and_warns_and_never_faults(kelvin, bench):
     """§1: a compressor failure is a COLDPLATE event, and `δT_c` never faults.
 
-    What faults is the consequence -- the loop runs out of authority holding
-    the sample against a sink that keeps rising.  The model is unchanged
-    underneath, so the band does not move with the disturbance and the demand
-    rails against it, which is exactly the condition `fault_error_k` names.
+    **Nor does its consequence** (Jeff, 2026-09-15).  This row used to say the
+    loop would run out of authority and fault, and hedged the assertion with
+    `if faulted` -- which was as well, because it never did: the sink was
+    SCENERY.  Moving `_aux_base` moved the thermometer and left the plant where
+    it was, so the disturbance the loop was supposed to react to did not exist.
+    `FittedHarness.sink_offset` moves both.
+
+    With a sink that genuinely rises, this is scenario 1 of
+    plans/pid-3-review.md: a steady change the model explains, the loop needs
+    less heat, and the worst case is a sample colder than intended.  A warning
+    however far it goes -- including all the way to the heater at its floor --
+    because a ramp-down does not improve it and a lockout would stop the loop
+    resuming when the bath recovers.
+
+    Measured, +2 K/h for two hours: the output falls (24.22 -> 14.68 % at 10 K,
+    68.72 -> 64.92 at 180) and the loop holds.  The error stays under a kelvin
+    at 10 to 60 K, where the gain is small enough to absorb it, and passes one
+    at 100 K and above, where the error row warns.
     """
     h = bench(kelvin)
-    base = h.cryostat._aux_base["218.2"]
-    faulted = False
-    for i in range(4000):
+    h.history.clear()
+    for i in range(3600):
         # +2 K over an hour, and then it keeps going.
-        h.cryostat._aux_base["218.2"] = base + 2.0 * (i * h.DT / 3600.0)
+        h.sink_offset(2.0 * (i * h.DT / 3600.0))
         h.step(1)
-        if h.sup.state in (SupervisorState.RAMPING_DOWN,
-                           SupervisorState.LOCKED_OUT):
-            faulted = True
-            break
+        assert h.sup.state is SupervisorState.TRACKING, (
+            f"scenario 1 stopped the loop: {h.history[-1].alarms}")
 
-    # Whatever it does, it must not have raised the heater past its window.
     outs = [x.output_pct for x in h.history if x.output_pct is not None]
     assert max(outs) <= h.sup.cfg.hard_max_pct + 1e-9
-    if faulted:
-        assert any("authority exhausted" in a or "missing power" in a
-                   or "stepped" in a
-                   for x in h.history[-5:] for a in x.alarms)
+    assert outs[-1] < outs[0], "the loop should need LESS heat, not more"
+    for a, b in zip(outs, outs[1:]):
+        assert b <= a + 2 * h.sup.cfg.dac_step_pct + 1e-9, "the output rose"
+
+    worst = max(abs(x.error_k) for x in h.history if x.error_k is not None)
+    warned = [a for x in h.history for a in x.alarms if "warn_error_k" in a]
+    assert bool(warned) == (worst >= h.sup.cfg.warn_error_k), (
+        f"worst error {worst:.2f} K, {len(warned)} warnings")
+    assert not [a for x in h.history for a in x.alarms
+                if "authority exhausted" in a]
 
 
 @pytest.mark.parametrize("wrong", ("gain_low", "gain_high", "tau_low",

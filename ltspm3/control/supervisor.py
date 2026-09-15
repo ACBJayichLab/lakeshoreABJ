@@ -13,9 +13,12 @@ The layers, outermost first -- a proposal must survive all of them:
    Lambda(T_c)] - P(u)``, the same residual the monitor judges by and from the
    same two model functions.  Beyond 3 sigma it ALARMS AND KEEPS TRACKING; a
    STEP of ``fault_mw`` inside ``fault_window_s`` faults, as does an error past
-   ``fault_error_k`` with the demand railed (authority exhausted).  In `hold`
-   the tracking error in kelvin warns as well, and below ``min_output_pct``
-   -- where the residual has no opinion -- it is the only check there is.
+   ``fault_error_k`` with the demand railed at the CEILING (authority
+   exhausted); railed at the floor with the same error is a warning, because
+   less heat than the model expects is the safe direction.  While the setpoint
+   is not moving the tracking error in kelvin warns as well, and under about
+   40 K -- below ``min_output_pct``, or where the plant is faster than the
+   slope is measured -- it is the only check there is.
    A one-cycle lurch in the PID's own feedback terms still means a bad reading
    is driving the loop, and still freezes it.
 4. **Authority band.**  A window ``authority_pct`` wide either side of THE
@@ -60,7 +63,7 @@ from .filters import MeasurementFilter
 from .health import HealthState, SensorGuard, SensorGuardConfig
 from .pid import PID, PIDConfig
 from .ramp import RampConfig, SetpointRamp, SetpointSmoother
-from .tuning import ControlPhase, Tuner, TuningConfig
+from .tuning import Tuner, TuningConfig
 
 log = logging.getLogger(__name__)
 
@@ -173,10 +176,12 @@ class SupervisorConfig:
     # which is valid at a hold AND during a sweep, which is exactly what a
     # kelvin check is not.
 
-    #: Tracking error that raises an alarm and keeps going.  In `hold` only --
-    #: in `move` the error IS the ramp's lag by design -- **except below
-    #: `min_output_pct`**, where the watt residual has no opinion and the gain
-    #: is small enough that kelvin is not the wrong variable (Jeff, 2026-09-14).
+    #: Tracking error that raises an alarm and keeps going.  **While the
+    #: setpoint is not moving** -- during a commanded move the error IS the
+    #: ramp's lag by design.  It is the check cryo conditions require (Jeff,
+    #: 2026-09-15): the watt residual is the primary one, and it has no opinion
+    #: below `min_output_pct` or where the plant is faster than the slope is
+    #: measured, which between them is everything under about 40 K.
     warn_error_k: float = 1.0
     #: Alarm when `dQ` is this many sigma out, with `sigma_q_w` from the model.
     warn_sigma: float = 3.0
@@ -191,10 +196,21 @@ class SupervisorConfig:
     fault_mw: float = 10.0
     #: The window the step is measured over, as a range.
     fault_window_s: float = 1800.0
-    #: Tracking error that faults **when the output is also railed** -- the
-    #: cryostat is asking for more than this loop is allowed to give, which is
-    #: what a compressor failure eventually looks like.  Authority exhausted.
-    #: No window gates it: it is the slow-degradation fault.
+    #: Tracking error at which the two edges of the band part company.
+    #:
+    #: **Railed at the CEILING is a fault**: the loop is asking for everything
+    #: it is allowed to give and the sample still will not come up, so the
+    #: heater, the wiring or the model is not what the loop believes.  Nothing
+    #: about that is understood, and an open-loop descent is safer than
+    #: continuing to drive blind.  Authority exhausted; no window gates it.
+    #:
+    #: **Railed at the FLOOR is a warning, however far it goes** (Jeff,
+    #: 2026-09-15).  Less heat than the model expects for this setpoint means
+    #: the bath has changed or the model is wrong high, and the worst case is a
+    #: sample colder than intended -- the safe direction.  A ramp-down would
+    #: not improve it and a lockout would stop the loop resuming when the bath
+    #: recovers.  A rising coldplate is exactly this, and `delta T_c` never
+    #: faults.
     fault_error_k: float = 5.0
     #: How long any of the fault conditions must hold before the ramp-down.
     fault_after_s: float = 180.0
@@ -1410,36 +1426,75 @@ class HeaterSupervisor:
         """Is the cryostat behaving?  Warnings into ``anomalies``, the two
         fault conditions into ``faults``.
 
-        Four rows, and which of them apply depends on the PHASE:
+        Four rows, and which of them apply depends on **whether the setpoint
+        is moving**:
 
         * **the watt residual**, at a hold and during a sweep alike, because
           `dQ` carries `C dT/dt` and a kelvin error does not;
-        * **the tracking error in kelvin**, in `hold` only -- in `move` the
-          error IS the ramp's lag by design -- and below `min_output_pct` in
-          either, where `dQ` has no opinion and the gain is small enough that
-          kelvin is not the wrong variable (Jeff, 2026-09-14);
+        * **the tracking error in kelvin**, while the setpoint is NOT moving --
+          during a commanded move the error IS the ramp's lag by design.  This
+          is the check cryo conditions require (Jeff, 2026-09-15): under about
+          40 K the residual has no opinion at all, either because the output is
+          below `min_output_pct` or because the plant is faster than the slope
+          is measured, and then this is the only check there is;
         * **a step in the residual**, which is the fault: `fault_mw` inside
           `fault_window_s`, measured as the range of a trailing window;
-        * **authority exhausted**: error past `fault_error_k` AND the demand
-          railed at the band.  That is the fault a compressor failure
-          eventually causes, and no window gates it because nothing about it is
-          sudden.
+        * **authority exhausted**: error past `fault_error_k` with the demand
+          AND the output railed at the CEILING.  Railed at the FLOOR with the
+          same error is a warning instead -- the two scenarios of plans/pid-3-review.md, and
+          they are not symmetrical: too little heat leaves a cold sample, and
+          too little authority to warm one is not something a ramp-down helps.
+
+        **The gate used to be the TUNER's phase, and that made both kelvin rows
+        unreachable.**  "In `hold` only" meant "while the setpoint is not
+        moving", and the tuner's phase was a fair proxy for that until the
+        error itself started driving it: `update_phase` enters `move` on any
+        error over `move_error_k`, which is 0.25 K, so an error of 1 K -- let
+        alone 5 -- was by construction in the phase that switched both rows
+        off.  Measured: a heater delivering half its power at 30 K left the
+        sample 14.3 K low, railed at the ceiling, for an hour, in `tracking`,
+        with no alarm of any kind.  The phase is a tuning choice and decides
+        nothing about alarms now.
         """
         cfg = self.cfg
-        phase = ControlPhase(s.phase) if s.phase else ControlPhase.HOLD
-        railed = (s.demand_pct is not None
-                  and s.demand_pct > self.band[1] - cfg.dac_step_pct)
+        band_lo, band_hi = self.band
+        # **RAILED MEANS THE OUTPUT IS THERE TOO, not just the demand.**  A
+        # loop still travelling up to its window at the rate limit has not
+        # exhausted anything -- it has authority it has not applied yet -- and
+        # the demand rails at the ceiling for the whole of that traverse
+        # because that is what a PI controller with a standing error does.
+        #
+        # This mattered the moment the gate stopped being the tuner's phase:
+        # measured on the armed-at-0 % case, where the heater is cut out from
+        # under a loop and it climbs back at the rate limit.  The sample falls
+        # several kelvin during the climb, the demand is railed high
+        # throughout, and on the demand alone the loop declared authority
+        # exhausted and ramped down the recovery it was in the middle of.
+        here = self.output_pct
+        railed_high = (s.demand_pct is not None and here is not None
+                       and s.demand_pct > band_hi - cfg.dac_step_pct
+                       and here >= band_hi - cfg.dac_step_pct)
+        railed_low = (s.demand_pct is not None and here is not None
+                      and s.demand_pct < band_lo + cfg.dac_step_pct
+                      and here <= band_lo + cfg.dac_step_pct)
 
         # -- the kelvin rows ------------------------------------------------
+        #
+        # **THE GATE IS THE TRAJECTORY, not the tuner.**  The setpoint is not
+        # moving: no ramp running, and the smoother has stopped moving the
+        # value the PID is actually chasing.  (The smoother approaches
+        # exponentially, so `settled` arrives a few time constants after a
+        # sweep ends -- minutes at the cold end, where these rows are the only
+        # check, and an hour at 118 K, where the watt rows are doing the work.)
+        holding = not self.ramp.ramping and self.smoother.settled
         cold_end = (self.output_pct is not None
                     and self.output_pct < cfg.min_output_pct)
-        if phase is ControlPhase.HOLD or cold_end:
-            if abs(terms.error) >= cfg.warn_error_k:
-                anomalies.append(
-                    f"error {terms.error:+.3f} K is past warn_error_k "
-                    f"{cfg.warn_error_k} K"
-                    + (" (below min_output_pct, where dQ has no opinion)"
-                       if cold_end and phase is not ControlPhase.HOLD else ""))
+        if holding and abs(terms.error) >= cfg.warn_error_k:
+            anomalies.append(
+                f"error {terms.error:+.3f} K is past warn_error_k "
+                f"{cfg.warn_error_k} K"
+                + (" (below min_output_pct, where dQ has no opinion)"
+                   if cold_end else ""))
         # AUTHORITY EXHAUSTED IS A `hold`-PHASE FAULT ONLY, and that is not a
         # detail.  Railed with a large error is the NORMAL state of a loop
         # following a ramp the plant cannot keep up with -- it is what the
@@ -1451,11 +1506,26 @@ class HeaterSupervisor:
         # What makes exhaustion a fault is that it persists once the setpoint
         # has STOPPED moving: the cryostat is then asking for more than this
         # loop is allowed to give, which is what a compressor failure becomes.
-        if (phase is ControlPhase.HOLD and abs(terms.error) >= cfg.fault_error_k
-                and railed):
-            faults.append(
-                f"authority exhausted: {terms.error:+.3f} K of error with the "
-                f"demand railed at {self.band[1]:.3f} %")
+        if holding and abs(terms.error) >= cfg.fault_error_k:
+            if railed_high:
+                faults.append(
+                    f"authority exhausted: {terms.error:+.3f} K of error with "
+                    f"the demand railed at the ceiling, {band_hi:.3f} % -- the "
+                    "heater, the wiring or the model is not what this loop "
+                    "believes")
+            elif railed_low:
+                # **AND THIS ONE IS NOT A FAULT** (Jeff, 2026-09-15).  The loop
+                # is asking for less heat than the model says this setpoint
+                # needs and cannot ask for less; the bath has changed, or the
+                # model is wrong high.  The worst case is a sample colder than
+                # intended, which is the safe direction, and neither a
+                # ramp-down nor a lockout improves it -- a lockout would stop
+                # the loop resuming when the bath recovers.
+                anomalies.append(
+                    f"heater at its floor, {band_lo:.3f} %, with "
+                    f"{terms.error:+.3f} K of error: less heat than the model "
+                    "expects for this setpoint.  The safe direction -- the "
+                    "bath has changed, or the model is wrong high")
 
         # -- the watt rows --------------------------------------------------
         #
@@ -1590,8 +1660,21 @@ class HeaterSupervisor:
         # reason (plans/pid-2-monitor.md 2.5).  At a settled hold the dynamic
         # term is zero and the question does not arise, which is why this is
         # conditioned on moving at all.
+        # **MOVING means moving, not "the estimate is not exactly zero".**
+        # This read `if s.slope_k_per_s`, and with a real filter the slope
+        # estimate is never exactly zero -- so wherever the plant's tau is
+        # under the slope window the residual had no opinion at a SETTLED hold
+        # either, and between `min_output_pct` and about 40 K there was no
+        # check of any kind.  `model_check_slope_k_per_s` is the threshold this
+        # file already calls settled.
+        #
+        # Measured over an hour of settled hold with this in place: an opinion
+        # on every one of 1800 cycles at 30 K and at 60 K, worst residual
+        # +0.29 mW against a 3.98 mW band and +0.38 against 1.54, and a largest
+        # step of 0.03 mW.  The comment above is what it always claimed to do.
         window_s = self.filter.slope.window * (self._cadence_s or 0.0)
-        if s.slope_k_per_s and _M.tau_s(s.filtered_k) < window_s:
+        if (abs(s.slope_k_per_s) > cfg.model_check_slope_k_per_s
+                and _M.tau_s(s.filtered_k) < window_s):
             return None, 0.0, 0.0, "the plant is faster than the slope window"
         sink = self._coldplate_k
         if sink is None:
