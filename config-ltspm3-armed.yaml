@@ -35,12 +35,10 @@
 # PHASE 3 IS IN PROGRESS AND THIS FILE MOVES WITH IT
 # ---------------------------------------------------------------------------
 #
-# Steps 1 to 4 have landed: the filter chain has no low pass and the loop's
+# Steps 1 to 6 have landed: the filter chain has no low pass and the loop's
 # dead time is derived from it, `control/` reads the fitted curve, the tuning
-# is a ratio to the plant's own tau, and THE BAND FOLLOWS THE SETPOINT.
-#
-# Still to come, and still visible below: eight rate fields become two (step 5)
-# and four kelvin premise fields become the watt residual (step 6).
+# is a ratio to the plant's own tau, the band follows the setpoint, there is
+# ONE RATE in kelvin, and the premise check is in WATTS.
 
 log_level: INFO
 
@@ -181,13 +179,37 @@ control:
     # premise check called the cryostat broken long before it arrived.
     min_rate_pct_per_min: 0.20
 
-    max_error_k: 1.0
-    anomaly_demand_pct: 0.50
-    anomaly_hold_s: 180.0
-    response_lag_s: 519.0         # tau at 118 K from the FITTED table.  Step 6
-                                  # deletes this field with the kelvin
-                                  # allowance it exists for
-    max_ramp_error_k: 6.0
+    # THE PREMISE IS THAT THE WATTS ADD UP.  `dQ` is the same residual the
+    # monitor judges by, from the same two model functions, so the loop and the
+    # judge cannot disagree about what typical means -- only about what to do.
+    # It is valid at a hold AND during a sweep, which a kelvin check is not.
+    #
+    # `max_error_k: 1.0`, `anomaly_hold_s`, `response_lag_s`, `max_ramp_error_k`
+    # and `model_trust_k: 15.0` are gone.  One kelvin threshold cannot serve a
+    # cryostat whose gain spans forty-fold, and the ramp allowance that propped
+    # it up was excusing the loop's own 60 s filter as much as anything about
+    # the cryostat.
+    warn_error_k: 1.0             # in `hold`, and below min_output_pct.  ALARMS
+                                  # and keeps tracking; it does not freeze.
+    warn_sigma: 3.0               # sigma_q_w from the model
+    fault_mw: 10.0                # Jeff, 2026-09-14.  A FLOOR under 3 sigma...
+    fault_window_s: 1800.0        # ...and a STEP within half an hour, not a
+                                  # level: a change in delivered power lands in
+                                  # the residual immediately, and anything that
+                                  # takes hours did not step.
+    fault_error_k: 5.0            # with the demand RAILED: authority exhausted,
+                                  # which is what a compressor failure becomes.
+                                  # No window gates it.
+    fault_after_s: 180.0
+    min_output_pct: 28.0          # the monitor's number.  Below it dQ is the
+                                  # difference of two large numbers and has no
+                                  # opinion -- so the kelvin check stays on
+                                  # underneath (Jeff, 2026-09-14).
+    coldplate_channel: Coldplate  # Lambda(T_s) - Lambda(T_c) needs the sink
+
+    anomaly_demand_pct: 0.50      # a one-cycle lurch in the FEEDBACK terms is a
+                                  # bad reading driving the loop.  Kept: it is
+                                  # about the reading, not about the cryostat.
 
     max_feedforward_pct: 0.40
     # A CEILING ON THE DERIVED VELOCITY FEEDFORWARD, not the value.  What a
@@ -196,7 +218,6 @@ control:
     # number, so the drive a ramp needs and the authority it is granted cannot
     # disagree.  This is only the most it may ever come to.
     max_velocity_ff_pct: 6.00
-    model_trust_k: 15.0
     model_check_slope_k_per_s: 0.002
 
     # The fault ramp-down descends at THE SAME ONE RATE, in kelvin, through the

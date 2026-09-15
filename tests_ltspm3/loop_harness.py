@@ -47,7 +47,7 @@ class Harness:
 
     def __init__(self, *, start_k=None, sup_cfg=None, pid_cfg=None, guard_cfg=None,
                  filter_kwargs=None, response=None, model=None, cadence_s=None,
-                 ff_cfg=None):
+                 ff_cfg=None, aux_base=None, aux_coupling=None):
         self.clock = VirtualClock()
         params = response or ResponseParams()
         # Start in equilibrium at the operating point: a cryostat still drifting
@@ -68,7 +68,8 @@ class Harness:
             start_k=start_k,
             time_source=self.clock,
             seed=7,
-            aux_coupling=LTSPM3_AUX_COUPLING,
+            aux_base=aux_base,
+            aux_coupling=aux_coupling or LTSPM3_AUX_COUPLING,
         )
         self.sim = Sim218(self.cryostat)
         self.cryostat.response.pct = self.sim.analog_pct
@@ -93,7 +94,18 @@ class Harness:
         self.sup = HeaterSupervisor(
             self.inst,
             channel="Sample",
-            config=sup_cfg or SupervisorConfig(),
+            # **THE WATT PREMISE IS SWITCHED OFF IN THIS HARNESS**, and the
+            # reason is the same one that pairs it with the CD10 curve above:
+            # its plant is `sim_response`'s two-pole model, which is not the
+            # cryostat `model/fitted_response` describes.  `dQ` compares a
+            # measured sample against THAT fit, so here it correctly reports a
+            # mismatch of tens of milliwatts -- about the simulator, not about
+            # anything these tests are asking.  `min_output_pct: 100` is "never
+            # an opinion", which is the honest way to say it.
+            #
+            # The phase 3 bench runs the fitted plant and leaves it on; that is
+            # where the residual is tested.
+            config=sup_cfg or SupervisorConfig(min_output_pct=100.0),
             pid_config=pid_cfg or PIDConfig(setpoint=self.equilibrium_k, kp=0.02, ti=900.0),
             guard_config=guard_cfg or SensorGuardConfig(),
             # The SHIPPED chain, not a literal.  It was `{"tau": 60.0}` until

@@ -118,16 +118,19 @@ control:
     # `max_step_pct` and `max_rate_pct_per_min`, both trim rates.
     min_rate_pct_per_min: 0.20
 
-    # Premise checks.  An error this large means something is wrong with the
-    # CRYOSTAT, not with the control, so hold -- and ramp down only if it persists.
-    max_error_k: 1.0
+    # Premise checks, IN WATTS: `dQ` against the model's own band, the same
+    # residual the monitor judges by.  Beyond 3 sigma it alarms and keeps
+    # tracking; a STEP of fault_mw inside fault_window_s faults, as does an
+    # error past fault_error_k with the demand railed.
+    warn_error_k: 1.0             # in `hold`, and below min_output_pct
+    warn_sigma: 3.0
+    fault_mw: 10.0
+    fault_window_s: 1800.0
+    fault_error_k: 5.0
+    fault_after_s: 180.0
+    min_output_pct: 28.0
+    coldplate_channel: Coldplate
     anomaly_demand_pct: 0.50
-    anomaly_hold_s: 180.0
-    # A setpoint ramp of rate r on a first-order response with time constant tau settles at a
-    # tracking error of exactly r*tau, so a commanded move is allowed that much
-    # extra and nothing else.  Decays away once the ramp stops.
-    response_lag_s: 620.0            # measured; ONE step response only
-    max_ramp_error_k: 6.0
 
     # Fault response.  Nothing here ever raises the heater.
     #

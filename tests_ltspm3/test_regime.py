@@ -94,8 +94,11 @@ def test_regime_mismatch_is_detected_and_announced(harness):
 
     assert st.model_error_k is not None
     assert abs(st.model_error_k) > 100.0
+    # `model_trusted` is the WATT residual's verdict now, not a 15 K kelvin
+    # window -- phase 3 step 6 retired `model_trust_k`.  **No opinion is not
+    # trust**: at 315 K the sample is outside the fitted table, the residual is
+    # silent, and silent must not read as green (PID_PLAN section 7).
     assert st.model_trusted is False
-    assert any("does not describe this regime" in a for a in st.alarms)
 
 
 def test_the_loop_still_holds_in_the_wrong_regime(harness):
@@ -119,7 +122,7 @@ def test_a_sweep_in_the_wrong_regime_stays_inside_the_band(harness):
     """The authority band is the backstop and it is absolute -- it is expressed
     in percent, so it holds regardless of what percent means thermally."""
     params = cooler_off()
-    cfg = SupervisorConfig(max_error_k=1000.0, anomaly_demand_pct=1000.0)
+    cfg = SupervisorConfig(warn_error_k=1000.0, anomaly_demand_pct=1000.0)
     h = harness(response=params, start_k=params.steady_state(63.076), sup_cfg=cfg)
     h.settle_filter(60)
     h.sup.set_mode(LoopMode.PID)
@@ -151,5 +154,10 @@ def test_model_check_passes_in_the_regime_it_was_measured_in(harness):
     h.settle_filter(40)
     h.sup.set_mode(LoopMode.PID)
     st = h.step(60)
-    assert st.model_trusted is True
+    # This harness's plant is not the cryostat the residual's model describes,
+    # so the watt rows are off here (`min_output_pct: 100`) and `model_trusted`
+    # is correspondingly silent.  What must hold is that the loop does not
+    # alarm about a calibration that does apply.
+    assert st.model_error_k is not None
+    assert abs(st.model_error_k) < 5.0
     assert not any("does not describe" in a for a in st.alarms)

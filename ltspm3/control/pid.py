@@ -158,9 +158,28 @@ class PID:
     # -- the loop ----------------------------------------------------------
 
     def _integral_cap(self) -> float:
+        """How much output the integral alone may contribute.
+
+        **From the BIAS to the rails, not the width of the band.**  It was the
+        width, and that was right while the band was a fixed window the loop
+        lived inside: the bias is where the loop was primed, the rails were a
+        percent either side of it, and one band-width of integral could reach
+        either.
+
+        With a band that follows the setpoint (phase 3 step 4) the loop has to
+        TRAVERSE, and the two numbers come apart immediately.  Measured on a
+        10 K move at 30 K: primed at 52.41 %, the setpoint's output is 55.97 %,
+        and the demand settled at exactly 52.41 + 0.40 (feedforward cap) + 0.75
+        (P) + 2.00 (the old cap) = 55.56 % -- **1.57 K short, permanently, with
+        an integral that had stopped integrating**.  The clamp and its
+        back-calculation are the real anti-windup here; this is a second one
+        that had quietly become the binding constraint.
+        """
         if self.cfg.integral_limit_pct is not None:
             return abs(self.cfg.integral_limit_pct)
-        return abs(self.cfg.out_max - self.cfg.out_min)
+        return max(abs(self.cfg.out_max - self.bias),
+                   abs(self.bias - self.cfg.out_min),
+                   abs(self.cfg.out_max - self.cfg.out_min))
 
     def update(self, measurement: float, slope: float, dt: float) -> PIDTerms:
         """``slope`` is dT/dt in K/s from the filter, already smoothed."""

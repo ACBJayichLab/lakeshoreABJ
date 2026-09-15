@@ -71,13 +71,17 @@ def test_a_ramped_sweep_keeps_the_error_inside_the_premise_check(armed):
         "sweep never arrived"
 
 
-def test_a_stepped_setpoint_still_stalls_the_loop(armed):
-    """The check keeps its teeth: only ramping is exempt, because only ramping
-    keeps the error small."""
+def test_a_stepped_setpoint_is_converted_to_a_ramp(armed):
+    """Rule 8 keeps its teeth and stops needing to bite the loop to do it.
+
+    A step larger than `warn_error_k` becomes a ramp at the one rate (phase 3
+    step 6); it used to become a frozen output and, if held, a ramp-down.
+    """
     h = armed()
     h.sup.set_setpoint(h.equilibrium_k + 3.0, ramp=False)
+    assert h.sup.ramp.ramping
     h.step(5)
-    assert h.sup.state is SupervisorState.HOLDING
+    assert h.sup.state is SupervisorState.TRACKING
 
 
 def test_sweep_actually_moves_the_heater_in_the_right_direction(armed):
@@ -229,19 +233,12 @@ def test_the_band_caps_heat_without_compelling_it(armed):
     h.step(2)
     h.sup.arm(h.sup.filter.value)
 
-    # Only the ARMING march is rate limited.  Armed at 0% the loop cannot reach
-    # the setpoint, so it holds, escalates, and ends this loop in a fault
-    # ramp-down -- and a ramp-down deliberately bypasses the trim limiter (it
-    # has to, or it could never reach safe_output_pct).  Measuring its steps
-    # here would assert something false about ramp-downs; this used to pass only
-    # because the old single 0.5 %/min rate happened to fall under max_step_pct.
-    # Look at the state on BOTH sides of the cycle, not just after it.  The
-    # last ramp-down step lands on `safe_output_pct` and flips the state to
-    # `locked_out` inside the same `step()`, so a cycle that was a ramp-down
-    # when it wrote reads as a lockout when it is graded -- which is how a
-    # 0.07 % ramp-down step got counted as a trim.  It passed for as long as
-    # the arithmetic happened to make the last step small; phase 3's filter
-    # change moved the timing by two cycles and it stopped.
+    # ARMED AT 0 %, THE LOOP NOW CLIMBS BACK.  It used to hold, escalate and
+    # end in a fault ramp-down: a 96 K error is a broken premise under the old
+    # kelvin check, and the only way out of being armed at the wrong output was
+    # through a lockout.  After step 6 the kelvin row is a warning and the
+    # traverse is a rate-limited climb, which is what the band existing at all
+    # is for.
     biggest, prev = 0.0, h.inst.get_analog_percent()
     for _ in range(300):
         was = h.sup.state
@@ -251,17 +248,15 @@ def test_the_band_caps_heat_without_compelling_it(armed):
             biggest = max(biggest, abs(now - prev))
         prev = now
 
-    # Two DAC codes of headroom: the dither legitimately moves a code either
-    # side of the rate-limited target.
     assert biggest <= h.sup._rate_limit_step(h.DT) + 2 * h.sup.cfg.dac_step_pct
-    # It ends at the safe output, having walked there.  The old form of this
-    # compared against `band[0]`, which stopped meaning anything at step 4: the
-    # floor falls back to `hard_min_pct` whenever the window is somewhere the
-    # loop is not, precisely so it cannot compel heat -- so "below the floor"
-    # became "below zero" and could not be true.
-    assert h.inst.get_analog_percent() == pytest.approx(
-        h.sup.cfg.safe_output_pct, abs=h.sup.cfg.dac_step_pct)
-    assert h.sup.state is SupervisorState.LOCKED_OUT
+
+    # It went UP, from zero, at the rate limit and not in one write -- the
+    # original defect here was `clamp` running after the rate limiter and
+    # raising anything below the floor straight to it, so arming at 0 % wrote
+    # 62.076 % in a single cycle.
+    now = h.inst.get_analog_percent()
+    assert 0.0 < now < 63.076, f"did not climb, or jumped the band: {now:.3f}"
+    assert h.sup.state is SupervisorState.TRACKING
 
 
 # The ceiling needs no test of its own here: only the floor changed, and

@@ -9,10 +9,15 @@ The layers, outermost first -- a proposal must survive all of them:
 1. **Mode.**  ``OFF`` writes nothing at all, ever.
 2. **Sensor health.**  A single doubtful reading freezes the output.  Sustained
    failure ramps down.  Nothing raises the heater in response to a fault.
-3. **Premise checks.**  This loop is specified for millikelvin trim.  If the
-   error exceeds ``max_error_k``, or the PID suddenly wants ``anomaly_demand_pct``
-   more output than it currently has, the premise is broken -- something is wrong
-   with the cryostat, not with the control -- so hold, and ramp down if it persists.
+3. **Premise checks: THE WATTS ADD UP.**  ``dQ = C dT/dt + [Lambda(T) -
+   Lambda(T_c)] - P(u)``, the same residual the monitor judges by and from the
+   same two model functions.  Beyond 3 sigma it ALARMS AND KEEPS TRACKING; a
+   STEP of ``fault_mw`` inside ``fault_window_s`` faults, as does an error past
+   ``fault_error_k`` with the demand railed (authority exhausted).  In `hold`
+   the tracking error in kelvin warns as well, and below ``min_output_pct``
+   -- where the residual has no opinion -- it is the only check there is.
+   A one-cycle lurch in the PID's own feedback terms still means a bad reading
+   is driving the loop, and still freezes it.
 4. **Authority band.**  A window ``authority_pct`` wide either side of THE
    OUTPUT THAT HOLDS THE PRESENT SETPOINT, widened while a ramp is running by
    exactly the lead that ramp needs, and intersected with an absolute
@@ -42,10 +47,12 @@ import enum
 import logging
 import math
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from lschart.model import Reading, Validity
 from lschart.transport import TransportError
+from ..model import fitted_response as _M
 from .coherence import CoherenceConfig, CoherenceMonitor
 from .dither import SigmaDeltaDither
 from .feedforward import Feedforward, FeedforwardConfig
@@ -53,7 +60,7 @@ from .filters import MeasurementFilter
 from .health import HealthState, SensorGuard, SensorGuardConfig
 from .pid import PID, PIDConfig
 from .ramp import RampConfig, SetpointRamp, SetpointSmoother
-from .tuning import Tuner, TuningConfig
+from .tuning import ControlPhase, Tuner, TuningConfig
 
 log = logging.getLogger(__name__)
 
@@ -123,27 +130,59 @@ class SupervisorConfig:
     #: before it arrived.
     min_rate_pct_per_min: float = 0.20
 
-    # Premise checks -- "this should only ever be a small correction".
-    max_error_k: float = 1.0
+    # -- premise checks: THE WATTS ADD UP -----------------------------------
+    #
+    # Phase 3 step 6 rewrites rule 4.  It used to be "this should only ever be
+    # a small correction", in kelvin, with `max_error_k: 1.0` and an allowance
+    # for a commanded ramp.  A kelvin threshold cannot serve a cryostat whose
+    # gain spans forty-fold: the same 1 K is a trim at 180 K and the whole
+    # range at 10 K, and the allowance was excusing the loop's own filter as
+    # much as anything about the cryostat.  `max_error_k`, `anomaly_hold_s`,
+    # `max_ramp_error_k`, `response_lag_s` and `model_trust_k` are gone with it.
+    #
+    # The premise is now the residual the monitor judges by -- the SAME two
+    # functions, so the two cannot disagree about what typical means:
+    #
+    #     dQ = C(T) dT/dt + [Lambda(T) - Lambda(T_c)] - P(u)
+    #
+    # which is valid at a hold AND during a sweep, which is exactly what a
+    # kelvin check is not.
+
+    #: Tracking error that raises an alarm and keeps going.  In `hold` only --
+    #: in `move` the error IS the ramp's lag by design -- **except below
+    #: `min_output_pct`**, where the watt residual has no opinion and the gain
+    #: is small enough that kelvin is not the wrong variable (Jeff, 2026-09-14).
+    warn_error_k: float = 1.0
+    #: Alarm when `dQ` is this many sigma out, with `sigma_q_w` from the model.
+    warn_sigma: float = 3.0
+    #: **A fault is a STEP, not a level** -- inherited from the monitor, not
+    #: re-decided here.  A change in delivered power puts `-(1-a)P(u)` into the
+    #: residual immediately; anything that takes hours to reach a level did not
+    #: step, and the fault slow degradation eventually causes is
+    #: authority-exhausted below.  10 mW is Jeff's, 2026-09-14, and it is a
+    #: FLOOR under the 3 sigma band rather than a replacement for it.
+    fault_mw: float = 10.0
+    #: The window the step is measured over, as a range.
+    fault_window_s: float = 1800.0
+    #: Tracking error that faults **when the output is also railed** -- the
+    #: cryostat is asking for more than this loop is allowed to give, which is
+    #: what a compressor failure eventually looks like.  Authority exhausted.
+    #: No window gates it: it is the slow-degradation fault.
+    fault_error_k: float = 5.0
+    #: How long any of the fault conditions must hold before the ramp-down.
+    fault_after_s: float = 180.0
+    #: Below this output the heater has no authority and the residual is the
+    #: difference of two large numbers.  **The same number the monitor uses**,
+    #: and the reason the kelvin check stays on underneath it.
+    min_output_pct: float = 28.0
+    #: The channel the sink temperature is read from.  `Lambda(T) - Lambda(T_c)`
+    #: needs it; the model's own settled locus is the fallback.
+    coldplate_channel: str = "Coldplate"
+
     #: A one-cycle lurch in the *feedback* terms (P+I+D) this large means a bad
     #: reading is driving the loop, not that the cryostat needs the output.
+    #: Kept: it is about the READING, not about the cryostat.
     anomaly_demand_pct: float = 0.50
-    anomaly_hold_s: float = 180.0
-
-    #: Dominant thermal time constant.  620 s is measured, but from the *one*
-    #: clean step response the reference logs contain (65.9% -> 137.3 K); every
-    #: other command there is a sub-2 K trim.  Heat capacity varies with
-    #: temperature, so this certainly does too -- treat it as provisional and
-    #: re-measure with a deliberate step test.  A
-    #: first-order response asked to follow a setpoint ramp of rate r settles at a
-    #: tracking error of exactly r * tau -- at 0.5 K/min that is 3 K, which
-    #: would trip max_error_k on every legitimate sweep.  So while a ramp is in
-    #: progress the premise check is widened by the lag the ramp itself
-    #: commands, and by nothing else.  When not ramping the allowance is zero
-    #: and the check is exactly as strict as before.
-    response_lag_s: float = 620.0
-    #: Ceiling on that allowance, so a fast ramp cannot blind the check entirely.
-    max_ramp_error_k: float = 6.0
 
     #: Hard cap on the feedforward contribution.  The steady-state curve is
     #: calibrated for one regime -- cooler running, shields cold.  With the
@@ -163,11 +202,7 @@ class SupervisorConfig:
     #: 6.0 is above the 4.10 % the fastest commanded rate needs at the worst
     #: temperature, with margin, and far below `hard_max_pct`.
     max_velocity_ff_pct: float = 6.00
-    #: Once settled, the measurement should agree with kelvin_for(output).  If
-    #: it disagrees by more than this the calibration does not describe the
-    #: present regime -- say so loudly rather than quietly trusting it.
-    model_trust_k: float = 15.0
-    #: "Settled" for that check: slope below this and no ramp in progress.
+    #: "Settled" for the reported model error: slope below this and no ramp.
     model_check_slope_k_per_s: float = 0.002
     # Fault response.  THE SAME ONE RATE, in kelvin, through the model's
     # inverse curve -- `_rampdown_target`.  Three percent-rate fields and a
@@ -218,6 +253,13 @@ class SupervisorStatus:
     #: measured - model, once settled.  None while ramping or still moving.
     model_error_k: float | None = None
     model_trusted: bool = True
+    #: THE PREMISE, in watts.  `None` means no opinion, which is not the same
+    #: as typical -- `residual_reason` says which.
+    missing_power_w: float | None = None
+    sigma_q_w: float = 0.0
+    #: The range of the residual over `fault_window_s`.  A fault is a STEP.
+    dq_step_w: float = 0.0
+    residual_reason: str = ""
     phase: str = "hold"
     kp: float = 0.0
     ti: float = 0.0
@@ -298,7 +340,16 @@ class HeaterSupervisor:
         #: not trusted.
         self._rampdown_from_k: float | None = None
         self._rampdown_t0: float | None = None
-        self._ramp_allowance_k = 0.0
+        #: The residual's trailing window, for the STEP test, and the slow
+        #: average that feeds it.
+        self._dq_hist: deque = deque()
+        self._dq_slow: float | None = None
+        #: The sink, from this cycle's frame.  The model's settled locus is the
+        #: fallback, so a missing Coldplate degrades to an assumption rather
+        #: than to no opinion at all.
+        self._coldplate_k: float | None = None
+        #: Edge-triggered logging for a standing warning.
+        self._warned = False
         self._pending_approach = False
         self._model_warned = False
         self._last_feedback = 0.0
@@ -572,6 +623,7 @@ class HeaterSupervisor:
             # the error the ramp exists to avoid.
             self._pending_approach = True
             self._disengaged_by = ""
+            self._break_residual_history()
             self.state = SupervisorState.TRACKING
         elif mode is LoopMode.MANUAL:
             # Adopt where the heater actually is, not where we last left it.
@@ -603,11 +655,35 @@ class HeaterSupervisor:
         # deferred post-fault approach must not silently re-rate an operator's
         # sweep to the post-fault approach rate behind their back.
         self._pending_approach = False
-        if not ramp:
-            # A step means a step: bypass the smoother too.  Otherwise
-            # ramp=False silently becomes a gentle approach, and the premise
-            # check -- whose whole job is to refuse a setpoint the loop was
-            # never asked to reach gradually -- never sees the error.
+        here = self.filter.value if self.filter.primed else None
+        big = (here is not None
+               and abs(kelvin - here) > self.cfg.warn_error_k)
+        if not ramp and big:
+            # **RULE 8, ENFORCED WHERE IT BELONGS.**  "Move the setpoint by
+            # ramping it, never by stepping it" used to be enforced by the
+            # premise check -- a step bigger than `max_error_k` produced an
+            # error the check read as a broken premise, so the loop froze and
+            # eventually ramped down.  Rule 8 was protecting the cryostat by
+            # BREAKING the loop, and it only worked because the check could not
+            # tell a commanded move from a fault.
+            #
+            # Step 6 gives it one that can (the watt residual), so the kelvin
+            # error is a warning now and a stepped setpoint would simply be
+            # obeyed -- a typo of 300 K would walk the sample to the top of the
+            # table at 5 K/min.  So the refusal moves here, where it is a
+            # statement about the REQUEST rather than a consequence of the
+            # loop's distress: a step this large becomes a ramp at the one
+            # rate.  `ramp=False` still means what its docstring says it means,
+            # for a trim smaller than `warn_error_k`.
+            log.warning(
+                "setpoint step of %+.3f K is past warn_error_k %.2f K; "
+                "ramping at %.1f K/min instead (rule 8)",
+                kelvin - here, self.cfg.warn_error_k,
+                self.ramp.cfg.max_rate_k_per_min)
+            self.ramp.start(self.clock(), kelvin, from_k=here)
+        elif not ramp:
+            # A trim means a trim: bypass the smoother too, so a small
+            # deliberate step is not silently turned into a gentle approach.
             self.ramp.jump_to(kelvin)
             self.smoother.reset(kelvin)
         else:
@@ -770,6 +846,7 @@ class HeaterSupervisor:
         self.guard.reset()
         self.filter.reset()
         self.coherence.reset()
+        self._break_residual_history()
 
     # -- instrument I/O ----------------------------------------------------
 
@@ -892,6 +969,9 @@ class HeaterSupervisor:
         # -- believe the sensor? --------------------------------------------
         if readings:
             self.coherence.update(t, readings)
+            sink = readings.get(self.cfg.coldplate_channel)
+            if sink is not None and getattr(sink, "usable", False):
+                self._coldplate_k = sink.kelvin
         corroborated, why = self.coherence.corroboration(self.channel, t)
         s.corroborated = corroborated
 
@@ -1059,7 +1139,7 @@ class HeaterSupervisor:
             # from here rather than presenting the loop with the whole gap.
             self._pending_approach = False
             gap = self.ramp.target - s.filtered_k
-            if abs(gap) > self.cfg.max_error_k:
+            if abs(gap) > self.cfg.warn_error_k:
                 self.ramp.start(
                     t, self.ramp.target, from_k=s.filtered_k,
                     rate_k_per_min=self.ramp.cfg.max_rate_k_per_min,
@@ -1127,30 +1207,16 @@ class HeaterSupervisor:
         s.error_k = terms.error
 
         anomalies: list[str] = []
+        faults: list[str] = []
 
-        # A commanded ramp buys exactly the lag it commands, and no more.  The
-        # allowance decays with the thermal time constant once the ramp stops
-        # rather than vanishing at the instant it does: the cryostat is still
-        # legitimately catching up then, and a cliff there turned every
-        # completed sweep into an anomaly hold.
-        # Two contributions, both from moves we asked for: the steady lag of
-        # following a ramp (rate * tau), and the size of the excursion still
-        # outstanding.  Neither says anything about an *uncommanded* error,
-        # which is what the check is actually guarding against.
-        commanded = min(
-            abs(self.ramp.rate_k_per_s) * self.cfg.response_lag_s + self.ramp.span,
-            self.cfg.max_ramp_error_k,
-        )
-        if dt > 0 and self.cfg.response_lag_s > 0:
-            self._ramp_allowance_k *= math.exp(-dt / self.cfg.response_lag_s)
-        allowance = self._ramp_allowance_k = max(commanded, self._ramp_allowance_k)
-        error_limit = self.cfg.max_error_k + allowance
-        if abs(terms.error) > error_limit:
-            anomalies.append(
-                f"error {terms.error:+.3f} K exceeds max_error_k "
-                f"{self.cfg.max_error_k} K"
-                + (f" + {allowance:.2f} K ramp allowance" if allowance else "")
-            )
+        # THE PREMISE IS THAT THE WATTS ADD UP.  The whole ramp-allowance
+        # machinery that used to stand here is gone with `max_error_k`: it
+        # existed because one kelvin threshold had to cover a hold and a sweep,
+        # and once the PHASE decides which check applies there is nothing left
+        # for it to do.  `_check_premise` is the replacement, and it is the
+        # largest single deletion in phase 3.
+        self._check_premise(t, s, terms, anomalies, faults, dt)
+
         # What this check is for is a *bad reading* driving the loop: the
         # feedback terms lurch in one cycle.  So watch those terms directly.
         #
@@ -1170,20 +1236,34 @@ class HeaterSupervisor:
                 f"(limit {self.cfg.anomaly_demand_pct}%)"
             )
 
-        if anomalies:
-            # Whatever we decide below, we are not acting on this PID output, so
-            # the integral must not keep charging while the loop refuses to move.
-            self.pid.integral, self.pid.cfg.kp, self.pid.cfg.ti = state_before
-            self._last_feedback = feedback
+        # A WARNING KEEPS TRACKING.  That is the whole shape of rule 4 now: an
+        # alarm says something is worth looking at, and only a FAULT stops the
+        # loop.  The old check froze the output on any anomaly and escalated on
+        # a timer, which on a cryostat whose legitimate sweep lag is 43 K meant
+        # freezing was the normal outcome of doing what it was told.
+        s.alarms.extend(anomalies)
+        if anomalies and not self._warned:
+            self._warned = True
+            log.warning("heater premise: %s", "; ".join(anomalies))
+        elif not anomalies:
+            self._warned = False
+
+        if faults:
+            # A fault must PERSIST.  `fault_after_s` of it, and the output is
+            # frozen for that time rather than tracking on a premise nobody
+            # believes -- the integral must not charge while the loop is
+            # refusing to act on it either.
             if self._anomaly_since is None:
                 self._anomaly_since = t
-                log.warning("heater anomaly, holding: %s", "; ".join(anomalies))
+                log.warning("heater FAULT pending, holding: %s", "; ".join(faults))
             held = t - self._anomaly_since
-            s.alarms.extend(anomalies)
-            if held >= self.cfg.anomaly_hold_s:
-                return self._rampdown_target(t, s, "anomaly persisted", dt)
+            s.alarms.extend(faults)
+            if held >= self.cfg.fault_after_s:
+                return self._rampdown_target(t, s, faults[0], dt)
+            self.pid.integral, self.pid.cfg.kp, self.pid.cfg.ti = state_before
+            self._last_feedback = feedback
             self.state = SupervisorState.HOLDING
-            s.reason = f"anomaly held {held:.0f}/{self.cfg.anomaly_hold_s:.0f} s"
+            s.reason = f"fault held {held:.0f}/{self.cfg.fault_after_s:.0f} s"
             return None
 
         self._anomaly_since = None
@@ -1191,39 +1271,222 @@ class HeaterSupervisor:
         self.state = SupervisorState.TRACKING
         return terms.output
 
-    def _check_model(self, s: SupervisorStatus) -> None:
-        """Is the calibration still describing this cryostat, in this regime?
+    def _break_residual_history(self) -> None:
+        """Forget the trailing window.  Called wherever the loop stops being
+        comparable with itself: arming, acknowledging, disengaging."""
+        self._dq_hist.clear()
+        self._dq_slow = None
 
-        The steady-state curve was measured with the cooler running.  Before a
-        cooldown or after a warmup it does not apply, and nothing in a
-        temperature log distinguishes those cases -- so check it against
-        reality instead of assuming.  Only meaningful once settled: during a
-        ramp the measurement is *supposed* to lag the model.
+    # -- rule 4, in watts --------------------------------------------------
+
+    #: How long the residual is averaged over before the STEP test sees it.
+    #: Not a threshold -- it is the timescale the question is asked on, and the
+    #: fault it serves is specified as a step within thirty minutes.
+    STEP_AVERAGE_S = 60.0
+
+    def _check_premise(self, t, s, terms, anomalies: list, faults: list,
+                       dt: float = 0.0) -> None:
+        """Is the cryostat behaving?  Warnings into ``anomalies``, the two
+        fault conditions into ``faults``.
+
+        Four rows, and which of them apply depends on the PHASE:
+
+        * **the watt residual**, at a hold and during a sweep alike, because
+          `dQ` carries `C dT/dt` and a kelvin error does not;
+        * **the tracking error in kelvin**, in `hold` only -- in `move` the
+          error IS the ramp's lag by design -- and below `min_output_pct` in
+          either, where `dQ` has no opinion and the gain is small enough that
+          kelvin is not the wrong variable (Jeff, 2026-09-14);
+        * **a step in the residual**, which is the fault: `fault_mw` inside
+          `fault_window_s`, measured as the range of a trailing window;
+        * **authority exhausted**: error past `fault_error_k` AND the demand
+          railed at the band.  That is the fault a compressor failure
+          eventually causes, and no window gates it because nothing about it is
+          sudden.
+        """
+        cfg = self.cfg
+        phase = ControlPhase(s.phase) if s.phase else ControlPhase.HOLD
+        railed = (s.demand_pct is not None
+                  and s.demand_pct > self.band[1] - cfg.dac_step_pct)
+
+        # -- the kelvin rows ------------------------------------------------
+        cold_end = (self.output_pct is not None
+                    and self.output_pct < cfg.min_output_pct)
+        if phase is ControlPhase.HOLD or cold_end:
+            if abs(terms.error) >= cfg.warn_error_k:
+                anomalies.append(
+                    f"error {terms.error:+.3f} K is past warn_error_k "
+                    f"{cfg.warn_error_k} K"
+                    + (" (below min_output_pct, where dQ has no opinion)"
+                       if cold_end and phase is not ControlPhase.HOLD else ""))
+        # AUTHORITY EXHAUSTED IS A `hold`-PHASE FAULT ONLY, and that is not a
+        # detail.  Railed with a large error is the NORMAL state of a loop
+        # following a ramp the plant cannot keep up with -- it is what the
+        # velocity feedforward exists to produce.  Measured on a 10 K sweep at
+        # 30 K: railed at the band ceiling with 7.9 K of error for three
+        # minutes, every bit of it commanded, and the loop ramped the heater
+        # down and locked out over a sweep it was executing correctly.
+        #
+        # What makes exhaustion a fault is that it persists once the setpoint
+        # has STOPPED moving: the cryostat is then asking for more than this
+        # loop is allowed to give, which is what a compressor failure becomes.
+        if (phase is ControlPhase.HOLD and abs(terms.error) >= cfg.fault_error_k
+                and railed):
+            faults.append(
+                f"authority exhausted: {terms.error:+.3f} K of error with the "
+                f"demand railed at {self.band[1]:.3f} %")
+
+        # -- the watt rows --------------------------------------------------
+        dq, sigma, why = self._missing_power(s)
+        s.missing_power_w, s.sigma_q_w, s.residual_reason = dq, sigma, why
+        if dq is None:
+            # **THE STEP HISTORY BREAKS HERE**, and clearing it is the point
+            # rather than merely not appending.  A range taken across a gap is
+            # not a step in the residual, it is the difference between two
+            # residuals that were never comparable -- the monitor learned this
+            # on the 2026-09-05 ladder, where a range across a commanded move
+            # read as 21 mW.  Here the gap that mattered was ARMING: the window
+            # at 180 K still reached back into the pre-tracking samples and
+            # read 12.18 mW of "step" over a sweep whose residual never left
+            # +/-2 mW.
+            self._dq_hist.clear()
+            self._dq_slow = None
+            return
+
+        threshold = max(cfg.warn_sigma * sigma, 0.0)
+        if abs(dq) > threshold:
+            anomalies.append(
+                f"missing power {1e3 * dq:+.2f} mW is past "
+                f"{cfg.warn_sigma:.0f} sigma at {1e3 * threshold:.2f} mW")
+
+        # **THE STEP TEST SEES AN AVERAGED RESIDUAL**, and it has to.
+        #
+        # `dQ` carries `C dT/dt`, and dT/dt is a regression over 15 samples of
+        # a measurement whose noise is 1.36e-6 T^2 -- 44 mK rms at 180 K.  That
+        # puts **1.50 mW rms of pure estimator noise** into the residual up
+        # there, and a RANGE statistic over half an hour is about six sigma of
+        # whatever noise it is fed: 9 to 12 mW, with nothing whatever happening.
+        # Measured, and it faulted a 3 K move at 180 K whose residual never left
+        # +/-7 mW of a band that allows 12.
+        #
+        # A level check does not have this problem -- 3 sigma of 1.5 mW is
+        # 4.5 mW and the residual sits inside it -- which is exactly why the
+        # range needed its own answer rather than a bigger threshold.
+        #
+        # One minute of averaging costs the test nothing it was measuring: the
+        # 2026-09-10 event reached its full -5 mW in SEVEN minutes, and this
+        # fault is specified as a step within thirty.  It buys sqrt(30) on the
+        # noise, which is 0.27 mW at 180 K.
+        if dt > 0:
+            alpha = 1.0 if self._dq_slow is None else 1.0 - math.exp(
+                -dt / self.STEP_AVERAGE_S)
+            self._dq_slow = dq if self._dq_slow is None else (
+                self._dq_slow + alpha * (dq - self._dq_slow))
+        if self._dq_slow is None:
+            return
+        self._dq_hist.append((t, self._dq_slow, sigma))
+        floor_t = t - cfg.fault_window_s
+        while len(self._dq_hist) > 1 and self._dq_hist[0][0] < floor_t:
+            self._dq_hist.popleft()
+        recent = [x[1] for x in self._dq_hist]
+        step = max(recent) - min(recent)
+        s.dq_step_w = step
+        # A FLOOR UNDER THE BAND, not a replacement for it: at a settled 118 K
+        # the floor binds (band 1.4 mW) and on a 5 K/min sweep at 180 K the
+        # band does (8.8 mW), and a flat 10 mW there would fault every sweep.
+        #
+        # **The band is the WIDEST it was anywhere in the window**, not its
+        # value at this instant, because the range is a statement about the
+        # whole window.  Evaluated at the instant, a window that contains a
+        # sweep gets judged against the settled band: measured at 180 K, a 3 K
+        # move whose residual swung -7.07 to +4.68 mW -- an 11.75 mW range, and
+        # every bit of it inside the 12.6 mW the band allows while sweeping --
+        # faulted against a 10 mW floor that only applies when nothing is
+        # moving.
+        widest = max(x[2] for x in self._dq_hist)
+        fault_at = max(cfg.fault_mw * 1e-3, cfg.warn_sigma * widest)
+        if step >= fault_at:
+            faults.append(
+                f"the residual stepped {1e3 * step:.2f} mW inside "
+                f"{cfg.fault_window_s / 60:.0f} min, past {1e3 * fault_at:.1f} mW")
+
+    def _missing_power(self, s):
+        """``(dQ, sigma, why)``.  ``dQ`` is None when there is no opinion.
+
+        The same two model functions the monitor calls, so the loop and the
+        judge cannot disagree about what typical means -- only about what to do
+        about it.
+
+        **No transient gate here, unlike the monitor's.**  The monitor holds its
+        opinion for 3 tau after any heater move because it is fitting poles and
+        measuring scatter, and a relaxation is a curve.  This is only the
+        residual, which carries `C dT/dt` explicitly and is valid while the
+        cryostat is moving -- and a closed loop moves the heater every cycle,
+        so a gate keyed to that would mean no opinion, ever.
+        """
+        cfg = self.cfg
+        if s.filtered_k is None or self.output_pct is None:
+            return None, 0.0, "no reading"
+        if self.output_pct < cfg.min_output_pct:
+            return None, 0.0, f"output below {cfg.min_output_pct:.0f} %"
+        if not _M.T_MIN_K <= s.filtered_k <= _M.T_MAX_K:
+            return None, 0.0, "sample outside the table"
+        # **NO OPINION WHERE THE PLANT IS FASTER THAN THE SLOPE IS MEASURED.**
+        # `dQ` carries `C dT/dt`, and dT/dt here is a regression over the
+        # slope window -- 30 s at this cadence.  Where tau is shorter than
+        # that, a transient is over before the window has seen it, the
+        # estimate is an average of two regimes, and what comes out is tens of
+        # milliwatts of residual that is about the estimator rather than the
+        # cryostat.  Measured at 30 K (tau 9 s): a 10 K move put a 10.09 mW
+        # range into a residual whose band is 6.6 mW.
+        #
+        # The monitor learned the same thing from the other end -- its
+        # transient gate is floored at its own slope window for exactly this
+        # reason (plans/pid-2-monitor.md 2.5).  At a settled hold the dynamic
+        # term is zero and the question does not arise, which is why this is
+        # conditioned on moving at all.
+        window_s = self.filter.slope.window * (self._cadence_s or 0.0)
+        if s.slope_k_per_s and _M.tau_s(s.filtered_k) < window_s:
+            return None, 0.0, "the plant is faster than the slope window"
+        sink = self._coldplate_k
+        if sink is None:
+            sink = _M.coldplate_k(s.filtered_k)
+        dq = _M.missing_power_w(s.filtered_k, s.slope_k_per_s, sink,
+                                self.output_pct)
+        sigma = _M.sigma_q_w(s.filtered_k, self.output_pct, time.time(),
+                             dt_dt_k_per_s=s.slope_k_per_s)
+        return dq, sigma, ""
+
+    def _check_model(self, s: SupervisorStatus) -> None:
+        """Report how far the settled measurement is from the curve.
+
+        **It no longer judges.**  `model_trust_k: 15.0` was a second premise
+        check in kelvin, and the watt residual subsumes it: a regime the
+        calibration does not describe is a cryostat whose watts do not add up,
+        which `dQ` says in the variable that means the same thing at 10 K and
+        at 180 K.  Fifteen kelvin was also a strange number to have to choose,
+        being simultaneously far too loose at the cold end and tighter than the
+        13 K CD10 and the fit disagreed by at 59 %.
+
+        What is left is the number itself, on the status line, because "what
+        should this output be settling at" is a question an operator asks.
+        Only meaningful once settled: during a ramp the measurement is
+        *supposed* to lag the model.
         """
         if self.ramp.ramping or self.output_pct is None or s.filtered_k is None:
             return
         if abs(s.slope_k_per_s) > self.cfg.model_check_slope_k_per_s:
             return
-        expected = self.feedforward.kelvin_for(self.output_pct)
-        s.model_error_k = s.filtered_k - expected
-        if abs(s.model_error_k) > self.cfg.model_trust_k:
-            s.model_trusted = False
-            s.alarms.append(
-                f"calibration does not describe this regime: {self.output_pct:.3f}% "
-                f"should settle near {expected:.1f} K but reads {s.filtered_k:.1f} K "
-                f"({s.model_error_k:+.1f} K). Feedforward is capped at "
-                f"{self.cfg.max_feedforward_pct}%; the integral is doing the work."
-            )
-            if not self._model_warned:
-                self._model_warned = True
-                log.warning(
-                    "temperature does not match the calibration curve (%+.1f K at %.3f%%) -- "
-                    "different cooler/vacuum state?  Control continues on feedback.",
-                    s.model_error_k, self.output_pct,
-                )
-        else:
-            s.model_trusted = True
-            self._model_warned = False
+        s.model_error_k = s.filtered_k - self.feedforward.kelvin_for(self.output_pct)
+        # **NO OPINION IS NOT TRUST.**  `model_trusted` is True only when the
+        # residual HAS an opinion and that opinion is inside the band.  Written
+        # the other way round -- trusted unless the residual objects -- it
+        # reports a green light wherever the residual is silent, which is
+        # exactly PID_PLAN.md section 7's trap: a green light outside the table
+        # is a lie, and the cooler-off regime at 315 K is outside the table.
+        s.model_trusted = (s.missing_power_w is not None
+                           and abs(s.missing_power_w)
+                           <= self.cfg.warn_sigma * s.sigma_q_w)
 
     def _rampdown_target(
         self, t: float, s: SupervisorStatus, why: str, dt: float

@@ -95,6 +95,30 @@ class FittedHarness(Harness):
         self.bench_pct = plant.percent_for(self.bench_k)
         plant.pct = self.bench_pct
 
+        # THE SIMULATED COLDPLATE MUST BE THE MODEL'S OWN LOCUS, not the
+        # generic simulator's scenery.  `SimulatedCryostat.DEFAULT_AUX_BASE`
+        # puts input 2 at 8.06 K -- a plausible number, and a PRE-RECALIBRATION
+        # one -- while the fit's settled locus runs 4.9 K at 10 K to 6.8 K at
+        # 180 K.  That 1.2-1.5 K gap is not cosmetic: `Lambda(T_s) -
+        # Lambda(T_c)` is what the watt residual is made of, and a sink 1.5 K
+        # too warm is **25 to 47 mW of false missing power**, which is two to
+        # four times the fault level.  Measured, and it faulted the bench at
+        # 30 K and 180 K before this line existed.
+        #
+        # First order in the coupling, which is all the generic simulator
+        # offers: the base at this temperature and the locus's local slope.
+        from lschart.instruments.sim import SimulatedCryostat as _SC
+
+        from ltspm3.model import fitted_response as _M
+        from ltspm3.model.sim_response import LTSPM3_AUX_COUPLING
+
+        h = 0.5
+        slope = (_M.coldplate_k(self.bench_k + h)
+                 - _M.coldplate_k(max(self.bench_k - h, _M.T_MIN_K))) / (2 * h)
+        kw.setdefault("aux_base", {**_SC.DEFAULT_AUX_BASE,
+                                   "218.2": _M.coldplate_k(self.bench_k)})
+        kw.setdefault("aux_coupling", {**LTSPM3_AUX_COUPLING, "218.2": slope})
+
         sup = sup_cfg or dataclasses.replace(
             cfg.supervisor, operating_point_pct=self.bench_pct)
         pid = pid_cfg or dataclasses.replace(cfg.pid, setpoint=self.bench_k)

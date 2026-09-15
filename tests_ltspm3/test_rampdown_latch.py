@@ -31,7 +31,7 @@ def test_the_ramp_down_descends_at_the_one_rate_in_KELVIN(armed):
     What this asserts is the property that replaces the knee: the SAMPLE falls
     at the one rate, and it is the same rate wherever the descent starts.
     """
-    cfg = SupervisorConfig(anomaly_hold_s=60.0, authority_pct=30.0)
+    cfg = SupervisorConfig(authority_pct=30.0)
     h = armed(sup_cfg=cfg)
     started = h.sup.filter.value
     h.cryostat.inject(dropout_channels={"218.1"})
@@ -63,7 +63,7 @@ def test_the_ramp_down_descends_at_the_one_rate_in_KELVIN(armed):
 def test_the_ramp_down_needs_no_sensor_at_all(armed):
     """Rule 3's point: the thing a feedback ramp-down would steer by is the
     thing that is broken.  Here the sensor is dead for the whole descent."""
-    h = armed(sup_cfg=SupervisorConfig(anomaly_hold_s=60.0, authority_pct=30.0))
+    h = armed(sup_cfg=SupervisorConfig(authority_pct=30.0))
     h.cryostat.inject(dropout_channels={"218.1"})
     for _ in range(3000):
         h.step(1)

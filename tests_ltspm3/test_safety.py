@@ -84,38 +84,65 @@ def test_ramp_down_reaches_safe_value_and_locks_out(armed):
 
 # -- "sudden multiple percentage point change in power needed -> don't" -----
 
-def test_large_error_is_treated_as_a_broken_premise_not_a_command(armed):
-    """A large error that was *not* commanded means the cryostat is wrong, not the loop.
+def test_a_stepped_setpoint_becomes_a_RAMP_rather_than_stalling_the_loop(armed):
+    """Rule 8, moved to where it belongs -- phase 3 step 6.
 
-    Stepping the setpoint (``ramp=False``) is the way to manufacture this in a
-    test.  In normal use setpoint moves ramp, precisely so that a large error
-    keeps its meaning as evidence of a fault -- see test_sweep.py.
+    "Move the setpoint by ramping it, never by stepping it" used to be enforced
+    by the premise check: a step past `max_error_k` produced an error the check
+    read as a broken premise, so the loop froze and eventually ramped down.
+    Rule 8 was protecting the cryostat by BREAKING the loop, and it only worked
+    because the check could not tell a commanded move from a fault.
+
+    The watt residual can, so the kelvin error is a warning now -- and a
+    stepped setpoint would simply be obeyed.  The refusal therefore moves to
+    the REQUEST: a step larger than `warn_error_k` becomes a ramp at the one
+    rate.  The heater still never lurches, which is what rule 8 is for.
     """
     h = armed()
     before = h.sup.output_pct
 
-    h.sup.set_setpoint(140.0, ramp=False)   # 40 K away: outside max_error_k=1.0
+    h.sup.set_setpoint(140.0, ramp=False)   # 40 K away
+    assert h.sup.ramp.ramping, "a step this large must have become a ramp"
     st = h.step(3)
 
-    assert st.state is SupervisorState.HOLDING
-    assert any("max_error_k" in a for a in st.alarms)
-    assert h.sup.output_pct == before, "must not chase a setpoint this far away"
+    assert st.state is SupervisorState.TRACKING
+    assert abs(h.sup.output_pct - before) <= 3 * (
+        h.sup._rate_limit_step(h.DT) + h.sup.cfg.dac_step_pct)
 
 
-def test_persistent_anomaly_escalates_to_ramp_down(armed):
-    cfg = SupervisorConfig(anomaly_hold_s=60.0)
-    h = armed(sup_cfg=cfg)
-    h.sup.set_setpoint(140.0, ramp=False)
-    h.step(5)
-    assert h.sup.state is SupervisorState.HOLDING
-    h.step(20)                          # past anomaly_hold_s
-    assert h.sup.state in (SupervisorState.RAMPING_DOWN, SupervisorState.LOCKED_OUT)
-
-
-def test_anomaly_hold_does_not_wind_up_the_integral(armed):
+def test_a_trim_smaller_than_the_warning_is_still_a_step(armed):
+    """`ramp=False` keeps meaning what its docstring says for a small move."""
     h = armed()
-    h.sup.set_setpoint(h.equilibrium_k + 1.5, ramp=False)  # outside max_error_k
+    h.sup.set_setpoint(h.equilibrium_k + 0.5, ramp=False)
+    assert not h.sup.ramp.ramping
+    assert h.sup.status.state is not SupervisorState.RAMPING_DOWN
+
+
+def test_a_standing_error_WARNS_and_keeps_tracking(armed):
+    """§3.4's first row.  An alarm is not a freeze.
+
+    The old check froze the output on any anomaly and escalated on a timer,
+    which on a cryostat whose legitimate sweep lag is 43 K meant that freezing
+    was the normal outcome of doing what it was told.  Only a FAULT stops the
+    loop now, and a kelvin error is not one.
+    """
+    h = armed()
+    h.sup.sweep_to(h.equilibrium_k + 6.0, rate_k_per_min=5.0)
     h.step(30)
+    warned = [s for s in h.history
+              if any("warn_error_k" in a for a in s.alarms)]
+    if warned:
+        assert all(s.state is SupervisorState.TRACKING for s in warned), (
+            "a warning froze the loop")
+
+
+def test_the_integral_does_not_charge_while_a_fault_is_held(armed):
+    """A fault freezes the output, and the integral must not keep charging
+    against a premise nobody believes."""
+    h = armed()
+    h.cryostat.inject(dropout_channels={"218.1"})
+    h.step(3)
+    assert h.sup.state is SupervisorState.HOLDING
     # Assert on the *contribution* ki*I, not the raw integral: gain scheduling
     # rescales the stored integral whenever ki changes, precisely so that the
     # contribution is preserved.  Rescaling is not charging.
@@ -144,7 +171,7 @@ def test_output_can_never_exceed_the_hard_ceiling(armed):
     """
     cfg = SupervisorConfig(operating_point_pct=63.0, authority_pct=0.25,
                            hard_max_pct=68.0,
-                           max_error_k=1000, anomaly_demand_pct=1000)
+                           warn_error_k=1000, anomaly_demand_pct=1000)
     h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=300.0, kp=5.0, ti=10.0))
     h.sup.set_setpoint(300.0, ramp=False)
     h.step(400)
@@ -169,7 +196,7 @@ def test_nothing_moves_the_output_down_except_a_ramp_down(armed):
     """Below the band is less heat, which is never the dangerous direction --
     but *moving* there is still only a fault response's business."""
     cfg = SupervisorConfig(operating_point_pct=63.0, authority_pct=0.25,
-                           max_error_k=1000, anomaly_demand_pct=1000)
+                           warn_error_k=1000, anomaly_demand_pct=1000)
     h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=300.0, kp=5.0, ti=10.0))
     h.sup.set_setpoint(300.0, ramp=False)
     h.step(400)
@@ -187,7 +214,7 @@ def test_per_step_rate_limit_is_respected_while_tracking(armed):
     """The limit is DERIVED now -- `max_rate_k_per_min / K(T)` -- so the test
     asks the loop what it is rather than quoting a constant that no longer
     exists."""
-    cfg = SupervisorConfig(max_error_k=1000, anomaly_demand_pct=1000)
+    cfg = SupervisorConfig(warn_error_k=1000, anomaly_demand_pct=1000)
     h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=200.0, kp=5.0, ti=50.0))
     h.sup.set_setpoint(200.0, ramp=False)
     h.step(100)

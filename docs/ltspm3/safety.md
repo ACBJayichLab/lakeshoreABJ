@@ -13,10 +13,36 @@ correct aggressively.
    output. Nothing else may write to the analog output.
 3. **A single doubtful reading freezes the output.** Escalation to a ramp-down
    takes 60 s of sustained failure by default.
-4. **Premise checks.** This loop is specified for mK trim. An error above
-   `max_error_k`, or a PID demand that jumps by more than `anomaly_demand_pct`,
-   means something is wrong *with the cryostat*, not with the control — so hold, and
-   ramp down only if it persists.
+4. **Premise checks: the watts add up.** `δQ = C(T)·dT/dt + [Λ(T) − Λ(T_c)] −
+   P(u)` — the same residual the monitor judges by, from the same two model
+   functions, so the loop and the judge cannot disagree about what typical
+   means, only about what to do. It is valid at a hold **and during a sweep**,
+   which a kelvin check is not.
+
+   - beyond `warn_sigma` × `σ_Q`: **alarm and keep tracking**. An alarm is not
+     a freeze. The old check froze on any anomaly and escalated on a timer,
+     which on a cryostat whose legitimate sweep lag is 43 K made freezing the
+     normal outcome of doing what it was told;
+   - a **step** of `fault_mw` inside `fault_window_s`: fault. Inherited from
+     the monitor, not re-decided — a change in delivered power lands in the
+     residual immediately, and anything that takes hours did not step;
+   - **authority exhausted** — error past `fault_error_k` with the demand
+     railed, **in `hold` only**. Railed with a large error is the normal state
+     of a loop following a ramp; what makes it a fault is that it persists once
+     the setpoint has stopped moving;
+   - the tracking error in kelvin warns in `hold`, and below `min_output_pct`
+     — where the residual has no opinion — it is the only check there is;
+   - a PID demand that jumps by `anomaly_demand_pct` in one cycle still freezes
+     the loop. That one is about the *reading*, not about the cryostat.
+
+   **No opinion is not typical.** Outside the table, below `min_output_pct`, or
+   where the plant is faster than the slope window, the residual is silent —
+   and silent must never read as green.
+
+   `max_error_k`, `anomaly_hold_s`, `max_ramp_error_k`, `response_lag_s` and
+   `model_trust_k` are gone. One kelvin threshold cannot serve a cryostat whose
+   gain spans forty-fold, and the ramp allowance propping it up was excusing
+   the loop's own 60 s filter as much as anything about the cryostat.
 5. **The authority band caps heat unconditionally, and it follows the
    setpoint.** The window is `authority_pct` either side of *the output the
    model says holds the setpoint the loop is chasing*, widened while a ramp is
@@ -54,11 +80,21 @@ correct aggressively.
 7. **Recovery is always the operator's call.** A completed fault ramp-down locks
    out; `acknowledge()` disarms the loop, and re-arming is a deliberate act that
    re-primes the PID and the filter from what the cryostat is doing *now*.
-8. **Move the setpoint by ramping it, never by stepping it.** A step of more
-   than `max_error_k` is indistinguishable from a broken premise, so it stalls
-   the loop rather than moving it. Sweeps and post-fault approaches both go
-   through `control/ramp.py`; the premise check is widened only by the lag the
-   ramp itself commands (`rate × response_lag_s`), decaying once it stops.
+8. **Move the setpoint by ramping it, never by stepping it.** Sweeps, the
+   post-fault approach and the fault ramp-down all go through
+   `control/ramp.py` at the one rate.
+
+   This used to be enforced by rule 4: a step past `max_error_k` produced an
+   error the premise check read as a broken premise, so the loop froze and
+   eventually ramped down. **Rule 8 was protecting the cryostat by breaking the
+   loop**, and it only worked because the check could not tell a commanded move
+   from a fault. Rule 4 can now, so the refusal moved to the *request*:
+   `set_setpoint(x, ramp=False)` with a step larger than `warn_error_k` becomes
+   a ramp at the one rate, and says so in the log. `ramp=False` still means a
+   step for a trim smaller than that.
+
+   The premise check no longer needs widening during a ramp at all, because the
+   watt residual carries `C·dT/dt` and a commanded move is not an excursion.
 
 **Never hardcode a limit in `control/`.** It belongs in `SupervisorConfig`,
 `SensorGuardConfig` or `PIDConfig`, so every limit is visible and auditable in

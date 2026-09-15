@@ -98,23 +98,14 @@ def test_a_settled_hold_is_already_inside_the_criterion(kelvin, bench):
 # -- §3.7, the setpoint move ------------------------------------------------
 
 
-def test_a_3_k_move_lands_everywhere_except_10_K(kelvin, bench):
-    """§3.7's first row.  Step 4 made five of six land; step 5 kept them there.
+def test_a_3_k_move_lands(kelvin, bench):
+    """§3.7's first row, green at all six for the first time (step 6).
 
-    Before the band followed the setpoint this did three different things.  At
-    30 K it railed and **silently gave up** 0.883 K short -- under
-    `max_error_k`, so no alarm, no state change, nothing in the log.  At 10 K it
-    read a legitimate move as a broken premise and ramped the heater to zero.
-
-    Now 30 K and up land on target with 0.1 to 3.1 % overshoot.  The corner
-    scheduled in step 5 is what holds the overshoot down: at 30 K it was 17.9 %
-    with a corner of four dead times and 0.1 % with eight.
-
-    **10 K still faults**, and after step 5 it faults rather than merely
-    falling short -- the rate limit is no longer what holds it back, so the
-    error closes fast enough to trip `anomaly_demand_pct` on the way.  Step 6
-    is where the cold end gets a premise check it can live with: `dQ` has no
-    opinion below 28 % output and 10 K sits at 24.22 %.
+    It has taken every step of phase 3 to get here, and each one fixed a
+    different thing.  Before the band followed the setpoint this did three
+    different things: at 30 K it railed and **silently gave up** 0.883 K short,
+    under `max_error_k`, with no alarm and nothing in the log; at 10 K it read a
+    legitimate move as a broken premise and ramped the heater to zero.
     """
     h = bench(kelvin)
     h.sup.sweep_to(kelvin + 3.0, 5.0)
@@ -122,12 +113,6 @@ def test_a_3_k_move_lands_everywhere_except_10_K(kelvin, bench):
     h.minutes(90)
     last = h.history[-1]
     reached = [s.filtered_k for s in h.history if s.filtered_k is not None]
-
-    if kelvin <= 10.0:
-        assert last.state in (SupervisorState.RAMPING_DOWN,
-                              SupervisorState.LOCKED_OUT)
-        assert last.filtered_k < kelvin, "the sample fell instead of rising"
-        return
 
     assert last.state is SupervisorState.TRACKING
     overshoot = (max(reached) - (kelvin + 3.0)) / 3.0
@@ -138,52 +123,65 @@ def test_a_3_k_move_lands_everywhere_except_10_K(kelvin, bench):
     assert settled == pytest.approx(kelvin + 3.0, abs=max(0.05, floor))
 
 
-#: Where a 10 K sweep at 5 K/min lands today.  Step 3 moved 100 K into this
-#: group and step 4 moved 140 and 180 K; 10 and 30 K wait on step 5, and it is
-#: a different limit that holds them back.
-SWEEP_SURVIVES = (60.0, 100.0, 140.0, 180.0)
+def test_a_5_k_per_min_sweep_of_10_K_arrives(kelvin, bench):
+    """§3.7's second row, and the requirement phase 3 exists for.
 
+    Jeff's rate is 5 K/min.  Before step 3 this locked the loop out at five of
+    the six bench temperatures and left the sample at base temperature.  Four
+    steps moved four different limits out of the way, one at a time:
 
-def test_a_5_k_per_min_sweep_still_fails_AT_THE_COLD_END(kelvin, bench):
-    """RECORDED DEFECT, down to a third of one, and the cause has changed.
+    * **step 3**, 100 K -- `move_tau_cl` was a fixed 300 s against a plant tau
+      of 441 s, and a ratio makes it 221 s;
+    * **step 4**, 140 and 180 K -- they had been ARRIVING and then faulting
+      afterwards, as the ramp allowance decayed while the loop was still
+      railed at a window centred where the sweep started;
+    * **step 5**, the cold end's rate -- ten kelvin is 29 % of output at 10 K
+      and a trim rate allowed two and a half hours for a two-minute sweep;
+    * **step 6**, the premise itself -- the lag peaked at 8.78 K against a
+      kelvin check that allowed 7.0, so the loop was being told that a sweep it
+      was executing correctly was evidence the cryostat was broken.
 
-    Jeff's rate is 5 K/min.  Before step 3 a 10 K sweep at that rate locked the
-    loop out at five of six bench temperatures and left the sample at base.
-    Ratio tuning fixed 100 K; the band following the setpoint fixed 140 and
-    180 K, which had been reaching the target and then faulting AFTERWARDS as
-    the ramp allowance decayed while the loop was still railed at a window
-    centred where the sweep started.  Step 5 halved the remaining lag
-    everywhere -- 2.30 K to 1.55 K at 100 K -- by making the output rate the
-    one rate through the gain and the corner the closed loop's own response.
-
-    **10 and 30 K remain, and what stops them now is the KELVIN PREMISE CHECK
-    itself.**  The lag peaks at 8.78 K and 7.24 K against a limit of
-    `max_error_k` 1.0 plus a `max_ramp_error_k` allowance capped at 6.0 -- so
-    7.0, and both miss it by about a kelvin.  There is nothing left to fix in
-    the rate or the band: the loop is being told that a sweep it is executing
-    correctly is evidence the cryostat is broken.  That is §3.4's row, and step
-    6 is where the check moves into watts and switches off in `move`.
+    The tracking lag is genuinely 7.6 K at 10 K and 1.3 K at 140 K, and none of
+    it is an anomaly: it is `r*tau`, the lag a ramp commands.  That is the
+    whole reason the premise had to move into watts, where `dQ` carries
+    `C dT/dt` and a commanded move is not an excursion.
     """
     h = bench(kelvin)
     h.sup.sweep_to(kelvin + 10.0, 5.0)
     h.history.clear()
     h.minutes(120)
     last = h.history[-1]
+    reached = [s.filtered_k for s in h.history if s.filtered_k is not None]
 
-    if kelvin in SWEEP_SURVIVES:
-        assert last.state is SupervisorState.TRACKING
-        # Scaled to the thermometer, as everywhere else here: 1.36e-6*T^2 is
-        # 44 mK rms at 180 K and a 50 mK window on the last sample is a coin
-        # toss up there.
-        floor = 5e3 * M.FittedParams().noise_quadratic * kelvin ** 2
-        assert last.filtered_k == pytest.approx(kelvin + 10.0,
-                                                abs=max(0.05, floor))
-    else:
-        assert last.state in (SupervisorState.RAMPING_DOWN,
-                              SupervisorState.LOCKED_OUT), (
-            f"{kelvin} K survived a 5 K/min sweep; if step 6 has landed, this "
-            "test is what should be rewritten")
-        assert last.filtered_k < kelvin
+    assert last.state is SupervisorState.TRACKING
+    floor = 5e3 * M.FittedParams().noise_quadratic * kelvin ** 2
+    assert last.filtered_k == pytest.approx(kelvin + 10.0, abs=max(0.08, floor))
+    overshoot = (max(reached) - (kelvin + 10.0)) / 10.0
+    assert overshoot < 0.05, f"{100 * overshoot:.1f} % overshoot at {kelvin} K"
+
+
+def test_the_residual_is_quiet_through_a_sweep(kelvin, bench):
+    """§3.4: `dQ` is valid at a hold AND during a sweep, which is the whole
+    reason the premise moved into watts.
+
+    Where the plant is faster than the slope is measured -- 10 and 30 K, where
+    tau is 0.1 and 9 s against a 30 s regression -- it correctly has NO OPINION
+    rather than a wrong one.
+    """
+    h = bench(kelvin)
+    h.sup.sweep_to(kelvin + 10.0, 5.0)
+    h.history.clear()
+    h.minutes(120)
+
+    judged = [s for s in h.history if s.missing_power_w is not None]
+    if not judged:
+        assert h.history[-1].residual_reason
+        return
+    worst = max(judged, key=lambda s: abs(s.missing_power_w))
+    assert abs(worst.missing_power_w) < max(
+        0.010, h.sup.cfg.warn_sigma * worst.sigma_q_w), (
+        f"{1e3 * worst.missing_power_w:+.2f} mW at {kelvin} K")
+    assert max(s.dq_step_w for s in h.history) < h.sup.cfg.fault_mw * 1e-3
 
 
 # -- §3.7, the sensor ------------------------------------------------------

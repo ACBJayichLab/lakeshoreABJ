@@ -115,7 +115,7 @@ def test_a_saturated_loop_writes_below_its_own_rail(tmp_path, armed):
     makes the arithmetic reachable; both are config, which is where limits
     belong.
     """
-    h = armed(sup_cfg=SupervisorConfig(authority_pct=0.05, max_error_k=20.0,
+    h = armed(sup_cfg=SupervisorConfig(authority_pct=0.05, warn_error_k=20.0,
                                        anomaly_demand_pct=5.0))
     h.sup.set_setpoint(h.equilibrium_k + 5.0, ramp=False)
     h.step(40)

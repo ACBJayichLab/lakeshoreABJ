@@ -350,7 +350,7 @@ class StatusWriter:
             fixed rails a heater output uses would mean never lighting the mark.
         ``threshold_k``
             The loop's own "this should only ever be a small correction"
-            premise (``max_error_k``).  Null where the controller does not
+            premise (``warn_error_k``).  Null where the controller does not
             offer one, which a client must already handle: a loop with no
             configured threshold gets no opinion about being settled.
 
@@ -399,7 +399,7 @@ class StatusWriter:
             # slope rather than a gain, so a number there would be an invention.
             "p": _num(getattr(status, "kp", None)),
             "i": _num(getattr(status, "ti", None)),
-            "threshold_k": _num(getattr(cfg, "max_error_k", None)),
+            "threshold_k": _num(getattr(cfg, "warn_error_k", None)),
             "alarms": [str(a) for a in getattr(status, "alarms", []) or []],
             "reason": str(getattr(status, "reason", "") or ""),
         }

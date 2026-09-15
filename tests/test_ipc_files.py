@@ -245,9 +245,9 @@ class FakeSupervisorStatus:
 
 
 class FakeSupervisor:
-    def __init__(self, band=(62.076, 64.076), max_error_k=1.0):
+    def __init__(self, band=(62.076, 64.076), warn_error_k=1.0):
         self.band = band
-        self.cfg = type("cfg", (), {"max_error_k": max_error_k})()
+        self.cfg = type("cfg", (), {"warn_error_k": warn_error_k})()
 
 
 def control_of(tmp_path, status, controller=None, channel="Sample"):
@@ -293,10 +293,12 @@ def test_the_demand_is_published_beside_the_output_it_was_clamped_into(
 
 
 def test_the_error_premise_is_published_as_the_settle_threshold(tmp_path):
-    """`max_error_k` is "this should only ever be a small correction" -- a
-    real per-loop threshold in kelvin, which is what the column asks for."""
+    """`warn_error_k` is the loop's "this should only ever be a small
+    correction" -- a real per-loop threshold in kelvin, which is what the
+    column asks for.  It was `max_error_k` until phase 3 step 6 moved the
+    premise into watts and left the kelvin row as a warning."""
     block = control_of(tmp_path, FakeSupervisorStatus(),
-                       FakeSupervisor(max_error_k=2.5))
+                       FakeSupervisor(warn_error_k=2.5))
     assert block["threshold_k"] == 2.5
 
 
