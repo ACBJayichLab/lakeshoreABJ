@@ -185,20 +185,42 @@ readers may open — see
 
 Three things are outstanding, in priority order.
 
-### 1. `verify_readback` on the 218 may be confirming a stale value
+### 1. `verify_readback` on the 218 — what it can and cannot tell you
 
-**The highest-value parked item.** Writes on a Lake Shore box are applied
-asynchronously: a query issued too soon after a write overtakes it and answers
-with the *previous* value. Measured on the 336 over USB — at 0 ms every readback
-was stale, at 50 ms readbacks lagged by exactly one write, 80 ms+ was correct.
-**Both wrong regimes look like success.**
+Writes on a Lake Shore box are applied asynchronously: a query issued too soon
+after a write overtakes it and answers with the *previous* value. Measured on
+the 336 over USB — at 0 ms every readback was stale, at 50 ms readbacks lagged
+by exactly one write, 80 ms+ was correct. It is **unverified on the 218 over
+GPIB**.
 
-This very likely applies to the 218 on GPIB too and is **unverified** there.
-`SupervisorConfig.verify_readback` reads `AOUT?` after `ANALOG` and may
-therefore be confirming a stale value. It passes in simulation only because the
-fake applies writes synchronously.
+What that is worth is narrower than it was once written, and the narrowing is
+the useful part. `write_settle_s` is the transport's pacing gap between a write
+and the next transaction on that link — `_pace()` applies it only when the last
+transaction was a write — so a write and its confirming readback sit back to
+back inside one cycle. Nothing is issued at sub-cycle intervals.
 
-**Check this before the LTSPM3 cryostat runs armed.**
+**A stale readback announces itself whenever the step is big enough.** The
+comparison is against the value *just commanded*, so a stale reply returns the
+old value, misses by the whole step and is caught. It is only when the step is
+smaller than `readback_tol_pct` that stale and fresh are indistinguishable —
+and no settle time fixes that, because the two values are the same number.
+
+Which means, on this cryostat:
+
+- **at a hold the check is vacuous by design.** `dither: true` moves one 0.01 %
+  code at a time, deliberately below the 0.015 % tolerance. Worst case is one
+  code;
+- **at 118 K it is vacuous while ramping too.** At ~13.8 K/% a full 5 K/min ramp
+  is 0.36 %/min, or 0.012 % per 2 s cycle — also under tolerance;
+- **at the cold end it bites.** The gain falls toward 0.35 K/%, the same rate is
+  ~0.48 % per cycle, and there the readback is doing real work.
+
+So `verify_readback` will be silent through the whole of stage 4a, and it will
+be silent because of the arithmetic rather than because it is passing. Knowing
+that is the point. The check that 100 ms is enough is three `send analog` steps
+above the tolerance with the recorder running —
+[plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md) W1 — not a
+characterisation, and not a reason to stop.
 
 ### 2. The closed loop has never run on this cryostat
 
@@ -239,8 +261,8 @@ about step size and doublets.
 
 ## The monitor: a judge that never commands
 
-**Built 2026-09-14, not yet in service** — it has not had its 72 h soak beside
-the live recorder. Run it when you want it; it can do nothing.
+**Built 2026-09-14, soaked 2026-09-15** beside the live recorder. Run it when
+you want it; it can do nothing.
 
 ```bash
 python -m ltspm3.monitor -c config-ltspm3-heater.yaml     # follow the live log

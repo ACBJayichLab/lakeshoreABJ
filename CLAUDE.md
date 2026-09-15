@@ -84,10 +84,18 @@ in the linked document.
    `allow_writes` gate and a `max_output_pct` ceiling in config, never a
    constant in code.
 5. **Writes are applied asynchronously** — a query issued too soon answers with
-   the previous value, and both wrong regimes *look like success*. Hence
-   `write_settle_s` **and** readback verification. **Unverified on the 218 over
-   GPIB; check `verify_readback` before the LTSPM3 cryostat runs armed.**
-   → [instruments](docs/recorder/instruments.md)
+   the previous value. Hence `write_settle_s`, which is the transport's pacing
+   gap between a write and the next transaction on that link, **and** readback
+   verification. A stale readback returns the **old** value, so any step larger
+   than `readback_tol_pct` fails the comparison and is caught rather than
+   confirmed; **below that tolerance the check is undecidable at any settle
+   time.** That is every hold write under dither, and every 5 K/min ramp write
+   at 118 K — 0.012 % per 2 s cycle against a 0.015 % tolerance — so on this
+   cryostat the check is discriminating at the cold end and silent by
+   arithmetic at the warm one. Knowing which of those it is doing matters more
+   than the settle number: 100 ms wants a three-command check on the box, not a
+   characterisation. → [instruments](docs/recorder/instruments.md) ·
+   [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) W1
 6. **Availability of the cryostat outranks control quality.** Every ambiguous
    case holds the output and raises an alarm; nothing raises the heater in
    response to a fault. The eight design rules are in

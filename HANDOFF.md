@@ -1,150 +1,140 @@
-# Handoff — 2026-09-15 (the phase 3 review fixes; nothing has been armed)
+# Handoff — 2026-09-15b (the monitor soaked; two gates shrank; a document retired)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
-route to a working loop is [PID_PLAN.md](PID_PLAN.md), the step-by-step is
-[plans/pid-3-loop.md](plans/pid-3-loop.md), and what this session did is
-[plans/pid-3-review.md](plans/pid-3-review.md). This goes stale.
+route to a working loop is [PID_PLAN.md](PID_PLAN.md) and the commissioning
+step-by-step is [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md).
+This goes stale.
 
-Previous: [HANDOFF-2026-09-14d.md](HANDOFF-2026-09-14d.md) (phase 3 built).
+Previous: [HANDOFF-2026-09-15a.md](HANDOFF-2026-09-15a.md) (the phase 3 review
+fixes).
 
 > ## NOTHING WAS COMMANDED, AND THE HEATER IS WHERE IT WAS
 >
 > The 218's analog output has been at **64.0100 %** since 2026-09-10 14:49 and
 > the sample flat at **118.3 K**. **No `control:` section has ever been armed on
-> this cryostat.** Everything below happened on the virtual-clock bench.
-> **1211 tests passing, `ruff` clean.**
+> this cryostat.** The monitor ran, and it holds no port and sends no commands.
+> **1210 tests passing, `ruff` clean** — and one pre-existing failure, below.
 
-## All ten review fixes landed
+## What this session did
 
-A code review of phase 3's steps 5 to 8 found five defects on the bench and six
-more from reading, none of them covered by a test — the suite was green
-throughout, which was the point. `plans/pid-3-review.md` is the plan; ten
-commits, one per step, each naming the safety rule it touched and each with a
-bench row that failed before it.
+No code changed. Three conclusions were reached by reading the code against the
+documents, and the documents lost.
 
-| step | what | rule |
-|---|---|---|
-| 1 | the bench stops depending on the date; the step test takes the **fast** band | 4 |
-| 2 | `CRASHED` survives an idle cycle | 7 |
-| 3 | a failed read does not finish a ramp-down | 1, 3 |
-| 4 | the descent is bounded per cycle | 1 |
-| 5 | the descent never lacks a start | 1 |
-| 6 | **the kelvin rows are reachable, and they answer the two scenarios** | **4** |
-| 7 | a stale sink is no opinion | 4 |
-| 8 | `model_trusted` is `None` by default; the prime fallback is a percent | 4, 2 |
-| 9 | the supervisor's thresholds are validated | — |
-| 10 | the documentation sweep | — |
+### 1. Phase 2's live soak is done, and the gate is a day rather than 72 h
 
-### The three that changed what the loop does to a real sample
+Jeff ran the monitor on 2026-09-15. **The 72 h was a round number with nothing
+behind it** — plan 2 stated it and never derived it. What establishes the
+false-alarm rate is the replay across 63 days of archive, green in `pytest`.
+What the live run adds is that the tail path works on that machine, that
+`plant.json` stays current, and that it survives.
 
-**Both kelvin rows were unreachable.** They were gated on the tuner's `hold`
-phase, and `update_phase` enters `move` on any error over `move_error_k` =
-0.25 K — so an error of 1 K, let alone 5, was by construction in the phase that
-switched both rows off. Measured: a heater delivering half its power at 30 K
-left the sample **14.3 K low, railed at the ceiling, for an hour, in
-`tracking`, silent**. That is the one band where the watt residual cannot
-speak — above `min_output_pct` and below the 40 K where the plant outruns the
-slope window — so there was no check of any kind there.
+The defensible length is **one diurnal cycle**: a 16 mK diurnal term is in the
+band and `measure.py` fits a 24 h harmonic, so a day is the longest measured
+timescale short of the campaign drift — which no soak of any length covers.
 
-**A transient crash's latch lasted one cycle.** The OFF-mode early return
-excepted `LOCKED_OUT` and said nothing about `CRASHED`, so `arm` was accepted
-two seconds after a crash with no `ack`. The old bench row could not see it:
-its sabotage re-crashes every cycle, so the latch was re-set as fast as it was
-cleared.
+**And the judge's state is reconstructed from the recorder's log, not from the
+monitor's own uptime.** Started on 09-15 it read the 09-14 file from the top and
+caught up in seconds. The evidence is in the CSV the recorder has been writing
+all along, which is what makes the shorter gate defensible rather than merely
+convenient.
 
-**The loop's premise band grew with the calendar.** 3 σ at 118 K is 1.44 mW on
-the day the level was gauged, 8.7 mW ten days later and 52 mW at +60 d, and the
-step test scaled its fault threshold by it. A month after a gauge the loop
-would not have faulted on a step five times the 2026-09-10 event; the monitor,
-which judges its own step against a band with no date in it, still would.
+### 2. W1 is three commands, not a characterisation, and nothing is blocked
 
-### Jeff's principle, 2026-09-15, and what it changed
+`write_settle_s` is **not a command cadence**. It is the transport's pacing gap
+between a write and the next transaction on that link — `_pace()` applies it
+only when the last transaction was a write — so a write and its confirming
+readback sit back to back inside one 2 s cycle. Nothing is issued at sub-cycle
+intervals, and the old W1's 0/25/50/80/150/300 ms sweep was asking for timing
+the architecture does not use.
 
-Two things go wrong and they need different answers:
+What the check is worth is narrower than invariant 5 claimed, and the narrowing
+is the useful half:
 
-1. **A steady change the model explains** — the bath moves, the loop needs less
-   heat, and the worst case is a sample colder than intended. **A warning,
-   however far it goes**, including all the way to the heater at its floor. A
-   ramp-down does not improve it and a lockout would stop the loop resuming
-   when the bath recovers.
-2. **A sudden, aphysical change** — the watts stop adding up, or the loop rails
-   at its *ceiling* and the sample still will not come up. **A fault and a
-   ramp-down.**
+- the comparison is against the value **just commanded**, so a stale readback
+  returns the old value, misses by the whole step, and is caught rather than
+  confirmed. "Both wrong regimes look like success" predates that;
+- **below `readback_tol_pct` the check is undecidable at any settle time**,
+  because stale and fresh are the same number. That is every hold write under
+  `dither: true` (one 0.01 % code, against a 0.015 % tolerance) and every ramp
+  write at 118 K (5 K/min ÷ 13.8 K/% = 0.012 % per cycle);
+- **it bites at the cold end**, where the gain falls toward 0.35 K/% and the
+  same rate is ~0.48 % per cycle.
 
-So the two edges of the band part company at `fault_error_k`: the ceiling
-faults, the floor warns. `safety.md` rule 4 is reworded.
+So `verify_readback` will be silent through the whole of 4a, and silent by
+arithmetic rather than by passing. Three `send analog` steps above the tolerance
+answer "is 100 ms enough", with the recorder running and no downtime.
 
-### What the bench says now
+### 3. `docs/ltspm3/commissioning.md` is retired
 
-Eight scenarios × six temperatures, plus the review's own rows, **green with
-the wall clock pinned to the gauge day and to the gauge plus sixty days** —
-which is the gate that stops the bench being a different grader every morning.
-New, and all measured:
+964 lines, written 2026-09-03 and overtaken three times. A dated status block
+describing the sample at 180.57 K on 69.027 %; a two-rate ramp-down with a knee
+at 40 % that phase 3 step 5 replaced with one rate in kelvin; the W1 above; and
+gates met months ago. The durable half went to four homes — the step-test
+method and the R² table to [thermal-response](docs/ltspm3/thermal-response.md),
+the `AOUT?` flicker to [cryostat](docs/ltspm3/cryostat.md), the band principle
+was already in [running](docs/ltspm3/running.md), and the plan half plus C1–C7
+to [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md).
 
-- a heater delivering 3 % less faults at **both** dates, in 210–264 s; at 12 %
-  it is 54–93 mW against a 10 mW floor;
-- half power at 30 K warns, faults as authority exhausted, descends, locks out
-  and needs an `ack`; at 10 K it warns for two hours at 2.03 K and correctly
-  never faults;
-- a sink rising 2 K/h at 118 K and 20 K/h at 30 K warns — at the error row and
-  then at the floor — holds `tracking`, never raises the heater and never
-  faults;
-- no descent cycle anywhere moves the output further than the one rate allows.
-  It used to move 3.62 % in one 2 s cycle at 60 K, against 0.047 % allowed.
+**Archived `HANDOFF-*` and `AUDIT-*` references still point at the deleted
+file, on purpose**: they are records of what was true when written.
 
-## Three findings the plan did not have
+## One finding, not diagnosed
 
-- **The simulated sink was scenery.** The rising-coldplate row moved
-  `_aux_base` — the thermometer — and left the plant where it was, so the
-  disturbance it was grading did not exist, and it hedged with `if faulted`.
-  `FittedHarness.sink_offset` moves both.
-- **Railed means the OUTPUT is there too**, not just the demand. A loop
-  travelling up to its window at the rate limit has authority it has not
-  applied yet, and a PI controller with a standing error rails its demand for
-  the whole traverse. On the demand alone the armed-at-0 % case ramped down the
-  recovery it was in the middle of.
-- **A descent's per-cycle bound belongs on the steady-state curve**, not the
-  tuner's schedule. They are the same table on this cryostat and are not in the
-  legacy harness, where a descent would be throttled by one curve while
-  following another.
+**Two residuals go blind at the daily file roll.** At exactly
+`2026-09-15T00:00:00`, `cold_head` → `no opinion (no cold-head reading)` and
+`noise` → `no opinion (not enough samples)`. `noise` recovers in 15 s, which is
+`RollingFit(noise_window_s = 60)` refilling and is expected. **`cold_head`
+takes 616 s**, which is not explained by that and lines up suspiciously with
+`stage_baseline_tau_s = 600`.
 
-## Then, in order — unchanged
+It fails safe — `no opinion` is the honest answer and never reads as green — so
+it bears on nothing about arming. It bears on **stage 5**: seven unattended days
+is seven midnights. Two candidates, neither checked: the 336's aux columns
+absent from the new file's opening rows, or the stage fits/baselines resetting
+across the rollover. It wants a test that rolls a file under the judge.
+plans/pid-2-monitor.md carries the row.
 
-1. **Phase 2's 72 h soak is still Jeff's to start**, still unblocked, still one
-   command, and the recorder does not need restarting:
+## Then, in order
 
-   ```
-   cd /d C:\Coding\Python\lakeshoreABJ && git pull && .venv\Scripts\python.exe -m ltspm3.monitor -c config-ltspm3-heater.yaml
-   ```
-
-   Expect the headline `verdict` to read `no opinion` throughout: it is the
-   worst of four, and `tau` cannot have an opinion without a heater move. The
-   five residuals underneath it read `typical`.
-2. **Phase 3's own soak** — §3.6's quiet hold is one *simulated* hour at each
-   temperature and the Allan criterion has no closed-loop record to grade. It
-   is the first hour of phase 4.
-3. **Phase 4 is the first thing that needs the cryostat.** Stage 3's W1/W2
-   close-out comes first — the write-settle sweep is what invariant 5 is
-   waiting on, and `verify_readback` is still unverified on the 218 over GPIB.
+1. **Phase 4 stage 3 close-out.** The write check (three commands, recorder
+   running) and W2's ceilings — `send analog 70.5` refused, `analog 0` refused
+   with the gate closed, `heaters_off` reaching the box. **`heaters_off` takes
+   the sample off 118 K**, so pick the day for that one.
+2. **4a — the first armed hour**, `authority_pct` narrowed to 0.1, tuning and
+   feedforward off, armed with no `--setpoint` from a hold that has settled.
    **The first `arm` is Jeff's to type.**
-4. `lschart status` and MATLAB `plant()` still do not read `plant.json`.
-5. The 09-10 mask still goes in with the next archive export.
+3. **4b** the fault drill, **4c** widen one thing per watched hour, **4d** the
+   5 K/min sweep.
+4. Before stage 5: the midnight blind spot above.
+5. `lschart status` and MATLAB `plant()` still do not read `plant.json`.
+6. The 09-10 mask still goes in with the next archive export.
 
-## Traps this session added to the list
+## One pre-existing test failure, and it is not from this session
 
-- **A gate that is a proxy stops being one when something else starts driving
-  it.** "In `hold` only" meant "while the setpoint is not moving", and the
-  tuner's phase said that faithfully until the error began deciding the phase.
-  Nothing announced the change; both alarms simply stopped being reachable.
-- **A defence has to be measured in the state it defends against.** Every
-  wrong-on-purpose row perturbs the CONTROLLER's model, and a heater that
-  stops delivering is the opposite experiment. The docstring named the case and
-  nothing ran it.
-- **A test that disables the premise check has to disable all of it.** Two
-  safety tests neutralised `warn_error_k` and `anomaly_demand_pct` and left
-  `fault_error_k`, which only ever mattered once the kelvin rows could fire.
-- **A validator with an untested line passes everything.** Six of the
-  premise check's thresholds could be set to zero and the config still loaded.
+`tests/test_gui_window.py::test_a_burst_of_view_changes_costs_one_redraw` fails
+on this Mac with `assert 6 == 3` — a second redraw pass after `processEvents()`.
+**1210 passed, 1 failed.** It failed identically on a branch three weeks older
+whose GUI history is entirely different, and nothing in this session touches a
+file under `lschart/gui/`. CI is green on Linux/Windows, so it reads as a
+platform difference rather than a regression — but it is failing, it is not
+written down anywhere current, and it should be either fixed or recorded as
+known before it becomes normal.
+
+## Traps this session added
+
+- **A round number in a plan is not a measurement.** The 72 h had been quoted
+  forward through three documents and derived in none of them. Ask what
+  timescale a gate is supposed to cover before spending days on it.
+- **"Both wrong regimes look like success" stopped being true when the
+  comparison changed**, and the sentence outlived the code by weeks in an
+  invariant. A claim about a failure mode has to name the code that produces
+  it, or it cannot be rechecked when that code moves.
+- **A check can be silent by arithmetic.** `verify_readback` passes at a hold
+  because every write is below its own tolerance, not because the write landed.
+  A green check whose inputs cannot differ is not evidence.
+- **A dated current-state block in a long-lived document has now been wrong
+  three times** — twice in the config headers, once in the document retired
+  here. Current state goes in `HANDOFF.md`, which is archived under its date.
 
 ## Running it
 
@@ -153,9 +143,8 @@ The venv is Windows and lives at the **repository root**, not in a worktree:
 ```bash
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest -q
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ruff check .
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest tests_ltspm3/test_bench.py tests_ltspm3/test_bench_review.py -q
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ltspm3.monitor --replay reference/cooldown-10/
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/pid_tuning.py --rows
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ltspm3.monitor -c config-ltspm3-heater.yaml
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ltspm3 -c config-ltspm3-armed.yaml check
 ```
 
 `analysis/` still needs `measure.py` run once (11 s) before anything that fits.

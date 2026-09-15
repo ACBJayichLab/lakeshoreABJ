@@ -11,7 +11,12 @@ written against.
 **PHASE 2 IS BUILT, 2026-09-14.** `ltspm3/monitor/` — report only, no port, no
 commands. The 2026-09-10 fault warns fourteen minutes after it happened at
 −5.08 mW, and does not fault — because a fault is a step and that one is 5 mW.
-**What is left of phase 2 is the 72 h live soak.** It does NOT need the
+**What is left of phase 2 is the live soak, and its length is ONE DIURNAL
+CYCLE rather than the 72 h this plan used to ask for** (2026-09-15): the 72 was
+a round number with nothing behind it, the false-alarm rate is established by
+the replay over 63 days of archive, and a 16 mK diurnal term plus `measure.py`'s
+24 h harmonic make a day the longest measured timescale short of the campaign
+drift — which no soak of any length covers. It does NOT need the
 recorder restarted — the monitor is a separate process that tails the CSV — and
 it is one command in a second window, now that the file-selection defect is
 fixed: the tail chose the last `*.csv` by name in a directory it does not own,
@@ -38,7 +43,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 |---|---|---|---|
 | **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | **DONE 2026-09-14** — REFIT §1 green; in-epoch prediction 0.135 K rms; `missing_power_w` 0.58 mW worst in-epoch over 40 K; `sigma_q_w` exported. The 300 K half is a PIPELINE, run as a dry run; the ladder itself is stage 6 |
-| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **72 h live outstanding** |
+| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **Live soak run 2026-09-15; the gate is one diurnal cycle, not 72 h** |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts, **a band that follows the setpoint** | **BUILT 2026-09-14** — 8 scenarios × 6 temperatures green, 8 rate fields → 2, hold at 2 DAC codes/min. **Review fixes all ten landed 2026-09-15** ([plans/pid-3-review.md](plans/pid-3-review.md)): the bench no longer depends on the date, `CRASHED` latches, the descent is bounded and cannot be finished by a failed read, and **both kelvin rows are reachable** — a heater delivering half its power at 30 K now faults instead of holding 14 K low in silence. §3.6's soak outstanding |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | 7 days unattended, hold criterion met, every warning explained; ladder graded to 300 K |
 | **5** | §6 here | warnings and faults in the viewer | verdict row visible, contrast-tested |

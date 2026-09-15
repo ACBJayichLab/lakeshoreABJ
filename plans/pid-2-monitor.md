@@ -12,8 +12,9 @@ in-loop check (plan 3 §3.4) is tested against.
 **Status: BUILT 2026-09-14.** `ltspm3/monitor/` — `source.py` (a live tail and
 an archive replay, one `Sample` shape), `judge.py` (the residuals and the
 verdicts), `report.py` (`plant.json` and the daily CSV), `__main__.py`.
-37 tests, of which 11 are the replay on genuine data. **The 72 h live soak is
-what is left**; §2.4 has the replay row by row and §2.5 the two thresholds.
+37 tests, of which 11 are the replay on genuine data. **The live soak is what
+is left, and it is one diurnal cycle rather than 72 h** — see the exit gate;
+§2.4 has the replay row by row and §2.5 the two thresholds.
 
 **And the soak WAS blocked on code, which this plan twice said it was not.**
 Checked against the cryostat's own `data/` on 2026-09-14 before starting it:
@@ -293,6 +294,36 @@ Three things the step test needed before it behaved:
   downstream of it was still half made of the previous regime — a 99 mW step on
   the ladder's cold end. Two settling times, and the longer one governs.
 
+### What the live soak found — 2026-09-15
+
+**Two residuals go blind at the daily file roll, and one of them for ten
+minutes.** At exactly `2026-09-15T00:00:00`, where the recorder rolls to a new
+daily CSV:
+
+```
+00:00:00  cold_head: typical -> no opinion  (no cold-head reading)
+00:00:00  noise:     typical -> no opinion  (not enough samples)
+00:00:15  noise:     no opinion -> typical
+00:10:16  cold_head: no opinion -> typical
+```
+
+**It fails safe** — `no opinion` is the honest answer and rule 4 already says it
+must never read as green — so this is not a false alarm and not a defect in the
+verdicts. What makes it worth a row here is stage 5: seven unattended days is
+seven midnights, each with `cold_head` unable to speak for ten minutes.
+
+`noise` recovering in 15 s is `RollingFit(noise_window_s = 60)` refilling, which
+is expected. `cold_head` taking **616 s** is not explained by that: it needs
+every channel in `stage_channels` to return `None` from `s.aux`, or every
+`RollingFit` to be short, for the whole stretch. `stage_baseline_tau_s` is 600 s
+and lines up suspiciously well. **Not diagnosed** — the two candidates are the
+336's aux columns being absent from the new file's opening rows, and the stage
+fits or baselines resetting across the rollover. It wants a test that rolls a
+file underneath the judge and asserts what each residual says on the far side.
+
+Do it before stage 5, not before arming: nothing here bears on whether the loop
+may close.
+
 ## Exit gate
 
 - The replay table green in `pytest`; `fault_mw` and `warn_after_s` written
@@ -302,12 +333,27 @@ Three things the step test needed before it behaved:
   is what puts the 09-10 event at fourteen minutes rather than at 104.
   `warn_mw: 5` and `fault_mw: 10` are Jeff's, and the fault is a **step inside
   `fault_window_s`** rather than a level -- §2.5.
-- 72 h beside the live recorder, `plant.json` read by `lschart status` and
-  MATLAB `plant()`, the post-repair residual inside the band throughout.
-  **NOT STARTED, and no longer blocked.** The recorder does NOT need
-  restarting — the monitor is a separate process that tails the CSV, holds no
-  port and sends no commands. It needs the file-selection defect above (fixed
-  2026-09-14) and one command in a second window:
+- **One diurnal cycle** beside the live recorder, `plant.json` current, the
+  post-repair residual inside the band throughout, every warning explained.
+  **RUN 2026-09-15.**
+
+  **The length was 72 h and nothing justified it.** What establishes the
+  false-alarm rate is the replay across 63 days of archive, already green in
+  `pytest`. What the live run adds is that the tail path works on that machine,
+  that `plant.json` stays current, and that it survives without crashing. The
+  defensible length is a day: a 16 mK diurnal term is in the band and
+  `measure.py` fits a 24 h harmonic, so one diurnal cycle is the longest
+  measured timescale short of the campaign drift, and no soak of any length
+  covers that one.
+
+  **The judge's state is reconstructed from the recorder's log, not from this
+  process's uptime** — started on 09-15 it read the 09-14 file from the top and
+  caught up in seconds. So the evidence is in the CSV the recorder has been
+  writing all along, which is what makes the shorter gate defensible rather
+  than merely convenient. The recorder does NOT need restarting — the monitor
+  is a separate process that tails the CSV, holds no port and sends no
+  commands. It needs the file-selection defect above (fixed 2026-09-14) and one
+  command in a second window:
 
   ```
   cd /d C:\Coding\Python\lakeshoreABJ && git pull && .venv\Scripts\python.exe -m ltspm3.monitor -c config-ltspm3-heater.yaml
