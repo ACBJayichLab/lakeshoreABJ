@@ -74,9 +74,18 @@ class LoopMode(enum.Enum):
 class SupervisorState(enum.Enum):
     IDLE = "idle"
     TRACKING = "tracking"          # closed loop, healthy
-    HOLDING = "holding"            # output frozen pending clarity
+    #: Output frozen pending clarity.  **It was `HOLDING`**, and that collided
+    #: with the `hold` PHASE and with the `hold` COMMAND, which are three
+    #: different things: the phase is a tuning, the command is an operator
+    #: disengaging the loop, and this is the loop declining to act on a reading
+    #: it does not believe.  Jeff asked for "frozen" (2026-09-11).
+    FROZEN = "frozen"
     RAMPING_DOWN = "ramping_down"  # sustained fault -> slowly back off the heat
     LOCKED_OUT = "locked_out"      # ramp complete; needs an operator acknowledge
+    #: An exception escaped `step()`.  The output is held exactly where it was,
+    #: the loop is disengaged, and `arm` is refused until `ack` -- the same way
+    #: out as a lockout, because the same thing is true: nobody has looked yet.
+    CRASHED = "crashed"
 
 
 @dataclass
@@ -565,11 +574,29 @@ class HeaterSupervisor:
         deciding *what* to arm to but must not know what a :class:`LoopMode` is.
         Stepped, not ramped: the caller has already established that this is
         where the cryostat is now, so there is nothing to traverse.
+
+        **The refusal is checked FIRST.**  It used to move the setpoint and
+        then discover it was locked out, which left a loop that had refused to
+        arm carrying a setpoint somebody had asked for and it had not accepted.
+        It also meant the refusal could be pre-empted by whatever
+        `set_setpoint` touched on the way -- after a crash, by the very thing
+        that crashed.
         """
+        self._refuse_if_latched(LoopMode.PID)
         self.set_setpoint(setpoint_k, ramp=False)
         self.set_mode(LoopMode.PID)
 
     def set_mode(self, mode: LoopMode) -> None:
+        self._refuse_if_latched(mode)
+        if mode is self.mode:
+            return
+        log.warning("heater mode %s -> %s", self.mode.value, mode.value)
+        self.mode = mode
+        self._enter_mode(mode)
+
+    def _refuse_if_latched(self, mode: LoopMode) -> None:
+        """Every latch that stops automation resuming the loop, in one place
+        so `arm` can ask before it changes anything."""
         if self.state is SupervisorState.RAMPING_DOWN and mode is not LoopMode.OFF:
             # Same shape as the lockout refusal below, and for the same reason:
             # automation may not call off a ramp-down that is already running.
@@ -580,6 +607,11 @@ class HeaterSupervisor:
                 "Let it finish and clear the latch with `send ack`, or stop it "
                 "now with `send hold` (which freezes the heater where it is)"
             )
+        if self.state is SupervisorState.CRASHED and mode is not LoopMode.OFF:
+            raise PermissionError(
+                f"the heater loop crashed ({self._locked_reason}). Look at the "
+                "cryostat and the log, then clear the latch with `send ack`; "
+                "`arm` again after that")
         if self.state is SupervisorState.LOCKED_OUT and mode is not LoopMode.OFF:
             # Name the way out, the way every other refusal in this system
             # does.  This used to say "acknowledge() first", which is a Python
@@ -590,10 +622,8 @@ class HeaterSupervisor:
                 "cryostat, then clear the latch with `send ack` (or "
                 "acknowledge() in process); `arm` again after that"
             )
-        if mode is self.mode:
-            return
-        log.warning("heater mode %s -> %s", self.mode.value, mode.value)
-        self.mode = mode
+
+    def _enter_mode(self, mode: LoopMode) -> None:
         if mode is LoopMode.PID:
             # Bumpless: start from wherever the heater actually is, *now* --
             # not from where the PID last thought it was.  After a fault
@@ -738,11 +768,13 @@ class HeaterSupervisor:
         nobody has diagnosed anything yet; :meth:`acknowledge` clears a
         lockout and nothing else does.
         """
-        was_locked = self.state is SupervisorState.LOCKED_OUT
+        was_locked = self.state in (SupervisorState.LOCKED_OUT,
+                                    SupervisorState.CRASHED)
+        was_state = self.state
         self.abort_ramp()
         self.set_mode(LoopMode.OFF)
         if was_locked:
-            self.state = SupervisorState.LOCKED_OUT
+            self.state = was_state
         self._disengaged_by = why
 
     def panic_hold(self) -> float:
@@ -930,7 +962,57 @@ class HeaterSupervisor:
         reading: Reading | None,
         readings: dict[str, Reading] | None = None,
     ) -> SupervisorStatus:
-        """Advance one control cycle.  ``t`` is a monotonic timestamp in seconds.
+        """Advance one control cycle, and **fail gracefully if it cannot**.
+
+        Jeff, 2026-09-11: a crashed PID disengages.  It did not -- an exception
+        propagated to the poller with the loop still in `tracking` and still
+        believing it owned the heater, and what happened next depended on how
+        the caller handled it.  The output never moved, which was the one
+        mercy, but nothing said so and nothing stopped the next cycle trying
+        again.
+
+        Now: `panic_hold()`, state `CRASHED` with the exception's first line,
+        and `arm` refused until `ack`.  The recorder keeps writing, because a
+        cryostat whose loop has crashed is exactly when the log matters most.
+
+        Deliberately broad.  The distinction that matters here is not which
+        exception it was -- it is that this thread owns a heater and must not
+        leave it owned by nobody.
+        """
+        try:
+            return self._step(t, reading, readings)
+        except Exception as exc:                       # noqa: BLE001
+            return self._crash(t, exc)
+
+    def _crash(self, t: float, exc: BaseException) -> SupervisorStatus:
+        first = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
+        reason = f"{exc.__class__.__name__}: {first}"
+        log.exception("HEATER LOOP CRASHED (%s); disengaging", reason)
+        try:
+            held = self.panic_hold()
+        except Exception:                              # noqa: BLE001
+            # Even the disengage failed.  Say so and stop; there is nothing
+            # left this object can do that is safer than doing nothing.
+            log.exception("could not disengage after the crash")
+            held = self.output_pct
+        self.state = SupervisorState.CRASHED
+        self._locked_reason = reason
+        self._disengaged_by = (
+            f"the loop crashed ({reason}); `ack` then `arm` to resume")
+        s = SupervisorStatus(t=t, mode=self.mode, state=self.state,
+                             output_pct=held, reason=self._disengaged_by,
+                             alarms=[f"CRASHED: {reason}"])
+        self._wrote_last_cycle = False
+        self.status = s
+        return s
+
+    def _step(
+        self,
+        t: float,
+        reading: Reading | None,
+        readings: dict[str, Reading] | None = None,
+    ) -> SupervisorStatus:
+        """One cycle.  ``t`` is a monotonic timestamp in seconds.
 
         ``readings`` is the whole frame.  Supplying it lets the supervisor ask
         whether any *other* channel saw the same event, which is the only
@@ -1128,7 +1210,7 @@ class HeaterSupervisor:
             return self._rampdown_target(t, s, "sensor fault", dt)
 
         if health is not HealthState.OK or not self.filter.primed:
-            self.state = SupervisorState.HOLDING
+            self.state = SupervisorState.FROZEN
             s.alarms.append(f"holding: sensor {health.value}")
             return None
 
@@ -1262,7 +1344,7 @@ class HeaterSupervisor:
                 return self._rampdown_target(t, s, faults[0], dt)
             self.pid.integral, self.pid.cfg.kp, self.pid.cfg.ti = state_before
             self._last_feedback = feedback
-            self.state = SupervisorState.HOLDING
+            self.state = SupervisorState.FROZEN
             s.reason = f"fault held {held:.0f}/{self.cfg.fault_after_s:.0f} s"
             return None
 

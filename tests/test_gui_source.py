@@ -1510,7 +1510,7 @@ def test_the_software_loop_is_trying_only_while_it_is_closed_and_tracking():
     assert loop_marks(control_row(a_control()), 96.0)["trying"]
     for block in (a_control(mode="manual", state="idle"),
                   a_control(mode="off", state="idle"),
-                  a_control(state="holding"),
+                  a_control(state="frozen"),
                   a_control(state="locked_out"),
                   a_control(ramping=True)):
         row = control_row(block)

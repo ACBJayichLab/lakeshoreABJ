@@ -110,7 +110,7 @@ def test_a_glitch_of_EITHER_length_freezes_the_output_and_moves_nothing(
     s = h.sup.status
 
     assert s.health.value in ("suspect", "fault"), "the guard never saw it"
-    assert s.state is SupervisorState.HOLDING       # step 7 renames it FROZEN
+    assert s.state is SupervisorState.FROZEN
     assert h.sup.output_pct == pytest.approx(before, abs=1e-9), (
         "rule 3: a doubtful reading freezes the output, it does not move it")
 

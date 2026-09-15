@@ -70,7 +70,18 @@ log = logging.getLogger(__name__)
 #: there before (now ``links[].loop_numbers``).  A client written against 1
 #: keeps working: ``capabilities()`` in the viewer's source module is the
 #: worked example of degrading rather than assuming.
-SCHEMA_VERSION = 2
+#:
+#: 3 -- a software loop's ``control.state`` gained two values and lost one.
+#: ``holding`` is now ``frozen`` -- it collided with the `hold` PHASE and the
+#: `hold` COMMAND, which are three different things -- and ``crashed`` is new:
+#: an exception escaped the loop, the heater is where it was, and `ack` then
+#: `arm` is the way back.  ``control.threshold_k`` is the loop's
+#: ``warn_error_k`` rather than its retired ``max_error_k``.
+#:
+#: A client written against 2 keeps working and shows an unfamiliar state as
+#: itself, which is why every consumer here keys on ``tracking`` -- the one
+#: value that means "trying" -- rather than enumerating the others.
+SCHEMA_VERSION = 3
 
 
 def _num(value: Any) -> Any:

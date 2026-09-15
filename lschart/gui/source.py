@@ -1799,8 +1799,11 @@ def control_row(control: dict | None) -> dict | None:
 
     ``mode_code`` is set to 1 -- closed loop, the code an instrument uses --
     only when the supervisor is both in PID mode *and* tracking.  Idle, manual,
-    holding, ramping down and locked out are all "not trying", which is what
-    suppresses both warning marks, exactly as a range of 0 does on a heater.
+    frozen, ramping down, locked out and crashed are all "not trying", which is
+    what suppresses both warning marks, exactly as a range of 0 does on a
+    heater -- and testing for the ONE value that means trying is what lets a
+    schema-3 state this code has never heard of degrade to "not trying"
+    instead of to "fine".
     """
     if not isinstance(control, dict) or not control:
         # Empty and absent mean the same thing here.  A block with nothing in

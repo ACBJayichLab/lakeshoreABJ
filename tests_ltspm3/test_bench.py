@@ -22,6 +22,7 @@ import pytest
 
 from bench_plant import BENCH_TEMPERATURES, FittedHarness, bench_control_config
 from ltspm3.control import LoopMode, SupervisorState
+from ltspm3.control.filters import MeasurementFilter
 from ltspm3.model import fitted_response as M
 
 pytestmark = pytest.mark.parametrize("kelvin", BENCH_TEMPERATURES)
@@ -199,7 +200,7 @@ def test_a_glitching_sensor_freezes_the_output_and_moves_nothing(kelvin, bench):
     h.cryostat.inject(glitch_channels={"218.1"},
                       glitch_low_k=0.7 * kelvin, glitch_high_k=1.2 * kelvin)
     s = h.step(1)
-    assert s.state is SupervisorState.HOLDING
+    assert s.state is SupervisorState.FROZEN
     assert s.output_pct == pytest.approx(before, abs=1e-9)
 
     # And it recovers, without the output having moved in between.
@@ -213,21 +214,57 @@ def test_a_glitching_sensor_freezes_the_output_and_moves_nothing(kelvin, bench):
 # -- §3.5, the crash --------------------------------------------------------
 
 
-def test_an_exception_in_step_ESCAPES_the_supervisor(kelvin, bench):
-    """RECORDED DEFECT -- §3.5.  Step 7 replaces this whole test.
+def test_a_crash_disengages_the_loop_and_needs_an_acknowledge(kelvin, bench):
+    """§3.5.  Jeff, 2026-09-11: a crashed PID disengages.
 
-    Jeff asked for graceful failure: a crashed PID disengages.  Today the
-    exception propagates to the poller with the loop still in `tracking` and
-    still believing it owns the heater.  The output does not move, which is the
-    one mercy -- nothing writes on the way out.
+    It did not.  The exception propagated to the poller with the loop still in
+    `tracking` and still believing it owned the heater, and what happened next
+    depended on how the caller handled it.  The output never moved, which was
+    the one mercy, but nothing said so and nothing stopped the next cycle
+    trying again.
+
+    The way out is the lockout's, and for the same reason: nobody has looked
+    at the cryostat yet.
     """
     h = bench(kelvin)
     before = h.sup.output_pct
     h.sup.filter = None                      # the cheapest possible detonation
-    with pytest.raises(AttributeError):
-        h.step(1)
-    assert h.sup.state is SupervisorState.TRACKING, "step 7 makes this `crashed`"
+
+    s = h.step(1)                            # and no exception escapes
+    assert s.state is SupervisorState.CRASHED
+    assert any("CRASHED" in a for a in s.alarms)
+    assert h.sup.mode is LoopMode.OFF, "a crashed loop must let go"
     assert h.sup.output_pct == pytest.approx(before, abs=1e-9)
+    assert "ack" in s.reason
+
+    # It keeps not writing, rather than retrying into a broken loop.
+    h.step(20)
+    assert h.inst.get_analog_percent() == pytest.approx(before, abs=1e-9)
+
+    # And `arm` is refused until somebody has looked.  The refusal happens
+    # BEFORE the setpoint moves, which it did not used to: `arm` set the
+    # setpoint and then discovered it was latched, so a loop that had refused
+    # to arm was left carrying a setpoint it had not accepted -- and after a
+    # crash the refusal could be pre-empted by the very thing that crashed.
+    with pytest.raises(PermissionError, match="crashed"):
+        h.sup.arm(kelvin)
+
+    # Acknowledging is what an operator does after fixing the cryostat, so the
+    # sabotage is undone first -- `acknowledge` re-primes the filter, and there
+    # has to be one.
+    h.sup.filter = MeasurementFilter()
+    h.sup.acknowledge()
+    assert h.sup.state is SupervisorState.IDLE
+
+
+def test_a_crash_still_lets_the_recorder_write(kelvin, bench):
+    """The cryostat whose loop has just crashed is exactly when the log matters
+    most, so `step()` must return a frame rather than raising."""
+    h = bench(kelvin)
+    h.sup.filter = None
+    s = h.step(1)
+    assert s is not None and s.t > 0
+    assert s.output_pct is not None
 
 
 # -- §3.0.A / step 4: the band ----------------------------------------------

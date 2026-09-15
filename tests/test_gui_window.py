@@ -2103,7 +2103,7 @@ def test_an_unhealthy_software_loop_is_coloured_even_with_both_marks_dark(
     """The marks go quiet exactly when the supervisor stops trusting itself,
     which is the moment the row most needs to catch an eye."""
     w = cryostat(tmp_path, qt_app, [CTRL],
-                 control=dict(SOFTWARE, health="fault", state="holding",
+                 control=dict(SOFTWARE, health="fault", state="frozen",
                               reason="reading rejected"))
     assert cells(w, row_for(w, 'Sample'))[7] == "" and cells(w, row_for(w, 'Sample'))[8] == ""
     assert w.readings.item(row_for(w, 'Sample'), 0).foreground().color().name() == warn_colour(w)

@@ -18,7 +18,7 @@ def test_single_dropout_to_zero_does_not_move_the_heater(armed):
     assert st.raw_k == 0.0
     assert st.validity.value == "no_sensor"
     assert st.health is HealthState.SUSPECT
-    assert st.state is SupervisorState.HOLDING
+    assert st.state is SupervisorState.FROZEN
     assert h.sup.output_pct == before, "a dropout must not move the heater at all"
     assert not st.wrote
 
@@ -29,7 +29,7 @@ def test_brief_dropout_then_recovery_returns_to_tracking(armed):
 
     h.cryostat.inject(dropout_channels={"218.1"})
     h.step(5)                       # 20 s of dropout, below fault_after_s=60
-    assert h.sup.state is SupervisorState.HOLDING
+    assert h.sup.state is SupervisorState.FROZEN
     assert h.sup.output_pct == before
 
     h.cryostat.clear_faults()
@@ -142,7 +142,7 @@ def test_the_integral_does_not_charge_while_a_fault_is_held(armed):
     h = armed()
     h.cryostat.inject(dropout_channels={"218.1"})
     h.step(3)
-    assert h.sup.state is SupervisorState.HOLDING
+    assert h.sup.state is SupervisorState.FROZEN
     # Assert on the *contribution* ki*I, not the raw integral: gain scheduling
     # rescales the stored integral whenever ki changes, precisely so that the
     # contribution is preserved.  Rescaling is not charging.

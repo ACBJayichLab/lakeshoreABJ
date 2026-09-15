@@ -28,7 +28,7 @@ def test_the_280_second_glitch_is_ridden_out_without_moving_the_heater(armed):
     h.cryostat.inject(glitch_channels={"218.1"})
     h.step(70)                                    # 280 s at 4 s cadence
 
-    assert h.sup.state is SupervisorState.HOLDING
+    assert h.sup.state is SupervisorState.FROZEN
     assert h.sup.guard.state is not HealthState.FAULT, "escalated on a self-healing glitch"
     assert h.sup.output_pct == before, "the glitch moved the heater"
 
@@ -78,7 +78,7 @@ def test_uncorroborated_move_is_rejected_even_below_the_hard_slew_limit(armed):
     # Rejected on the coherence tier at least once; the spike test also fires on
     # the smaller excursions, and either way the output must freeze.
     assert any(s.validity.value == "incoherent" for s in window)
-    assert h.sup.state is SupervisorState.HOLDING
+    assert h.sup.state is SupervisorState.FROZEN
 
 
 def test_coherence_degrades_gracefully_with_a_single_channel(harness):
@@ -93,4 +93,4 @@ def test_coherence_degrades_gracefully_with_a_single_channel(harness):
     assert h.sup.status.corroborated is None
     h.cryostat.response.pct = 20.0
     h.step(40)
-    assert h.sup.state in (SupervisorState.TRACKING, SupervisorState.HOLDING)
+    assert h.sup.state in (SupervisorState.TRACKING, SupervisorState.FROZEN)

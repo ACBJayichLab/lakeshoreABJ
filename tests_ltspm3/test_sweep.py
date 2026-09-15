@@ -65,7 +65,7 @@ def test_a_ramped_sweep_keeps_the_error_inside_the_premise_check(armed):
     # The tracking error during a ramp is genuinely r*tau; what must not happen
     # is the loop reading that as a broken premise.
     assert not any(s.state is SupervisorState.RAMPING_DOWN for s in window)
-    assert not any(s.state is SupervisorState.HOLDING for s in window)
+    assert not any(s.state is SupervisorState.FROZEN for s in window)
     assert h.sup.state is SupervisorState.TRACKING
     assert h.sup.status.filtered_k == pytest.approx(h.equilibrium_k + 3.0, abs=0.25), \
         "sweep never arrived"
