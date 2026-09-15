@@ -80,6 +80,54 @@ def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) ->
             f"control.supervisor.on_exit must be 'hold' or 'zero', got {s.on_exit!r}"
         )
 
+    # -- the premise check's own thresholds ---------------------------------
+    #
+    # None of these was checked, and each of them can be quietly switched off
+    # by a plausible-looking edit: `warn_sigma: 0` alarms on every cycle,
+    # `fault_mw: 0` faults on the first sample of noise, `fault_window_s: 0`
+    # leaves the step test a window of one, and `fault_error_k` under
+    # `warn_error_k` puts the fault below the warning that is supposed to
+    # precede it.  A limit nobody validates is a limit nobody notices the loss
+    # of -- which is the argument for every other line in this function.
+    if s.warn_sigma <= 0:
+        problems.append(
+            "control.supervisor.warn_sigma must be positive -- at zero every "
+            "cycle is past the band and the alarm means nothing")
+    if s.fault_mw <= 0:
+        problems.append(
+            "control.supervisor.fault_mw must be positive -- it is the FLOOR "
+            "under the sigma band, and at zero the first milliwatt of "
+            "estimator noise is a fault")
+    if s.fault_window_s <= 0:
+        problems.append(
+            "control.supervisor.fault_window_s must be positive -- the fault "
+            "is a STEP measured as a range over this window, and a window of "
+            "zero has nothing to compare")
+    if s.fault_after_s < 0:
+        problems.append(
+            "control.supervisor.fault_after_s must not be negative -- it is "
+            "how long a fault must persist before the ramp-down")
+    if s.warn_error_k <= 0:
+        problems.append(
+            "control.supervisor.warn_error_k must be positive -- under about "
+            "40 K it is the only premise check there is, and at zero it warns "
+            "on the thermometer's own noise")
+    if s.fault_error_k < s.warn_error_k:
+        problems.append(
+            f"control.supervisor.fault_error_k {s.fault_error_k} K is below "
+            f"warn_error_k {s.warn_error_k} K -- the fault would arrive before "
+            "the warning that is supposed to precede it")
+    if not s.hard_min_pct <= s.min_output_pct <= s.hard_max_pct:
+        problems.append(
+            f"min_output_pct {s.min_output_pct}% is outside the hard limits "
+            f"[{s.hard_min_pct}, {s.hard_max_pct}] -- the residual would have "
+            "no opinion anywhere, or an opinion everywhere")
+    if s.sink_stale_s <= 0:
+        problems.append(
+            "control.supervisor.sink_stale_s must be positive -- at zero every "
+            "coldplate reading is stale on arrival and the residual never has "
+            "an opinion at all")
+
     g = cfg.guard
     if g.corroborate_slew_k_per_s > g.max_slew_k_per_s:
         problems.append("guard.corroborate_slew_k_per_s must not exceed max_slew_k_per_s")
@@ -115,6 +163,12 @@ def validate_monitor(cfg, app: AppConfig, problems: list[str]) -> None:
     if cfg.warn_sigma <= 0 or cfg.fault_mw <= 0:
         problems.append(
             "monitor.warn_sigma and monitor.fault_mw must be positive")
+    if cfg.move_k <= 0:
+        problems.append(
+            "monitor.move_k must be positive -- it is what counts as a heater "
+            "move worth holding an opinion after, and at zero a closed loop "
+            "with dither is in transient on every cycle, which is the judge "
+            "reporting no opinion for the whole of its life")
 
 
 register_section("control", ControlConfig, validator=validate_control)

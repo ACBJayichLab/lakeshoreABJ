@@ -176,3 +176,61 @@ def test_the_band_the_docs_quote_is_the_band_the_config_produces():
                 f"shipped config produces {lo:.3f}-{hi:.3f}%"
             )
     assert seen, "no worked `check` band found in docs/ltspm3 -- did they move?"
+
+
+# -- 3R.9: the supervisor's own thresholds ----------------------------------
+#
+# plans/pid-3-review.md 3R.9.  `validate_control` checked the band, the rates
+# and the exit action and said nothing about the premise check's thresholds --
+# every one of which can be switched off by a plausible-looking edit.  One test
+# per line, because a validator with an untested line is a validator that
+# passes everything.
+
+
+def _supervisor(**kw):
+    cfg = _with_control()
+    for name, value in kw.items():
+        setattr(cfg.extensions["control"].supervisor, name, value)
+    return cfg
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("warn_sigma", 0.0, "warn_sigma must be positive"),
+    ("fault_mw", 0.0, "fault_mw must be positive"),
+    ("fault_window_s", 0.0, "fault_window_s must be positive"),
+    ("fault_after_s", -1.0, "fault_after_s must not be negative"),
+    ("warn_error_k", 0.0, "warn_error_k must be positive"),
+    ("sink_stale_s", 0.0, "sink_stale_s must be positive"),
+])
+def test_a_premise_threshold_that_switches_the_check_off_is_rejected(
+        field, value, message):
+    cfg = _supervisor(**{field: value})
+    with pytest.raises(ConfigError, match=message):
+        cfg.validate()
+
+
+def test_a_fault_threshold_below_the_warning_is_rejected():
+    """The fault would arrive before the warning that is supposed to precede
+    it, which is an alarm ordering nobody reading the log could reconstruct."""
+    cfg = _supervisor(warn_error_k=5.0, fault_error_k=1.0)
+    with pytest.raises(ConfigError, match="is below warn_error_k"):
+        cfg.validate()
+
+
+def test_a_min_output_outside_the_hard_limits_is_rejected():
+    """`min_output_pct` is where the residual stops having an opinion.  Above
+    the ceiling it has none anywhere; below the floor it has one everywhere,
+    including at outputs where it is the difference of two large numbers."""
+    cfg = _supervisor(min_output_pct=99.0)
+    with pytest.raises(ConfigError, match="min_output_pct"):
+        cfg.validate()
+
+
+def test_a_monitor_move_that_is_never_over_is_rejected():
+    """The defect this catches was shipped: `move_pct` was half a DAC code, so
+    a closed loop with dither was in transient on every cycle and the judge
+    would have reported `no opinion` for the whole of its life."""
+    cfg = AppConfig()
+    cfg.extensions["monitor"] = ltspm3.config.MonitorConfig(move_k=0.0)
+    with pytest.raises(ConfigError, match="move_k must be positive"):
+        cfg.validate()
