@@ -235,6 +235,9 @@ because a one-rate sweep the band forbids cannot be tested.
 | 7 | §3.5 `FROZEN` / `CRASHED`, schema bump | 6, 7 | §3.5 |
 | 8 | §3.6 quiet hold, the full matrix, finding E, the docs | 4 | the exit gate below |
 
+**Review, 2026-09-15:** four confirmed defects in steps 5 to 8 and their fixes,
+one rule-scoped commit each, are in [pid-3-review.md](pid-3-review.md).
+
 ## Exit gate — MET 2026-09-14, except the bench's two soak rows
 
 - **All eight scenarios green at all six temperatures** ✔ — 3 K move, 5 K/min
