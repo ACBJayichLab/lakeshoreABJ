@@ -354,3 +354,54 @@ def test_the_lost_sensor_descent_is_bounded_too(kelvin):
     h.history.clear()
     h.minutes(20)
     assert_descent_obeys_the_one_rate(h)
+
+
+# -- 3R.5, the descent never lacks a start ----------------------------------
+
+
+def test_a_fault_before_the_filter_primes_still_descends_at_the_one_rate():
+    """3R.0.F: with no trusted temperature the descent fell back to
+    `min_rate_pct_per_min` -- 0.20 %/min, which is 63 % to zero in over five
+    hours against the 23 minutes the docs promise.
+
+    The state that reaches it is not exotic: `acknowledge` resets the filter,
+    so the cycles immediately after an `ack` and a re-arm have no primed
+    measurement, and a sensor that drops out there has never given the loop a
+    temperature to descend from.  The model has one -- `kelvin_for(current)`
+    is what an open-loop descent stands on anyway.
+    """
+    h = armed(118.0)
+    h.sup.acknowledge()
+    h.sup.arm(118.0)
+    assert not h.sup.filter.primed, "the ack should have emptied the filter"
+    h.cryostat.inject(dropout_channels={"218.1"})
+
+    t0 = h.clock.t
+    for _ in range(20000):
+        h.step(1)
+        if h.sup.state is SupervisorState.LOCKED_OUT:
+            break
+    assert h.sup.state is SupervisorState.LOCKED_OUT, "never finished the descent"
+    minutes = (h.clock.t - t0) / 60.0
+    assert minutes < 40.0, f"the descent took {minutes:.0f} min"
+
+
+def test_a_descent_that_starts_at_t_zero_still_descends():
+    """3R.0.F's second half: `self._rampdown_t0 or t` reads a start time of
+    exactly 0.0 as "not captured", so every cycle recomputed `elapsed` as zero
+    and the target temperature never moved.
+
+    A virtual clock starts at 0.0, and so does a monotonic one on some
+    platforms.  `_rampdown_target` is driven directly here because the harness
+    advances its clock before the first cycle, which is exactly the shape that
+    hid this.
+    """
+    from ltspm3.control.supervisor import SupervisorStatus
+
+    h = armed(118.0)
+    sup = h.sup
+    first = sup._rampdown_target(0.0, SupervisorStatus(t=0.0), "test", h.DT)
+    later = sup._rampdown_target(120.0, SupervisorStatus(t=120.0), "test", h.DT)
+    assert sup._rampdown_t0 == 0.0
+    assert later < first, (
+        f"two minutes of descent moved the target {first:.3f} -> {later:.3f} %")

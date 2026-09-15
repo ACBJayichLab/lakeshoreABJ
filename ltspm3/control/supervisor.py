@@ -1662,12 +1662,8 @@ class HeaterSupervisor:
             log.error("heater RAMPING DOWN (%s)", why)
             self.state = SupervisorState.RAMPING_DOWN
             self._locked_reason = why
-            # The last temperature anybody believed, and the clock it falls
-            # from.  Captured once, at the fault, because after that the sensor
-            # is not trusted -- which is the whole point.
-            self._rampdown_from_k = (
-                self.filter.value if self.filter.primed else None)
-            self._rampdown_t0 = t
+            self._rampdown_from_k = None
+            self._rampdown_t0 = None
         s.alarms.append(f"ramping down: {why}")
 
         # **A FAILED READ MUST NOT FINISH THE DESCENT.**  This used to read
@@ -1695,9 +1691,35 @@ class HeaterSupervisor:
         safe = self.cfg.safe_output_pct
         rate = self.ramp.cfg.max_rate_k_per_min
 
+        # **WHERE THE DESCENT FALLS FROM, AND WHEN IT STARTED.**  Captured
+        # once, on the first cycle that knows where the heater is, because
+        # after the fault the sensor is not trusted -- which is the whole
+        # point -- and because a descent whose read failed has not started yet.
+        #
+        # The model's answer for the present output is the fallback, and it is
+        # not a guess: `kelvin_for(current)` is what an OPEN-LOOP descent
+        # stands on anyway, so a descent that starts from it is the same
+        # descent, just with the first number coming from the curve instead of
+        # from a filter that has not primed.  Without it the fall-back was
+        # `min_rate_pct_per_min` -- 63 % to zero in over five hours, measured,
+        # against the 23 minutes the documents promise.  Reachable whenever the
+        # sensor faults before the filter primes, which is the state
+        # immediately after an `ack` and a re-arm.
+        if self._rampdown_t0 is None:
+            self._rampdown_from_k = (
+                self.filter.value if self.filter.primed
+                else (self.feedforward.kelvin_for(current)
+                      if self.feedforward.enabled else None))
+            self._rampdown_t0 = t
+
         target_k = None
         if self._rampdown_from_k is not None and self.feedforward.enabled:
-            elapsed = max(0.0, t - (self._rampdown_t0 or t))
+            # `or t` here read a start time of exactly 0.0 as "never
+            # captured", so a descent that began at t = 0 -- which is where a
+            # virtual clock starts, and where a monotonic one can -- recomputed
+            # `elapsed` as zero on every cycle and never moved its target.
+            t0 = self._rampdown_t0 if self._rampdown_t0 is not None else t
+            elapsed = max(0.0, t - t0)
             target_k = self._rampdown_from_k - rate * (elapsed / 60.0)
             if target_k <= _M.T_MIN_K:
                 # **THE INVERSE CURVE BOTTOMS OUT ABOVE ZERO**, and the descent
@@ -1715,9 +1737,10 @@ class HeaterSupervisor:
             else:
                 proposed = self.feedforward.percent_for(target_k)
         else:
-            # No trusted temperature and no curve: the one rate through the
-            # gain at the present output, which is the same conversion the rate
-            # limiter uses.
+            # **No curve at all** -- a cryostat with no fitted response, which
+            # is the only way to get here now that the model supplies the
+            # starting temperature when the filter cannot.  The floor rate is
+            # all there is to descend at, and it is slow.
             proposed = current - self._rate_pct_per_min(None) * (dt / 60.0)
 
         # Never upward.  Rule 1, and the one line that makes a wrong model
