@@ -103,3 +103,49 @@ def test_a_heater_that_stops_delivering_faults_at_either_date(kelvin, wall_t0, f
         f"a {100 * (1 - frac):.0f} % power loss at {kelvin} K never faulted")
     assert any("stepped" in a or "authority exhausted" in a
                for x in h.history[-40:] for a in x.alarms)
+
+
+# -- 3R.2, CRASHED survives an idle cycle -----------------------------------
+
+
+@pytest.mark.parametrize("kelvin", BENCH_TEMPERATURES)
+def test_a_one_off_exception_stays_crashed_until_acknowledged(kelvin):
+    """3R.0.A: the latch lasted exactly one cycle.
+
+    `_step`'s OFF-mode early return reset the state to IDLE unless it was
+    LOCKED_OUT, and CRASHED was not excepted -- so one cycle after a crash the
+    loop reported idle and `arm` was accepted with no `ack`, which is the whole
+    point of the latch gone.
+
+    The bench's own crash row could not see it: its sabotage (`filter = None`)
+    re-crashes on every cycle, so the latch was being re-set as fast as it was
+    being cleared.  This one detonates ONCE and puts the loop back exactly as
+    it was -- which is the shape of a real transient, and the shape nobody has
+    looked at yet either.
+    """
+    h = armed(kelvin)
+    before = h.sup.output_pct
+    real = h.sup._check_premise
+
+    def once(*a, **kw):
+        h.sup._check_premise = real           # a transient, not a broken loop
+        raise RuntimeError("a one-off lurch")
+
+    h.sup._check_premise = once
+    s = h.step(1)
+    assert s.state is SupervisorState.CRASHED
+    assert h.sup._check_premise is real, "the sabotage did not clear itself"
+
+    # Twenty healthy cycles later it is still latched, still says why, and
+    # still has not moved the heater.
+    for _ in range(20):
+        s = h.step(1)
+        assert s.state is SupervisorState.CRASHED
+    assert "one-off lurch" in h.sup._locked_reason
+    assert "ack" in s.reason
+    assert h.sup.output_pct == pytest.approx(before, abs=1e-9)
+
+    with pytest.raises(PermissionError, match="crashed"):
+        h.sup.arm(kelvin)
+    h.sup.acknowledge()
+    assert h.sup.state is SupervisorState.IDLE

@@ -88,6 +88,22 @@ class SupervisorState(enum.Enum):
     CRASHED = "crashed"
 
 
+#: **THE STATES A CYCLE MAY NOT CLEAR.**  Both mean the same thing -- the loop
+#: stopped itself and nobody has looked at the cryostat yet -- and only
+#: :meth:`HeaterSupervisor.acknowledge` clears either.
+#:
+#: One tuple because the three places that ask were three literals, and they
+#: drifted: the OFF-mode early return in `_step` excepted LOCKED_OUT and not
+#: CRASHED, so a transient crash was latched for exactly one cycle and `arm`
+#: was accepted with no `ack` on the next one.  The bench's crash row could not
+#: see it because its sabotage re-crashed every cycle.
+#:
+#: RAMPING_DOWN is deliberately NOT here.  It refuses automation as well, but
+#: it is a descent in progress rather than a latch, and an operator's `hold` is
+#: meant to be able to stop it where it stands.
+LATCHED = (SupervisorState.LOCKED_OUT, SupervisorState.CRASHED)
+
+
 @dataclass
 class SupervisorConfig:
     """All limits are in output percent unless the name says kelvin.
@@ -623,12 +639,12 @@ class HeaterSupervisor:
                 "Let it finish and clear the latch with `send ack`, or stop it "
                 "now with `send hold` (which freezes the heater where it is)"
             )
-        if self.state is SupervisorState.CRASHED and mode is not LoopMode.OFF:
-            raise PermissionError(
-                f"the heater loop crashed ({self._locked_reason}). Look at the "
-                "cryostat and the log, then clear the latch with `send ack`; "
-                "`arm` again after that")
-        if self.state is SupervisorState.LOCKED_OUT and mode is not LoopMode.OFF:
+        if self.state in LATCHED and mode is not LoopMode.OFF:
+            if self.state is SupervisorState.CRASHED:
+                raise PermissionError(
+                    f"the heater loop crashed ({self._locked_reason}). Look at "
+                    "the cryostat and the log, then clear the latch with `send "
+                    "ack`; `arm` again after that")
             # Name the way out, the way every other refusal in this system
             # does.  This used to say "acknowledge() first", which is a Python
             # method an operator at a terminal has no way to call -- a signpost
@@ -784,8 +800,7 @@ class HeaterSupervisor:
         nobody has diagnosed anything yet; :meth:`acknowledge` clears a
         lockout and nothing else does.
         """
-        was_locked = self.state in (SupervisorState.LOCKED_OUT,
-                                    SupervisorState.CRASHED)
+        was_locked = self.state in LATCHED
         was_state = self.state
         self.abort_ramp()
         self.set_mode(LoopMode.OFF)
@@ -1105,12 +1120,14 @@ class HeaterSupervisor:
                 log.warning("%s health -> %s: %s", self.channel, guard.state.value, guard.reason)
         s.noise_k = self.filter.noise_estimate()
 
-        if self.mode is LoopMode.OFF or self.state is SupervisorState.LOCKED_OUT:
-            self.state = (
-                SupervisorState.LOCKED_OUT
-                if self.state is SupervisorState.LOCKED_OUT
-                else SupervisorState.IDLE
-            )
+        if self.mode is LoopMode.OFF or self.state in LATCHED:
+            # **A LATCH SURVIVES THE CYCLE THAT FINDS IT.**  This used to name
+            # LOCKED_OUT twice and say nothing about CRASHED, so a crash that
+            # happened once -- a transient, which is the shape most of them
+            # are -- was cleared to IDLE by the very next cycle and `arm` was
+            # accepted with nobody having looked at anything.
+            if self.state not in LATCHED:
+                self.state = SupervisorState.IDLE
             s.state = self.state
             s.output_pct = self.output_pct
             if self._disengaged_by:
