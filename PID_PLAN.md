@@ -18,11 +18,14 @@ fixed: the tail chose the last `*.csv` by name in a directory it does not own,
 which on the cryostat was a nine-day-old sweep table, and then its own plant
 log. → plans/pid-2-monitor.md's opening.
 
-**PHASE 3 — the loop — is the next code**, and
-[plans/pid-3-loop.md](plans/pid-3-loop.md) was **revised 2026-09-14**: its §3.0
-carries seven things the 09-11 draft did not know, of which the authority band
-never moving is the one that blocks 4 to 300 K outright. Update this line as
-phases land.
+**PHASE 3 IS BUILT, 2026-09-14**, in eight commits, each naming the rule it
+touched. The bench is green at all six temperatures on all eight scenarios;
+`safety.md` rules 4, 5 and 8 are reworded. What is left of it is §3.6's soak —
+the quiet hold is one simulated hour rather than a real one, and the Allan
+criterion has no closed-loop record to grade yet.
+
+**PHASE 4 — commissioning — is the next thing, and it is the first that needs
+the cryostat.** Update this line as phases land.
 
 **Goal.** A software PID that holds and sweeps the LTSPM3 sample from 4 to
 300 K, fails gracefully, and judges from the thermal characterisation whether
@@ -36,7 +39,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 | **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | **DONE 2026-09-14** — REFIT §1 green; in-epoch prediction 0.135 K rms; `missing_power_w` 0.58 mW worst in-epoch over 40 K; `sigma_q_w` exported. The 300 K half is a PIPELINE, run as a dry run; the ladder itself is stage 6 |
 | **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **72 h live outstanding** |
-| **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts, **a band that follows the setpoint** | bench green at 6 temperatures; 8 rate fields → 2; hold jitter ≤ 0.02 %/min |
+| **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts, **a band that follows the setpoint** | **BUILT 2026-09-14** — 8 scenarios × 6 temperatures green, 8 rate fields → 2, hold at 2 DAC codes/min. §3.6's soak outstanding |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | 7 days unattended, hold criterion met, every warning explained; ladder graded to 300 K |
 | **5** | §6 here | warnings and faults in the viewer | verdict row visible, contrast-tested |
 

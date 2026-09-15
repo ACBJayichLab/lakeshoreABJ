@@ -1,131 +1,157 @@
-# Handoff — 2026-09-14c (phase 3 is open; the bench is in and it is red)
+# Handoff — 2026-09-14d (phase 3 is built; nothing has been armed)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
-route to a working loop is [PID_PLAN.md](PID_PLAN.md) and the step order is
+route to a working loop is [PID_PLAN.md](PID_PLAN.md) and the step-by-step is
 [plans/pid-3-loop.md](plans/pid-3-loop.md). This goes stale.
 
-Previous: [HANDOFF-2026-09-14b.md](HANDOFF-2026-09-14b.md) (phase 2 built) and
-[HANDOFF-2026-09-14a.md](HANDOFF-2026-09-14a.md) (phase 1, the band).
+Previous: [HANDOFF-2026-09-14c.md](HANDOFF-2026-09-14c.md) (phase 3 opened) and
+[HANDOFF-2026-09-14b.md](HANDOFF-2026-09-14b.md) (phase 2 built).
 
 > ## NOTHING WAS COMMANDED, AND THE HEATER IS WHERE IT WAS
 >
 > The 218's analog output has been at **64.0100 %** since 2026-09-10 14:49 and
-> the sample flat at **118.3 K** — read from the live recorder at 14:23:06
-> today, 118.3400 K. No `control:` section has ever been armed on this
-> cryostat. **1052 tests passing, `ruff` clean.**
+> the sample flat at **118.3 K**. **No `control:` section has ever been armed on
+> this cryostat.** Everything below happened on the virtual-clock bench.
+> **1151 tests passing, `ruff` clean.**
 
-## The monitor could not have followed the recorder, and the soak was one
-## command from starting
+## Phase 3 is built, in eight commits
 
-Checked against the cryostat's own `data/` before starting phase 2's 72 h soak,
-because the plan said it needed no code and that turned out to be false twice
-over.
+Each names the safety rule it touches. `safety.md` rules **4, 5 and 8** are
+reworded; the status schema is **3**.
 
-`RecorderTail._current_path` took **the last `*.csv` by name out of the whole
-directory**. There are 28 of them and the last is
-`sweep-20260905-131753.csv` — the sweep tool's grading table from nine days
-ago, whose header has no `Sample` column. And `plant_` sorts after
-`ltspm3-heater_`, so the first verdict this process wrote would have moved the
-tail onto **its own daily log**. Measured: first poll 5 samples from the
-recorder, second poll 0, following `plant_2026-09-14.csv`.
+| step | what | rule |
+|---|---|---|
+| 0 | the bench, written before the code it grades | — |
+| 1 | no low pass, median-3, a dead time DERIVED from the chain | 3 |
+| 2 | `control/` reads the fitted curve, not CD10's | 4 |
+| 3 | closed-loop speed as a RATIO to τ(T); no schedule to rot | 4 |
+| 4 | **the authority band follows the setpoint** | **5** |
+| 5 | one rate, in kelvin; a ramp-down that needs no sensor | 1, 5, 8 |
+| 6 | **the premise is that the watts add up** | **4, 8** |
+| 7 | `FROZEN` and `CRASHED` | 6, 7 |
+| 8 | the rest of §3.7's matrix, and the monitor's blind spot | — |
 
-One defect — choosing by name in a directory it does not own — so one fix. It
-takes the recorder's own `filename_prefix`, which `run_live` already has from
-the same config the recorder loaded, and it now prints which file it is reading
-whenever that changes. Verified against the live log: **26,908 samples, 0 parse
-errors, both cold-head stages present.**
+### What the bench says now
 
-**What this cost is worth writing down: 34 green tests over a live path that
-could not work.** The replay takes an explicit directory, so nothing ever
-exercised the choice. A monitor with nothing to read looks exactly like a
-monitor with nothing to say.
+**Eight scenarios × six temperatures (10, 30, 60, 100, 140, 180 K), all
+green.** A 3 K move lands everywhere with 0.1–3.1 % overshoot; a 10 K sweep at
+**Jeff's 5 K/min** arrives everywhere; a glitch freezes the output and moves
+nothing; a lost sensor descends open loop and locks out; a rising coldplate is
+tracked and never raises the heater past its window; a crash disengages and
+needs an `ack`; the quiet hold commands two DAC codes a minute; and the model
+is wrong on purpose five ways — K ×0.8 and ×1.2, τ ×0.7 and ×1.3, the curve
+0.3 K warm — with no false fault.
 
-## Phase 3 is open, and step 0 is in
+When step 0 was written, **five of those six sweeps locked the loop out and left
+the sample at base temperature.**
 
-[plans/pid-3-loop.md](plans/pid-3-loop.md) was **revised**: its new §3.0 carries
-seven things the 09-11 draft did not know, and there is a step order at the
-end. The one that matters:
+### The four limits that were in the way, and none of them was the tuning
 
-**The authority band never moves.** `band` is recomputed every cycle but from
-two config constants, and `_apply_band_to_pid()` is called exactly once, in
-`__init__` — not in `arm()`, not in `set_setpoint()`, not in `step()`. Jeff
-believed it already followed the setpoint. At ±1 % around 63.076 % the rails
-are 62.08–64.08 % for the life of the process, while **10 K is 24.22 % and
-180 K is 68.73 %**.
+Each step moved exactly one, which is the only reason it was possible to tell
+them apart:
 
-Step 0 is `config-ltspm3-armed.yaml` and a second harness on the fitted plant —
-`FittedHarness`, beside the `sim_response` one rather than replacing it,
-because the existing control tests are calibrated to the two-pole model's
-single 620 s τ. 48 assertions at six temperatures, and **three of them are
-defects recorded as assertions** so that fixing them is what breaks the test.
+| | what was wrong | what it cost |
+|---|---|---|
+| **3** | `move_tau_cl` a fixed 300 s against a plant τ of 441 s | 100 K could not follow its own ramp |
+| **4** | the band centred where the sweep STARTED | 140 and 180 K arrived and then faulted *afterwards*, as the allowance decayed while the loop was still railed |
+| **5** | `max_rate_pct_per_min: 0.20`, a trim rate | ten kelvin is 29 % of output at 10 K, so two and a half hours were allowed for a two-minute sweep |
+| **6** | the premise in kelvin, allowance capped at 6 K | the lag peaks at 8.78 K — the loop was told a sweep it was executing correctly was evidence the cryostat was broken |
 
-### What the bench says about the loop as it stands
+## Eleven defects the bench found, all measured
 
-**One 3 K move, three behaviours, and the band is all that differs.**
+Nine were in the code being written; two were already there.
 
-| | |
-|---|---|
-| ≥ 60 K | works — 0.1 to 7.7 % overshoot, on target |
-| 30 K | **rails and silently gives up**: demand 53.412 % against a ceiling of 53.410, settles **0.883 K short**, no alarm, no state change, nothing in the log |
-| 10 K | **crashes the sample**: tracking → `holding` at 922 s → ramping down at 1102 s → locked out at 1858 s, heater 0.000 %, sample at base **4.700 K** |
+1. **The simulated coldplate was scenery.** 8.06 K — plausible, and a
+   *pre-recalibration* number — where the fit's locus is 4.9–6.8 K.
+   `Λ(T_s) − Λ(T_c)` is what the residual is made of, so a sink 1.5 K too warm
+   is **25–47 mW of false missing power**, two to four times the fault level.
+2. **A slew-limited band centre breaks arming.** Armed at 0 %, the window
+   crawls toward the setpoint at 0.2 %/min — five hours during which the loop
+   can reach nothing. 115 tests. The band opening is not heat; the *output*
+   rate limiter is what governs.
+3. **A band floor above the present output COMPELS heat** — invariant 4 broken
+   by the safety layer itself. A loop holding at 63.09 % was walked to 64.68 %
+   by its own envelope.
+4. **A floor pinned *to* the output is a ratchet.** The PID can then never ask
+   for less than it is already producing: 63.11 → 63.51 % in seven minutes with
+   the error oscillating around zero.
+5. **`PID._integral_cap` was the band's WIDTH.** Right while the loop lived
+   inside a fixed window; with a band that follows the setpoint the loop must
+   *traverse*, and a 10 K move at 30 K settled exactly 1.57 K short, for ever,
+   with an integral that had stopped integrating.
+6. **The inverse curve bottoms out above zero.** `percent_for` clamps at 4.7 K
+   and 0.72 % of output, so the ramp-down stopped there — never reached
+   `safe_output_pct`, never locked out. Still `ramping_down` three hours after
+   a lost sensor at 60 K.
+7. **Authority exhausted fired on every sweep.** Railed with a large error is
+   the *normal* state of a loop following a ramp — it is what the velocity
+   feedforward produces. It is a `hold`-phase fault now.
+8. **The step test's history must break at every no-opinion sample.** The
+   monitor's own rule, which I left out: at 180 K the window reached back into
+   the pre-arming samples and read 12.18 mW of "step" over a sweep whose
+   residual never left ±2 mW.
+9. **A range statistic is six sigma of whatever noise it is fed.** The slope
+   estimator puts 1.50 mW rms into `δQ` at 180 K, so the range over half an
+   hour is 9–12 mW with nothing happening. The step test sees a 60 s average;
+   a *level* check never had the problem, which is why the range needed its own
+   answer rather than a bigger threshold.
+10. **`test_the_band_caps_heat_without_compelling_it` had a hole**: it excluded
+    ramp-down cycles by looking at the state *after* the cycle, and the last
+    ramp-down step flips to `locked_out` inside the same `step()`.
+11. **`from conftest import ...` is a trap across two test trees.** Both lack
+    `__init__.py`, so `conftest` means whichever was imported first: the bench
+    passed under `pytest -q` and failed under `pytest tests_ltspm3 tests`.
 
-3 K is 0.23 % of output at 118 K and 8.8 % at 10 K. The loop reasoned correctly
-from two limits that are wrong for this cryostat.
+## And the monitor would have gone blind the moment the loop was armed
 
-**A 5 K/min sweep cannot be done at all.** Ten kelvin at Jeff's rate locks the
-loop out at **five of the six** bench temperatures; only 60 K survives, by
-luck. The arithmetic is not subtle: a first-order plant following a ramp lags
-by `r·τ`, which at 118 K is **43 K**, and `max_ramp_error_k` caps the allowance
-a commanded ramp is granted at **6 K**. The loop is *required* to read every
-legitimate 5 K/min sweep as a broken cryostat, and it does.
+`MonitorConfig.move_pct` was **half a DAC code**. A closed loop with dither
+moves the output by a code most cycles, so the transient gate was refreshed
+every cycle, `in_transient` never expired, and the judge that exists to watch
+the loop would have reported `no opinion` for the whole of its life.
 
-**An exception in `step()` escapes**, with the loop still `tracking` and still
-believing it owns the heater. The output does not move, which is the one mercy.
-
-The quiet hold already passes — **0.0100 %/min at every one of the six**, which
-is one DAC code per minute and is the dither rather than the loop. Worth having
-before the gains change.
-
-## Two decisions taken, both Jeff's, 2026-09-14
-
-1. **The band follows the setpoint** — centred on `percent_for(setpoint)`,
-   `authority_pct` still the half-width, `hard_max_pct` still absolute and
-   still the last word. Rule 5 is reworded in that commit and nowhere else.
-2. **The kelvin premise check stays on in `move` below `min_output_pct`**,
-   where `δQ` has no opinion (28 % output, and 10 K sits at 24.22 %) and the
-   gain is small enough that kelvin is not the wrong variable.
+It is `move_k: 1.0` now — a move worth a kelvin of sample. **The replay is
+unchanged by it**, which is the point: on an archive of typed commands the two
+definitions agree, and that is exactly why phase 2 could not have found this.
 
 ## Then, in order
 
-1. **Phase 3 step 1** — the filter chain and the derived delay. Steps are in
-   plans/pid-3-loop.md's order and each one is a commit that names its rule and
-   runs the bench first. **Step 4 is the rule-5 change and wants a look before
-   it lands.**
-2. **The 72 h soak is unblocked and is Jeff's to start.** The recorder does
-   *not* need restarting — the monitor is a separate process that tails the
-   CSV, holds no port and sends no commands:
+1. **Phase 2's 72 h soak is still Jeff's to start**, still unblocked, still one
+   command. The recorder does not need restarting:
 
    ```
    cd /d C:\Coding\Python\lakeshoreABJ && git pull && .venv\Scripts\python.exe -m ltspm3.monitor -c config-ltspm3-heater.yaml
    ```
 
-3. `lschart status` and MATLAB `plant()` still do not read `plant.json`. Phase
-   5's work; neither blocks the soak, which only needs the file current.
-4. The 09-10 mask still goes in with the next archive export, not before.
+   Expect the headline `verdict` to read `no opinion` throughout: it is the
+   worst of four, and `tau` cannot have an opinion without a heater move. The
+   five residuals underneath it read `typical`. Whether the headline should
+   exclude τ is a reporting choice and belongs with phase 5's viewer row.
+2. **Phase 3's own soak** — §3.6's quiet hold is one *simulated* hour at each
+   temperature, and the Allan criterion (`σ_y(τ) ≤ σ_y(10 s)`) has no
+   closed-loop record to grade. `analysis/allan.py` grades archive and live runs
+   alike. It is the first hour of phase 4.
+3. **Phase 4 is the first thing that needs the cryostat**, and the first `arm`
+   is Jeff's to type. `config-ltspm3-armed.yaml` exists and `lschart` refuses
+   it by design; choosing it is not arming.
+4. `lschart status` and MATLAB `plant()` still do not read `plant.json`.
+5. The 09-10 mask still goes in with the next archive export.
 
 ## Traps this session added to the list
 
-- **A reader that picks "the newest file" in a directory it does not own will
-  eventually read something else's output — or its own.** Name the prefix.
-- **A test suite cannot tell you a live path works if nothing runs the live
-  path.** The replay's explicit directory is what hid this for 34 tests.
-- **Check the plan's claim that something is not blocked on code.** This one
-  said so twice, in two places, and was wrong both times.
-- **A loop can run out of authority and say nothing at all.** Railed demand,
-  0.883 K of standing error, under `max_error_k`, no alarm. Look at
-  `demand_pct` against the rail, not at `output_pct`.
-- **Build the grader before the thing it grades.** Everything above came out of
-  writing step 0 first, and none of it would have come out of writing step 1.
+- **A test that perturbs the plant is not the test that perturbs the model.** A
+  controller wrong about K is mistuned and must not fault; a heater delivering
+  12 % less is a genuine fault and must. Getting that backwards in the test
+  that grades the residual would have been quietly circular.
+- **No opinion is not trust.** `model_trusted` written as "true unless the
+  residual objects" reports green wherever the residual is silent.
+- **A rate is a ceiling, not a promise.** A 519 s plant does not move 10 K in
+  the two minutes 5 K/min implies — eleven at best, thirty if you want the
+  trajectory followed.
+- **A trajectory with corners sharper than the closed loop's own response is
+  one the loop cannot follow**, and no retuning fixes it.
+- **Build the grader before the thing it grades**, and let it record defects as
+  assertions. Every number in this handoff came out of a test that had to be
+  rewritten when a step landed, which is the point and not an accident.
 
 ## Running it
 
@@ -139,6 +165,4 @@ C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ltspm3.monitor --repla
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe analysis/pid_tuning.py --rows
 ```
 
-The replay needs nothing prepared — `reference/cooldown-10/` is versioned, and
-it is the one test here on genuine data. `analysis/` still needs `measure.py`
-run once (11 s) before anything that fits.
+`analysis/` still needs `measure.py` run once (11 s) before anything that fits.
