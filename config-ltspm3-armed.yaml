@@ -206,6 +206,13 @@ control:
                                   # opinion -- so the kelvin check stays on
                                   # underneath (Jeff, 2026-09-14).
     coldplate_channel: Coldplate  # Lambda(T_s) - Lambda(T_c) needs the sink
+    sink_stale_s: 30.0            # and past this the residual has NO OPINION
+                                  # rather than running on a remembered one.
+                                  # The sink term is the largest in a settled
+                                  # band up here -- Lambda' at 6.6 K is nine
+                                  # times Lambda' at 118 -- so a coldplate that
+                                  # moves while the channel is down would land
+                                  # in dQ as if it were the sample's problem.
 
     anomaly_demand_pct: 0.50      # a one-cycle lurch in the FEEDBACK terms is a
                                   # bad reading driving the loop.  Kept: it is

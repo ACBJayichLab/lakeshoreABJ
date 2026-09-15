@@ -533,3 +533,40 @@ def test_a_commanded_sweep_raises_no_kelvin_alarm(kelvin):
     for x in moving:
         assert not [a for a in x.alarms if "warn_error_k" in a or "at its floor" in a
                     or "authority exhausted" in a], x.alarms
+
+
+# -- 3R.7, a stale sink is no opinion ---------------------------------------
+
+
+def test_a_coldplate_that_drops_out_takes_the_residual_with_it():
+    """3R.0.G: `_coldplate_k` was refreshed only on a usable reading and never
+    expired, so after the channel dropped out the residual ran on a remembered
+    sink for as long as the loop ran.
+
+    `Λ(T_s) − Λ(T_c)` is most of the residual and `Λ'` at 6.6 K is nine times
+    `Λ'` at 118 K, so 100 mK of sink is worth 1.5 mW against a 1.44 mW band --
+    a coldplate that moves while nobody can see it lands in `dQ` as if it were
+    the sample's problem.
+
+    No opinion, then, and no fault when the channel comes back either: the step
+    history breaks on a no-opinion cycle, so the sink's return is not a step.
+    """
+    h = armed(118.0)
+    assert h.history[-1].missing_power_w is not None
+
+    h.cryostat.inject(dropout_channels={"218.2"})
+    h.minutes(10)
+    assert h.sup.state is SupervisorState.TRACKING
+    assert h.history[-1].missing_power_w is None
+    assert "coldplate stale" in h.history[-1].residual_reason
+
+    # The loop itself is unaffected -- this is the JUDGE going quiet, not the
+    # controller losing its sensor.
+    assert h.history[-1].filtered_k == pytest.approx(118.0, abs=0.1)
+
+    h.cryostat.clear_faults()
+    h.history.clear()
+    h.minutes(40)
+    assert h.sup.state is SupervisorState.TRACKING
+    assert h.history[-1].missing_power_w is not None, "never spoke again"
+    assert not alarms_matching(h, "stepped"), "the sink's return read as a step"

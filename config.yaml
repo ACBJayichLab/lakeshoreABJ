@@ -130,6 +130,7 @@ control:
     fault_after_s: 180.0
     min_output_pct: 28.0
     coldplate_channel: Coldplate
+    sink_stale_s: 30.0            # past this the residual has no opinion
     anomaly_demand_pct: 0.50
 
     # Fault response.  Nothing here ever raises the heater.

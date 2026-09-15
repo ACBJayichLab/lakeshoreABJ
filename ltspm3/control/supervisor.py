@@ -219,8 +219,21 @@ class SupervisorConfig:
     #: and the reason the kelvin check stays on underneath it.
     min_output_pct: float = 28.0
     #: The channel the sink temperature is read from.  `Lambda(T) - Lambda(T_c)`
-    #: needs it; the model's own settled locus is the fallback.
+    #: needs it; the model's own settled locus is the fallback for a cryostat
+    #: that never reports one at all.
     coldplate_channel: str = "Coldplate"
+    #: How long a coldplate reading stays usable after it arrives.  Past this
+    #: the residual has NO OPINION rather than running on a remembered sink:
+    #: `_coldplate_k` used to be refreshed only on a usable reading and never
+    #: to expire, so after the channel dropped out the residual ran on a stale
+    #: number for as long as the loop ran, and a coldplate that moved while
+    #: nobody could see it would have been read as the sample's problem.
+    #:
+    #: Falling back to the model's locus instead was considered and rejected:
+    #: the switch itself is a step of `Lambda(T_c,model) - Lambda(T_c,measured)`
+    #: in the residual, which is exactly the false fault this is meant to
+    #: avoid.  A few cycles, because the sink is read on every one of them.
+    sink_stale_s: float = 30.0
 
     #: A one-cycle lurch in the *feedback* terms (P+I+D) this large means a bad
     #: reading is driving the loop, not that the cryostat needs the output.
@@ -401,10 +414,13 @@ class HeaterSupervisor:
         #: average that feeds it.
         self._dq_hist: deque = deque()
         self._dq_slow: float | None = None
-        #: The sink, from this cycle's frame.  The model's settled locus is the
-        #: fallback, so a missing Coldplate degrades to an assumption rather
-        #: than to no opinion at all.
+        #: The sink, from this cycle's frame, and WHEN it was read.  The
+        #: model's settled locus is the fallback for a cryostat that never
+        #: reports one; a reading that has gone stale is no opinion instead,
+        #: because a remembered sink and a real one are the same number right
+        #: up until they are not.  See `SupervisorConfig.sink_stale_s`.
         self._coldplate_k: float | None = None
+        self._coldplate_t: float | None = None
         #: Edge-triggered logging for a standing warning.
         self._warned = False
         self._pending_approach = False
@@ -1107,6 +1123,7 @@ class HeaterSupervisor:
             sink = readings.get(self.cfg.coldplate_channel)
             if sink is not None and getattr(sink, "usable", False):
                 self._coldplate_k = sink.kelvin
+                self._coldplate_t = t
         corroborated, why = self.coherence.corroboration(self.channel, t)
         s.corroborated = corroborated
 
@@ -1678,7 +1695,20 @@ class HeaterSupervisor:
             return None, 0.0, 0.0, "the plant is faster than the slope window"
         sink = self._coldplate_k
         if sink is None:
+            # Never read one at all -- a cryostat with no coldplate channel.
+            # The model's settled locus is the documented assumption there, and
+            # there is no staleness to speak of because there is no reading.
             sink = _M.coldplate_k(s.filtered_k)
+        elif (self._coldplate_t is not None
+              and s.t - self._coldplate_t > cfg.sink_stale_s):
+            # **A STALE SINK IS NO OPINION.**  `Lambda(T_s) - Lambda(T_c)` is
+            # most of the residual and `Lambda'` at 6.6 K is nine times
+            # `Lambda'` at 118, so 100 mK of sink is 1.5 mW -- a coldplate that
+            # moves while the channel is down is invisible and lands in the
+            # residual as if it were the sample's problem.  No opinion already
+            # breaks the step history, so a sink that comes back cannot read as
+            # a step either.
+            return None, 0.0, 0.0, "coldplate stale"
         dq = _M.missing_power_w(s.filtered_k, s.slope_k_per_s, sink,
                                 self.output_pct)
         sigma = _M.sigma_q_w(s.filtered_k, self.output_pct, self.wall_clock(),
