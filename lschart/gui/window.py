@@ -1984,7 +1984,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             f"{row.get('channel') or 'the sensor'} is further than "
             f"{self._maybe(row.get('threshold_k'), '{:g}')} K from the "
             "setpoint ("
-            + ("max_error_k in the controller's config)" if software
+            + ("warn_error_k in the controller's config)" if software
                else "loop_thresholds in the recorder's config)")
             if marks["unsettled"] else "")
 

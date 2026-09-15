@@ -27,7 +27,10 @@ feedforward buys speed and costs the hold NOTHING, because at constant
 setpoint it contributes nothing to the output.  The two requirements are not
 in conflict; they are served by different terms.
 
-What blocks it today is authority, not tuning.  From SupervisorConfig:
+What blocked it in AUGUST 2026 was authority, not tuning.  From the
+SupervisorConfig of the day -- **every one of these is gone; phase 3 is what
+this script was an argument for, and the four lines below are quoted as the
+state they described rather than as anything a reader can still set**:
 
     max_rate_pct_per_min = 0.20      the output may not slew faster than this
     max_step_pct         = 0.02      nor move more than this in one command
@@ -36,6 +39,12 @@ What blocks it today is authority, not tuning.  From SupervisorConfig:
 
 A 5 K move in one minute at 180 K needs about 4% of extra output.  At
 0.20 %/min the output takes twenty minutes just to get there.
+
+What replaced them, 2026-09-14: ONE rate, `max_rate_k_per_min: 5.0`, converted
+to percent through the model's own gain, with `min_rate_pct_per_min` as the
+floor where the model has no opinion; `max_velocity_ff_pct: 6.00` as a CEILING
+on a lead the loop derives (`rate*tau/K`) rather than the value itself; and a
+premise check in watts, so the lag a ramp commands is not read as an excursion.
 """
 from __future__ import annotations
 
@@ -72,7 +81,11 @@ RAMP_CAP_K_PER_MIN = 10.0
 #: the setpoint, it does not make the thermometer report faster.
 FILTER_TAUS = ((60.0, "#c53030"), (30.0, "#c05621"), (10.0, "#2c7a7b"),
                (5.0, "#2b6cb0"))
-#: SupervisorConfig: max_error_k plus the cap on the ramp allowance.
+#: The AUGUST 2026 kelvin budget: `max_error_k` plus the cap on the ramp
+#: allowance, both retired by phase 3 step 6.  Kept as the line this figure was
+#: drawn against -- what a sweep has to fit inside today is the watt residual's
+#: band, which carries `C dT/dt` and does not charge a commanded ramp for its
+#: own lag at all.
 ERROR_BUDGET_K = 1.0 + 6.0
 
 
@@ -115,7 +128,7 @@ def ramp_plan(T, u, Q, C, dQdu, g_v, out):
         a.semilogy(rates, rates / 60.0 * tau_f, color=c, lw=2.0,
                    label=f"filter τ = {tau_f:.0f} s")
     a.axhline(ERROR_BUDGET_K, color="#1a202c", lw=1.6, ls="--",
-              label=f"max_error_k + ramp allowance = {ERROR_BUDGET_K:.0f} K")
+              label=f"the Aug 2026 kelvin budget = {ERROR_BUDGET_K:.0f} K")
     a.axvline(RAMP_CAP_K_PER_MIN, color="#a0aec0", lw=1.0)
     a.set_xlabel("sweep rate  [K/min]")
     a.set_ylabel("apparent tracking error from the filter  [K]")

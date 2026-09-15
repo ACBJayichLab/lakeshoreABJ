@@ -347,10 +347,10 @@ takes no setpoint, range or PID command — it takes `arm` and the panic `hold`,
 which are buttons of their own. A row that could be clicked into a selection
 the command panel cannot honour would be a row that lies.
 
-Two notes for whoever reads the marks on the real cryostat. On the shipped
-numbers a *tracking* software loop cannot rail at all: `max_error_k` is 1.0 K
-and the band is about ±7 K of authority, so the anomaly hold always fires
-first — what you will see is `holding`, not `RAIL`. And when health goes bad
+Two notes for whoever reads the marks on the real cryostat. A *tracking*
+software loop sitting on its rail is a state you can expect to see — a warning
+does not stop the loop, and railing at the ceiling past `fault_error_k` while
+settled is what the supervisor calls authority exhausted. And when health goes bad
 both marks go quiet, because the loop has stopped trying; the row is coloured
 instead, since that is the moment it most needs to catch an eye.
 

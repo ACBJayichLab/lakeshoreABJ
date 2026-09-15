@@ -240,11 +240,13 @@ not an instrument:
   *down* a code, so a saturated loop writes a number strictly below its own
   rail and would never compare equal to it.
 
-`Off SP` uses the loop's own `max_error_k` — "this should only ever be a small
-correction" — which is a real threshold in kelvin and exactly what the column
-asks for. On the shipped numbers the premise check fires long before the clamp
-does, so a *tracking* loop railing is not something to expect: what you will
-see instead is the anomaly hold, as `holding` in the State column.
+`Off SP` uses the loop's own `warn_error_k` — the tracking error it warns at
+while the setpoint is not moving — which is a real threshold in kelvin and
+exactly what the column asks for. A warning does not stop the loop, so a
+*tracking* loop sitting on its rail is a state you can expect to see: that is
+what the supervisor watches for as authority exhausted, and it faults only at
+the ceiling and only past `fault_error_k`. A loop that has stopped acting on a
+reading it does not believe shows `frozen` in the State column.
 
 **The row is read, not clicked.** It is the one row the command panel cannot
 follow: the software loop takes no setpoint, range or PID command — it takes

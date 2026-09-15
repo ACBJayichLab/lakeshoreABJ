@@ -1,10 +1,11 @@
 """Programmatic temperature sweeps.
 
 The requirement is to sit at a temperature for hours *and* to move between
-temperatures under program control.  The supervisor's premise check treats any
-error over max_error_k as evidence the cryostat is broken, so a stepped setpoint
-stalls the loop.  Ramping the setpoint is what makes both requirements hold at
-once without weakening the check.
+temperatures under program control.  A setpoint STEP larger than
+`warn_error_k` is refused as a step and becomes a ramp at the one rate (rule 8,
+enforced in `set_setpoint`): a move that large is a typo as often as it is an
+instruction.  Ramping the setpoint is what makes both requirements hold at once
+without weakening anything.
 """
 
 import pytest

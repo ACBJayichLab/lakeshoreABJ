@@ -315,14 +315,15 @@ def test_the_band_widens_only_by_what_the_ramp_needs(kelvin, bench):
     # `rate * tau / K` at the rate ACTUALLY being commanded, which is the
     # smoother's and not the ramp's.
     #
-    # **Those are very different numbers and that is a finding, not a detail.**
-    # `smooth_tau_s` is 300 s -- chosen to take the corners off a 0.5 K/min
-    # sweep, where a ramp lasts hours.  A 10 K sweep at Jeff's 5 K/min lasts
-    # 120 s, so the smoother never gets anywhere near the commanded rate: five
-    # cycles in it is at 0.0027 K/s against the ramp's 0.0833, and the band
-    # widens by 0.14 % where 5 K/min at 180 K would need 4.23 %.  The loop is
-    # not sweeping at 5 K/min; it is sweeping at whatever the smoother lets
-    # through.  Step 5's business, with the one rate.
+    # **Those were very different numbers, and that was a finding rather than
+    # a detail.**  When this row was written the corner was a flat 300 s --
+    # chosen to round a 0.5 K/min sweep, where a ramp lasts hours.  A 10 K
+    # sweep at Jeff's 5 K/min lasts 120 s, so the smoother never got anywhere
+    # near the commanded rate: five cycles in it was at 0.0027 K/s against the
+    # ramp's 0.0833, and the band widened by 0.14 % where 5 K/min at 180 K
+    # needs 4.23 %.  The corner is `move_speed * tau(T)` now (step 3), which is
+    # the closed loop's own response time, and this asserts against whatever
+    # rate the smoother is actually passing.
     rate = abs(h.sup.smoother.rate_k_per_s)
     want = rate * M.tau_s(kelvin) / M.gain_k_per_pct(kelvin)
     assert lead == pytest.approx(min(want, h.sup.cfg.max_velocity_ff_pct), rel=0.35)

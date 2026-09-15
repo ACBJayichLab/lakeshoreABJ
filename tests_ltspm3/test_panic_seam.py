@@ -240,7 +240,7 @@ def test_the_next_move_is_computed_from_where_the_heater_is(armed_service):
     moved = h.inst.get_analog_percent()
     assert moved > 62.5, "the loop never noticed the output had moved"
     # And it walked, rather than jumping straight back to the remembered value:
-    # five cycles of `max_step_pct` is 0.1%, nowhere near the 0.58% gap.
+    # five cycles of the one rate through the gain is well under the 0.58% gap.
     assert moved < asked_for - 0.2
 
 

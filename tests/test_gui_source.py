@@ -1544,9 +1544,9 @@ def test_an_instrument_loop_still_rails_at_the_fixed_pair():
 
 
 def test_the_software_loop_is_settled_against_its_own_premise():
-    """`max_error_k` -- "this should only ever be a small correction" -- is a
-    real per-loop threshold in kelvin, which is exactly what the column asks
-    for."""
+    """`warn_error_k` -- the error the loop warns at while the setpoint is not
+    moving -- is a real per-loop threshold in kelvin, which is exactly what the
+    column asks for."""
     row = control_row(a_control(setpoint_k=96.0, threshold_k=1.0))
     assert loop_marks(row, 98.0, rails=row["rails"])["unsettled"]
     assert not loop_marks(row, 96.5, rails=row["rails"])["unsettled"]

@@ -5,9 +5,22 @@ Part of [PID_PLAN.md](../PID_PLAN.md), after [pid-3-loop.md](pid-3-loop.md).
 before phase 4 arms anything. Nothing here is a new feature: every step
 restores a property the code already claims to have.
 
-**Status, 2026-09-15: steps 1-9 of ten landed.**  The step-order table at the
-bottom carries the rest; a step is landed when its gate is green and its commit
-names the rule it touched.
+**Status: ALL TEN LANDED, 2026-09-15.**  One commit each, each naming the rule
+it touched, each with a bench test that failed before it.  The exit gate at the
+bottom is met; `tests_ltspm3/test_bench_review.py` is where the new rows live.
+
+Two things came out of the work that the plan did not have:
+
+* **Railed means the OUTPUT is there too, not just the demand** (3R.6).  A loop
+  still travelling up to its window at the rate limit has authority it has not
+  applied yet, and the demand rails for the whole of that traverse because that
+  is what a PI controller with a standing error does.  On the demand alone, the
+  armed-at-0 % case ramped down the recovery it was in the middle of.
+* **The descent's per-cycle bound is computed on the steady-state CURVE, not
+  the tuner's schedule** (3R.4).  They are the same table on this cryostat and
+  they are not in the legacy harness, where a descent would otherwise be
+  throttled by one curve while following another and arrive late by the
+  difference between them.
 
 **The rules of phase 3 still apply.** One commit per step, each naming the
 safety rule it touches, each with a bench test that FAILS before the change

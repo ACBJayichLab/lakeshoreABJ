@@ -746,10 +746,11 @@ class HeaterSupervisor:
     ) -> None:
         """Change the target temperature.
 
-        Ramps by default.  A step change of more than ``max_error_k`` is
-        indistinguishable from a broken premise, so stepping the setpoint is
-        how you stall the loop rather than how you move it -- see
-        :mod:`ltspm3.control.ramp`.  ``ramp=False`` is for small trims.
+        Ramps by default.  A step change of more than ``warn_error_k`` is
+        refused as a step and becomes a ramp at the one rate -- a move that
+        large is a typo as often as it is an instruction, and rule 8 is
+        enforced here rather than by the loop's distress.  ``ramp=False`` is
+        for trims smaller than that.
         """
         # An explicit setpoint command takes charge of the trajectory: the
         # deferred post-fault approach must not silently re-rate an operator's

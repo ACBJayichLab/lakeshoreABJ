@@ -88,52 +88,14 @@ temperature.
 None of this is hardware work. All of it is code and config that the stages
 below assume, so it comes first.
 
-### 0.1 The fault ramp-down is too slow — **LANDED 2026-09-03**
+### 0.1 The fault ramp-down — **SUPERSEDED 2026-09-14 by the one rate**
 
-Was: a single `rampdown_pct_per_min: 0.50`. From the 63.076% operating point
-to zero that is **126 minutes** — long enough that "slowly reduce heat" stops
-being a fault response and starts being a shrug.
-
-Now, piecewise on the present output (Jeff, 2026-08-28):
-
-| Output | Rate |
-|---|---|
-| above 40% | **1.0 %/min** |
-| at or below 40% | **2.0 %/min** |
-
-63.076% → 40% takes 23 min, 40% → 0% takes 20 min: **~43 minutes end to end**,
-about 3x faster than today. Still nothing like an emergency stop — a fault on
-this cryostat is not an emergency, and the risk of a fast change remains larger
-than the risk of a slow one — but it no longer takes two hours.
-
-The knee is where it is because power goes as `pct²`: at 40% the heater delivers
-about 40% of the power it was at the operating point, so the thermal shock per
-percent is much smaller down there and there is less reason to crawl.
-
-Invariant 7 applies — all three numbers are `SupervisorConfig` fields, not
-constants in `control/`. The rate is chosen on where the heater is *now*, so a
-long ramp changes slope as it crosses the knee rather than being fixed when the
-fault began:
-
-```yaml
-rampdown_pct_per_min: 1.0             # above the knee
-rampdown_knee_pct: 40.0
-rampdown_below_knee_pct_per_min: 2.0  # at or below it
-```
-
-`validate_control` rejects a non-positive rate and a knee outside
-`[hard_min_pct, hard_max_pct]`.
-
-The trim rate limiter already does not apply during a ramp-down (only the hard
-limits do), so raising these rates needs no change to `max_rate_pct_per_min`.
-
-> One test had quietly depended on that not being true.
-> `test_the_band_caps_heat_without_compelling_it` bounded *every* single-cycle
-> output change by `max_step_pct`, and passed only because the old 0.5 %/min
-> over one cycle happened to fall under that bound. Its loop ends in a fault
-> ramp-down, where the limiter is bypassed by design; at 2.0 %/min the step is
-> 0.14% and the assertion fired. It now measures only the arming march, which
-> is what it was always about.
+This section described a descent in PERCENT with a knee at 40 %, and three
+config fields to set it with. Phase 3 step 5 replaced all of it: the descent
+walks a target TEMPERATURE down at `max_rate_k_per_min` and turns it into an
+output through the model's inverse curve, so it is the same descent at every
+temperature and it needs no sensor. 118 K to base takes about 23 minutes.
+→ [control.md](control.md), and `HeaterSupervisor._rampdown_target`.
 
 ### 0.2 A ramp-down must latch — **LANDED 2026-09-03**
 
@@ -184,8 +146,8 @@ The **floor** bounds what the PID may *ask* for (`_apply_band_to_pid` sets
 
 > Both halves of that changed on 2026-08-31 and this section described the old
 > behaviour. `clamp()` used to run on the output *after* the rate limiter and
-> so undid it from below: arming at 0% wrote 62.076% in a single step, past
-> `max_step_pct`. It also meant this loop could not hold any temperature whose
+> so undid it from below: arming at 0% wrote 62.076% in a single step, past the
+> per-cycle limit. It also meant this loop could not hold any temperature whose
 > steady-state output lay below the band — at base temperature it commanded
 > operating-point power and then faulted.
 
@@ -357,8 +319,9 @@ it in the instrument's own formatting of that code rather than in the output.
   It re-reads `AOUT?` after any cycle that wrote nothing — which is exactly the
   steady holding regime where the flicker occurs — and that value is the base
   for the rate limiter's step, the fault ramp-down's step, and the value a
-  manual hold adopts. Against `max_step_pct` of 0.02% a 0.003% error is 15% of
-  one cycle's step; it is zero-mean and one sample long, so it does not
+  manual hold adopts. Against a per-cycle step of 0.013% at 118 K — the one
+  rate through the gain — a 0.003% error is a quarter of one cycle's move; it
+  is zero-mean and one sample long, so it does not
   accumulate, and it can only shift the quantised code when the target already
   sits within 0.003% of a code boundary. Bounded at one code, ~0.13 K.
 - **Analysis of the CSV must allow for it.** `steptest` has a
@@ -518,18 +481,20 @@ cryostat rather than in a test.
 one at a time, each with its own watched hour. Enabling both at once means a
 surprise has two possible causes.
 
-**4d — a commanded sweep.** 0.5 K/min over a few kelvin, through the ramp. Watch
-the tracking error against `max_error_k` plus the ramp allowance, and watch the
-**end** of the ramp specifically — the decaying allowance is what stops a
-completed sweep from becoming an anomaly hold.
+**4d — a commanded sweep.** 5 K/min over ten kelvin, through the ramp. Watch
+`missing_power_w` against its band rather than the tracking error: the lag a
+ramp commands is `r·τ` and is not an excursion, which is the whole reason the
+premise moved into watts. Watch the **end** of the ramp specifically — the
+band's ramp lead decays with the smoother, and a sweep that has arrived should
+leave no standing error behind it.
 
 ### Exit gate
 
 - ≥1 h tracking at 4a, with readback agreeing every cycle.
 - A real ramp-down that latched, completed and locked out.
-- A completed sweep with no anomaly hold at either end.
-- `model_error_k` inside `model_trust_k` at settled points, or a written
-  explanation of why the curve does not describe this regime.
+- A completed sweep with no warning at either end.
+- `missing_power_w` inside `warn_sigma · sigma_q_w` at settled points, or a
+  written explanation of why the curve does not describe this regime.
 
 ---
 
@@ -544,9 +509,9 @@ quote.
 
 **Abort and drop back a stage if any of these happen:** a readback disagreement
 that is not explained by `write_settle_s`; a ramp-down nobody can account for;
-the loop railing against either end of the band; `model_error_k` drifting past
-`model_trust_k` while settled; any hold lasting longer than `anomaly_hold_s`
-without a cause you can name.
+the loop railing against the ceiling of the band while settled; `dQ` drifting
+outside its band while settled; any `frozen` lasting longer than
+`fault_after_s` without a cause you can name.
 
 **Rollback is always the same thing**: `send hold`, then stop the process.
 `on_exit: hold` leaves the heater where it is, which is what you want on a live
@@ -927,7 +892,7 @@ which is a C2 result, not a dither result.
 ### C5 — closed-loop verification
 
 With the C2 schedule loaded, command a small setpoint step — inside
-`max_error_k`, so 0.5 K — through the ramp and watch the response.
+`warn_error_k`, so 0.5 K — through the ramp and watch the response.
 
 IMC tuning predicts a **first-order closed loop with no overshoot** and a time
 constant equal to `τ_cl`. Check both. Overshoot means the schedule's `K` or `τ`

@@ -107,13 +107,13 @@ def test_a_saturated_loop_writes_below_its_own_rail(tmp_path, armed):
     stepping *down* one, so a loop pinned at its clamp writes a number strictly
     below the rail it is sitting on and would never compare equal to it.
 
-    Reaching that state needs a config the shipped one is not: at
-    ``authority_pct`` 1.0 and a gain near 7.6 K/%, the band is about +/-7 K of
-    authority while ``max_error_k`` is 1.0 K -- so on the real cryostat the
-    anomaly hold always fires long before the clamp does, and a *tracking*
-    loop cannot saturate.  Widening the premise and narrowing the band is what
-    makes the arithmetic reachable; both are config, which is where limits
-    belong.
+    Reaching that state on THIS harness needs a config the shipped one is not:
+    at ``authority_pct`` 1.0 and a gain near 7.6 K/%, the band is about
+    +/-7 K of authority, so a small deliberate error never reaches the clamp.
+    Widening the premise and narrowing the band is what makes the arithmetic
+    reachable; both are config, which is where limits belong.  On the cryostat
+    a tracking loop CAN sit on its rail -- a warning does not stop it, and
+    authority exhausted is the check that watches for exactly that.
     """
     h = armed(sup_cfg=SupervisorConfig(authority_pct=0.05, warn_error_k=20.0,
                                        anomaly_demand_pct=5.0))

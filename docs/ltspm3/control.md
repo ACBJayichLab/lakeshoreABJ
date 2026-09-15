@@ -30,8 +30,8 @@ heater sat outside the band moved it on the next cycle.
 — less heat is never the dangerous direction. The floor bounds what the PID may
 *ask* for (`_apply_band_to_pid` sets `out_min`), not what the DAC must carry.
 Enforcing it on the output too meant `clamp` ran after the rate limiter and
-undid it: arming with the heater at 0 % wrote 62.076 % in one step, past
-`max_step_pct`, which exists for exactly that. It also meant the loop could not
+undid it: arming with the heater at 0 % wrote 62.076 % in one step, past the
+per-cycle limit that exists for exactly that. It also meant the loop could not
 hold any temperature whose steady-state output lay below the band — at base
 temperature it would command operating-point power and then fault.
 

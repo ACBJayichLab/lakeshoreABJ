@@ -94,7 +94,7 @@ client can tell "no such loop" from "a loop with nothing to say".
 | `output_pct` | what was actually written to the DAC |
 | `demand_pct` | what the PID asked for *before* the band clamped it. `null` outside the PID branch |
 | `rail_low_pct`, `rail_high_pct` | the authority band the supervisor enforces |
-| `threshold_k` | the loop's `max_error_k` — "this should only ever be a small correction" |
+| `threshold_k` | the loop's `warn_error_k` — the tracking error it warns at while the setpoint is not moving |
 | `p`, `i` | the gains **in force this cycle**, under the same names an instrument loop uses. There is no `d`: this controller takes its derivative from a regressed slope, not from a gain, so a number there would be an invention |
 | `alarms`, `reason` | sentences, not cells |
 

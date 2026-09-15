@@ -2,10 +2,11 @@
 
 This exists because of a conflict between two requirements that are both real:
 
-* the supervisor treats an error above ``max_error_k`` as evidence that
-  something is wrong *with the cryostat*, freezes the heater and eventually ramps
-  down.  That check is the main protection against acting on a bad reading, and
-  loosening it would defeat the point of the whole safety envelope;
+* the supervisor refuses a setpoint STEP larger than ``warn_error_k``
+  outright (rule 8, enforced in ``set_setpoint``), because a step that size is
+  a typo as often as it is an instruction -- 300 K typed for 30 would walk the
+  sample to the top of the table.  And while the setpoint is not moving, an
+  error past ``warn_error_k`` is what the premise check warns on;
 * the operator wants to sweep temperature programmatically, and wants the loop
   to come back to setpoint after a fault ramp-down.
 
@@ -13,9 +14,11 @@ Both of those are large deliberate errors, and under a step change they are
 indistinguishable from the broken-premise case the check is there to catch.
 
 Ramping the *setpoint* rather than stepping it resolves this cleanly: the
-target moves at a rate the cryostat can actually follow, the tracking error stays
-inside ``max_error_k`` throughout, and the premise check keeps its full meaning
-for genuine anomalies.  Nothing has to be relaxed.
+target moves at a rate the cryostat can actually follow, the trajectory is a
+commanded thing with a rate limit on it, and the premise check keeps its full
+meaning for genuine anomalies.  Nothing has to be relaxed.  The lag a ramp
+commands is not an excursion, and the watt residual says so in the one variable
+that knows the difference -- it carries ``C dT/dt`` explicitly.
 
 There is one rate -- ``max_rate_k_per_min``, 5 K/min -- and everything that
 moves a setpoint uses it: a commanded sweep, the approach after a fault, and
