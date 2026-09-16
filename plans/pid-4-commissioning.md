@@ -51,7 +51,7 @@ glitch, a comms drop, a sustained fault to completion and lockout, and
 | item | do | gate |
 |---|---|---|
 | W1 | see below | **MET 2026-09-15** — three steps, each read back on readback 1 |
-| W2 | `send analog 70.5`; `analog 0` with the gate closed; `heaters_off` | two refusals logged, one zero reaching the box, output restored |
+| W2 | `send analog 70.5`; `analog 0` with the gate closed; `heaters_off` | **both refusals MET 2026-09-15**; `heaters_off` outstanding — it costs a hold, so run it when you are ending one |
 | circuit | the 09-10 repair on the manifest (Phase 0) | `δQ` inside 3 σ_Q for 72 h; weak evidence, but the evidence there is |
 
 ### W1 — is 100 ms enough?  **Answered 2026-09-15: yes.**
@@ -144,6 +144,20 @@ there for, and knowing it is silent by arithmetic rather than by passing is the
 point.
 
 ### W2 — make a ceiling refuse something
+
+**Both refusals met 2026-09-15.** `send analog 70.5` was refused by the 70 %
+ceiling with no bytes reaching the 218, and `send analog 0` against a recorder
+running `ipc.allow_analog_output: false` was refused by the gate — invariant 3's
+both-directions rule exercised on the real system for the first time. The gate
+was closed by editing the committed heater config and restored with
+`git checkout --`, which is the restore to use: it is exact and cannot be left
+half-done. `config-ltspm3-read-only.yaml` cannot stand in for this, because its
+`accept_commands: false` refuses one gate earlier and the gate under test is
+never reached.
+
+`heaters_off` is the part still outstanding. It genuinely reaches the box, so it
+costs the hold and hours of recovery; run it on a day you are ending a hold
+anyway, not to tick the box.
 
 As of 2026-09-03 the spool had applied 39 commands and refused **zero**, so no
 ceiling in this system has ever been exercised against the real hardware.
