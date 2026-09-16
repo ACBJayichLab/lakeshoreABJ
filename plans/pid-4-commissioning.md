@@ -181,6 +181,41 @@ band follows the setpoint (rule 5), and that field is only the fallback centre
 for a loop with no model. What to check is that `check`'s printed band brackets
 the output the heater is actually holding.
 
+### The file ships at 1.0, and 4a arms at 0.1 — narrow it on the day
+
+**`authority_pct` in `config-ltspm3-armed.yaml` is 1.0, and that is correct for
+the file.** It is the *design envelope*, and `tests_ltspm3/bench_plant.py` loads
+its limits from this file precisely so the harness grades the numbers the
+cryostat would run. Narrowing the committed value to 0.1 fails 26 bench
+scenarios — the 10–180 K sweeps and faults rail against ±0.1 % by construction,
+which is a property of the throttle and not a finding about the loop.
+
+So the 4a throttle is a **deliberate edit on arming day, reverted after 4c**,
+and not the file's committed state. Do it, and read the band back:
+
+```bash
+python -m ltspm3 -c config-ltspm3-armed.yaml check
+```
+
+At 118 K, `authority_pct: 1.0` prints `62.960% .. 64.960%` and `0.1` prints
+`63.860% .. 64.060%`. **Measured 2026-09-15: the heater holds 64.010 %, which
+leaves only 0.05 % of headroom above it inside the narrow band** — five DAC
+codes. That is the model's own level error at this point (63.960 % is where the
+fit says 118.3 K sits), and it is inside the refit's stated accuracy. Expect the
+4a loop to sit high in its band, and do not read that as the §4.3 abort
+signature: *railing against the ceiling while settled* means railing with room
+in the model, not railing because the throttle is tighter than the calibration
+offset. If it rails, widen to 4c's 1.0 rather than chasing it.
+
+**Revert with `git checkout -- config-ltspm3-armed.yaml`** rather than by
+editing the number back, for the same reason W2 used it: it is exact and cannot
+be left half-done.
+
+`authority_pct` carrying both meanings is a known wart. Fixing it properly means
+separating "the envelope the bench grades" from "the throttle this stage runs
+at", and that is a change to make deliberately, not in the middle of
+commissioning.
+
 | step | gate |
 |---|---|
 | 4a — arm, `authority_pct` 0.1, no tuning, no feedforward | ≥ 1 h `tracking`, readback agreeing every cycle, monitor and supervisor verdicts agreeing |
