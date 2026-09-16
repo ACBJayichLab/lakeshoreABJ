@@ -250,7 +250,7 @@ commissioning.
 
 | step | gate |
 |---|---|
-| 4a — arm, `authority_pct` 0.1, **no tuning, no feedforward** — all three, see below | ≥ 1 h `tracking`, readback agreeing every cycle, monitor and supervisor verdicts agreeing — **but read the caveat on that last clause** |
+| 4a — arm, `authority_pct` 0.1, **no tuning, no feedforward** — all three, see below | **MET 2026-09-16** — 1 h, 1750 samples, `tracking` on every one; worst error 90 mK against a 1 K warning; monitor and supervisor both clean |
 | 4b — provoked fault at low temperature | ramps down at the one rate through the inverse curve, **does not resume when the sensor comes back**, latches, locks out, `ack` the only way out |
 | 4c — widen to 1.0 %, then tuning, then feedforward, one per watched hour | no `frozen` without a named cause |
 | 4d — **5 K/min sweep ≥ 10 K** | lag < 2 K, no warning at either end, `δQ` quiet |
@@ -273,6 +273,41 @@ explains.** A standing supervisor warning with the monitor typical, after
 somebody has touched the heater wiring, is that. A disagreement nobody can
 account for is not. **Do not raise `warn_sigma` to make them agree** — that
 warning is the only thing reporting that the gauge is stale.
+
+### What 4a measured, 2026-09-16 — and what an hour cannot grade
+
+1750 samples, `tracking` on every one, worst error 90 mK against a 1 K
+warning, output 63.986–63.998 inside a 63.860–64.060 band. Monitor and
+supervisor both clean.
+
+`analysis/allan.py` on that window, which is **the first closed-loop data this
+cryostat has ever produced**:
+
+```
+     tau s   sigma_y mK      edf
+         8        8.426      436     <- the floor, sigma_y(10 s)
+       146        6.919       23
+       264        6.833       12
+       480        9.715        6
+       874       18.962       3
+```
+
+**The loop beats open loop everywhere the window can measure.** Open loop at
+this temperature floors at 7.38 mK at tau = 130 s and rises after — averaging
+stops helping at two minutes. Closed loop reaches **6.83 mK at 264 s**: a lower
+minimum, and still improving twice as long.
+
+**The section-1 criterion reports NOT MET, and at one hour that means nothing.**
+The criterion runs to `L/4`, which is 874 s on a 58-minute window, and `edf`
+there is **3**. Three independent samples cannot distinguish wander from
+nothing. Note also that the raw sd over the window is 28.7 mK — about the
+long-tau sigma_y, not the 8 mK floor — so **quoting an rms over a hold says
+almost nothing about it**, which is the whole reason this tool exists.
+
+**So: do not grade the hold criterion on anything short.** It is a stage-5
+gate, over seven days, for exactly this reason. A rule of thumb from this run:
+`edf` below about 10 means the point is decoration. Read the shape out to where
+`edf` is still tens, and ignore the tail.
 
 4b is rules 1 and 7 proved on the cryostat rather than on the bench. The
 cleanest provocation is to drop `fault_after_s` to something short and pull the

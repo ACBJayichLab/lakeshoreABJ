@@ -16,8 +16,9 @@ two gates shrank; a document retired).
 > **The first arm, at 13:35, walked the heater down and cost 350 mK** — cause
 > below, and it was a config omission, not a defect in `control/`.
 >
-> The heater is otherwise where it has been all week. **W1 and both of W2's
-> refusals are MET on real hardware.**
+> **4a's gate is MET**: one hour, 1750 samples, `tracking` on every one,
+> worst error 90 mK against a 1 K warning, monitor and supervisor both clean.
+> **W1 and both of W2's refusals are MET** on real hardware too.
 
 ## What this session did
 
@@ -80,6 +81,39 @@ while an armed loop was driving the heater**.
 All three now load with `allow_unknown_sections`: the section is kept aside as
 a raw mapping and never interpreted, so invariant 1 is untouched. Anything that
 opens the port still refuses, and still says to use `python -m ltspm3`.
+
+### 6. 4a — MET, and the loop is quieter than open loop
+
+One hour armed. `analysis/allan.py` on it, the first closed-loop data this
+cryostat has produced: floor **8.43 mK** at 10 s, down to **6.83 mK at 264 s**.
+Open loop at this temperature floors at 7.38 mK at 130 s and rises after — so
+the loop reaches a lower minimum and keeps improving twice as long.
+
+The section-1 hold criterion reports NOT MET at tau = 480 and 874 s, and at one
+hour **that is not a finding**: the criterion runs to `L/4`, and `edf` there is
+6 and 3. It is a stage-5 gate over seven days for exactly this reason.
+
+It also explains the raw sd: **28.7 mK over the window, against an 8 mK floor.**
+That is the long-tau wander, not loop-added noise, and it is why an rms over a
+hold says almost nothing about the hold.
+
+### 7. The gauge is now the CRITICAL PATH, not a deferral
+
+4a passing is what exposed this. With feedforward off, `band_centre_pct`
+returns the constant `operating_point_pct` — **the band does not follow the
+setpoint**. So 4a is pinned at 63.960 +/- 0.1, about 115.7–118.3 K, and the
+setpoint cannot move more than ~1.3 K. 4d's 10 K sweep needs 0.76 % of output,
+7.6x the whole half-width.
+
+The chain: moving the setpoint needs the band to follow it; the band follows
+only with feedforward on; feedforward commands the model's answer, so it needs
+a gauge somebody believes. **A gates everything past a fixed hold at one
+temperature.**
+
+Widening `authority_pct` instead would buy setpoint range by running a wide
+*fixed* band, which is the pre-rule-5 behaviour the band-follows-setpoint work
+replaced. Wrong trade. For the hold itself 0.1 is generous: the loop used
+63.986–63.998, **6 % of its authority**, and never neared a rail.
 
 ## What needs fixing, in the order I would take it
 
