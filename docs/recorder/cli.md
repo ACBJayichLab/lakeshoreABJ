@@ -141,7 +141,18 @@ python -m lschart -c config.yaml send note "reseated the heater connector"
 ```
 
 Writes into the command spool and waits for the acknowledgement
-(`--timeout`, default 10 s). `--instrument NAME` when several are configured.
+(`--timeout`, default 10 s). `--instrument NAME` when several are configured,
+and `--file` to read a status file other than the config's — the same option
+`status` takes, so the two can be pointed at the same recorder.
+
+It refuses to queue when `status.json` is absent, older than three cycles or
+says the recorder has stopped: a command nobody will read is an operator
+watching nothing happen. **`hold` and `heaters_off` are exempt** — they warn
+and queue anyway. A recorder that is alive but momentarily not writing status
+is the one an abort most needs to reach, `command_ttl_s` bounds the cost of
+being wrong, and a `hold` nobody reads changes nothing. The exemption belongs
+to the command *kind*, exactly as the recorder's own does, so it is not a
+property of having typed it at this CLI.
 
 `ping` is the one command that proves the whole path — spool, recorder,
 acknowledgement — without touching an instrument. Run it first when setting up

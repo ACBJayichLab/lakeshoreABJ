@@ -21,9 +21,12 @@ Why the write may fail, and why that is fine
 --------------------------------------------
 
 On Windows, replacing a file that another process currently has open can fail
-with a sharing violation.  There is nothing to do about that and mostly nothing
-that needs doing: the next cycle rewrites it a second later.  It is never
-raised -- an IPC convenience must not be able to stop the recording it is
+with a sharing violation.  The rename is retried a few times over a few
+milliseconds first -- a reader holds the file for microseconds, so that turns
+most of them into a late write rather than a missed one, and it is cheap enough
+to pay on the acquisition thread (see ``REPLACE_RETRIES``).  One that survives
+that is still not fatal: the next cycle rewrites it a second later.  It is
+never raised -- an IPC convenience must not be able to stop the recording it is
 reporting on.
 
 But it does need to be *noticeable*.  A write that fails cannot report itself
@@ -101,6 +104,43 @@ def _num(value: Any) -> Any:
     return f if math.isfinite(f) else None
 
 
+#: **A SHARING VIOLATION IS NOT A PERMISSIONS PROBLEM, and on Windows it is
+#: the common one.**  `os.replace` raises `PermissionError: [WinError 5]` when
+#: another process has the target open at the instant of the rename, and this
+#: file has two habitual readers -- the viewer and the monitor, both polling.
+#: Observed 2026-09-15 and -16; the writer logged it, counted it and carried
+#: on, which is invariant 6 behaving, but two consecutive misses put the file
+#: past `send`'s 6 s liveness guard and that guard is what an abort has to get
+#: through.
+#:
+#: The suggested fix -- readers opening with share-delete semantics -- is not
+#: available from Python's `open()`.  Retrying is: a reader holds the file for
+#: microseconds, so a few milliseconds turns a sharing violation into a late
+#: write instead of a missed one.  The cost is bounded and it is paid on the
+#: acquisition thread: 3 x 10 ms against a 2 s cycle, and only when the rename
+#: has already failed once.
+#:
+#: Retried for `PermissionError` alone.  A full disk or a bad path is not going
+#: to be different in ten milliseconds, and sleeping over it on the thread that
+#: owns the bus would be the wrong trade.
+REPLACE_RETRIES = 3
+REPLACE_RETRY_S = 0.01
+
+
+def _replace_with_retry(tmp: Path, path: Path) -> None:
+    for attempt in range(REPLACE_RETRIES):
+        try:
+            os.replace(tmp, path)
+            if attempt:
+                log.debug("status rename to %s succeeded on attempt %d",
+                          path, attempt + 1)
+            return
+        except PermissionError:
+            if attempt == REPLACE_RETRIES - 1:
+                raise
+            time.sleep(REPLACE_RETRY_S)
+
+
 def atomic_write_json(path: str | os.PathLike, payload: dict,
                       *, on_error=None) -> bool:
     """Write ``payload`` to ``path`` so no reader can see it half-written.
@@ -126,7 +166,7 @@ def atomic_write_json(path: str | os.PathLike, payload: dict,
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
         return True
     except (OSError, ValueError, TypeError) as exc:
         log.debug("status write to %s failed: %s", path, exc)

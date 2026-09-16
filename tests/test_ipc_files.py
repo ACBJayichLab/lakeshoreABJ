@@ -454,10 +454,12 @@ def test_the_debris_of_a_crashed_client_is_swept(tmp_path):
 # -- a status write that fails ----------------------------------------------
 #
 # On Windows `os.replace` over a file another process has open can fail with a
-# sharing violation.  Nothing can be done about that and nothing needs to be:
-# the next cycle rewrites it.  What was missing was any way to *notice* -- a
-# write that fails cannot report itself in the file it failed to write, so a
-# client saw a gap and nothing else, which looks exactly like a hung recorder.
+# sharing violation.  A reader holds the file for microseconds, so the rename
+# is retried over a few milliseconds first and most of them become a late write
+# rather than a missed one.  One that survives that still is not fatal: the
+# next cycle rewrites it.  What was missing was any way to *notice* -- a write
+# that fails cannot report itself in the file it failed to write, so a client
+# saw a gap and nothing else, which looks exactly like a hung recorder.
 
 
 def failing_writer(tmp_path, monkeypatch):
@@ -476,6 +478,42 @@ def failing_writer(tmp_path, monkeypatch):
 
     monkeypatch.setattr(status_mod.os, "replace", maybe)
     return writer, broken
+
+
+def test_a_sharing_violation_that_clears_is_a_LATE_write_not_a_missed_one(
+        tmp_path, monkeypatch):
+    """The 2026-09-16 `WinError 5`, and why one retry is worth the milliseconds.
+
+    Two consecutive misses put `status.json` past `send`'s 6 s liveness guard,
+    and that guard is what an abort has to get through.
+    """
+    from lschart.ipc import status as status_mod
+
+    writer = StatusWriter(tmp_path / "status.json")
+    real = os.replace
+    attempts = []
+
+    def sticky_once(src, dst):
+        attempts.append(dst)
+        if len(attempts) == 1:
+            raise PermissionError(32, "The process cannot access the file")
+        return real(src, dst)
+
+    monkeypatch.setattr(status_mod.os, "replace", sticky_once)
+    assert writer.write(frame()) is True
+    assert len(attempts) == 2
+    assert writer.failures == 0, "a retried rename is not a failure"
+    assert read_status(tmp_path / "status.json") is not None
+
+
+def test_a_rename_that_never_clears_still_fails_and_leaves_no_debris(
+        tmp_path, monkeypatch):
+    """The retry is a few milliseconds, not a loop.  Whatever is holding the
+    file for longer than that is a real condition and has to be reported."""
+    writer, _broken = failing_writer(tmp_path, monkeypatch)
+    assert writer.write(frame()) is False
+    assert writer.failures == 1
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_a_failed_write_is_counted_and_says_why(tmp_path, monkeypatch, caplog):

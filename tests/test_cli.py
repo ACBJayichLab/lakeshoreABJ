@@ -350,6 +350,53 @@ def test_send_refuses_to_queue_into_a_stale_recorder(tmp_path, capsys):
     assert CommandSpool(ipc / "commands").pending() == [], "queued anyway"
 
 
+def _spooled_kinds(directory):
+    """What is sitting in the spool, by kind.  `pending()` answers in paths."""
+    return [json.loads(p.read_text())["kind"]
+            for p in CommandSpool(directory).pending()]
+
+
+@pytest.mark.parametrize("kind", ["hold", "heaters_off"])
+def test_a_panic_kind_queues_into_a_stale_recorder_anyway(tmp_path, capsys, kind):
+    """**The guard is backwards for an abort.**
+
+    A recorder that is alive but momentarily not writing status is exactly the
+    one a `hold` most needs to reach, and both of the conditions that produce
+    that file were observed on 2026-09-16: a sharing violation on the status
+    rename, and a first cycle after the VISA resources open that overruns by
+    2.8 s.  `command_ttl_s` bounds the cost of being wrong, and a `hold`
+    nobody reads changes nothing.
+    """
+    ipc = tmp_path / "ipc"
+    ipc.mkdir()
+    stale = status_file(tmp_path, t_wall=time.time() - 3600)
+    (ipc / "status.json").write_text(pathlib.Path(stale).read_text())
+    # No acknowledgement is coming -- nothing is consuming the spool -- so the
+    # exit status is still 1.  What changed is that the command is THERE.
+    assert cli.main(["-c", config(tmp_path), "send", "--timeout", "0", kind]) == 1
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "3600 s old" in err
+    assert _spooled_kinds(ipc / "commands") == [kind]
+
+
+@pytest.mark.parametrize("kind", ["hold", "heaters_off"])
+def test_a_panic_kind_queues_even_with_no_status_file_at_all(tmp_path, capsys, kind):
+    """The exemption belongs to the KIND, so it covers every reason the status
+    file cannot be believed -- including there not being one."""
+    assert cli.main(["-c", config(tmp_path), "send", "--timeout", "0", kind]) == 1
+    assert "WARNING" in capsys.readouterr().err
+    assert _spooled_kinds(tmp_path / "ipc" / "commands") == [kind]
+
+
+def test_send_takes_the_same_file_option_as_status(tmp_path, capsys):
+    """`status --file` and `send` could not be pointed at the same recorder,
+    so the one that says it is alive and the one that refuses because it is
+    not were reading different files."""
+    path = status_file(tmp_path, t_wall=time.time() - 3600)
+    assert cli.main(["-c", config(tmp_path), "send", "--file", path, "ping"]) == 1
+    assert "3600 s old" in capsys.readouterr().err
+
+
 @pytest.fixture
 def recorder(tmp_path, monkeypatch):
     """A running recorder, ticked once per status read.

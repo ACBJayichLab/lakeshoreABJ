@@ -480,10 +480,14 @@ def cmd_send(args) -> int:
     `send` writes a file that the running recorder picks up on its next cycle,
     so it only works when one *is* running -- and it is the same path MATLAB
     uses, which makes this the way to test that path without MATLAB.
+
+    **Except for the panic kinds**, which queue whatever the status file says.
+    See the guard below.
     """
     import time as _time
 
     from .ipc.commands import CommandSpool
+    from .ipc.service import PANIC_KINDS
     from .ipc.status import read_status, status_age_s
 
     # `allow_unknown_sections`: THIS COMMAND WRITES A FILE INTO A DIRECTORY.
@@ -494,22 +498,52 @@ def cmd_send(args) -> int:
     # path must not depend on which of the two entry points you typed.
     cfg = config_mod.load(args.config, allow_unknown_sections=True)
     spool = CommandSpool(cfg.ipc.command_path(), ttl_s=cfg.ipc.command_ttl_s)
-    status_path = cfg.ipc.status_path()
+    status_path = args.file or cfg.ipc.status_path()
 
-    # Refuse to queue into a spool nobody is reading.  Otherwise the command
-    # sits there until it expires and the operator watches nothing happen.
+    # **THE PANIC KINDS ARE EXEMPT FROM THE LIVENESS GUARD**, which is finding
+    # 6 of AUDIT-2026-09-16 and is about which way to fail.
+    #
+    # For a `setpoint` the guard is right: refusing to queue into a spool
+    # nobody is reading is better than an operator watching nothing happen.
+    # For `hold` it is backwards.  A recorder that is ALIVE but momentarily not
+    # writing status is precisely the one you most want an abort to reach, and
+    # this session observed both of the conditions that produce that file:
+    # `PermissionError: [WinError 5]` on the status `os.replace` when a reader
+    # holds the file at the instant of the rename (two consecutive misses put
+    # it past 6 s), and a first cycle after both VISA resources open that
+    # overruns by 2.8 s, every time.
+    #
+    # Queueing costs nothing if it is wrong: `command_ttl_s` bounds it at 30 s,
+    # after which the command is refused as expired, and a `hold` nobody reads
+    # has changed nothing.  So: say what is wrong, and queue anyway.  The
+    # recorder already exempts these kinds from the source policy and the two
+    # power gates; this is the same exemption on the client side, and it
+    # belongs to the KIND, so it reaches MATLAB's abort too.
+    panic = args.kind in PANIC_KINDS
     status = read_status(status_path)
     if status is None:
-        print(f"no recorder is running here: {status_path} is absent or "
-              "unreadable. Use `set` to talk to the instrument directly.",
+        why = (f"no recorder is running here: {status_path} is absent or "
+               "unreadable.")
+        if not panic:
+            print(why + " Use `set` to talk to the instrument directly.",
+                  file=sys.stderr)
+            return 1
+        print(f"WARNING: {why} Queueing `{args.kind}` anyway -- it expires in "
+              f"{cfg.ipc.command_ttl_s:g} s if nothing reads it.",
               file=sys.stderr)
-        return 1
-    age = status_age_s(status) or 0.0
-    if age > max(3 * cfg.acquisition.interval_s, 5.0) or not status.get("running", True):
-        print(f"the recorder's status file is {age:.0f} s old"
-              f"{'' if status.get('running', True) else ' and says it has stopped'}"
-              " -- not queueing a command it may never read.", file=sys.stderr)
-        return 1
+    else:
+        age = status_age_s(status) or 0.0
+        running = bool(status.get("running", True))
+        if age > max(3 * cfg.acquisition.interval_s, 5.0) or not running:
+            why = (f"the recorder's status file is {age:.0f} s old"
+                   f"{'' if running else ' and says it has stopped'}")
+            if not panic:
+                print(why + " -- not queueing a command it may never read.",
+                      file=sys.stderr)
+                return 1
+            print(f"WARNING: {why}. Queueing `{args.kind}` anyway -- a stale "
+                  "status is not a stopped recorder, and an abort is the last "
+                  "thing to withhold.", file=sys.stderr)
 
     kwargs = dict(args.args)
     cid = spool.submit(args.kind, instrument=args.instrument or "",
@@ -613,6 +647,10 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     )
     snd.add_argument("--instrument", default=None,
                      help="which box, if more than one is configured")
+    snd.add_argument("--file", default=None,
+                     help="status file to read, overriding the config -- the "
+                          "same option `status` takes, so the two can be "
+                          "pointed at the same recorder")
     snd.add_argument("--timeout", type=float, default=10.0,
                      help="seconds to wait for the acknowledgement")
     snd_sub = snd.add_subparsers(dest="kind", required=True)
