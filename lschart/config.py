@@ -794,8 +794,24 @@ def _migrate_legacy_instruments(raw: dict, path: str) -> None:
     )
 
 
-def load(path: str | None = None, *, validate: bool = True) -> AppConfig:
-    """Read a config file.  With no path, returns validated defaults (sim)."""
+def load(path: str | None = None, *, validate: bool = True,
+         allow_unknown_sections: bool = False) -> AppConfig:
+    """Read a config file.  With no path, returns validated defaults (sim).
+
+    ``allow_unknown_sections`` keeps a top-level section this install has no
+    registration for, instead of refusing the file.  **It exists for the
+    viewer and nothing else.**  A viewer opens a config it could not itself
+    run -- that is its whole design -- and on this cryostat the config it most
+    needs to open is the armed one, whose `control:` section is registered by
+    `ltspm3`, which `lschart` may never import (invariant 1).  Before this
+    flag the viewer could not open the file the loop it is watching runs on.
+
+    Unknown keys INSIDE a known section stay a hard error, so the typo
+    protection is untouched; and a misspelled top-level section is still
+    refused by the recorder, which is where it would do harm.  The sections
+    land in ``extensions`` as raw mappings, so ``dump`` round-trips them back
+    to the top level where they came from.
+    """
     if path is None:
         cfg = AppConfig()
     else:
@@ -815,6 +831,10 @@ def load(path: str | None = None, *, validate: bool = True) -> AppConfig:
         for name, cls in _SECTIONS.items():
             if name in raw:
                 extensions[name] = _coerce(cls, raw.pop(name), name)
+        if allow_unknown_sections:
+            known = {f.name for f in dataclasses.fields(AppConfig)}
+            for name in [k for k in raw if k not in known]:
+                extensions[name] = raw.pop(name)
         cfg = _coerce(AppConfig, raw, "")
         cfg.extensions = extensions
         cfg.source_path = path

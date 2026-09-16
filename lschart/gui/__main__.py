@@ -70,7 +70,14 @@ def main(argv: list[str] | None = None) -> int:
         # itself be able to run -- a hardware config on a laptop with no VISA
         # runtime, say.  It opens no instrument, so nothing it does depends on
         # those parts of the file being satisfiable here.
-        cfg = config_mod.load(args.config, validate=False)
+        #
+        # allow_unknown_sections=True for the same reason, and it is the half
+        # that was missing: `control:` is registered by `ltspm3`, which this
+        # package may never import, so the viewer refused the ONE config it is
+        # most needed for -- the armed one, watched by a person in the room
+        # while the loop runs.
+        cfg = config_mod.load(args.config, validate=False,
+                              allow_unknown_sections=True)
     except config_mod.ConfigError as exc:
         print(f"cannot read the config: {exc}", file=sys.stderr)
         return 1

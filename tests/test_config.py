@@ -239,3 +239,53 @@ def test_every_shipped_example_fits_its_own_cadence(path):
         f"{cfg.estimated_cycle_s():.2f} s, past its "
         f"{cfg.acquisition.interval_s} s cadence"
     )
+
+
+# -- the viewer's tolerance -------------------------------------------------
+#
+# A viewer opens a config it could not itself run.  `control:` is registered by
+# `ltspm3`, which `lschart` may never import, so before `allow_unknown_sections`
+# the viewer refused the ONE config it is most needed for: the armed one, open
+# on a screen while a person watches the loop it describes.
+
+VIEWER_YAML = """
+acquisition:
+  interval_s: 2.0
+control:
+  enabled: true
+  supervisor:
+    authority_pct: 0.15
+monitor:
+  enabled: true
+"""
+
+
+def test_the_viewer_can_open_a_config_it_could_not_run(tmp_path):
+    cfg = config_mod.load(write(tmp_path, VIEWER_YAML), validate=False,
+                          allow_unknown_sections=True)
+    assert cfg.acquisition.interval_s == 2.0
+    assert sorted(cfg.extensions) == ["control", "monitor"]
+
+
+def test_the_recorder_still_refuses_the_very_same_file(tmp_path):
+    """The tolerance is the viewer's alone; nothing that RUNS gets it."""
+    with pytest.raises(ConfigError, match="control"):
+        config_mod.load(write(tmp_path, VIEWER_YAML), validate=False)
+
+
+def test_a_typo_inside_a_known_section_is_still_an_error(tmp_path):
+    """Tolerating a foreign SECTION must not tolerate a misspelled KEY.
+
+    The unknown-key check is the typo protection, and a viewer that quietly
+    ignored `intrval_s` would send somebody hunting the wrong cadence.
+    """
+    with pytest.raises(ConfigError, match="intrval_s"):
+        config_mod.load(write(tmp_path, "acquisition:\n  intrval_s: 2.5\n"),
+                        validate=False, allow_unknown_sections=True)
+
+
+def test_an_unknown_section_round_trips_back_to_the_top_level(tmp_path):
+    """`dump` re-emits it where it came from, rather than losing it."""
+    cfg = config_mod.load(write(tmp_path, VIEWER_YAML), validate=False,
+                          allow_unknown_sections=True)
+    assert "\ncontrol:" in "\n" + config_mod.dump(cfg)
