@@ -1,140 +1,204 @@
-# Handoff — 2026-09-15b (the monitor soaked; two gates shrank; a document retired)
+# Handoff — 2026-09-16 (the loop closed on the cryostat, twice; the second time it held)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; the
 route to a working loop is [PID_PLAN.md](PID_PLAN.md) and the commissioning
 step-by-step is [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md).
 This goes stale.
 
-Previous: [HANDOFF-2026-09-15a.md](HANDOFF-2026-09-15a.md) (the phase 3 review
-fixes).
+Previous: [HANDOFF-2026-09-15b.md](HANDOFF-2026-09-15b.md) (the monitor soaked;
+two gates shrank; a document retired).
 
-> ## NOTHING WAS COMMANDED, AND THE HEATER IS WHERE IT WAS
+> ## THE SOFTWARE PID HAS NOW HELD THIS CRYOSTAT
 >
-> The 218's analog output has been at **64.0100 %** since 2026-09-10 14:49 and
-> the sample flat at **118.3 K**. **No `control:` section has ever been armed on
-> this cryostat.** The monitor ran, and it holds no port and sends no commands.
-> **1210 tests passing, `ruff` clean** — and one pre-existing failure, below.
+> Armed 14:11:42, setpoint **117.06 K**, holding to **−22 mK with a 13 mK
+> scatter** — which is the open-loop noise floor, so the loop is not adding
+> any. Output dithering one DAC code, 63.99/64.00. `tracking`, no alarms.
+> **The first arm, at 13:35, walked the heater down and cost 350 mK** — cause
+> below, and it was a config omission, not a defect in `control/`.
+>
+> The heater is otherwise where it has been all week. **W1 and both of W2's
+> refusals are MET on real hardware.**
 
 ## What this session did
 
-No code changed. Three conclusions were reached by reading the code against the
-documents, and the documents lost.
+### 1. W1 — MET, and the method it was going to use was wrong
 
-### 1. Phase 2's live soak is done, and the gate is a day rather than 72 h
+Three steps on the real 218 over GPIB, each above the 0.02 % tolerance so a
+stale reply would have been *rejected* rather than believed, and **each agreed
+on readback 1** — the readback paced at `write_settle_s`, and the only one the
+armed supervisor gets. `write_settle_s: 0.1` stands.
 
-Jeff ran the monitor on 2026-09-15. **The 72 h was a round number with nothing
-behind it** — plan 2 stated it and never derived it. What establishes the
-false-alarm rate is the replay across 63 days of archive, green in `pytest`.
-What the live run adds is that the tail path works on that machine, that
-`plant.json` stays current, and that it survives.
+The plan said to count `AOUT? readback failed (attempt N)` at DEBUG. That would
+have answered "attempt 1" whether the box was prompt or slow: `_confirm` logged
+only when a readback *raised*, and a readback that arrived and disagreed — the
+stale case, the one W1 is about — was retried in silence. The attempt number is
+now on the WARNING line the driver already writes, so it needs no DEBUG at all.
+`--log-level DEBUG` also no longer drags pyvisa along (`--bus-trace` does that).
 
-The defensible length is **one diurnal cycle**: a 16 mK diurnal term is in the
-band and `measure.py` fits a 24 h harmonic, so a day is the longest measured
-timescale short of the campaign drift — which no soak of any length covers.
+### 2. W2 — both refusals MET
 
-**And the judge's state is reconstructed from the recorder's log, not from the
-monitor's own uptime.** Started on 09-15 it read the 09-14 file from the top and
-caught up in seconds. The evidence is in the CSV the recorder has been writing
-all along, which is what makes the shorter gate defensible rather than merely
-convenient.
+`send analog 70.5` refused by the 70 % ceiling with no bytes reaching the box;
+`send analog 0` against `ipc.allow_analog_output: false` refused by the gate.
+**Invariant 3's both-directions rule, exercised on real hardware for the first
+time**, against a spool that had applied 39 commands and refused none.
+`heaters_off` is still outstanding — it costs a hold.
 
-### 2. W1 is three commands, not a characterisation, and nothing is blocked
+### 3. Jeff worked on the heater wiring, and the model's level went stale
 
-`write_settle_s` is **not a command cadence**. It is the transport's pacing gap
-between a write and the next transaction on that link — `_pace()` applies it
-only when the last transaction was a write — so a write and its confirming
-readback sit back to back inside one 2 s cycle. Nothing is issued at sub-cycle
-intervals, and the old W1's 0/25/50/80/150/300 ms sweep was asking for timing
-the architecture does not use.
+Sample fell **118.31 → 117.19 K at unchanged output**, onset ~11:00. That is
+−0.336 % of delivered power, **0.48 of the ±0.7 % `DELTA_P_FRAC` envelope the
+model already carries for exactly this event**. The shape did not move; only
+the level. It is in the log's Notes column — the first time that column has
+carried one of these, after both September events went unrecorded.
 
-What the check is worth is narrower than invariant 5 claimed, and the narrowing
-is the useful half:
+Consequence: the model reads **0.107 % of output low** at the operating point,
+and `GAUGE_WINDOW` is still `trace-ladder-20260905`.
 
-- the comparison is against the value **just commanded**, so a stale readback
-  returns the old value, misses by the whole step, and is caught rather than
-  confirmed. "Both wrong regimes look like success" predates that;
-- **below `readback_tol_pct` the check is undecidable at any settle time**,
-  because stale and fresh are the same number. That is every hold write under
-  `dither: true` (one 0.01 % code, against a 0.015 % tolerance) and every ramp
-  write at 118 K (5 K/min ÷ 13.8 K/% = 0.012 % per cycle);
-- **it bites at the cold end**, where the gain falls toward 0.35 K/% and the
-  same rate is ~0.48 % per cycle.
+### 4. The first arm walked the heater down — feedforward, not a bug
 
-So `verify_readback` will be silent through the whole of 4a, and silent by
-arithmetic rather than by passing. Three `send analog` steps above the tolerance
-answer "is 100 ms enough", with the recorder running and no downtime.
+13:35:12 armed at 117.23 K with the heater at 64.007. Five cycles `frozen`
+(filter priming), then `tracking` — and the output walked to **63.92 and stayed
+there**, which is the model's stale answer, 63.902. Sample fell 350 mK.
 
-### 3. `docs/ltspm3/commissioning.md` is retired
+**`_enter_mode` primes bumplessly and is correct.** The cause was that
+`config-ltspm3-armed.yaml` ships `feedforward: enabled: true`, and 4a specifies
+**no feedforward and no tuning**; only `authority_pct` had been changed. The
+feedforward commands the model's answer, and the model is stale, so the loop
+drove there and the integral needed hours at `ti = 900 s` to unwind it.
 
-964 lines, written 2026-09-03 and overtaken three times. A dated status block
-describing the sample at 180.57 K on 69.027 %; a two-rate ramp-down with a knee
-at 40 % that phase 3 step 5 replaced with one rate in kelvin; the W1 above; and
-gates met months ago. The durable half went to four homes — the step-test
-method and the R² table to [thermal-response](docs/ltspm3/thermal-response.md),
-the `AOUT?` flicker to [cryostat](docs/ltspm3/cryostat.md), the band principle
-was already in [running](docs/ltspm3/running.md), and the plan half plus C1–C7
-to [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md).
+With feedforward off the band centres on `operating_point_pct` (63.960) instead
+of the model's 63.902 — much closer to the truth — so **`authority_pct: 0.1`
+works as the plan writes it and needs no widening.** Second arm, 14:11:42, held.
 
-**Archived `HANDOFF-*` and `AUDIT-*` references still point at the deleted
-file, on purpose**: they are records of what was true when written.
+### 5. Three tools refused the armed config, one of them the abort
 
-## One finding, not diagnosed
+`control:` is registered by `ltspm3`; `lschart` may never import it; unknown
+keys are a hard error. So the **viewer**, **`send`** and **`status`** all
+refused `config-ltspm3-armed.yaml` — including `send hold`, **with a traceback,
+while an armed loop was driving the heater**.
 
-**Two residuals go blind at the daily file roll.** At exactly
-`2026-09-15T00:00:00`, `cold_head` → `no opinion (no cold-head reading)` and
-`noise` → `no opinion (not enough samples)`. `noise` recovers in 15 s, which is
-`RollingFit(noise_window_s = 60)` refilling and is expected. **`cold_head`
-takes 616 s**, which is not explained by that and lines up suspiciously with
-`stage_baseline_tau_s = 600`.
+All three now load with `allow_unknown_sections`: the section is kept aside as
+a raw mapping and never interpreted, so invariant 1 is untouched. Anything that
+opens the port still refuses, and still says to use `python -m ltspm3`.
 
-It fails safe — `no opinion` is the honest answer and never reads as green — so
-it bears on nothing about arming. It bears on **stage 5**: seven unattended days
-is seven midnights. Two candidates, neither checked: the 336's aux columns
-absent from the new file's opening rows, or the stage fits/baselines resetting
-across the rollover. It wants a test that rolls a file under the judge.
-plans/pid-2-monitor.md carries the row.
+## What needs fixing, in the order I would take it
+
+### A. The gauge is stale — the only item that costs cryostat time
+
+Nothing else here removes it, and it is what made the first arm misbehave.
+**~2–3 h**, rehearsed and green on the virtual clock:
+
+```bash
+python -m ltspm3.tools.sweep -c config-ltspm3-heater.yaml --percents "63.5,62.8,62.0,61.2" --order down
+```
+
+Downward deliberately: the rehearsal found that 64.5 % crosses `sweep`'s 120 K
+ceiling and aborts, and down is the benign direction. 4/4 rungs graded `tau` in
+28–34 min each. With the 117.19 K hold that is **five anchors over 82–117 K** —
+enough to fit the gauge *and* hold one out, which is what `holdout.gauge`'s
+docstring demands. Then re-export; `FittedSchedule` reads the model live and
+there are no pasted keys in `tuning.py`, so the tuning does not rot.
+
+Correction to something said earlier in the session: a re-gauge is **not** one
+number off one anchor. `measure_gauge` fits it on a ladder.
+
+### B. The working 4a config is UNCOMMITTED — this is the trap
+
+`config-ltspm3-armed.yaml` currently carries `feedforward: false`,
+`tuning: false`, `authority_pct: 0.1` — the three changes that made the arm
+work — **and none of it is in git**. A fresh clone, or an idle
+`git checkout --`, restores feedforward and reproduces the 350 mK walk.
+
+It is uncommitted because `tests_ltspm3/bench_plant.py` loads its limits from
+that file, so the file is both *what the cryostat runs* and *what the harness
+grades*. Those are different things for `authority_pct` (a commissioning
+throttle) and for `feedforward`/`tuning` (stage switches), though not for
+`hard_max_pct` or the rates, which really are cryostat properties.
+
+**Fix:** let the bench pin what it needs to grade the envelope; let the config
+carry what is actually run, committed with the reason written down.
+
+### C. The viewer offers controls that fight an armed loop
+
+`analog_ok = self.source.allows_analog_output()` gates on the IPC permission
+only — nothing asks whether a software loop owns that output. The arm button
+has no gating at all.
+
+* **Set output…** is overwritten by the supervisor within one 2 s cycle:
+  a blip, then silently undone.
+* **Arm software loop…** is the worse one. `arm()` runs
+  `set_setpoint(x, ramp=False)` *before* `set_mode()`, and `set_mode` no-ops
+  when already PID — but the setpoint change does not. Pressing it while armed
+  is **"step the setpoint now, no ramp"**, behind a button that says otherwise.
+
+Panic Menu is unaffected and remains the abort. **Fix:** gate both on the
+control row's state, with a note saying why, in the pattern the range and
+analog permission notes already use.
+
+### D. The bench cannot reproduce a stale-gauge arm
+
+Three attempts, none of which reproduced the walk-down — the harness converges
+with feedforward on *or* off, so it is not modelling whatever sustains it on
+the real cryostat. Until it can, the bench cannot protect against this class of
+problem, and the diagnosis above rests on the real trace plus code reading
+rather than on a bench demonstration. **This is the gap that let 4 happen.**
+
+### E. Viewer history is fragmented by the filename prefix
+
+`source.py` stitches prior logs only when the prefix matches, and the configs
+use `ltspm3-heater` and `ltspm3-armed` deliberately — so six months from now
+the filename still says whether software or a person moved the heater. The cost
+is that you see continuous history *or* the armed window, never both, which is
+what Jeff hit. **A design decision, not a patch.** `--csv` points the viewer at
+one log in the meantime.
+
+### F. `status.json` write fails intermittently on Windows
+
+`PermissionError: [WinError 5]` on the `os.replace`, recovered after one
+failure. Cause is a reader — the viewer and the monitor both poll it — holding
+the file at the instant of the rename. The recorder logs, carries on and
+recovers, which is invariant 6 behaving. **Fix:** readers open with
+share-delete semantics. Costs one stale cycle; not urgent.
+
+### G. Phase 5 — the viewer shows the loop but not its judgement
+
+The control row works: `Sample | sw | SP | Out | Rng n/a | tracking`. Missing
+are error, the band, health, alarms and the monitor's verdict. Known, tracked,
+gate not met.
+
+### H. Startup poll overrun — benign, and it recurs
+
+`poll overran by ~2.8 s` at 2026-09-15 16:26:54, 2026-09-16 13:35:11 and
+14:11:42. Always the first cycle after both VISA resources open, never while
+running. Worth a note, not a fix.
 
 ## Then, in order
 
-1. **Phase 4 stage 3 close-out.** The write check (three commands, recorder
-   running) and W2's ceilings — `send analog 70.5` refused, `analog 0` refused
-   with the gate closed, `heaters_off` reaching the box. **`heaters_off` takes
-   the sample off 118 K**, so pick the day for that one.
-2. **4a — the first armed hour**, `authority_pct` narrowed to 0.1, tuning and
-   feedforward off, armed with no `--setpoint` from a hold that has settled.
-   **The first `arm` is Jeff's to type.**
-3. **4b** the fault drill, **4c** widen one thing per watched hour, **4d** the
-   5 K/min sweep.
-4. Before stage 5: the midnight blind spot above.
-5. `lschart status` and MATLAB `plant()` still do not read `plant.json`.
-6. The 09-10 mask still goes in with the next archive export.
-
-## One pre-existing test failure, and it is not from this session
-
-`tests/test_gui_window.py::test_a_burst_of_view_changes_costs_one_redraw` fails
-on this Mac with `assert 6 == 3` — a second redraw pass after `processEvents()`.
-**1210 passed, 1 failed.** It failed identically on a branch three weeks older
-whose GUI history is entirely different, and nothing in this session touches a
-file under `lschart/gui/`. CI is green on Linux/Windows, so it reads as a
-platform difference rather than a regression — but it is failing, it is not
-written down anywhere current, and it should be either fixed or recorded as
-known before it becomes normal.
+1. **B and C** — neither touches a running process, and B is the one that will
+   otherwise bite somebody from a clean checkout.
+2. **A**, the ladder, when a couple of hours of cryostat time are affordable.
+3. Re-arm at 4a with `authority_pct: 0.1`, and let the hour run.
+4. **D**, before trusting the bench on anything arming-shaped again.
 
 ## Traps this session added
 
-- **A round number in a plan is not a measurement.** The 72 h had been quoted
-  forward through three documents and derived in none of them. Ask what
-  timescale a gate is supposed to cover before spending days on it.
-- **"Both wrong regimes look like success" stopped being true when the
-  comparison changed**, and the sentence outlived the code by weeks in an
-  invariant. A claim about a failure mode has to name the code that produces
-  it, or it cannot be rechecked when that code moves.
-- **A check can be silent by arithmetic.** `verify_readback` passes at a hold
-  because every write is below its own tolerance, not because the write landed.
-  A green check whose inputs cannot differ is not evidence.
-- **A dated current-state block in a long-lived document has now been wrong
-  three times** — twice in the config headers, once in the document retired
-  here. Current state goes in `HANDOFF.md`, which is archived under its date.
+* **4a's "no feedforward" is load-bearing, not conservatism.** With a stale
+  gauge, feedforward *is* the failure. Do not switch it on to "help".
+* **`operating_point_pct` is vestigial only while feedforward is on.** With it
+  off, that field becomes the band centre and its value matters.
+* **The premise alarm is a WARNING, not a fault** (`warn_sigma: 3.0` against
+  `fault_mw: 10.0`, and a fault is a *step*). A known calibration offset inside
+  `bias_q_w` (±4.7 mW at 118 K) will warn every cycle and keep tracking. **Do
+  not raise `warn_sigma` to silence it** — that is the only thing telling you
+  the gauge is stale.
+* **The monitor and the supervisor legitimately disagree** about the residual:
+  the monitor judges the *change* against a trailing baseline, the supervisor
+  the *level* against σ. After a calibration shift the monitor reads typical
+  while the supervisor warns, and both are right. 4a's "verdicts agreeing" gate
+  needs rewording.
+* **A settled hold looks like a trend if you difference bucket means.** Block
+  means scattered 13.5 mK against 16.1 mK within-block — the same number, which
+  is wander. `analysis/allan.py` exists for this and was not consulted.
 
 ## Running it
 
@@ -143,8 +207,8 @@ The venv is Windows and lives at the **repository root**, not in a worktree:
 ```bash
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest -q
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ruff check .
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ltspm3.monitor -c config-ltspm3-heater.yaml
 C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ltspm3 -c config-ltspm3-armed.yaml check
+C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m lschart.gui -c config-ltspm3-armed.yaml
 ```
 
 `analysis/` still needs `measure.py` run once (11 s) before anything that fits.

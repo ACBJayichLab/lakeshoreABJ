@@ -181,6 +181,38 @@ band follows the setpoint (rule 5), and that field is only the fallback centre
 for a loop with no model. What to check is that `check`'s printed band brackets
 the output the heater is actually holding.
 
+### "No feedforward" is load-bearing, and 2026-09-16 proved it
+
+**4a's three settings are `authority_pct: 0.1`, tuning OFF and feedforward
+OFF. Applying only the first is what cost 350 mK on the first arm.**
+
+With feedforward ON, `_model_reference()` returns the model's steady-state
+answer for the setpoint, and that is both the band centre *and* the term the
+loop drives toward. On 09-16 the model was 0.107 % of output low after wiring
+work, so the loop armed bumplessly at 64.007 %, tracked down to **63.92 — the
+model's answer — and stayed there**, with the integral needing hours at
+`ti = 900 s` to unwind a persistent error. The sample fell 350 mK.
+
+With feedforward OFF the centre is `operating_point_pct` and the PID carries no
+model-derived term at all: it primes at the real output and integrates from
+there, so it *cannot* seek a stale answer. Second arm, same cryostat, same
+stale gauge: held to **−22 mK with a 13 mK scatter**, which is the open-loop
+noise floor.
+
+So the ordering in 4c — widen, then tuning, then feedforward, one per watched
+hour — is not caution for its own sake. **Feedforward is the stage that makes
+the loop trust the model's level, and it should be the last thing switched on,
+after a gauge you believe.**
+
+Two consequences worth carrying:
+
+* **`operating_point_pct` stops being vestigial when feedforward is off.** The
+  rest of this document calls it "only the fallback centre for a loop with no
+  model" — true with feedforward on. At 4a it *is* the band centre, and
+  whether it brackets the output actually holding the setpoint is the check.
+* **`authority_pct: 0.1` needs no widening at 4a**, even on a stale gauge,
+  precisely because the centre is no longer the stale number.
+
 ### The file ships at 1.0, and 4a arms at 0.1 — narrow it on the day
 
 **`authority_pct` in `config-ltspm3-armed.yaml` is 1.0, and that is correct for
@@ -218,10 +250,29 @@ commissioning.
 
 | step | gate |
 |---|---|
-| 4a — arm, `authority_pct` 0.1, no tuning, no feedforward | ≥ 1 h `tracking`, readback agreeing every cycle, monitor and supervisor verdicts agreeing |
+| 4a — arm, `authority_pct` 0.1, **no tuning, no feedforward** — all three, see below | ≥ 1 h `tracking`, readback agreeing every cycle, monitor and supervisor verdicts agreeing — **but read the caveat on that last clause** |
 | 4b — provoked fault at low temperature | ramps down at the one rate through the inverse curve, **does not resume when the sensor comes back**, latches, locks out, `ack` the only way out |
 | 4c — widen to 1.0 %, then tuning, then feedforward, one per watched hour | no `frozen` without a named cause |
 | 4d — **5 K/min sweep ≥ 10 K** | lag < 2 K, no warning at either end, `δQ` quiet |
+
+### The "verdicts agreeing" clause needs rewording
+
+4a's gate asks the monitor and the supervisor to agree. **After a calibration
+shift they legitimately will not**, and 09-16 is the case: the monitor read
+`missing_power: typical` while the supervisor warned on the same residual.
+
+Both are right, and the difference is designed. The monitor judges the
+**change** against a trailing baseline — which is what absorbs a delivered-power
+fraction shift, exactly the thing a reseated wire is. The supervisor judges the
+**level** against σ, and `bias_q_w` (±4.7 mW at 118 K, the calibration
+envelope) is deliberately *not* in that band, so any cryostat sitting anywhere
+inside its own declared envelope warns.
+
+So the gate should read: **the two disagree only in ways a named cause
+explains.** A standing supervisor warning with the monitor typical, after
+somebody has touched the heater wiring, is that. A disagreement nobody can
+account for is not. **Do not raise `warn_sigma` to make them agree** — that
+warning is the only thing reporting that the gauge is stale.
 
 4b is rules 1 and 7 proved on the cryostat rather than on the bench. The
 cleanest provocation is to drop `fault_after_s` to something short and pull the
