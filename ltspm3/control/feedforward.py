@@ -207,7 +207,35 @@ class Feedforward:
 
     @property
     def enabled(self) -> bool:
+        """Whether the loop may use the model's LEVEL as a control term.
+
+        A commissioning decision, and at 4a it is `false`: the level is a
+        calibration with a shelf life and the loop must not drive to it.  See
+        :attr:`has_curve` for the question this is repeatedly mistaken for.
+        """
         return self.cfg.enabled
+
+    @property
+    def has_curve(self) -> bool:
+        """Whether there is a steady-state curve to ASK, enabled or not.
+
+        **A different question from :attr:`enabled`, and the two were one
+        switch until 2026-09-16** (AUDIT-2026-09-16 findings 2 and 3).
+        `enabled` answers "should the loop trust the model's level"; this
+        answers "is there a curve to convert kelvin into percent with".  The
+        fault ramp-down needs the second and was asking the first, so at 4a it
+        descended at `min_rate_pct_per_min` -- five and a third hours from
+        64 %, against the 23 minutes the documents promise.
+
+        The shape of the curve did not expire when its level did: a descent at
+        5 K/min walked on a curve whose level is 1.4 K off is still a descent
+        at about 5 K/min, and it is bounded at every write by
+        `_rampdown_step_pct` besides.
+
+        False only for a cryostat with no fitted response at all, which is what
+        the fallback branches exist for.
+        """
+        return self.curve is not None
 
     def relative_power(self, pct: float) -> float:
         """Heater power as a fraction of power at ``ref_pct``.  Exact."""

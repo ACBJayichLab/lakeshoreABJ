@@ -93,8 +93,19 @@ premise check could not tell a commanded move from a fault.
 **There is one rate** — `ramp.max_rate_k_per_min`, 5 K/min — and a sweep, the
 post-fault approach and the fault ramp-down all use it. The heater's rate limit
 in percent is derived from it through the gain, `max_rate_k_per_min / K(T)`:
-0.38 %/min at 118 K and 14.6 %/min at 10 K, which is the same five kelvin a
+0.40 %/min at 118 K and 14.6 %/min at 10 K, which is the same five kelvin a
 minute at both. A rate in percent cannot be, because the gain spans forty-fold.
+
+**Both conversions ask whether a curve EXISTS, not whether this commissioning
+stage trusts it** — `HeaterSupervisor.has_curve` and `.schedule`. They asked
+`feedforward.enabled` and `tuner.enabled` until 2026-09-16, which are answers
+to different questions: should the loop drive to the model's *level*, and
+should the gains be rescheduled with temperature. With both off — the armed 4a
+configuration — the descent fell at `min_rate_pct_per_min` (five hours from
+64 %, not 23 minutes) and the output limiter never left its floor (2.6 K/min at
+118 K, against the 5 configured). A model whose level is stale still has a
+usable shape. `ramp_lead_pct` is the one that stays on `tuner.enabled`,
+because it widens the authority band rather than slowing something down.
 
 **The closed-loop speed is a ratio, not a time** — `hold_speed: 3` and
 `move_speed: 0.5` against `tau(T)`, floored at four dead times. τ runs from

@@ -148,8 +148,10 @@ class SupervisorConfig:
     #: **THE OUTPUT RATE FLOOR, and one of the two rate fields left of eight.**
     #: The heater's percent rate is `max_rate_k_per_min / K(T)` -- the one rate
     #: converted through the gain, so 5 K/min means 5 K/min everywhere -- and
-    #: this is what it falls back to where the model has no opinion.  0.38 %/min
-    #: at 118 K, 14.6 %/min at 10 K.
+    #: this is what it falls back to where there is no model to ask.  The one
+    #: rate is 0.40 %/min at 118 K and 14.9 %/min at 10 K on the 2026-09-13
+    #: fit; the 0.38 and 14.6 written everywhere before that were the pre-refit
+    #: gains.
     #:
     #: What it replaces is `max_step_pct: 0.02` and `max_rate_pct_per_min:
     #: 0.20`, both of which were trim rates: ten kelvin is 29 % of output at
@@ -510,6 +512,39 @@ class HeaterSupervisor:
             self._cadence_s += alpha * (dt - self._cadence_s)
         self.tuner.delay_s = self.delay_s
 
+    # -- is there a model to ask? ------------------------------------------
+    #
+    # **TWO SEAMS, AND NEITHER OF THEM IS A COMMISSIONING SWITCH.**
+    # AUDIT-2026-09-16 findings 2 and 3 are the same mistake made twice: a
+    # question about whether the model EXISTS was asked of a flag that says
+    # whether a commissioning stage TRUSTS it.
+    #
+    #   `feedforward.enabled`  should the loop drive to the model's LEVEL?
+    #   `tuner.enabled`        should the gains be rescheduled with T?
+    #
+    # Neither is "is there a curve to convert kelvin into percent with".  The
+    # fault ramp-down asked the first and the output rate limiter the second,
+    # so at 4a -- both off -- the descent fell at `min_rate_pct_per_min`
+    # (320 minutes from 64 %, bench-measured) and the one rate never reached
+    # the output at all (0.20 %/min, which is 2.6 K/min at 118 K against the
+    # configured 5).  Both are properties of the CRYOSTAT's model, and a
+    # stale level does not make a curve's shape unusable.
+
+    @property
+    def has_curve(self) -> bool:
+        """Is there a steady-state curve to walk, whatever the stage trusts?"""
+        ff = self.feedforward
+        return ff is not None and ff.has_curve
+
+    @property
+    def schedule(self):
+        """The gain/tau schedule, or ``None`` where nothing has measured this
+        cryostat.  `Tuner` builds one from the config's table or from the
+        shipped fit; a controller with neither has no opinion about K(T) and
+        the rate limiter falls back to its floor."""
+        tuner = self.tuner
+        return getattr(tuner, "schedule", None) if tuner is not None else None
+
     # -- authority band ----------------------------------------------------
 
     def target_band_centre_pct(self) -> float:
@@ -573,6 +608,15 @@ class HeaterSupervisor:
         Taken from the smoother rather than the ramp, so it decays with the
         smoother's own time constant when a sweep ends instead of falling off
         a cliff while the cryostat is still catching up.
+
+        **Still gated on `tuner.enabled`, deliberately, where the ramp-down and
+        the output rate limiter are not.**  Those two were failing SLOW, and
+        slow is the safe side of rule 1.  This one widens the authority band,
+        which is the one direction that grants the loop more heater than it had
+        -- so it stays where it is until a stage asks for it, and a stage with
+        the tuning off runs a band that does not widen during a ramp.  That is
+        the conservative half of the same conflation and it is left in place on
+        purpose (AUDIT-2026-09-16 finding 3, and rule 5).
         """
         rate = abs(getattr(self.smoother, "rate_k_per_s", 0.0) or 0.0)
         if rate <= 0 or not self.tuner.enabled:
@@ -1837,11 +1881,11 @@ class HeaterSupervisor:
             self._rampdown_from_k = (
                 self.filter.value if self.filter.primed
                 else (self.feedforward.kelvin_for(current)
-                      if self.feedforward.enabled else None))
+                      if self.has_curve else None))
             self._rampdown_t0 = t
 
         target_k = None
-        if self._rampdown_from_k is not None and self.feedforward.enabled:
+        if self._rampdown_from_k is not None and self.has_curve:
             # `or t` here read a start time of exactly 0.0 as "never
             # captured", so a descent that began at t = 0 -- which is where a
             # virtual clock starts, and where a monotonic one can -- recomputed
@@ -1865,10 +1909,16 @@ class HeaterSupervisor:
             else:
                 proposed = self.feedforward.percent_for(target_k)
         else:
-            # **No curve at all** -- a cryostat with no fitted response, which
-            # is the only way to get here now that the model supplies the
-            # starting temperature when the filter cannot.  The floor rate is
-            # all there is to descend at, and it is slow.
+            # **No curve at all** -- a cryostat with no fitted response.  The
+            # floor rate is all there is to descend at, and it is slow: 63 % at
+            # `min_rate_pct_per_min` is over five hours.
+            #
+            # This branch used to be reachable whenever the FEEDFORWARD was
+            # switched off, which is every fault ramp-down at commissioning
+            # stage 4a -- the comment here said it was unreachable and it was
+            # the armed configuration (AUDIT-2026-09-16 finding 2).  It is
+            # gated on `has_curve` now: whether there is a curve, not whether
+            # this stage drives to its level.
             proposed = current - self._rate_pct_per_min(None) * (dt / 60.0)
 
         # Never upward.  Rule 1, and the one line that makes a wrong model
@@ -1922,9 +1972,10 @@ class HeaterSupervisor:
 
         Falls back to :meth:`_rate_pct_per_min` where there is no curve to ask,
         which is the same conversion the tracking rate limiter uses and carries
-        the same `min_rate_pct_per_min` floor.
+        the same `min_rate_pct_per_min` floor.  **`has_curve`, not
+        `feedforward.enabled`** -- see the seam above.
         """
-        if self.feedforward.enabled:
+        if self.has_curve:
             gain = self.feedforward.gain_at(current)
             if gain > 0:
                 rate = max(self.cfg.min_rate_pct_per_min,
@@ -1936,15 +1987,24 @@ class HeaterSupervisor:
         """**The one rate, converted through the gain.**
 
         ``max_rate_k_per_min / K(T)``, floored at ``min_rate_pct_per_min``
-        where the model has no opinion: 14.6 %/min at 10 K, 0.38 %/min at
-        118 K, 0.40 %/min at 180 K.  The same five kelvin a minute at every one
-        of them, which is what a rate limit in percent can never be -- the gain
-        spans forty-fold across this cryostat.
+        where there is no schedule to ask: 14.9 %/min at 10 K, 0.40 %/min at
+        118 K, 0.42 %/min at 180 K, measured off the shipped table.  The same
+        five kelvin a minute at every one of them, which is what a rate limit in
+        percent can never be -- the gain spans forty-fold across this cryostat.
+
+        **The conversion needs the SCHEDULE, not the scheduler.**  This asked
+        `tuner.enabled` until 2026-09-16, so a stage with the tuning switched
+        off ran the output limiter on its floor -- 2.6 K/min at 118 K and
+        0.6 K/min at 30 K, against a configured 5 -- while `set_setpoint` went
+        on ramping in kelvin at the rate the file names.  A loop told 5 K/min
+        and delivering 2.6 is one somebody will "tune" without knowing why.
+        AUDIT-2026-09-16 finding 3.
         """
         floor = self.cfg.min_rate_pct_per_min
-        if kelvin is None or not self.tuner.enabled:
+        schedule = self.schedule
+        if kelvin is None or schedule is None:
             return floor
-        gain = self.tuner.schedule.gain_at(kelvin)
+        gain = schedule.gain_at(kelvin)
         if gain <= 0:
             return floor
         return max(floor, self.ramp.cfg.max_rate_k_per_min / gain)

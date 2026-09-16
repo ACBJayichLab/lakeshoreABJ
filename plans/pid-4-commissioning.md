@@ -249,31 +249,47 @@ verbatim, where every other scenario in that directory pins the design envelope
 (1.0, on, on). It also pins the two things only visible from this stage —
 the fault ramp-down's rate and the output rate limiter's — see below.
 
-### What 4a's two switches cost the rate limits
+### What 4a's two switches cost the rate limits — fixed 2026-09-16
 
-Both are the same conflation and both were found by reading, not by a failing
-test (AUDIT-2026-09-16, findings 2 and 3):
+Both were the same conflation, and both were found by reading rather than by a
+failing test (AUDIT-2026-09-16, findings 2 and 3):
 
 * **the fault ramp-down.** `_rampdown_target` walks a target temperature down
   at the one rate and turns it into an output through the model's inverse
-  curve — *when the feedforward is enabled*. At 4a it is not, so the descent
-  takes the no-curve branch and falls at `min_rate_pct_per_min`: **320 minutes
+  curve — *when the feedforward was enabled*. At 4a it is not, so the descent
+  took the no-curve branch and fell at `min_rate_pct_per_min`: **320 minutes
   from 64 %, measured on the bench, against the 23 minutes
-  `docs/ltspm3/control.md` promises.** Slower is the safe side of rule 1, and
-  it is not a heater hazard — but a sensor fault at 118 K leaves the heater at
-  64 % for the rest of the afternoon on a cryostat whose thermometer is not
-  trusted.
-* **the output rate limiter.** `_rate_pct_per_min` returns the same floor
-  whenever the *tuner* is disabled, so 4a's effective output rate is
-  0.20 %/min — **2.6 K/min at 118 K**, not the 5 the file names; 0.6 K/min at
-  30 K. `ramp_lead_pct` is 0 for the same reason. **4d's 10 K sweep is written
-  against 5 K/min and is affected**, as is anything that reads
-  `ramp.max_rate_k_per_min` as a promise.
+  `docs/ltspm3/control.md` promises.** Slower is the safe side of rule 1 and it
+  was not a heater hazard — but a sensor fault at 118 K left the heater at 64 %
+  for the rest of the afternoon on a cryostat whose thermometer had just
+  stopped being trusted, and the `else` branch's own comment called itself
+  unreachable while it was the armed configuration.
+* **the output rate limiter.** `_rate_pct_per_min` returned the floor whenever
+  the *tuner* was disabled, so 4a's effective output rate was 0.20 %/min —
+  **2.6 K/min at 118 K**, not the 5 the file names; 0.6 K/min at 30 K — while
+  `set_setpoint` went on ramping in kelvin at the rate the file does name.
 
 `feedforward.enabled` answers "should the loop trust the model's *level*",
 which is what 4a correctly says no to; `tuning.enabled` answers "reschedule the
 gains". Neither is the question "is there a curve to convert kelvin into
 percent with", and the curve's *shape* did not expire when its level did.
+
+**`HeaterSupervisor.has_curve` and `.schedule` are that question**, and the
+ramp-down, `_rampdown_step_pct` and the rate conversion are gated on them.
+Measured under the file's switches after: the descent is **24.0 minutes** and
+the limiter is **0.40 %/min at 118 K**, which is the one rate.
+
+**`ramp_lead_pct` deliberately stays on `tuner.enabled`.** The two above were
+failing *slow*; that one widens the authority band, which is the only direction
+that hands the loop more heater than it had. So at 4a the band does not widen
+during a ramp, and the velocity feedforward it caps is off with it. Switch them
+on at 4c with the tuning, not before.
+
+**4d's 10 K sweep can now be given 5 K/min and get it** as far as the output
+limiter is concerned. It will not arrive in two minutes: with `tuning.enabled:
+false` the gains are the file's starting `kp = 0.02` / `ti = 900 s`, and a 3 K
+move measured on the bench is still 1 K short after half an hour. A rate is a
+ceiling, not a promise. Do 4c's tuning step before reading anything into 4d.
 
 ### The file ships at 1.0, and 4a arms at 0.1 — narrow it on the day
 

@@ -26,6 +26,7 @@ import pytest
 from bench_plant import (STAGE_FILE, FittedHarness, bench_control_config)
 
 from ltspm3.control import SupervisorState
+from ltspm3.model import fitted_response as _M
 
 #: The cryostat as wired on 2026-09-16: the heater delivers 0.336 % less power
 #: than `P(u)` claims, measured (HANDOFF section 3), which is 0.48 of the
@@ -135,22 +136,23 @@ def test_the_armed_stage_holds_where_it_was_armed(authority):
 
 # -- finding 2: what the fault ramp-down costs at this stage ---------------
 
-#: **MEASURED UNDER THE FILE'S SWITCHES**, and it is the number finding 2 is
-#: about: with `feedforward.enabled: false` the descent takes
-#: `_rampdown_target`'s `else` branch and falls at `min_rate_pct_per_min`,
-#: 0.20 %/min, instead of walking the curve down at the one rate in kelvin.
-#: From 63.98 % that is five and a third hours, against the 23 minutes
-#: `docs/ltspm3/control.md` promises.
+#: **MEASURED UNDER THE FILE'S SWITCHES.**  118 K to base at the one rate is
+#: what `docs/ltspm3/control.md` promises and what the supervisor's own comment
+#: quotes: about 23 minutes.
 #:
-#: Slower is the safe side of rule 1 -- nothing here is a heater hazard -- but
-#: it means a sensor fault at 118 K leaves the heater at 64 % for the rest of
-#: the afternoon on a cryostat whose thermometer is not trusted.  Pinned so the
-#: fix moves a number in a test rather than surprising somebody.
-RAMPDOWN_MINUTES = 320.0
-RAMPDOWN_TOL_MIN = 5.0
+#: It was **320** until the `has_curve` seam landed, because with
+#: `feedforward.enabled: false` the descent took `_rampdown_target`'s no-curve
+#: branch and fell at `min_rate_pct_per_min` -- 0.20 %/min, five and a third
+#: hours from 64 %, on a cryostat whose thermometer had just stopped being
+#: trusted.  Slower was the safe side of rule 1 and it was not a heater hazard;
+#: it was also not what anybody had reasoned about, and the comment in that
+#: branch called it unreachable while it was the armed configuration.
+#: AUDIT-2026-09-16 finding 2.
+RAMPDOWN_MINUTES = 24.0
+RAMPDOWN_TOL_MIN = 2.0
 
 
-def test_the_fault_ramp_down_takes_five_hours_at_this_stage():
+def test_the_fault_ramp_down_walks_the_curve_down_at_the_one_rate():
     h = armed()
     h.minutes(2)
     h.cryostat.inject(dropout_channels={"218.1"})
@@ -168,32 +170,54 @@ def test_the_fault_ramp_down_takes_five_hours_at_this_stage():
     assert from_pct == pytest.approx(63.98, abs=0.05)
     minutes = (h.clock.t - t_start) / 60.0
     assert minutes == pytest.approx(RAMPDOWN_MINUTES, abs=RAMPDOWN_TOL_MIN)
-    # Which IS the floor rate, stated as the arithmetic rather than as a
-    # duration, so the reason is visible next to the number.
-    assert from_pct / minutes == pytest.approx(
-        h.sup.cfg.min_rate_pct_per_min, rel=0.02)
+    # And it is the ONE RATE that sets it, stated as the arithmetic rather than
+    # as a duration so the reason sits next to the number: the sample was taken
+    # from where it was to the bottom of the table at `max_rate_k_per_min`.
+    span_k = h.sup.feedforward.kelvin_for(from_pct) - _M.T_MIN_K
+    assert span_k / minutes == pytest.approx(
+        h.sup.ramp.cfg.max_rate_k_per_min, rel=0.15)
+    # Emphatically NOT the floor rate, which is what this took before the
+    # `has_curve` seam and is 13x longer.
+    assert minutes < from_pct / h.sup.cfg.min_rate_pct_per_min / 10.0
 
 
 # -- finding 3: the output rate limiter, and what it is told ---------------
 
-def test_the_output_rate_limiter_is_on_its_floor_while_tuning_is_off():
-    """`_rate_pct_per_min` returns `min_rate_pct_per_min` whenever the TUNER
-    is disabled, so the one rate never reaches the output.
+def test_the_output_rate_limiter_converts_the_one_rate_with_tuning_off():
+    """The conversion needs the SCHEDULE; `tuning.enabled` says whether to
+    reschedule the GAINS.  Two questions, and they were one switch.
 
-    0.20 %/min at ~13.2 K/% is **2.6 K/min**, not the 5 the file's
-    `ramp.max_rate_k_per_min` names; `ramp_lead_pct` is 0 for the same reason,
-    so the band does not widen during a ramp either.  The conversion from
-    kelvin to percent needs the CURVE; `tuning.enabled` says whether to
-    reschedule the GAINS.  Two questions, one switch.
+    On the floor it was 0.20 %/min -- **2.6 K/min at 118 K**, against the 5 the
+    file's `ramp.max_rate_k_per_min` names, and 0.6 K/min at 30 K.
+    AUDIT-2026-09-16 finding 3.
     """
     h = armed()
-    floor = h.sup.cfg.min_rate_pct_per_min
-    assert h.sup._rate_pct_per_min(BENCH_K) == pytest.approx(floor)
-    # What the one rate would be here if the conversion were made.
-    gain = h.sup.tuner.schedule.gain_at(BENCH_K)
+    gain = h.sup.schedule.gain_at(BENCH_K)
     one_rate = h.sup.ramp.cfg.max_rate_k_per_min / gain
-    assert one_rate == pytest.approx(0.38, abs=0.02)
+    assert one_rate == pytest.approx(0.40, abs=0.02)
+    assert h.sup._rate_pct_per_min(BENCH_K) == pytest.approx(one_rate)
+    assert h.sup._rate_pct_per_min(BENCH_K) > h.sup.cfg.min_rate_pct_per_min
+    # The floor still governs where the model has nothing to say.
+    assert h.sup._rate_pct_per_min(None) == pytest.approx(
+        h.sup.cfg.min_rate_pct_per_min)
+
+
+def test_the_band_still_does_not_widen_during_a_ramp_at_this_stage():
+    """**The conservative half of the same conflation, left in place.**
+
+    `ramp_lead_pct` widens the AUTHORITY BAND, which is the one direction that
+    grants the loop more heater than it had, so it stays gated on
+    `tuner.enabled` where the ramp-down and the rate limiter no longer are.
+    Both of those were failing slow, and slow is the safe side of rule 1.
+    """
+    h = armed()
+    h.minutes(2)
+    h.sup.set_setpoint(h.sup.pid.cfg.setpoint + 3.0)
+    h.minutes(1)
+    assert abs(h.sup.smoother.rate_k_per_s) > 0.0, "not actually ramping"
     assert h.sup.ramp_lead_pct() == 0.0
+    lo, hi = h.sup.band
+    assert hi - lo == pytest.approx(2 * h.sup.cfg.authority_pct)
 
 
 def test_a_three_kelvin_setpoint_move_is_not_delivered_at_five_k_per_min():
