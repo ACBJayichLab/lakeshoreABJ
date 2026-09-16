@@ -347,8 +347,15 @@ class LakeshoreTransport(Transport):
     #: The vendor driver logs *every* transaction at INFO -- two lines per
     #: query.  Measured on the bench 336: 1,114 lines in 60 s at 1 Hz, which is
     #: ~1.6 M lines a day, and this recorder is meant to run for months.  So it
-    #: is quietened to WARNING unless someone has deliberately asked for DEBUG,
-    #: where per-transaction traffic is exactly what you want to see.
+    #: is quietened to WARNING.
+    #:
+    #: The CLI decides this now: `lschart.__main__._setup_logging` pins this
+    #: logger and `pyvisa` alike, and `--bus-trace` is what asks for the
+    #: traffic.  Root DEBUG on its own no longer means "and the bus too" --
+    #: on two boxes that was ~26 lines a cycle of somebody else's output
+    #: burying the program's own.  This stays as the backstop for a transport
+    #: constructed without going through the CLI, and defers to whatever the
+    #: CLI set: it only moves a logger still at NOTSET or INFO.
     VENDOR_LOGGER = "lakeshore"
 
     def __init__(

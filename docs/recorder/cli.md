@@ -1,12 +1,20 @@
 # The command line
 
 ```
-python -m lschart [-c CONFIG] [--log-level LEVEL] <command> ...
+python -m lschart [-c CONFIG] [--log-level LEVEL] [--bus-trace] <command> ...
 ```
 
 `-c/--config` is a path to a YAML file; without it the built-in defaults apply
 (simulated instruments). `lschart` is also installed as a console script, so
 `lschart -c config.yaml run` is the same thing.
+
+`--log-level` is the level of **this program**, overriding the config's
+`log_level`. `--bus-trace` is the separate question of whether the VISA and
+vendor-driver transaction lines come with it, and it is off even at
+`--log-level DEBUG`: pyvisa logs three lines per query, so two instruments on
+one board produce roughly 26 lines per cycle of somebody else's output, and it
+buries the lines you turned DEBUG on to read. Turn it on when the question is
+about the *bus* — a link that will not open, a reply that arrives garbled.
 
 ## Which commands touch the instrument
 

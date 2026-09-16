@@ -45,6 +45,12 @@ the same shape of gate:
     ``AOUT?`` answers to two decimals, so this confirms the *code* to within
     ``readback_tol_pct``, not the exact float commanded.
 
+    It retries, so "verified" on its own only means the box agreed within about
+    half a second.  The WARNING line therefore carries **which readback agreed**
+    -- see :meth:`LS218._confirm`.  Read that number before arming: the armed
+    path has no retry, so a 1 there is the evidence that ``write_settle_s`` is
+    enough and anything higher is the evidence that it is not.
+
 A software PID driving this output every cycle should set ``verify_writes:
 false`` and do its own confirmation -- ``HeaterSupervisor`` has
 ``verify_readback`` for exactly that, and paying for both would add a second
@@ -238,41 +244,61 @@ class LS218(Instrument):
 
         cmd = self.analog.command(percent)
         self.transport.write(cmd)
-        got = self._confirm(percent, cmd)
+        got, attempt = self._confirm(percent, cmd)
 
         # WARNING, not INFO: "who moved the heater, and from what" is the first
         # question asked after a surprise, and it should be in the log at the
-        # level an operator actually runs at.
+        # level an operator actually runs at.  The readback number rides along
+        # for the same reason -- it is what says whether `write_settle_s` is
+        # enough for the armed loop, which gets one readback and no retry, and
+        # it is worth nothing if it only appears at a log level nobody runs at.
         log.warning(
-            "%s: %s  (%s%% -> %s%%%s)", self.name, cmd,
+            "%s: %s  (%s%% -> %s%%, %s)", self.name, cmd,
             "?" if previous is None else f"{previous:.3f}",
             "?" if got is None else f"{got:.3f}",
-            "" if self.verify_writes else ", UNVERIFIED",
+            f"verified on readback {attempt}" if self.verify_writes
+            else "UNVERIFIED",
         )
         return cmd
 
     def _confirm(self, percent: float, cmd: str, *, attempts: int = 5,
-                 pause_s: float = 0.1) -> float | None:
-        """Read ``AOUT?`` back until it agrees, or say plainly that it never did.
+                 pause_s: float = 0.1) -> tuple[float | None, int]:
+        """Read ``AOUT?`` back until it agrees, and say WHICH attempt agreed.
 
         The tolerance is not slack for a sloppy instrument: the DAC quantises to
         its own step and ``AOUT?`` reports two decimals, so an exact float
         comparison would fail every single time on a write that worked.  What it
         still catches is the failure that matters -- a write that did not land
         at all, which leaves the readback a whole commanded step away.
+
+        **The attempt number is returned, not merely logged, because it is the
+        one thing the armed path cannot discover for itself.**  A supervisor
+        runs with ``verify_writes: false`` and reads back exactly ONCE, paced at
+        the transport's ``write_settle_s``.  If the box in fact needs two or
+        three of these attempts, this loop succeeds and reports "verified" while
+        the armed loop reads stale and raises an alarm every cycle.  A bare
+        "verified" cannot tell those two apart; "verified on readback 1" can.
         """
         if not self.verify_writes:
-            return None
+            return None, 0
         got = None
-        for attempt in range(attempts):
+        for attempt in range(1, attempts + 1):
             try:
                 got = self.get_analog_percent()
             except (TransportError, ValueError) as exc:
                 log.debug("%s: AOUT? readback failed (attempt %d): %s",
-                          self.name, attempt + 1, exc)
+                          self.name, attempt, exc)
                 got = None
             if got is not None and abs(got - percent) <= self.readback_tol_pct:
-                return got
+                return got, attempt
+            if got is not None:
+                # A readback that ARRIVES and disagrees is the stale case, and
+                # until 2026-09-15 it was the one branch here that said nothing
+                # at all -- it slept and retried in silence.  Counting the line
+                # above therefore counted comms errors and never once counted
+                # staleness, which is what somebody turning on DEBUG is after.
+                log.debug("%s: AOUT? still reads %.3f%% after commanding "
+                          "%.3f%% (attempt %d)", self.name, got, percent, attempt)
             time.sleep(pause_s)
         raise InstrumentError(
             f"{self.name}: analog output {self.analog.output} did not take. "

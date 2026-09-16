@@ -28,12 +28,38 @@ log = logging.getLogger("lschart")
 BUILDER = Application
 
 
-def _setup_logging(level: str) -> None:
+#: Third-party loggers that trace every transaction on the bus.  `pyvisa` logs
+#: three lines per query -- viWrite, "reading N bytes", viRead -- and the
+#: vendor `lakeshore` driver two, so on this cryostat's two boxes a root logger
+#: at DEBUG is ~26 lines per cycle of somebody else's output.  That buries the
+#: program's own DEBUG lines, which are the ones a person turning DEBUG on went
+#: there to read.
+#:
+#: So the two questions are separated: `--log-level` is the level of THIS
+#: program, and `--bus-trace` is the separate question of whether the bus
+#: traffic comes with it.  `LakeshoreTransport._quieten_vendor_logging` is the
+#: backstop for a transport built without going through this CLI.
+BUS_LOGGERS = ("pyvisa", "lakeshore")
+
+
+def _setup_logging(level: str, *, bus_trace: bool = False) -> None:
+    resolved = getattr(logging, level.upper(), logging.INFO)
     logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
+        level=resolved,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # basicConfig is a NO-OP once the root logger has a handler, and something
+    # imported before this point may well have installed one -- in which case
+    # the level above was silently never applied and `--log-level` did nothing.
+    # Setting it here works either way.  Deliberately not `force=True`: that
+    # would also tear out a handler somebody else is relying on, pytest's
+    # included.
+    logging.getLogger().setLevel(resolved)
+    for name in BUS_LOGGERS:
+        logging.getLogger(name).setLevel(
+            logging.NOTSET if bus_trace else logging.WARNING
+        )
 
 
 def cmd_run(args) -> int:
@@ -41,7 +67,11 @@ def cmd_run(args) -> int:
     if args.interval:
         cfg.acquisition.interval_s = args.interval
         cfg.validate()
-    _setup_logging(args.log_level or cfg.log_level)
+    _setup_logging(args.log_level or cfg.log_level,
+                   # getattr, not args.bus_trace: these commands are also
+                   # called with a hand-built namespace, and a logging flag
+                   # must never be the reason `probe` fails to run.
+                   bus_trace=getattr(args, "bus_trace", False))
 
     # Taken before anything is opened: the point is to lose the race cleanly,
     # rather than to discover halfway through startup that the port is held.
@@ -203,7 +233,11 @@ def cmd_probe(args) -> int:
     queries only: *IDN?, INNAME?, KRDG?, SETP?, HTR?, RANGE?, PID?, RAMP?.
     """
     cfg = config_mod.load(args.config)
-    _setup_logging(args.log_level or cfg.log_level)
+    _setup_logging(args.log_level or cfg.log_level,
+                   # getattr, not args.bus_trace: these commands are also
+                   # called with a hand-built namespace, and a logging flag
+                   # must never be the reason `probe` fails to run.
+                   bus_trace=getattr(args, "bus_trace", False))
 
     # Force the interlock on before anything is constructed.
     for inst_cfg in cfg.instruments:
@@ -285,7 +319,11 @@ def cmd_set(args) -> int:
     not be something that happens as a side effect of starting a recorder.
     """
     cfg = config_mod.load(args.config)
-    _setup_logging(args.log_level or cfg.log_level)
+    _setup_logging(args.log_level or cfg.log_level,
+                   # getattr, not args.bus_trace: these commands are also
+                   # called with a hand-built namespace, and a logging flag
+                   # must never be the reason `probe` fails to run.
+                   bus_trace=getattr(args, "bus_trace", False))
     app = BUILDER(cfg)
     inst = _one_controller(app, args.instrument)
     try:
@@ -496,7 +534,13 @@ def cmd_init(args) -> int:
 def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     ap = argparse.ArgumentParser(prog=prog, description=__doc__.splitlines()[0])
     ap.add_argument("-c", "--config", default=None, help="path to config.yaml")
-    ap.add_argument("--log-level", default=None)
+    ap.add_argument("--log-level", default=None,
+                    help="level for THIS program (default INFO, or the "
+                         "config's log_level)")
+    ap.add_argument("--bus-trace", action="store_true",
+                    help="also log every VISA/vendor transaction. Off even "
+                         "at --log-level DEBUG, because on two boxes it is "
+                         "~26 lines a cycle and buries this program's own")
     sub = ap.add_subparsers(dest="command")
 
     run = sub.add_parser("run", help="record (and optionally control) until interrupted")

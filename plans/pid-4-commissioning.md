@@ -50,7 +50,7 @@ glitch, a comms drop, a sustained fault to completion and lockout, and
 
 | item | do | gate |
 |---|---|---|
-| W1 | see below | a readback that shows the value just commanded |
+| W1 | see below | every step reads back the value just commanded, **on readback 1** |
 | W2 | `send analog 70.5`; `analog 0` with the gate closed; `heaters_off` | two refusals logged, one zero reaching the box, output restored |
 | circuit | the 09-10 repair on the manifest (Phase 0) | `δQ` inside 3 σ_Q for 72 h; weak evidence, but the evidence there is |
 
@@ -80,11 +80,44 @@ python -m lschart -c config-ltspm3-heater.yaml send analog <x-0.06>
 python -m lschart -c config-ltspm3-heater.yaml send analog <x>
 ```
 
-Each logs `old% -> new%` at WARNING, which is the evidence. If every readback
-shows the value just written, 100 ms stands. If any shows the previous value,
-**then** characterise the delay properly, and set `write_settle_s` above it with
-margin in the `transport:` block — it is a transport field, not an instrument
-one, and nothing under `instruments:` accepts it.
+Each logs `old% -> new%, verified on readback N` at WARNING, which is the
+evidence. If every readback shows the value just written, 100 ms stands. If any
+shows the previous value, **then** characterise the delay properly, and set
+`write_settle_s` above it with margin in the `transport:` block — it is a
+transport field, not an instrument one, and nothing under `instruments:` accepts
+it.
+
+**Send a step that actually moves the box.** A write commanding the value the
+output is already holding makes `previous` and `got` the same number, so a stale
+readback and a fresh one are identical and the write proves nothing. Read `AOUT?`
+first and step from there.
+
+#### And read N, not just the values
+
+`old% -> new%` alone closes only half of W1. The driver retries up to five times
+at 100 ms, so it says "verified" whether the box agreed at 100 ms or at 500 ms —
+and the armed config sets `verify_writes: false`, where `_write_output` does
+**one** readback paced at exactly `write_settle_s` with no retry and turns a
+disagreement into an alarm rather than a retry. A box needing 300 ms would pass
+this test and then alarm every cycle once armed.
+
+So the WARNING line carries which readback agreed (added 2026-09-15):
+
+- **`verified on readback 1`** on all three steps → the first readback at
+  `write_settle_s` was fresh. 100 ms stands, W1 fully closed.
+- **anything higher** → the box needs about N × 100 ms. Raise `write_settle_s`
+  above that with margin before arming.
+
+**Do not try to answer this by counting DEBUG lines.** Until 2026-09-15 the
+retry loop logged only when a readback *raised*; a readback that arrived and
+disagreed — the stale case, the one W1 is about — was retried in total silence.
+Counting `AOUT? readback failed (attempt N)` counted comms errors and never once
+counted staleness, so it read "attempt 1" either way. That branch now logs too,
+but the number on the WARNING line is the thing to read, and it needs no DEBUG.
+
+`--log-level DEBUG` is also survivable now: it no longer turns on pyvisa, which
+traced three lines per query and made ~26 lines a cycle across the two boxes.
+`--bus-trace` is how you ask for that traffic when you want it.
 
 **Two cases this cannot cover, and neither needs it.** With `dither: true` the
 sigma-delta quantiser moves one 0.01 % code at a time, deliberately below the

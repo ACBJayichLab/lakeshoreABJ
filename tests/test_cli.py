@@ -14,6 +14,7 @@ traceback, and that nothing reaches an instrument that should not.
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
 import time
 
@@ -495,3 +496,66 @@ def test_no_sub_command_means_run(tmp_path, monkeypatch):
 def test_a_heater_range_outside_0_to_3_is_refused_by_the_parser(tmp_path):
     with pytest.raises(SystemExit):
         cli.main(["-c", config(tmp_path), "set", "--range", "9"])
+
+
+@pytest.fixture
+def restore_logging():
+    """These tests move GLOBAL logging state; put every level back afterwards.
+
+    Leaving the root at DEBUG would leak into the rest of the suite, and a
+    suite whose noise depends on test ORDER is the kind of thing that gets
+    blamed on the code under test.
+    """
+    root = logging.getLogger()
+    before = [root.level] + [logging.getLogger(n).level for n in cli.BUS_LOGGERS]
+    handlers = list(root.handlers)
+    try:
+        yield
+    finally:
+        root.handlers[:] = handlers
+        root.setLevel(before[0])
+        for name, level in zip(cli.BUS_LOGGERS, before[1:]):
+            logging.getLogger(name).setLevel(level)
+
+
+# -- log levels -------------------------------------------------------------
+#
+# `--log-level DEBUG` means DEBUG for THIS program.  On the cryostat's two GPIB
+# boxes the root logger at DEBUG also turned on pyvisa, which traces three
+# lines per query -- ~26 lines a cycle of somebody else's output, burying the
+# lines somebody turned DEBUG on to read.  The bus is now its own question.
+
+def _levels():
+    return {name: logging.getLogger(name).level for name in cli.BUS_LOGGERS}
+
+
+def test_debug_does_not_drag_the_bus_loggers_along_with_it(restore_logging):
+    cli._setup_logging("DEBUG")
+    assert logging.getLogger().level == logging.DEBUG
+    assert set(_levels().values()) == {logging.WARNING}
+
+
+def test_bus_trace_is_how_you_ask_for_the_transaction_lines(restore_logging):
+    cli._setup_logging("DEBUG", bus_trace=True)
+    assert logging.getLogger().level == logging.DEBUG
+    # NOTSET, so they inherit the root -- rather than a level of their own that
+    # would then have to be kept in step with it.
+    assert set(_levels().values()) == {logging.NOTSET}
+
+
+def test_the_level_is_applied_even_when_a_handler_already_exists(restore_logging):
+    """basicConfig is a silent no-op once the root has a handler.
+
+    Something imported earlier -- a vendor driver, a plotting library -- can
+    install one, and then `--log-level` did nothing and said nothing.
+    """
+    logging.getLogger().addHandler(logging.NullHandler())
+    cli._setup_logging("DEBUG")
+    assert logging.getLogger().level == logging.DEBUG
+
+
+def test_bus_trace_is_off_unless_asked_for(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(cli, "cmd_run", lambda args: seen.append(args) or 0)
+    assert cli.main(["-c", config(tmp_path)]) == 0
+    assert seen[0].bus_trace is False

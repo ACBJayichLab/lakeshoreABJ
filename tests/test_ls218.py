@@ -8,6 +8,8 @@ guards around that single command are the whole of the safety story and are
 what these tests are about.
 """
 
+import logging
+
 import pytest
 
 from lschart.instruments.base import InstrumentError
@@ -225,6 +227,59 @@ def test_a_tolerance_too_tight_for_the_dac_reports_a_good_write_as_a_failure():
     inst, _ = build(allow_writes=True, readback_tol_pct=1e-9)
     with pytest.raises(InstrumentError):
         inst.set_analog_percent(63.076)
+
+
+# -- which readback agreed --------------------------------------------------
+#
+# The armed loop runs `verify_writes: false` and reads back exactly ONCE, at
+# `write_settle_s`, with no retry.  So "the driver verified it" is not the
+# question -- the driver retries five times over half a second and would report
+# success either way.  The question is whether the FIRST readback agreed, and
+# these pin that number to the operator's log line rather than to DEBUG.
+
+def test_the_readback_that_agreed_is_named_at_warning(caplog):
+    inst, _ = build(allow_writes=True)
+    with caplog.at_level(logging.WARNING, logger="lschart.instruments.ls218"):
+        inst.set_analog_percent(63.076)
+    assert "verified on readback 1" in caplog.text
+
+
+def test_a_box_that_answers_stale_is_retried_and_the_count_says_which(caplog):
+    """The whole point: a slow box must not look identical to a prompt one."""
+    inst, _ = build(allow_writes=True)
+    real = inst.get_analog_percent
+    # Three, not two: `set_analog_percent` reads once BEFORE the write, to log
+    # what the output was moving from, and that read consumes the first.
+    stale = [63.076, 63.076, 63.076]   # readbacks still showing the OLD value
+
+    def slow():
+        return stale.pop(0) if stale else real()
+
+    inst.get_analog_percent = slow
+    with caplog.at_level(logging.DEBUG, logger="lschart.instruments.ls218"):
+        inst.set_analog_percent(70.0)
+
+    assert "verified on readback 3" in caplog.text
+    # and the stale readbacks are not silent, which is what they used to be
+    assert "still reads 63.076%" in caplog.text
+
+
+def test_a_stale_readback_that_never_clears_still_raises(caplog):
+    inst, _ = build(allow_writes=True)
+    inst.get_analog_percent = lambda: 63.076
+    with caplog.at_level(logging.DEBUG, logger="lschart.instruments.ls218"):
+        with pytest.raises(InstrumentError, match="NOT applied"):
+            inst.set_analog_percent(70.0)
+    assert caplog.text.count("still reads 63.076%") == 5
+
+
+def test_an_unverified_write_names_no_readback_at_all(caplog):
+    """`verify_writes: false` has no attempt to report, and must not invent one."""
+    inst, _ = build(allow_writes=True, verify_writes=False)
+    with caplog.at_level(logging.WARNING, logger="lschart.instruments.ls218"):
+        inst.set_analog_percent(63.076)
+    assert "UNVERIFIED" in caplog.text
+    assert "readback" not in caplog.text
 
 
 # -- off --------------------------------------------------------------------
