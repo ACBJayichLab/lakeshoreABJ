@@ -214,13 +214,26 @@ Both controls disable while it is `pid`, each with a note saying why and
 pointing at `hold`; `hold` and `heaters_off` put the loop in `off` and hand
 the output straight back.
 
-### D. The bench cannot reproduce a stale-gauge arm
+### D. ~~The bench cannot reproduce a stale-gauge arm~~ — FIXED 2026-09-16
 
 Three attempts, none of which reproduced the walk-down — the harness converges
 with feedforward on *or* off, so it is not modelling whatever sustains it on
 the real cryostat. Until it can, the bench cannot protect against this class of
 problem, and the diagnosis above rests on the real trace plus code reading
 rather than on a bench demonstration. **This is the gap that let 4 happen.**
+
+**Fixed.** The missing ingredient was the plant's starting state: `__init__`
+put it at `percent_for(kelvin)`, the *nominal* curve, so a weak heater began
+out of equilibrium and falling and the first minutes were spent catching that.
+The cryostat had been **settled** on the weak heater for hours, 1.4 K below the
+model's answer for its own output. `FittedHarness(..., settled=True)` is that
+state, and arming there reproduces the walk-down — −0.52 K at five minutes,
+−0.76 K at forty, the output heading for the model's stale 63.93 — at
+`authority_pct` 0.1 and 0.25 alike, and not at all with feedforward off.
+
+`tests_ltspm3/test_stage_4a.py` pins it, together with the rest of the stage
+the cryostat is armed at; the table is in
+[plans/pid-4-commissioning.md](plans/pid-4-commissioning.md).
 
 ### E. Viewer history is fragmented by the filename prefix
 
@@ -281,11 +294,10 @@ it ends the hold.
 
 ## Then, in order
 
-1. **B and C** — neither touches a running process, and B is the one that will
-   otherwise bite somebody from a clean checkout.
+1. ~~**B and C**~~ and ~~**D**~~ — all three fixed 2026-09-16; D is what the
+   bench needed before it could be trusted on anything arming-shaped.
 2. **A**, the ladder, when a couple of hours of cryostat time are affordable.
 3. Re-arm at 4a with `authority_pct: 0.1`, and let the hour run.
-4. **D**, before trusting the bench on anything arming-shaped again.
 
 ## Traps this session added
 

@@ -213,6 +213,68 @@ Two consequences worth carrying:
 * **`authority_pct: 0.1` needs no widening at 4a**, even on a stale gauge,
   precisely because the centre is no longer the stale number.
 
+### The bench reproduces it now — HANDOFF item D, closed 2026-09-16
+
+Three attempts during the arming session could not reproduce the walk-down on
+the harness, and the reason was the plant's starting state, not the loop.
+`FittedHarness` put the plant at `percent_for(kelvin)` — the **nominal** curve
+— so a plant whose heater delivers less than `P(u)` claims began out of
+equilibrium *and falling*, and the first minutes were spent catching a
+disturbance nothing in `control/` had caused. Feedforward on and off then gave
+bit-identical traces, because the feedforward term is referenced at arming and
+a fixed setpoint never moves it again.
+
+The cryostat was in the other state: **settled** on a heater delivering 0.336 %
+less, 1.4 K below the model's answer for its own output. `FittedHarness(...,
+settled=True)` is that state — `equilibrate()` integrates the plant to its own
+fixed point before anything closes a loop — and the walk-down is there:
+
+| feedforward | authority | ΔT at 5 min | ΔT at 40 min | output at 40 min |
+|---|---|---|---|---|
+| on | 0.1 | −0.52 K | −0.76 K | 63.93 |
+| on | 0.25 | −0.52 K | −0.76 K | 63.93 |
+| off | 0.1 | +0.02 K | +0.01 K | 63.98 |
+| off | 0.25 | +0.02 K | +0.01 K | 63.98 |
+
+Feedforward is the whole mechanism and the band's width is not part of it: at
+either width the loop walks toward the model's stale answer and is still on its
+way at forty minutes, because unwinding an integral at `ti = 900 s` is slow.
+With it off neither half exists.
+
+**`tests_ltspm3/test_stage_4a.py` is the bench's copy of this stage**, and it
+is the only thing here that grades the switches the cryostat is armed on:
+`stage="file"` takes `authority_pct`, `operating_point_pct`,
+`feedforward.enabled` and `tuning.enabled` from `config-ltspm3-armed.yaml`
+verbatim, where every other scenario in that directory pins the design envelope
+(1.0, on, on). It also pins the two things only visible from this stage —
+the fault ramp-down's rate and the output rate limiter's — see below.
+
+### What 4a's two switches cost the rate limits
+
+Both are the same conflation and both were found by reading, not by a failing
+test (AUDIT-2026-09-16, findings 2 and 3):
+
+* **the fault ramp-down.** `_rampdown_target` walks a target temperature down
+  at the one rate and turns it into an output through the model's inverse
+  curve — *when the feedforward is enabled*. At 4a it is not, so the descent
+  takes the no-curve branch and falls at `min_rate_pct_per_min`: **320 minutes
+  from 64 %, measured on the bench, against the 23 minutes
+  `docs/ltspm3/control.md` promises.** Slower is the safe side of rule 1, and
+  it is not a heater hazard — but a sensor fault at 118 K leaves the heater at
+  64 % for the rest of the afternoon on a cryostat whose thermometer is not
+  trusted.
+* **the output rate limiter.** `_rate_pct_per_min` returns the same floor
+  whenever the *tuner* is disabled, so 4a's effective output rate is
+  0.20 %/min — **2.6 K/min at 118 K**, not the 5 the file names; 0.6 K/min at
+  30 K. `ramp_lead_pct` is 0 for the same reason. **4d's 10 K sweep is written
+  against 5 K/min and is affected**, as is anything that reads
+  `ramp.max_rate_k_per_min` as a promise.
+
+`feedforward.enabled` answers "should the loop trust the model's *level*",
+which is what 4a correctly says no to; `tuning.enabled` answers "reschedule the
+gains". Neither is the question "is there a curve to convert kelvin into
+percent with", and the curve's *shape* did not expire when its level did.
+
 ### The file ships at 1.0, and 4a arms at 0.1 — narrow it on the day
 
 **`authority_pct` in `config-ltspm3-armed.yaml` is 1.0, and that is correct for

@@ -45,6 +45,19 @@ BENCH_CONFIG = Path(__file__).resolve().parents[1] / "config-ltspm3-armed.yaml"
 #: a gauge somebody believes, and `plans/pid-4-commissioning.md` records why.
 BENCH_AUTHORITY_PCT = 1.0
 BENCH_FEEDFORWARD = True
+#: The third switch, and it was invisible until 2026-09-16: `Harness` passed no
+#: `tuning_config` at all, so every scenario here ran `TuningConfig()` --
+#: enabled -- while the cryostat is armed with `tuning.enabled: false`.  It is
+#: pinned for the same reason as the other two, and it is now pinned out loud.
+BENCH_TUNING = True
+
+#: `stage="file"` instead, for a scenario that wants the COMMISSIONING STAGE
+#: the cryostat is armed at rather than the design envelope: the three switches
+#: above, and `operating_point_pct`, come from `BENCH_CONFIG` verbatim.  That is
+#: what `test_stage_4a.py` grades.  Everything else is identical, so the two
+#: stages differ by exactly the four fields and nothing else.
+STAGE_ENVELOPE = "envelope"
+STAGE_FILE = "file"
 
 #: The six the plan grades at.  They are not evenly spaced in kelvin because
 #: nothing about this cryostat is: 10 and 30 K are where the delay floor binds
@@ -88,7 +101,8 @@ class FittedHarness(Harness):
 
     def __init__(self, *, kelvin: float, sup_cfg=None, pid_cfg=None,
                  guard_cfg=None, filter_kwargs=None, cadence_s=None,
-                 ff_cfg=None, delivered_frac=1.0, sink_offset_k=0.0, **kw):
+                 ff_cfg=None, tuning_cfg=None, stage=STAGE_ENVELOPE,
+                 settled=False, delivered_frac=1.0, sink_offset_k=0.0, **kw):
         import dataclasses
 
         from ltspm3.model.fitted_response import FittedResponse
@@ -163,11 +177,16 @@ class FittedHarness(Harness):
         # So: the bench grades the ENVELOPE, and the file says what is
         # actually armed today.  A test that wants a different envelope passes
         # its own `sup_cfg`/`ff_cfg`, exactly as before.
-        sup = sup_cfg or dataclasses.replace(
+        if stage not in (STAGE_ENVELOPE, STAGE_FILE):
+            raise ValueError(f"stage must be {STAGE_ENVELOPE!r} or "
+                             f"{STAGE_FILE!r}, got {stage!r}")
+        self.stage = stage
+        on_file = stage == STAGE_FILE
+        sup = sup_cfg or (cfg.supervisor if on_file else dataclasses.replace(
             cfg.supervisor,
             operating_point_pct=self.bench_pct,
             authority_pct=BENCH_AUTHORITY_PCT,
-        )
+        ))
         pid = pid_cfg or dataclasses.replace(cfg.pid, setpoint=self.bench_k)
 
         super().__init__(sup_cfg=sup, pid_cfg=pid,
@@ -178,8 +197,14 @@ class FittedHarness(Harness):
                          # between the bench's cryostat and the bench's
                          # controller, which is a mismatch no test here asked
                          # for.
-                         ff_cfg=ff_cfg or dataclasses.replace(
-                             cfg.feedforward, enabled=BENCH_FEEDFORWARD),
+                         ff_cfg=ff_cfg or (cfg.feedforward if on_file else
+                                           dataclasses.replace(
+                                               cfg.feedforward,
+                                               enabled=BENCH_FEEDFORWARD)),
+                         tuning_cfg=tuning_cfg or (cfg.tuning if on_file else
+                                                   dataclasses.replace(
+                                                       cfg.tuning,
+                                                       enabled=BENCH_TUNING)),
                          filter_kwargs=filter_kwargs or dict(cfg.filter),
                          cadence_s=self.DT if cadence_s is None else cadence_s,
                          start_k=self.bench_k, model=plant, **kw)
@@ -193,6 +218,57 @@ class FittedHarness(Harness):
         self.sup.output_pct = self.bench_pct
         self.sup.manual_pct = self.bench_pct
         self.equilibrium_k = self.bench_k
+
+        if settled:
+            self.equilibrate()
+
+    def equilibrate(self, *, prime_cycles: int = 40, tol_k: float = 1e-5,
+                    max_iter: int = 500) -> float:
+        """Let the plant SETTLE at its present output before any loop closes.
+
+        **A cryostat is never handed to the loop mid-transient**, and until
+        2026-09-16 this harness could only hand it one that was.  `__init__`
+        puts the plant at ``percent_for(kelvin)`` -- the NOMINAL curve -- so a
+        plant with ``delivered_frac < 1`` begins out of equilibrium and
+        falling, and the loop's first minutes are spent catching a disturbance
+        that has nothing to do with the controller.  That is why three attempts
+        at reproducing the 2026-09-16 13:35 walk-down failed (HANDOFF item D):
+        feedforward on and off gave bit-identical traces, because the
+        feedforward term is referenced at arming and a fixed setpoint never
+        moves it again.
+
+        The cryostat on the 16th was in the other state.  It had sat for hours
+        on a heater delivering 0.336 % less than the model claims -- SETTLED,
+        and 1.4 K below the model's answer for its own output.  Arm there and
+        the walk-down is reproducible; see `test_stage_4a.py`.
+
+        Integrating the plant directly rather than stepping the loop through
+        two virtual hours: the supervisor is in `OFF`, where it writes nothing
+        and returns early, so those hours are 3600 cycles that only advance the
+        clock.  Four time constants at a time because `FittedResponse`
+        re-linearises per substep, and the fixed point it converges on is the
+        fitted steady state.
+
+        Then `prime_cycles` of open loop, so the filter and the guard are
+        primed and the loop can be armed on the next cycle -- which is what
+        "settled" has to mean for a test that arms.
+        """
+        plant = self.plant
+        for _ in range(max_iter):
+            before = plant.temperature
+            plant.advance(4.0 * plant.tau_at())
+            if abs(plant.temperature - before) <= tol_k:
+                break
+        self.equilibrium_k = plant.temperature
+        # The simulated coldplate stays on the locus `__init__` pinned it to,
+        # which is the locus at `bench_k` rather than at the settled
+        # temperature.  A tenth of a percent of delivered power moves the
+        # sample by a kelvin and the sink by about 0.02 K, so re-pinning it
+        # would change the residual by well under a milliwatt -- and leaving it
+        # keeps `sink_offset()` meaning what it says.
+        if prime_cycles:
+            self.step(prime_cycles)
+        return self.equilibrium_k
 
     @property
     def plant(self):

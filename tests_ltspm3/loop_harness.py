@@ -57,7 +57,8 @@ class Harness:
 
     def __init__(self, *, start_k=None, sup_cfg=None, pid_cfg=None, guard_cfg=None,
                  filter_kwargs=None, response=None, model=None, cadence_s=None,
-                 ff_cfg=None, aux_base=None, aux_coupling=None, wall_t0=None):
+                 ff_cfg=None, tuning_cfg=None, aux_base=None, aux_coupling=None,
+                 wall_t0=None):
         self.clock = VirtualClock()
         self.wall_t0 = self.WALL_T0 if wall_t0 is None else float(wall_t0)
         params = response or ResponseParams()
@@ -132,6 +133,14 @@ class Harness:
             # about something else -- a mismatch a test should have to opt
             # into, which is what `ff_cfg` is for.
             feedforward_config=ff_cfg or FeedforwardConfig(source="cd10"),
+            # **THE TUNER IS A STAGE SWITCH TOO, and this harness could not
+            # say so until 2026-09-16**: it passed no `tuning_config` at all,
+            # so every test here ran `TuningConfig()` -- enabled -- whatever
+            # the cryostat was armed with.  `control.tuning.enabled: false` is
+            # 4a, and with it off the output rate limiter sits on its floor
+            # (`_rate_pct_per_min`).  A bench that cannot be handed the
+            # cryostat's own switch cannot grade that.
+            tuning_config=tuning_cfg,
             cadence_s=cadence_s,
             clock=self.clock,
             # Virtual seconds since the gauge, so the band the loop judges by
