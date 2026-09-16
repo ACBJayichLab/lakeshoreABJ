@@ -105,6 +105,14 @@ does to a 33x loop, which keeps regulating at the temperature it was at.
 cryostat is at *now*. If it drifted while held, that error is real; the clamp
 and rate limiter bound what the output may do about it.
 
+**Arming an armed loop is refused**, from the spool as well as from the
+viewer's button. `set_mode` no-ops when the mode is already `pid` but the
+setpoint change above it does not, so it was "step the setpoint now, no ramp"
+and a dumped trajectory. Rule 8 bounded the step, so it was a surprise rather
+than a hazard — and a surprise behind a word that says something else is its
+own kind of unsafe. **`hold` then `arm` is how an armed loop's setpoint moves**,
+and the pair is bumpless.
+
 ### `heaters_off` also disarms, and differs only in what happens next
 
 Both panic actions leave the loop in `OFF`. They differ in what becomes of the

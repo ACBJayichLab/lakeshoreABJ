@@ -695,8 +695,31 @@ class HeaterSupervisor:
         It also meant the refusal could be pre-empted by whatever
         `set_setpoint` touched on the way -- after a crash, by the very thing
         that crashed.
+
+        **ARMING AN ARMED LOOP IS REFUSED**, and that belongs here rather than
+        at whichever button somebody pressed.  `set_mode` no-ops when the mode
+        is already PID, but `set_setpoint` above it does not: on a tracking
+        loop this was "step the setpoint now, no ramp", plus a cleared
+        `_pending_approach` and a reset smoother -- a dumped trajectory behind
+        a command that says something else.  Rule 8 bounds the step to
+        `warn_error_k`, so it was never a hazard; it was a surprise, which is
+        its own kind of unsafe.  The viewer greyed its button out on 2026-09-16
+        and the spool went on accepting it -- `send arm` from the CLI, and
+        MATLAB, which has only the spool (AUDIT-2026-09-16 finding 4).
+
+        The way to move an armed loop's setpoint is `hold` and then `arm`,
+        which is what the viewer's own tooltip says, and it is bumpless: `hold`
+        freezes the heater where it is and `arm` primes from there.
         """
         self._refuse_if_latched(LoopMode.PID)
+        if self.mode is LoopMode.PID:
+            raise PermissionError(
+                f"the loop is already armed at {self.pid.cfg.setpoint:.4f} K "
+                "and its setpoint is unchanged. Arming again would step the "
+                "setpoint with no ramp and dump the trajectory it is on; if "
+                "that is what you want, `send hold` first (it freezes the "
+                "heater where it is) and then `arm` at the new temperature"
+            )
         self.set_setpoint(setpoint_k, ramp=False)
         self.set_mode(LoopMode.PID)
 

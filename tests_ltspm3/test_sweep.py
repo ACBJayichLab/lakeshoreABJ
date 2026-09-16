@@ -301,3 +301,49 @@ def test_a_loop_that_was_never_armed_says_nothing(harness):
     h.settle_filter(20)
     assert h.sup.mode is LoopMode.OFF
     assert not h.sup.status.reason
+
+
+# -- arming an armed loop ---------------------------------------------------
+
+
+def test_arming_an_armed_loop_is_refused_and_changes_nothing(armed):
+    """**Rule 8, at the supervisor rather than at a button.**
+
+    `set_mode` no-ops when the mode is already PID; `set_setpoint` above it in
+    `arm` does not.  So arming a tracking loop was "step the setpoint now, no
+    ramp", plus a cleared `_pending_approach` and a reset smoother -- a dumped
+    trajectory behind a command that says something else.  The viewer greyed
+    its button out on 2026-09-16; `send arm` from the CLI and from MATLAB, both
+    of which have only the spool, went on doing it (AUDIT-2026-09-16 finding 4).
+    """
+    h = armed()
+    h.step(20)
+    before = (h.sup.pid.cfg.setpoint, h.sup.smoother.value,
+              h.sup.ramp.target, h.sup.mode)
+
+    with pytest.raises(PermissionError) as exc:
+        h.sup.arm(h.sup.filter.value - 0.5)
+
+    assert "already armed" in str(exc.value)
+    assert "hold" in str(exc.value), "a refusal has to name the way through"
+    assert (h.sup.pid.cfg.setpoint, h.sup.smoother.value,
+            h.sup.ramp.target, h.sup.mode) == before
+    # And the loop carries on, which is the point of refusing rather than
+    # faulting: nothing about this is a reason to stop controlling.
+    h.step(10)
+    assert h.sup.mode is LoopMode.PID
+    assert h.sup.state is SupervisorState.TRACKING
+
+
+def test_hold_then_arm_is_still_the_way_to_move_an_armed_setpoint(armed):
+    """The refusal above must not be a dead end, and this is the route its
+    message names -- the same one the viewer's tooltip has always given."""
+    h = armed()
+    h.step(20)
+    h.sup.panic_hold()
+    h.step(2)
+    h.sup.arm(h.sup.filter.value - 0.5)
+    h.step(5)
+    assert h.sup.mode is LoopMode.PID
+    assert h.sup.pid.cfg.setpoint == pytest.approx(h.sup.filter.value - 0.5,
+                                                   abs=0.05)

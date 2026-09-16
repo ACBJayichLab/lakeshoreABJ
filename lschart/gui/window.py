@@ -2472,9 +2472,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # button is locked, and this must not re-open one behind that lock.
         self.arm_button.setEnabled(self._arm_allowed() and self._pending is None)
         self.arm_button.setToolTip(
-            "The software loop is already closed. This button would step its "
-            "setpoint immediately, with no ramp — send `hold` first if that is "
-            "what you want."
+            "The software loop is already closed, and a recorder refuses to "
+            "arm one twice — arming again would step the setpoint with no "
+            "ramp. Send `hold` first if that is what you want."
             if loop_owns else
             "Close the software loop at the temperature the cryostat is at "
             "now — the way back from a hold. This APPLIES POWER and is gated "

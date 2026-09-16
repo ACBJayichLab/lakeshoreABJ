@@ -207,6 +207,14 @@ loop driving the heater, so it needs `ipc.allow_analog_output` and passes the
 source policy like any other write. With no kelvin it arms to hold the
 temperature the cryostat is at now.
 
+**A loop that is already armed refuses it.** `arm` means close the loop, and
+closing a closed one would step its setpoint with no ramp and dump whatever
+trajectory it was on — a sub-kelvin surprise rather than a hazard, since rule 8
+bounds the step, but a surprise behind a word that says something else. To move
+an armed loop's setpoint: `send hold`, then `send arm 117.0`. `hold` freezes
+the heater exactly where it is and `arm` primes from there, so the pair is
+bumpless.
+
 `ack` clears a software loop's fault lockout, which is what `arm` refuses on
 until it is cleared. It leaves the loop **disarmed** — recovery is `ack` then
 `arm`, two acts, because the latch exists to make somebody look at the
