@@ -40,8 +40,11 @@ the same shape of gate:
 ``verify_writes``
     The write is confirmed by reading ``AOUT?`` back, because these boxes apply
     a command asynchronously and an unverified readback can be a whole write
-    behind -- measured on a 336 over USB, and never disproved on the 218 over
-    GPIB.  Mind the readback's own granularity: the DAC steps 0.01% and
+    behind -- measured on a 336 over USB.  On the LTSPM3 218 over GPIB it has
+    now been measured too (2026-09-15): at the default 100 ms settle, three
+    steps above tolerance each agreed on the first readback, so on this link
+    the retry below has never yet been needed.  Mind the readback's own
+    granularity: the DAC steps 0.01% and
     ``AOUT?`` answers to two decimals, so this confirms the *code* to within
     ``readback_tol_pct``, not the exact float commanded.
 

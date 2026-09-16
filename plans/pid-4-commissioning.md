@@ -50,11 +50,25 @@ glitch, a comms drop, a sustained fault to completion and lockout, and
 
 | item | do | gate |
 |---|---|---|
-| W1 | see below | every step reads back the value just commanded, **on readback 1** |
+| W1 | see below | **MET 2026-09-15** — three steps, each read back on readback 1 |
 | W2 | `send analog 70.5`; `analog 0` with the gate closed; `heaters_off` | two refusals logged, one zero reaching the box, output restored |
 | circuit | the 09-10 repair on the manifest (Phase 0) | `δQ` inside 3 σ_Q for 72 h; weak evidence, but the evidence there is |
 
-### W1 — is 100 ms enough?
+### W1 — is 100 ms enough?  **Answered 2026-09-15: yes.**
+
+Three steps on the real 218 over GPIB, at the default 100 ms:
+
+```
+64.007% -> 64.047%  commanded 64.050, verified on readback 1
+64.047% -> 63.989%  commanded 63.990, verified on readback 1
+63.986% -> 64.007%  commanded 64.010, verified on readback 1
+```
+
+Steps of 0.043, 0.057 and 0.021 % — every one above the 0.02 % tolerance, so a
+stale reply would have been **rejected**, not believed. And every one agreed on
+the **first** readback, which is the one paced at `write_settle_s` and the only
+one the armed supervisor gets. `write_settle_s: 0.1` stands; no change needed
+before arming. The procedure below is kept for the next link, or the next box.
 
 **This was a twenty-write, six-delay characterisation and it is
 over-specified.** `write_settle_s` is not a command cadence: it is the

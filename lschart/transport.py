@@ -63,6 +63,13 @@ class Transport(ABC):
     #: observed threshold (~50-80 ms), and costs nothing in practice because
     #: writes are occasional while reads are not.
     #:
+    #: **Confirmed on the LTSPM3 218 over GPIB, 2026-09-15** (W1): three
+    #: analog-output steps of 0.043, 0.057 and 0.021 % -- all above the 0.02 %
+    #: readback tolerance, so a stale reply would have been REJECTED rather
+    #: than believed -- and every one agreed on the FIRST readback, which is
+    #: the one paced at this number.  That is the case that matters, because
+    #: the armed supervisor reads back exactly once and does not retry.
+    #:
     #: This is a floor, not a guarantee.  The verification in the drivers is
     #: what makes correctness independent of it.
     write_settle_s: float = 0.1
