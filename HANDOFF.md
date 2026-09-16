@@ -20,21 +20,30 @@ two gates shrank; a document retired).
 > worst error 90 mK against a 1 K warning, monitor and supervisor both clean.
 > **W1 and both of W2's refusals are MET** on real hardware too.
 >
-> ## STATE AT SESSION END, 2026-09-16 15:19
+> ## STATE AT SESSION END, 2026-09-16
 >
-> **The loop is still armed and tracking** — `ltspm3 -c
-> config-ltspm3-armed.yaml run --arm`, started 14:11:42, setpoint 117.06 K,
-> 2025 samples, `tracking` throughout, err −60 mK, output 63.99 %. The viewer
-> and the monitor are up on the same config. **Leave it running** — every
-> further hour is stage-5 evidence that cannot be reconstructed later.
+> **The loop is armed and tracking. Ask it, do not read it here:**
 >
-> **`authority_pct` was raised 0.1 → 0.25 at 15:19 and is COMMITTED, but the
-> running loop is still on 0.1.** `SupervisorConfig` is read at construction,
-> so the new band takes effect on the next `run --arm`. See "the wider fixed
-> band" below before restarting.
+> ```bash
+> python -m lschart -c config-ltspm3-armed.yaml status
+> ```
 >
-> Nothing else is uncommitted. `data/armed-4a-window.csv` holds the graded
-> hour.
+> **Leave it running** — every further hour is stage-5 evidence that cannot be
+> reconstructed later. The viewer and the monitor are up on the same config.
+>
+> This block used to carry the setpoint, the sample count and the band, and
+> every one of them was wrong within the hour: it said the running loop was
+> still on `authority_pct: 0.1` while the file at 15:48 showed rails of
+> 63.71–64.21, i.e. a restart at about 15:36 that picked up the committed 0.25.
+> A live number belongs in a `status` call (AUDIT-2026-09-16 finding 7).
+>
+> **`SupervisorConfig` and the whole `control:` section are read at
+> construction.** Nothing committed today reaches a loop that is already
+> running — including the `control/` changes below, so **the running loop
+> still has the 320-minute fault ramp-down and still accepts `arm` while
+> armed**. Both arrive on the next `run --arm`.
+>
+> Nothing is uncommitted. `data/armed-4a-window.csv` holds the graded hour.
 
 ## What this session did
 
@@ -98,16 +107,20 @@ All three now load with `allow_unknown_sections`: the section is kept aside as
 a raw mapping and never interpreted, so invariant 1 is untouched. Anything that
 opens the port still refuses, and still says to use `python -m ltspm3`.
 
-### 6. 4a — MET, and the loop is quieter than open loop
+### 6. 4a — MET, and the loop adds no noise an hour can measure
 
 One hour armed. `analysis/allan.py` on it, the first closed-loop data this
 cryostat has produced: floor **8.43 mK** at 10 s, down to **6.83 mK at 264 s**.
-Open loop at this temperature floors at 7.38 mK at 130 s and rises after — so
-the loop reaches a lower minimum and keeps improving twice as long.
+Open loop at this temperature floors at 7.38 mK at 130 s and rises after.
 
-The section-1 hold criterion reports NOT MET at tau = 480 and 874 s, and at one
-hour **that is not a finding**: the criterion runs to `L/4`, and `edf` there is
-6 and 3. It is a stage-5 gate over seven days for exactly this reason.
+**"Consistent with no added noise" is what the hour supports, and the stronger
+claim above it was asymmetric** (AUDIT-2026-09-16 finding 9). The 6.83 mK at
+τ = 264 s has `edf ≈ 13`, which is a confidence interval of roughly ±20 %, and
+the 7.38 mK it is compared to was measured on a different day on a
+different-length window. The same hour's NOT MET at τ = 480 and 874 s is
+dismissed for low `edf` — 6 and 3 — and that dismissal is right; it just has to
+apply in both directions. The criterion runs to `L/4`, which is why this is a
+stage-5 gate over seven days.
 
 It also explains the raw sd: **28.7 mK over the window, against an 8 mK floor.**
 That is the long-tau wander, not loop-added noise, and it is why an rms over a
@@ -121,8 +134,15 @@ Jeff, 2026-09-16, with the trade understood. **It is not about control room**:
 With `feedforward.enabled: false`, `band_centre_pct` returns
 `operating_point_pct` as a constant — **rule 5 is suspended while the
 feedforward is off** — so the half-width is what bounds how far the setpoint
-may move. 0.25 % at ~13.2 K/% is **±3.3 K**: a band of 63.710–64.210 %, about
-114.7–121.3 K on the model, against ±1.3 K at 0.1.
+may move. 0.25 % at 12.57 K/% is a band of 63.710–64.210 %, which the model
+reads as 114.7–121.3 K, against ±1.3 K at 0.1.
+
+**It is not symmetric about the cryostat.** The centre is the model's number
+and the cryostat sits 0.107 % of output away from it, so from the hold that is
+running — 63.99 % at 117.05 K — the rails are −0.28 %/+0.22 %, about
+**−3.5 K / +2.8 K**: 113.6 to 119.8 K. A setpoint past the top rails the demand
+at the ceiling with a sub-5 K error, which is a standing `warn_error_k` warning
+and not a fault.
 
 A fixed band is the pre-rule-5 behaviour. The trade is a usable setpoint range
 today against a model whose level is stale, and it is written into the config
@@ -244,13 +264,20 @@ is that you see continuous history *or* the armed window, never both, which is
 what Jeff hit. **A design decision, not a patch.** `--csv` points the viewer at
 one log in the meantime.
 
-### F. `status.json` write fails intermittently on Windows
+### F. ~~`status.json` write fails intermittently on Windows~~ — FIXED 2026-09-16
 
 `PermissionError: [WinError 5]` on the `os.replace`, recovered after one
 failure. Cause is a reader — the viewer and the monitor both poll it — holding
 the file at the instant of the rename. The recorder logs, carries on and
-recovers, which is invariant 6 behaving. **Fix:** readers open with
-share-delete semantics. Costs one stale cycle; not urgent.
+recovers, which is invariant 6 behaving.
+
+**Fixed**, though not the way this said: readers opening with share-delete
+semantics is not reachable from Python's `open()`. The rename is retried three
+times over 10 ms instead, which is far longer than a reader holds the file, so
+a sharing violation becomes a **late** write rather than a missed one. It
+mattered more than "one stale cycle" suggested — two consecutive misses put the
+file past `send`'s 6 s liveness guard, and that guard is what an abort has to
+get through. See also the panic-kind exemption, which is the other half.
 
 ### G. Phase 5 — the viewer shows the loop but not its judgement
 

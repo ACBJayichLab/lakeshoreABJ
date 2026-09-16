@@ -93,7 +93,7 @@ premise check could not tell a commanded move from a fault.
 **There is one rate** — `ramp.max_rate_k_per_min`, 5 K/min — and a sweep, the
 post-fault approach and the fault ramp-down all use it. The heater's rate limit
 in percent is derived from it through the gain, `max_rate_k_per_min / K(T)`:
-0.40 %/min at 118 K and 14.6 %/min at 10 K, which is the same five kelvin a
+0.40 %/min at 118 K and 14.9 %/min at 10 K, which is the same five kelvin a
 minute at both. A rate in percent cannot be, because the gain spans forty-fold.
 
 **Both conversions ask whether a curve EXISTS, not whether this commissioning

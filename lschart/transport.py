@@ -43,6 +43,41 @@ from abc import ABC, abstractmethod
 log = logging.getLogger(__name__)
 
 
+#: The third-party loggers that trace every transaction on the bus: `pyvisa`
+#: three lines per query and the vendor `lakeshore` driver two, so on this
+#: cryostat's two boxes that is ~26 lines a cycle of somebody else's output.
+#: The same tuple `lschart.__main__.BUS_LOGGERS` names; kept here because this
+#: is the module that opens the links, and a backstop that covered only one of
+#: the two was a backstop for whichever box you were not using.
+BUS_LOGGERS = ("pyvisa", "lakeshore")
+
+
+def quieten_bus_logging() -> None:
+    """Keep the transaction tracers off unless somebody asked for them.
+
+    **The backstop for a transport built without going through the CLI** --
+    a test, a notebook, `analysis/`, anything embedding this package.
+    `lschart.__main__._setup_logging` is the front door and `--bus-trace` is
+    how a person asks; this is what happens when neither ran.
+
+    It only moves a logger still at NOTSET or INFO, which is what makes it
+    defer rather than override: anyone who wants the traffic says so on the
+    logger itself -- `logging.getLogger("pyvisa").setLevel(DEBUG)` -- and that
+    survives.
+
+    **Root DEBUG is not that request**, and this used to return early when the
+    root was at DEBUG, which made the backstop do nothing in exactly the case
+    it exists for: a transport built outside the CLI by somebody debugging.  It
+    also touched `lakeshore` only, so `pyvisa` -- the noisier of the two, and
+    the one this cryostat's GPIB boxes go through -- was never covered at all.
+    AUDIT-2026-09-16 finding 7.
+    """
+    for name in BUS_LOGGERS:
+        logger = logging.getLogger(name)
+        if logger.level in (logging.NOTSET, logging.INFO):
+            logger.setLevel(logging.WARNING)
+
+
 class TransportError(IOError):
     """Raised for any failure to complete a transaction with an instrument."""
 
@@ -281,6 +316,10 @@ class VisaTransport(Transport):
         self.parity = parity
         self._rm = None
         self._inst = None
+        # `pyvisa` is the noisier of the two tracers and nothing quietened it
+        # outside the CLI.  Here rather than in `_connect`, so it is done
+        # before the import that would start logging.
+        quieten_bus_logging()
 
     def __str__(self) -> str:
         return f"VISA {self.resource}"
@@ -360,9 +399,9 @@ class LakeshoreTransport(Transport):
     #: logger and `pyvisa` alike, and `--bus-trace` is what asks for the
     #: traffic.  Root DEBUG on its own no longer means "and the bus too" --
     #: on two boxes that was ~26 lines a cycle of somebody else's output
-    #: burying the program's own.  This stays as the backstop for a transport
-    #: constructed without going through the CLI, and defers to whatever the
-    #: CLI set: it only moves a logger still at NOTSET or INFO.
+    #: burying the program's own.  `quieten_bus_logging` is the backstop for a
+    #: transport constructed without going through the CLI; it defers to
+    #: whatever the CLI set, moving only a logger still at NOTSET or INFO.
     VENDOR_LOGGER = "lakeshore"
 
     def __init__(
@@ -404,15 +443,7 @@ class LakeshoreTransport(Transport):
             # values for argument 'baud_rate'".  So the signature decides.
             self._kwargs["baud_rate"] = baud_rate
         self._inst = None
-        self._quieten_vendor_logging()
-
-    @classmethod
-    def _quieten_vendor_logging(cls) -> None:
-        vendor = logging.getLogger(cls.VENDOR_LOGGER)
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            return
-        if vendor.level in (logging.NOTSET, logging.INFO):
-            vendor.setLevel(logging.WARNING)
+        quieten_bus_logging()
 
     def __str__(self) -> str:
         return f"Model{self.model} at {self.descriptor}"

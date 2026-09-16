@@ -113,7 +113,7 @@ control:
     hard_min_pct: 0.0
     hard_max_pct: 70.0
     # The output rate is `ramp.max_rate_k_per_min / K(T)` -- the one rate
-    # through the gain, 0.38 %/min at 118 K and 14.6 at 10 K.  This is only
+    # through the gain, 0.40 %/min at 118 K and 14.9 at 10 K.  This is only
     # the floor under it where the model has no opinion.  It replaces
     # `max_step_pct` and `max_rate_pct_per_min`, both trim rates.
     min_rate_pct_per_min: 0.20

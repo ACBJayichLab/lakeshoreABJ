@@ -128,8 +128,11 @@ disagrees with a fresh export by more than the fit's error fails.
 | `max_step_pct`, `max_rate_pct_per_min`, `rate_k_per_min`, `max_rate_k_per_min`, `approach_rate_k_per_min`, `rampdown_pct_per_min`, `rampdown_knee_pct`, `rampdown_below_knee_pct_per_min` | **`max_rate_k_per_min: 5.0`** and **`min_rate_pct_per_min: 0.20`** |
 
 - Heater percent rate = `max_rate_k_per_min / K(T)`, floored at
-  `min_rate_pct_per_min` where the model has no opinion. 0.38 %/min at
-  118 K, 14.6 %/min at 10 K.
+  `min_rate_pct_per_min` where there is no curve to ask. 0.40 %/min at
+  118 K, 14.9 %/min at 10 K on the 2026-09-13 fit (the 0.38 / 14.6 written
+  before that date are the pre-refit gains). "No curve to ask" is
+  `HeaterSupervisor.schedule`, not `tuning.enabled` — see
+  AUDIT-2026-09-16 finding 3.
 - Setpoint ramps, the post-fault approach and the fault ramp-down all use
   the one rate.
 - **Ramp-down is open loop through the model's inverse curve**:

@@ -22,6 +22,7 @@ import pytest
 
 from lschart import __main__ as cli
 from lschart import config as config_mod
+from lschart import transport
 from lschart.app import Application
 from lschart.instruments.sim import Sim33x, SimulatedCryostat
 from lschart.ipc import InstanceLock
@@ -589,6 +590,41 @@ def test_bus_trace_is_how_you_ask_for_the_transaction_lines(restore_logging):
     # NOTSET, so they inherit the root -- rather than a level of their own that
     # would then have to be kept in step with it.
     assert set(_levels().values()) == {logging.NOTSET}
+
+
+def test_the_backstop_covers_both_tracers_without_the_cli(restore_logging):
+    """**A transport built outside the CLI still quietens the bus.**
+
+    It used to return early when the ROOT was at DEBUG, which is exactly the
+    case the backstop exists for -- somebody debugging, in a notebook or a
+    test, with no `_setup_logging` anywhere. And it touched `lakeshore` only,
+    so `pyvisa` (three lines a query, and what this cryostat's GPIB boxes go
+    through) was never covered at all. AUDIT-2026-09-16 finding 7.
+    """
+    logging.getLogger().setLevel(logging.DEBUG)
+    for name in cli.BUS_LOGGERS:
+        logging.getLogger(name).setLevel(logging.NOTSET)
+
+    transport.quieten_bus_logging()
+    assert set(_levels().values()) == {logging.WARNING}
+
+
+def test_the_backstop_defers_to_anyone_who_asked_for_the_traffic(restore_logging):
+    """Saying so on the logger itself is how a caller with no CLI asks, so the
+    backstop must not overrule it -- it only moves NOTSET or INFO."""
+    for name in cli.BUS_LOGGERS:
+        logging.getLogger(name).setLevel(logging.DEBUG)
+    transport.quieten_bus_logging()
+    assert set(_levels().values()) == {logging.DEBUG}
+
+
+def test_constructing_a_visa_transport_quietens_the_bus(restore_logging):
+    """The backstop has to be on the path that OPENS a link, not only on the
+    vendor-driver one -- the cryostat's two boxes are both VISA."""
+    for name in cli.BUS_LOGGERS:
+        logging.getLogger(name).setLevel(logging.NOTSET)
+    transport.VisaTransport("GPIB0::12::INSTR")      # opens nothing; lazy
+    assert set(_levels().values()) == {logging.WARNING}
 
 
 def test_the_level_is_applied_even_when_a_handler_already_exists(restore_logging):

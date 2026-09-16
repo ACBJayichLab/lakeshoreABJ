@@ -16,6 +16,7 @@ import sys
 import time
 
 from . import config as config_mod
+from . import transport as transport_mod
 from .app import Application
 from .instruments import InstrumentError
 from .ipc import AlreadyRunning, InstanceLock
@@ -37,9 +38,10 @@ BUILDER = Application
 #:
 #: So the two questions are separated: `--log-level` is the level of THIS
 #: program, and `--bus-trace` is the separate question of whether the bus
-#: traffic comes with it.  `LakeshoreTransport._quieten_vendor_logging` is the
-#: backstop for a transport built without going through this CLI.
-BUS_LOGGERS = ("pyvisa", "lakeshore")
+#: traffic comes with it.  `lschart.transport.quieten_bus_logging` is the
+#: backstop for a transport built without going through this CLI, and it is
+#: where the same two names live.
+BUS_LOGGERS = transport_mod.BUS_LOGGERS
 
 
 def _setup_logging(level: str, *, bus_trace: bool = False) -> None:
@@ -218,7 +220,23 @@ def cmd_check(args) -> int:
         s = control.supervisor
         lo = max(s.hard_min_pct, s.operating_point_pct - s.authority_pct)
         hi = min(s.hard_max_pct, s.operating_point_pct + s.authority_pct)
-        print(f"  authority band : {lo:.3f}% .. {hi:.3f}%  (on_exit={s.on_exit})")
+        # **SAY WHICH BAND THIS IS.**  The centre follows the setpoint when the
+        # feedforward is on and is the constant `operating_point_pct` when it
+        # is off, so one pair of numbers means two different things -- and this
+        # printed the second while calling it the band, which is right today
+        # and wrong from 4c on.  Duck-typed and defaulted, like everything
+        # `lschart` reads out of a section `ltspm3` registered (invariant 1).
+        follows = bool(getattr(getattr(control, "feedforward", None),
+                               "enabled", False))
+        if follows:
+            print(f"  authority band : +/-{s.authority_pct:g}% AROUND THE "
+                  f"SETPOINT -- the model's output for whatever it is chasing. "
+                  f"{lo:.3f}%..{hi:.3f}% only while that is "
+                  f"{s.operating_point_pct:g}%  (on_exit={s.on_exit})")
+        else:
+            print(f"  authority band : {lo:.3f}% .. {hi:.3f}%, FIXED -- the "
+                  f"feedforward is off, so the centre is operating_point_pct "
+                  f"and does not follow the setpoint  (on_exit={s.on_exit})")
     print("OK")
     return 0
 

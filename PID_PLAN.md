@@ -333,8 +333,11 @@ recorder, contrast test green.
   sample follows the physics; `δT_c` warns; authority exhausted faults.
 - **"Typical" drifts** 0.28 mW/day. Every export carries `DRIFT_T0`.
 - **No opinion is not typical.** A green light outside the table is a lie.
-- **A percent rate limit is a function of temperature.** 5 K/min is 0.38 %/min
-  at 118 K and 14 %/min at 10 K.
+- **A percent rate limit is a function of temperature.** 5 K/min is 0.40 %/min
+  at 118 K and 14.9 %/min at 10 K on the 2026-09-13 fit. **And the conversion
+  asks whether a curve EXISTS, not whether the stage trusts it** — it asked
+  `tuner.enabled` / `feedforward.enabled` until 2026-09-16, which made both the
+  rate limiter and the fault ramp-down sit on `min_rate_pct_per_min` at 4a.
 - **The ramp-down must not need the sensor.** Rule 3: the fault may be the
   sensor. Hence the inverse curve, open loop.
 - **Nothing above 180.6 K is measured.** The 300 K numbers are extrapolations
