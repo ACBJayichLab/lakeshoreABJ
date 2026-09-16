@@ -19,6 +19,22 @@ two gates shrank; a document retired).
 > **4a's gate is MET**: one hour, 1750 samples, `tracking` on every one,
 > worst error 90 mK against a 1 K warning, monitor and supervisor both clean.
 > **W1 and both of W2's refusals are MET** on real hardware too.
+>
+> ## STATE AT SESSION END, 2026-09-16 15:19
+>
+> **The loop is still armed and tracking** — `ltspm3 -c
+> config-ltspm3-armed.yaml run --arm`, started 14:11:42, setpoint 117.06 K,
+> 2025 samples, `tracking` throughout, err −60 mK, output 63.99 %. The viewer
+> and the monitor are up on the same config. **Leave it running** — every
+> further hour is stage-5 evidence that cannot be reconstructed later.
+>
+> **`authority_pct` was raised 0.1 → 0.25 at 15:19 and is COMMITTED, but the
+> running loop is still on 0.1.** `SupervisorConfig` is read at construction,
+> so the new band takes effect on the next `run --arm`. See "the wider fixed
+> band" below before restarting.
+>
+> Nothing else is uncommitted. `data/armed-4a-window.csv` holds the graded
+> hour.
 
 ## What this session did
 
@@ -97,7 +113,28 @@ It also explains the raw sd: **28.7 mK over the window, against an 8 mK floor.**
 That is the long-tau wander, not loop-added noise, and it is why an rms over a
 hold says almost nothing about the hold.
 
-### 7. The gauge is now the CRITICAL PATH, not a deferral
+### 7. `authority_pct` 0.1 → 0.25 — a wider FIXED band, taken knowingly
+
+Jeff, 2026-09-16, with the trade understood. **It is not about control room**:
+4a met its gate at 0.1 having used 6 % of it. It is about setpoint range.
+
+With `feedforward.enabled: false`, `band_centre_pct` returns
+`operating_point_pct` as a constant — **rule 5 is suspended while the
+feedforward is off** — so the half-width is what bounds how far the setpoint
+may move. 0.25 % at ~13.2 K/% is **±3.3 K**: a band of 63.710–64.210 %, about
+114.7–121.3 K on the model, against ±1.3 K at 0.1.
+
+A fixed band is the pre-rule-5 behaviour. The trade is a usable setpoint range
+today against a model whose level is stale, and it is written into the config
+beside the number. Re-gauge and re-enable feedforward at 4c, and the band
+follows the setpoint again.
+
+**This is also the first proof that fix B works.** The value moved, and was
+committed, and the bench did not notice: 497 tests pass unchanged, because
+`bench_plant.py` pins its own envelope. Before B this edit could not have been
+committed at all.
+
+### 8. The gauge is now the CRITICAL PATH, not a deferral
 
 4a passing is what exposed this. With feedforward off, `band_centre_pct`
 returns the constant `operating_point_pct` — **the band does not follow the
@@ -213,6 +250,34 @@ gate not met.
 `poll overran by ~2.8 s` at 2026-09-15 16:26:54, 2026-09-16 13:35:11 and
 14:11:42. Always the first cycle after both VISA resources open, never while
 running. Worth a note, not a fix.
+
+## Picking this up next session
+
+**The loop is armed and should stay that way.** Read it without touching it:
+
+```bash
+python -m lschart -c config-ltspm3-armed.yaml status
+python -m analysis.allan --csv data/armed-4a-window.csv --column Sample
+```
+
+`status` and the viewer both accept the armed config now; so does `send`, which
+is the abort path:
+
+```bash
+python -m lschart -c config-ltspm3-armed.yaml send hold
+```
+
+`hold` freezes the heater where it is and puts the loop in `off`, which also
+hands the viewer's manual controls back. `heaters_off` is the harder stop and
+is exempt from every gate.
+
+**To pick up the 0.25 band**, the armed run has to be restarted — the config is
+read at construction. That is `Ctrl-C` (which leaves the heater where it is,
+`on_exit: hold`) then `run --arm` again, which re-arms at the present
+temperature. It costs the continuity of the tracking record, not the hold.
+
+**Do not run the ladder without asking** — Jeff declined it on 2026-09-16 and
+it ends the hold.
 
 ## Then, in order
 

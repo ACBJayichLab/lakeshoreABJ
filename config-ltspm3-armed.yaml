@@ -159,11 +159,34 @@ control:
     # the cryostat is moved to a new temperature, which is what the old comment
     # in this place asked an operator to remember.
     operating_point_pct: 63.960   # fitted: 63.960% settles at 118.3 K
-    # The window's HALF-WIDTH.  A percent of output either side of the model's
-    # answer.  The one systematic that moves the centre is the heater circuit's
-    # delivered fraction, 0.7 % of POWER = 0.35 % of output, so this leaves
-    # 0.65 % of genuine margin.
-    authority_pct: 0.1
+    # The window's HALF-WIDTH.  A percent of output either side of the centre.
+    # The one systematic that moves the centre is the heater circuit's
+    # delivered fraction, 0.7 % of POWER = 0.35 % of output.
+    #
+    # **THIS FILE SHIPS WHAT THE CRYOSTAT IS ARMED AT, NOT THE BENCH'S
+    # ENVELOPE.**  Since 2026-09-16 `tests_ltspm3/bench_plant.py` pins its own
+    # `BENCH_AUTHORITY_PCT` and `BENCH_FEEDFORWARD`, so this value is free to
+    # move with commissioning and be committed while it does.  Before that the
+    # two were the same field and the working configuration could not be
+    # committed at all.
+    #
+    # **0.25, Jeff, 2026-09-16 — deliberately a wider FIXED band.**  4a met its
+    # gate at 0.1 using 6 % of it, so this is not about control room; it is
+    # setpoint range.  With `feedforward.enabled: false` below,
+    # `band_centre_pct` returns `operating_point_pct` as a CONSTANT and the
+    # band does NOT follow the setpoint (rule 5 is suspended while the
+    # feedforward is off), so the half-width is what bounds how far the
+    # setpoint may move: +/-0.25 % at ~13.2 K/% is **+/-3.3 K**, a band of
+    # 63.710-64.210 % or about 114.7-121.3 K on the model.
+    #
+    # The band being fixed rather than following is the pre-rule-5 behaviour
+    # and is understood to be a trade, taken knowingly: it buys a usable
+    # setpoint range today against a model whose LEVEL is stale (see
+    # `GAUGE_WINDOW` in `ltspm3/model/_fitted_table.py`, and HANDOFF item A).
+    # Re-gauge, turn the feedforward back on at 4c, and the band follows the
+    # setpoint again -- at which point this number goes back to being about
+    # control room rather than range.
+    authority_pct: 0.25
     hard_min_pct: 0.0
     # THE ONE CAP NOTHING MOVES.  Whatever the model, the setpoint or the
     # arithmetic says, the output cannot exceed this.  Above it the fit is
