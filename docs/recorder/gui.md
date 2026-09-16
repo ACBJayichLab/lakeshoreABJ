@@ -326,7 +326,7 @@ in three places is the same table going stale in three places.
 | **PID gains** | a box with loops | P, I and D on **the selected loop** — the instrument's own, not any software loop's. All three go out together. Applies no power |
 | **Heater range** | a selected loop that drives a heater output | 0/1/2/3, applied to **that loop's** output. **Above 0 this applies power** |
 | **Analog output** | a box with a settable analog output (a 218) | one percentage. **Above 0 this applies power** — there is no inert half |
-| **Arm software loop** | always | close the software loop at the temperature the cryostat is at now — the way back from a hold. **This applies power** |
+| **Arm software loop** | always; disabled while a software loop owns the output | close the software loop at the temperature the cryostat is at now — the way back from a hold. **This applies power** |
 | **Clear lockout** | always | clear a software loop's fault lockout. Does **not** resume the loop — it stays disarmed until armed. Beside Arm and not in the Panic menu, because it is the first step back toward power and is gated the same way |
 | **Panic ▾** | always, and never greyed out | a menu of the two ways to stop: **All heaters OFF** and **All temperatures HOLD** |
 | **Accept commands from this viewer** | always | whether the recorder is listening to *this viewer*. Unticking mutes it; ticking undoes that |
@@ -378,6 +378,16 @@ acknowledged command and the next readback, `aux` still holds the *old* value.
 Until the readback confirms what was asked for, the field holds at the
 commanded number — so asking for 43% never shows 0% again in the seconds while
 power is the question.
+
+**Ownership is asked every refresh, in both directions.** While the status
+file's `control.mode` is `pid` a software loop writes the output every cycle,
+so the analog control and Arm are both disabled — a manual value would be
+overwritten within one cadence, and Arm on a tracking loop steps the setpoint
+with no ramp. The moment the loop lets go, both come back. That has to be
+re-asked on every refresh and not only when a command of the viewer's own
+settles: a `hold` typed in a terminal or sent by MATLAB hands the output back
+too, and it is exactly then that the way back from a hold must not be greyed
+out.
 
 **One unacknowledged command locks every button.** Otherwise a range can be
 queued against a setpoint that turned out to be refused. The Panic menu is the

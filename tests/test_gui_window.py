@@ -2015,6 +2015,65 @@ def test_the_software_loop_lands_on_the_row_for_the_channel_it_controls(
     w.close()
 
 
+def set_control(window, **fields) -> None:
+    """Rewrite the watched status file's `control` block and refresh.
+
+    Two refreshes with different status is the only way to ask what the panel
+    does when the cryostat changes under it, and the ownership gate is a
+    question about exactly that.
+    """
+    path = window.source.path
+    with open(path) as fh:
+        status = json.load(fh)
+    status["t_wall"] = time.time()
+    status["control"] = dict(status.get("control") or {}, **fields)
+    with open(path, "w") as fh:
+        json.dump(status, fh)
+    window.refresh()
+
+
+def test_the_arm_button_comes_back_after_a_hold_the_viewer_did_not_send(
+        tmp_path, qt_app):
+    """**Both directions, and the second one is the finding.**
+
+    `_update_gate_notes` only ever DISABLED the arm button and left re-enabling
+    to `_update_pending`, which fires only for a command the viewer itself
+    queued.  So a `hold` typed in a terminal -- or sent by MATLAB -- handed the
+    output back and left the button grey, and the way back from a hold was
+    unavailable exactly after a hold that did not come from the viewer.
+    AUDIT-2026-09-16 finding 5.
+    """
+    w = cryostat(tmp_path, qt_app, [MON], control=dict(SOFTWARE))
+    assert not w.arm_button.isEnabled(), "armed, and arm would step the setpoint"
+    assert "already closed" in w.arm_button.toolTip()
+
+    # `hold` from somewhere else entirely: mode off, output handed back.
+    set_control(w, mode="off", state="idle")
+    assert w.arm_button.isEnabled(), "the way back from a hold is greyed out"
+    assert "the way back from a hold" in w.arm_button.toolTip()
+
+    # And it goes away again when the loop takes the output back.
+    set_control(w, mode="pid", state="tracking")
+    assert not w.arm_button.isEnabled()
+    w.close()
+
+
+def test_a_command_in_flight_still_locks_the_arm_button(tmp_path, qt_app,
+                                                        monkeypatch):
+    """The ownership gate must not re-open a button behind the pending lock --
+    that lock is what stops two commands racing into one cycle."""
+    w = cryostat(tmp_path, qt_app, [MON], control=dict(SOFTWARE, mode="off",
+                                                       state="idle"))
+    assert w.arm_button.isEnabled()
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.arm_button.click()
+    assert w._pending is not None
+    assert not w.arm_button.isEnabled()
+    set_control(w, mode="off", state="idle")      # a refresh while it waits
+    assert not w.arm_button.isEnabled()
+    w.close()
+
+
 def test_a_recorder_that_is_only_a_software_loop_still_gets_a_table(
         tmp_path, qt_app):
     """A 218 has no loops of its own.  Before this the table was hidden

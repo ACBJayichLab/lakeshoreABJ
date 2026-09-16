@@ -2457,11 +2457,20 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # returns early when the mode is already PID -- but the setpoint change
         # does not.  Pressing this on a tracking loop is "step the setpoint
         # now, no ramp", behind a button that says something else.
-        # Only ever DISABLES here.  The pending-command logic owns re-enabling
-        # (`_command_buttons`), and `setEnabled(isEnabled() and ...)` would
-        # latch this off for good the first time a loop armed.
-        if loop_owns:
-            self.arm_button.setEnabled(False)
+        # **SET UNCONDITIONALLY, both directions**, exactly as the analog
+        # controls below are.  It used to only ever DISABLE and leave
+        # re-enabling to `_update_pending` -- which fires only when a command
+        # THE VIEWER ITSELF queued is acknowledged or times out.  So: viewer
+        # open, loop armed, button grey; somebody types `send hold` in a
+        # terminal or MATLAB does; the mode goes `off` and the output comes
+        # back, and the button stayed grey until the viewer happened to queue
+        # something else.  The way back from a hold was unavailable exactly
+        # after a hold that did not come from the viewer
+        # (AUDIT-2026-09-16 finding 5).
+        #
+        # `_pending` is the other half: while a command is in flight every
+        # button is locked, and this must not re-open one behind that lock.
+        self.arm_button.setEnabled(self._arm_allowed() and self._pending is None)
         self.arm_button.setToolTip(
             "The software loop is already closed. This button would step its "
             "setpoint immediately, with no ramp — send `hold` first if that is "
@@ -2536,6 +2545,22 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         self._update_pending()
 
+    def _arm_allowed(self) -> bool:
+        """Whether arming is something to offer *right now*.
+
+        **Arm is not idempotent while armed**, which is why the answer is no
+        while a software loop owns the output: `arm()` runs
+        `set_setpoint(x, ramp=False)` BEFORE `set_mode()`, and `set_mode`
+        returns early when the mode is already PID -- but the setpoint change
+        does not.  Pressing it on a tracking loop is "step the setpoint now, no
+        ramp", behind a button that says something else.
+
+        One function because two places have to agree: the gate notes, every
+        refresh, and `_update_pending`, which releases the buttons when a
+        command settles and must not release this one into an armed loop.
+        """
+        return not self.source.software_loop_owns_output()
+
     def _update_pending(self) -> None:
         """Settle the one command that is waiting to be acknowledged.
 
@@ -2576,6 +2601,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
             return                       # still waiting; leave the buttons locked
         for button in self._buttons():
             button.setEnabled(True)
+        # Except arm, which answers to ownership as well as to the lock -- and
+        # the command that just settled is very often the arm itself.
+        self.arm_button.setEnabled(self._arm_allowed())
 
     def _update_statusbar(self) -> None:
         status = self.source.status or {}
