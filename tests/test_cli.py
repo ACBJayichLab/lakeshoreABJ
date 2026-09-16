@@ -21,6 +21,7 @@ import time
 import pytest
 
 from lschart import __main__ as cli
+from lschart import config as config_mod
 from lschart.app import Application
 from lschart.instruments.sim import Sim33x, SimulatedCryostat
 from lschart.ipc import InstanceLock
@@ -559,3 +560,53 @@ def test_bus_trace_is_off_unless_asked_for(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "cmd_run", lambda args: seen.append(args) or 0)
     assert cli.main(["-c", config(tmp_path)]) == 0
     assert seen[0].bus_trace is False
+
+
+# -- the abort path must not care which entry point you typed ---------------
+#
+# 2026-09-16: `lschart -c config-ltspm3-armed.yaml send hold` died with a
+# config traceback while an armed loop was running on the cryostat, because
+# `control:` is registered by `ltspm3` and `lschart` may never import it.
+# `send` writes a file into a spool; it opens no instrument and reads nothing
+# but `ipc:`.  A section it does not understand is none of its business.
+
+ARMED_LIKE = """
+ipc:
+  enabled: true
+  directory: {d}
+  accept_commands: true
+control:
+  enabled: true
+monitor:
+  enabled: true
+"""
+
+
+def _armed_like(tmp_path):
+    p = tmp_path / "armed.yaml"
+    p.write_text(ARMED_LIKE.format(d=str(tmp_path).replace("\\", "/")))
+    return str(p)
+
+
+def test_send_accepts_a_config_whose_control_section_it_cannot_read(tmp_path, capsys):
+    """It must reach the spool.  Refusing the status check is the NEXT gate."""
+    rc = cli.main(["-c", _armed_like(tmp_path), "send", "hold"])
+    out = capsys.readouterr()
+    combined = out.out + out.err
+    assert "unknown key" not in combined, combined
+    # No recorder is running here, so it stops at the staleness guard -- which
+    # is the check that is SUPPOSED to stop it, rather than the config parser.
+    assert rc != 0
+
+
+def test_status_accepts_the_same_config(tmp_path, capsys):
+    rc = cli.main(["-c", _armed_like(tmp_path), "status"])
+    combined = "".join(capsys.readouterr())
+    assert "unknown key" not in combined, combined
+    assert rc == 1          # no status file here, which is the honest answer
+
+
+def test_run_still_refuses_it(tmp_path, capsys):
+    """Anything that OPENS the port keeps the hard error and its advice."""
+    with pytest.raises(config_mod.ConfigError, match="python -m ltspm3"):
+        config_mod.load(_armed_like(tmp_path))

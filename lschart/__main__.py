@@ -380,7 +380,11 @@ def cmd_status(args) -> int:
     """
     from .ipc.status import read_status, status_age_s
 
-    cfg = config_mod.load(args.config)
+    # Same reasoning as `send`: this reads a JSON file and touches nothing.
+    # It is also the command somebody runs to find out WHETHER the recorder
+    # is alive, which is the worst possible moment to answer with a config
+    # parse error about a section it never reads.
+    cfg = config_mod.load(args.config, allow_unknown_sections=True)
     path = args.file or cfg.ipc.status_path()
     status = read_status(path)
     if status is None:
@@ -482,7 +486,13 @@ def cmd_send(args) -> int:
     from .ipc.commands import CommandSpool
     from .ipc.status import read_status, status_age_s
 
-    cfg = config_mod.load(args.config)
+    # `allow_unknown_sections`: THIS COMMAND WRITES A FILE INTO A DIRECTORY.
+    # It opens no instrument, builds no controller and reads nothing but
+    # `ipc:`, so a `control:` section it does not understand is none of its
+    # business -- and refusing over one put a TRACEBACK in front of somebody
+    # reaching for `send hold` on an armed cryostat, 2026-09-16.  The panic
+    # path must not depend on which of the two entry points you typed.
+    cfg = config_mod.load(args.config, allow_unknown_sections=True)
     spool = CommandSpool(cfg.ipc.command_path(), ttl_s=cfg.ipc.command_ttl_s)
     status_path = cfg.ipc.status_path()
 
