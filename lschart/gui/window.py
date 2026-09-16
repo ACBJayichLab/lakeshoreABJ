@@ -2443,10 +2443,45 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 "including to 0 — cutting a heater is not automatically the "
                 "safe direction. Panic → All heaters OFF is exempt from this "
                 "gate and always works.")
-        analog_ok = self.source.allows_analog_output()
+        # **OWNERSHIP, NOT PERMISSION, AND IT COMES FIRST.**  A software loop
+        # in `pid` writes this output every cycle, so a manual command is not
+        # refused -- it lands and is overwritten within one cadence.  A control
+        # that silently undoes itself is worse than one that is greyed out, and
+        # 2026-09-16 found both this and the arm button live while a loop was
+        # tracking.  `hold` puts the loop in `off` and hands the output back,
+        # which is when this returns.
+        loop_owns = self.source.software_loop_owns_output()
+        # **Arm is NOT idempotent while armed**, which is why it is disabled
+        # here rather than left to no-op.  `arm()` runs
+        # `set_setpoint(x, ramp=False)` BEFORE `set_mode()`, and `set_mode`
+        # returns early when the mode is already PID -- but the setpoint change
+        # does not.  Pressing this on a tracking loop is "step the setpoint
+        # now, no ramp", behind a button that says something else.
+        # Only ever DISABLES here.  The pending-command logic owns re-enabling
+        # (`_command_buttons`), and `setEnabled(isEnabled() and ...)` would
+        # latch this off for good the first time a loop armed.
+        if loop_owns:
+            self.arm_button.setEnabled(False)
+        self.arm_button.setToolTip(
+            "The software loop is already closed. This button would step its "
+            "setpoint immediately, with no ramp — send `hold` first if that is "
+            "what you want."
+            if loop_owns else
+            "Close the software loop at the temperature the cryostat is at "
+            "now — the way back from a hold. This APPLIES POWER and is gated "
+            "like any other write.")
+        analog_ok = self.source.allows_analog_output() and not loop_owns
         self.analog_spin.setEnabled(analog_ok)
         self.analog_button.setEnabled(analog_ok)
-        if analog_ok:
+        if loop_owns:
+            self._note(self.analog_note, "the software loop owns this output",
+                       theme.note_style("warn", self))
+            self.analog_note.setToolTip(
+                "A software PID is driving this output every cycle, so a "
+                "manual value here would be overwritten within one cadence. "
+                "Send `hold` first — that stops the loop and leaves the "
+                "heater where it is. Panic → All heaters OFF always works.")
+        elif analog_ok:
             self._note(self.analog_note, "one step, no ramp",
                        theme.note_style("muted", self))
             self.analog_note.setToolTip(

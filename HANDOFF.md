@@ -102,7 +102,7 @@ there are no pasted keys in `tuning.py`, so the tuning does not rot.
 Correction to something said earlier in the session: a re-gauge is **not** one
 number off one anchor. `measure_gauge` fits it on a ladder.
 
-### B. The working 4a config is UNCOMMITTED — this is the trap
+### B. ~~The working 4a config is UNCOMMITTED~~ — FIXED 2026-09-16
 
 `config-ltspm3-armed.yaml` currently carries `feedforward: false`,
 `tuning: false`, `authority_pct: 0.1` — the three changes that made the arm
@@ -115,10 +115,14 @@ grades*. Those are different things for `authority_pct` (a commissioning
 throttle) and for `feedforward`/`tuning` (stage switches), though not for
 `hard_max_pct` or the rates, which really are cryostat properties.
 
-**Fix:** let the bench pin what it needs to grade the envelope; let the config
-carry what is actually run, committed with the reason written down.
+**Fixed.** `tests_ltspm3/bench_plant.py` pins `BENCH_AUTHORITY_PCT` and
+`BENCH_FEEDFORWARD` -- the design envelope it grades -- and reads everything
+else from the file, so the config now ships its 4a stage committed.
+`tests_ltspm3/test_bench_envelope.py` pins the split both ways: the stage
+switches come from the harness, `hard_max_pct` and the rates still come from
+the file, and a test passing its own `sup_cfg` still wins.
 
-### C. The viewer offers controls that fight an armed loop
+### C. ~~The viewer offers controls that fight an armed loop~~ — FIXED 2026-09-16
 
 `analog_ok = self.source.allows_analog_output()` gates on the IPC permission
 only — nothing asks whether a software loop owns that output. The arm button
@@ -131,9 +135,13 @@ has no gating at all.
   when already PID — but the setpoint change does not. Pressing it while armed
   is **"step the setpoint now, no ramp"**, behind a button that says otherwise.
 
-Panic Menu is unaffected and remains the abort. **Fix:** gate both on the
-control row's state, with a note saying why, in the pattern the range and
-analog permission notes already use.
+Panic Menu is unaffected and remains the abort.
+
+**Fixed.** `StatusSource.software_loop_owns_output()` asks the control block's
+`mode` -- ownership, which is a different question from the permission gates.
+Both controls disable while it is `pid`, each with a note saying why and
+pointing at `hold`; `hold` and `heaters_off` put the loop in `off` and hand
+the output straight back.
 
 ### D. The bench cannot reproduce a stale-gauge arm
 

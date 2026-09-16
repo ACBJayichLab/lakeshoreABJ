@@ -34,6 +34,18 @@ from loop_harness import Harness
 
 BENCH_CONFIG = Path(__file__).resolve().parents[1] / "config-ltspm3-armed.yaml"
 
+#: The DESIGN ENVELOPE the bench grades against, which is not the same thing
+#: as the commissioning stage the cryostat is armed at today.  See the long
+#: note in `FittedHarness.__init__` for why these two are pinned here rather
+#: than read from `BENCH_CONFIG` like every other limit.
+#:
+#: `authority_pct` 1.0 is what phase 3 proved the loop over: the 10-180 K
+#: sweeps need the full window and rail against 4a's 0.1 by construction.
+#: Feedforward on is likewise the end state -- 4c switches it on last, after
+#: a gauge somebody believes, and `plans/pid-4-commissioning.md` records why.
+BENCH_AUTHORITY_PCT = 1.0
+BENCH_FEEDFORWARD = True
+
 #: The six the plan grades at.  They are not evenly spaced in kelvin because
 #: nothing about this cryostat is: 10 and 30 K are where the delay floor binds
 #: and the watt residual has no opinion, 60 K is where the plant's own tau
@@ -130,8 +142,32 @@ class FittedHarness(Harness):
                                    "218.2": self._sink_locus_k + sink_offset_k})
         kw.setdefault("aux_coupling", {**LTSPM3_AUX_COUPLING, "218.2": slope})
 
+        # **THE STAGE SWITCHES ARE PINNED HERE, NOT READ FROM THE FILE.**
+        #
+        # Everything else this harness takes from `config-ltspm3-armed.yaml`
+        # is a property of the CRYOSTAT -- `hard_max_pct`, the rates, the
+        # guard's thresholds -- and reading them from the file is what makes
+        # the bench grade the numbers the cryostat runs.  These two are not.
+        # They are where COMMISSIONING has got to, and 4a runs at
+        # `authority_pct: 0.1` with feedforward off while 4c ends at 1.0 with
+        # it on.  Both are the same cryostat.
+        #
+        # Reading them from the file made the file mean two things at once, so
+        # the operational values could not be committed: narrowing to 4a's
+        # numbers failed 26 scenarios here, because the 10-180 K sweeps rail
+        # against +/-0.1 % by construction.  That left the working
+        # configuration sitting uncommitted in somebody's tree, one
+        # `git checkout` away from restoring the feedforward that cost 350 mK
+        # on 2026-09-16 (HANDOFF, item B).
+        #
+        # So: the bench grades the ENVELOPE, and the file says what is
+        # actually armed today.  A test that wants a different envelope passes
+        # its own `sup_cfg`/`ff_cfg`, exactly as before.
         sup = sup_cfg or dataclasses.replace(
-            cfg.supervisor, operating_point_pct=self.bench_pct)
+            cfg.supervisor,
+            operating_point_pct=self.bench_pct,
+            authority_pct=BENCH_AUTHORITY_PCT,
+        )
         pid = pid_cfg or dataclasses.replace(cfg.pid, setpoint=self.bench_k)
 
         super().__init__(sup_cfg=sup, pid_cfg=pid,
@@ -142,7 +178,8 @@ class FittedHarness(Harness):
                          # between the bench's cryostat and the bench's
                          # controller, which is a mismatch no test here asked
                          # for.
-                         ff_cfg=ff_cfg or cfg.feedforward,
+                         ff_cfg=ff_cfg or dataclasses.replace(
+                             cfg.feedforward, enabled=BENCH_FEEDFORWARD),
                          filter_kwargs=filter_kwargs or dict(cfg.filter),
                          cadence_s=self.DT if cadence_s is None else cadence_s,
                          start_k=self.bench_k, model=plant, **kw)

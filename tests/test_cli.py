@@ -579,6 +579,8 @@ control:
   enabled: true
 monitor:
   enabled: true
+never_registered_by_anything:
+  x: 1
 """
 
 
@@ -607,6 +609,11 @@ def test_status_accepts_the_same_config(tmp_path, capsys):
 
 
 def test_run_still_refuses_it(tmp_path, capsys):
-    """Anything that OPENS the port keeps the hard error and its advice."""
-    with pytest.raises(config_mod.ConfigError, match="python -m ltspm3"):
+    """Anything that OPENS the port keeps the hard error.
+
+    Keyed on a section nothing registers: `control` is registered as soon as
+    `ltspm3.config` is imported, so asserting on it would pass alone and fail
+    in the full suite.
+    """
+    with pytest.raises(config_mod.ConfigError, match="never_registered_by_anything"):
         config_mod.load(_armed_like(tmp_path))

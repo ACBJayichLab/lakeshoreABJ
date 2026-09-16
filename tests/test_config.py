@@ -257,6 +257,8 @@ control:
     authority_pct: 0.15
 monitor:
   enabled: true
+never_registered_by_anything:
+  x: 1
 """
 
 
@@ -264,12 +266,20 @@ def test_the_viewer_can_open_a_config_it_could_not_run(tmp_path):
     cfg = config_mod.load(write(tmp_path, VIEWER_YAML), validate=False,
                           allow_unknown_sections=True)
     assert cfg.acquisition.interval_s == 2.0
-    assert sorted(cfg.extensions) == ["control", "monitor"]
+    assert sorted(cfg.extensions) == ["control", "monitor",
+                                      "never_registered_by_anything"]
 
 
 def test_the_recorder_still_refuses_the_very_same_file(tmp_path):
-    """The tolerance is the viewer's alone; nothing that RUNS gets it."""
-    with pytest.raises(ConfigError, match="control"):
+    """The tolerance is the viewer's alone; nothing that RUNS gets it.
+
+    Asserted on `never_registered_by_anything` rather than on `control`,
+    because `control` IS registered once `ltspm3.config` has been imported --
+    and `tests_ltspm3` imports it.  Keying this on `control` made the test
+    pass alone and fail in the full suite, which is a property of the import
+    order and not of the code under test.
+    """
+    with pytest.raises(ConfigError, match="never_registered_by_anything"):
         config_mod.load(write(tmp_path, VIEWER_YAML), validate=False)
 
 

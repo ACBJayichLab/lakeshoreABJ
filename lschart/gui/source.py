@@ -1608,6 +1608,25 @@ class StatusSource:
         cmds = (self.status or {}).get("commands") or {}
         return bool(cmds.get("allow_analog_output"))
 
+    def software_loop_owns_output(self) -> bool:
+        """Is a software loop currently driving the heater?
+
+        **Not a permission -- an ownership question**, and a different one from
+        `allows_analog_output`.  The gates say whether a file *may* command the
+        output; this says whether something else is already commanding it every
+        cycle, in which case a manual write is not refused, it is simply
+        overwritten within one 2 s cycle.  A control that silently undoes
+        itself is worse than one that is greyed out.
+
+        `mode` rather than `state`: `hold` and `heaters_off` put the loop in
+        `off` and hand the output back, which is exactly when manual control
+        should return.  A loop that is merely `frozen` or ramping down is still
+        the owner and still writing.
+
+        False on a plain recorder, which has no `control` block at all.
+        """
+        return (self.control() or {}).get("mode") == "pid"
+
     def allows_pid(self) -> bool:
         """May a *file* retune a loop on this recorder?
 

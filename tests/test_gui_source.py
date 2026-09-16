@@ -1726,3 +1726,46 @@ def test_channel_columns_separates_measurements_from_instrument_readbacks():
     assert tail.channel_columns() == ["Sample", "RAD SHIELD"]
     assert tail.columns() == ["Sample", "RAD SHIELD",
                               "ls218.aout1", "ls336.setpoint1"]
+
+
+# -- ownership is not permission --------------------------------------------
+#
+# 2026-09-16: the viewer offered "Set output…" and "Arm software loop…" while
+# a software loop was tracking.  Neither is refused by the recorder -- the
+# manual write lands and is overwritten within one 2 s cycle, and Arm is NOT
+# idempotent while armed (`arm()` steps the setpoint before `set_mode` no-ops).
+
+def _status_with_control(mode):
+    st = {"commands": {"allow_analog_output": True}}
+    if mode is not None:
+        st["control"] = {"mode": mode, "state": "tracking"}
+    return st
+
+
+def test_a_tracking_software_loop_owns_the_output(monkeypatch):
+    src = StatusSource.__new__(StatusSource)
+    src.status = _status_with_control("pid")
+    assert src.software_loop_owns_output() is True
+    # The PERMISSION is still open -- these are different questions.
+    assert src.allows_analog_output() is True
+
+
+def test_a_held_loop_hands_the_output_back():
+    """`hold` and `heaters_off` put the loop in `off`, which is exactly when
+    manual control should return."""
+    src = StatusSource.__new__(StatusSource)
+    src.status = _status_with_control("off")
+    assert src.software_loop_owns_output() is False
+
+
+def test_a_plain_recorder_has_no_owner():
+    """No `control` block at all, which is most recorders."""
+    src = StatusSource.__new__(StatusSource)
+    src.status = _status_with_control(None)
+    assert src.software_loop_owns_output() is False
+
+
+def test_no_status_at_all_is_not_an_owner():
+    src = StatusSource.__new__(StatusSource)
+    src.status = None
+    assert src.software_loop_owns_output() is False

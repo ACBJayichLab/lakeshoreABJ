@@ -163,7 +163,7 @@ control:
     # answer.  The one systematic that moves the centre is the heater circuit's
     # delivered fraction, 0.7 % of POWER = 0.35 % of output, so this leaves
     # 0.65 % of genuine margin.
-    authority_pct: 1.0
+    authority_pct: 0.1
     hard_min_pct: 0.0
     # THE ONE CAP NOTHING MOVES.  Whatever the model, the setpoint or the
     # arithmetic says, the output cannot exceed this.  Above it the fit is
@@ -266,7 +266,7 @@ control:
                                   # present temperature instead of this
 
   feedforward:
-    enabled: true
+    enabled: false
     # THE SHIPPED FIT, not the CD10 steady-state curve.  They agree to 4-5 K
     # where CD10 measured (64.3-68.5 %) and to THIRTEEN KELVIN where it did
     # not: 59.2 % is 73.72 K on the old curve and 60.41 K on the fit, and the
@@ -320,7 +320,7 @@ control:
     smooth_delays: 8.0
 
   tuning:
-    enabled: true
+    enabled: false
     # RATIOS TO THE PLANT'S OWN TIME CONSTANT, not absolute times.  tau(T) runs
     # from 0.1 s at 10 K to 611 s at 180 K, so the 1800 s / 300 s this replaced
     # was three times the plant at the top and eighteen THOUSAND times it at
