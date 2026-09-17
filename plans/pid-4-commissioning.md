@@ -333,8 +333,56 @@ throttle is tighter than the calibration offset.
 |---|---|
 | 4a — arm, `authority_pct` 0.1, **no tuning, no feedforward** — all three, see below | **MET 2026-09-16** — 1 h, 1750 samples, `tracking` on every one; worst error 90 mK against a 1 K warning; monitor and supervisor both clean |
 | 4b — provoked fault at low temperature | ramps down at the one rate through the inverse curve, **does not resume when the sensor comes back**, latches, locks out, `ack` the only way out |
-| 4c — widen to 1.0 %, then tuning, then feedforward, one per watched hour | no `frozen` without a named cause |
-| 4d — **5 K/min sweep ≥ 10 K** | lag < 2 K, no warning at either end, `δQ` quiet |
+| 4c — widen to 1.0 %, then tuning, then feedforward, one per watched hour | no `frozen` without a named cause. **TUNING STEP TAKEN 2026-09-17** — see below; the widen and the feedforward are still outstanding, and the feedforward waits on the gauge |
+| 4d — **a sweep ≥ 10 K**, at the fastest rate the plant allows | lag < 2 K, no warning at either end, `δQ` quiet. **The "5 K/min" this row used to name is a COLD-END number** — see below |
+
+### 4c's tuning step, taken out of order and before the widen — 2026-09-17
+
+`tuning.enabled: true`, `hold_speed: 3 -> 12`, feedforward still off.
+
+Out of order deliberately. The widen and the feedforward both change how much
+heater the loop may command; the tuner changes only how it is scheduled, and
+**it is the one of the three that does not wait on the gauge** — `feedforward`
+commands the model's stale LEVEL while the tuner reads only `K(T)` and `tau(T)`,
+the SHAPE. Same distinction `has_curve` already draws for the ramp-down and the
+output rate limiter (AUDIT-2026-09-16 findings 2 and 3).
+
+It is also what made ramping testable at all: three things are gated on
+`tuner.enabled` — the scheduled gains, the velocity feedforward, and
+`ramp_lead_pct` — and with all three off a +2 K move arrives about a kelvin
+late at **any** commanded rate. `tests_ltspm3/test_stage_4c_tuning.py`.
+
+`hold_speed: 12` is a **guess against the 2026-09-17 hold finding** and the one
+number here that is not measured: the loop's authority in the 90–240 min band
+scales as ≈ `2.2 / hold_speed` at 118 K, the old fixed gains sat at 0.37 and made
+the hold 5.6x worse than open loop, and the tuner's *default* 3 would be 0.74 —
+worse again. It costs a ramp nothing, because a ramp runs on `move_speed`. One
+night graded by `analysis/hold_quality.py` settles it.
+
+### 4d — "5 K/min" is a cold-end number, and this row asked for the impossible
+
+**Measured on the cryostat, 2026-09-17.** A 1 K/min sweep commanded at 118 K
+does not run at 1 K/min: the setpoint rate decays exponentially with
+`rate / remaining` constant at 0.23/min, i.e. **τ = 260 s**, which is exactly
+`move_speed * tau(118 K)` = 0.5 * 516 s — `_smooth_tau_s`. The ramp would finish
+in 117 s, well inside the 258 s corner, so what comes out is the smoother's step
+response and the commanded rate never takes effect.
+
+A commanded rate therefore only governs for moves much larger than
+`rate * 3*tau_cl`, which at 118 K is about **13 K at 1 K/min**. Every move that
+fits inside 4c's present band is smoother-dominated.
+
+**This is not a config problem and no retune fixes it.** Building the drive a
+ramp needs, `rate*tau/K`, at the output rate limit of `rate/K` per minute takes
+one plant time constant, always. `_smooth_tau_s`'s own docstring has said "a
+rate is a ceiling, not a promise" from the start, and carries the measured
+table: 10 K at 118 K takes 11.3 min with a 12 s corner (and 8.46 K of lag) or
+30.4 min with a 180 s corner (and 0.3 % overshoot).
+
+So the gate is restated as **a 10 K sweep with lag < 2 K**, and the time it
+takes is an output of the plant rather than an input from the operator. The
+5 K/min of PID_PLAN §1 stands where tau is short — it is under a second at 10 K
+against 516 s at 118 — and the ladder to 300 K is where it gets tested.
 
 ### The "verdicts agreeing" clause needs rewording
 

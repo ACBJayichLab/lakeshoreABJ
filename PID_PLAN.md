@@ -32,6 +32,21 @@ criterion has no closed-loop record to grade yet.
 **PHASE 4 — commissioning — is the next thing, and it is the first that needs
 the cryostat.** Update this line as phases land.
 
+**4a MET 2026-09-16. 4c's TUNING step taken 2026-09-17**, out of order and
+before the widen, because it is the only one of 4c's three that does not wait on
+the gauge. Two things were learned that day and both contradict a row in §1
+below:
+
+* **the hold was the LOOP's problem** — armed, it was 5.6× worse at 39 min of
+  averaging than the same cryostat open loop the night before, at the loop's own
+  natural period. Open loop this cryostat now essentially meets the hold
+  criterion on its own, and drifts 21 mK over four days;
+* **the ramp is the PLANT's** — a commanded rate is a ceiling, not a promise,
+  and 5 K/min is a cold-end number.
+
+The software PID's value is therefore in **reaching and changing** a setpoint,
+not in holding one. → [HANDOFF.md](HANDOFF.md)
+
 **Goal.** A software PID that holds and sweeps the LTSPM3 sample from 4 to
 300 K, fails gracefully, and judges from the thermal characterisation whether
 the cryostat is behaving typically — warning on the atypical, faulting only on
@@ -58,8 +73,8 @@ until those are corrected.
 | | requirement | today | resolution |
 |---|---|---|---|
 | range | **4–300 K** | measured 4.7–180.6 K; ceiling 70 % ≈ 192 K | ladder upward to 300 K, ceiling raised one measured rung at a time to 100 % (1.63 W; heater rated 1.68 W, wiring fine) |
-| hold | slow wander **below the 10 s noise floor** | open loop at 118 K: Allan **8.7 mK @ 10 s, floor 7.4 mK @ 130 s, 12.7 mK @ 1 h, 24.5 mK @ 6.6 h** — measured, `analysis/allan.py`, and **2.9× outside the criterion** | `σ_y(τ) ≤ σ_y(10 s)` for all `τ` in [10 s, run/4] |
-| sweep | **5 K/min** | default 0.5 | one rate, converted to heater %/min through the model's gain; ramp lag closed by velocity feedforward |
+| hold | slow wander **below the 10 s noise floor** | **the bar MOVED, 2026-09-17.** The archive reference `pc-20260908-154814` still reads 8.7 mK @ 10 s rising to 24.5 @ 6.6 h. But the **2026-09-15 open-loop night FALLS** — 3.78 mK @ 39 min, worst 1.04× its floor — i.e. essentially MEETING the criterion with nobody regulating. Meanwhile the armed night of 09-16 was **5.6× worse than that**, 21.19 mK @ 39 min | `σ_y(τ) ≤ σ_y(10 s)` for all `τ` in [10 s, run/4], **and** `analysis/hold_quality.py` against a matched OPEN-LOOP window — the criterion above is self-referential and a loop that doubles the wander everywhere can pass it |
+| sweep | **5 K/min** | default 0.5. **MEASURED 2026-09-17: a rate is a CEILING, not a promise.** A 1 K/min sweep commanded at 118 K runs as an exponential with τ = 260 s = `move_speed × tau(118 K)`, and the commanded rate never takes effect — it only governs for moves much larger than `rate × 3τ_cl`, about 13 K at 1 K/min up here | one rate, converted to heater %/min through the model's gain; ramp lag closed by velocity feedforward. **5 K/min is a COLD-END number** — τ is under a second at 10 K against 516 s at 118, and building `rate·τ/K` of drive at `rate/K` per minute takes one plant time constant whatever anybody configures. → plans/pid-4-commissioning.md 4d |
 | rate limits | **fewer** | eight | **two**: `max_rate_k_per_min: 5`, `min_rate_pct_per_min: 0.20` (floor) |
 | ramp-down | at the same **5 K/min** | 1 / 2 %/min with a knee | open loop through the model's inverse curve, so it needs no sensor |
 | premise | **warn at 1 K, fault at 5 K**; for the PID **in watts, from the fit** | hold at 1 K, ramp down after 180 s | **settled 2026-09-14: `warn_mw: 5`, `fault_mw: 10`** — 3.0 K and 6.0 K at 118 K, as floors under the 3σ band; and the fault is a **step within 30 min**, not a level. The 09-10 event is a warning at +14 min and never a fault, as this row always said. §4 |
