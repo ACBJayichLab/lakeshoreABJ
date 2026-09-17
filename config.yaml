@@ -251,8 +251,8 @@ control:
     enabled: true
     # RATIOS to the plant's own tau(T), not absolute times -- see
     # ltspm3/control/tuning.py.  tau_cl = max(speed * tau(T), 4 * delay_s).
-    hold_speed: 3.0               # stabilising: slower than the plant
-    move_speed: 0.5               # sweeping: faster than the plant
+    hold_speed: 0.25              # stabilising with real authority (LTSPM3, 2026-09-17)
+    move_speed: 0.15              # a 2 K move at 118 K in ~5 min; see the armed file
     delay_floor: 4.0              # x the derived dead time
     move_error_k: 0.25            # enter MOVE above this error
     hold_error_k: 0.10            # return to HOLD below this...

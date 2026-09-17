@@ -16,13 +16,23 @@
 # act on top of choosing this file -- choosing it is not arming -- but it is no
 # longer hypothetical, and an edit here reaches the cryostat at the next arm.
 #
+# **RETUNED 2026-09-17 TO JEFF'S REQUIREMENTS** (docs/ltspm3/requirements.md):
+# a 2 K move at 118 K arrives in 5 minutes, and a hold with real authority.
+# `authority_pct` 0.25 -> 1.0, `move_speed` 0.5 -> 0.15, `hold_speed` 12 ->
+# 0.25, and the band follows the setpoint whether or not the feedforward term
+# is on.  Graded on the bench by `tests_ltspm3/test_stage_4d_fast_move.py`;
+# NOT yet graded on the cryostat.  The loop that was running when this was
+# written was armed on the previous numbers.
+#
 # The bench loads the CRYOSTAT's limits from here -- `hard_max_pct`, the rates,
 # the guard's thresholds -- so the numbers the harness proves are the numbers
-# the cryostat runs.  It does NOT load the four COMMISSIONING SWITCHES below
+# the cryostat runs.  It does NOT load the COMMISSIONING SWITCHES below
 # (`authority_pct`, `operating_point_pct`, `feedforward.enabled`,
-# `tuning.enabled`): `tests_ltspm3/bench_plant.py` pins its own envelope for
-# those, which is what lets this file ship the stage it is armed at.
-# `tests_ltspm3/test_stage_4a.py` is the one that grades THIS file's switches.
+# `tuning.enabled`) nor the two speed ratios (`hold_speed`, `move_speed`):
+# `tests_ltspm3/bench_plant.py` pins its own envelope for those, which is what
+# lets this file ship the stage it is armed at.  `test_stage_4a.py`,
+# `test_stage_4c_tuning.py` and `test_stage_4d_fast_move.py` grade THIS
+# file's numbers.
 #
 # The gain and time-constant SCHEDULE is not here.  It lives in
 # `ltspm3/control/tuning.py`, pasted from
@@ -167,18 +177,21 @@ control:
     # the cryostat is moved to a new temperature, which is what the old comment
     # in this place asked an operator to remember.
     #
-    # **THAT IS ALL TRUE ONLY WITH THE FEEDFORWARD ON, WHICH IT IS NOT.**  With
-    # `feedforward.enabled: false` below, `band_centre_pct` returns this field
-    # as a CONSTANT and the band does not follow the setpoint, so at the stage
-    # the cryostat is armed at THIS FIELD IS THE BAND CENTRE.  It is not
-    # vestigial here and its value matters.
+    # **Since 2026-09-17 that is true WHETHER OR NOT THE FEEDFORWARD TERM IS
+    # ON.**  Until then the centre asked `feedforward.enabled`, so with the
+    # term off (as it is below) the band sat pinned at this constant and a
+    # setpoint more than ~3 K from where the loop was armed railed against a
+    # window that never moved -- a +2 K move at 140 K faulted on the bench.
+    # The centre asks `has_curve` now, like the ramp-down and the rate limiter.
+    # This field is therefore what its first paragraph says: the fallback for a
+    # loop with no model, and nothing on this cryostat reads it as the band.
     #
     # The fit says 63.960 % settles at 118.3 K.  On the cryostat as wired since
     # 2026-09-16 it settles about 116.7 K: handling the heater wiring cost
     # 0.336 % of delivered power, which is 0.107 % of output at this point, and
-    # the model's LEVEL has been stale since (HANDOFF item A).  The centre is
-    # therefore about 0.1 % below where the sample actually needs the heater,
-    # which the loop absorbs and the half-width below has to cover.
+    # the model's LEVEL has been stale since.  The centre is therefore about
+    # 0.1 % below where the sample actually needs the heater, which the loop's
+    # integral absorbs and the half-width below has to cover.
     operating_point_pct: 63.960   # fitted: 63.960% settles at 118.3 K
     # The window's HALF-WIDTH.  A percent of output either side of the centre.
     # The one systematic that moves the centre is the heater circuit's
@@ -191,33 +204,37 @@ control:
     # two were the same field and the working configuration could not be
     # committed at all.
     #
-    # **0.25, Jeff, 2026-09-16 — deliberately a wider FIXED band.**  4a met its
-    # gate at 0.1 using 6 % of it, so this is not about control room; it is
-    # setpoint range.  With `feedforward.enabled: false` below,
-    # `band_centre_pct` returns `operating_point_pct` as a CONSTANT and the
-    # band does NOT follow the setpoint (rule 5 is suspended while the
-    # feedforward is off), so the half-width is what bounds how far the
-    # setpoint may move: +/-0.25 % at 12.57 K/% is a band of 63.710-64.210 %,
-    # which the model reads as 114.7-121.3 K.
+    # **1.0, 2026-09-17, sized to two things** (docs/ltspm3/requirements.md):
     #
-    # **IT IS NOT SYMMETRIC ABOUT THE CRYOSTAT**, because the centre is the
-    # model's number and the cryostat is 0.107 % of output away from it.  From
-    # the hold that is actually running -- 63.99 % at 117.05 K -- the rails are
-    # -0.28 % and +0.22 %, so the reach is about **-3.5 K / +2.8 K**, or
-    # 113.6 to 119.8 K.  A setpoint past the top rails the demand at the
-    # ceiling with an error under `fault_error_k`, which is a standing
-    # `warn_error_k` WARNING and goes on tracking; railed at the ceiling is
-    # only a FAULT once the error passes 5 K (see `fault_error_k` below, which
-    # reads as though railing alone were one).
+    #   * the LEVEL ERROR the model may carry.  Today 0.107 % of output; up to
+    #     0.35 % after somebody handles the heater wiring (0.7 % of power).  A
+    #     half-width below the level error cuts the heater at arming -- the
+    #     ceiling lands under where the heater already sits -- and
+    #     `test_a_band_narrower_than_the_level_error_cuts_the_heater_at_arming`
+    #     pins that with 0.1;
+    #   * the OVERDRIVE a fast move needs.  A 2 K move in 5 min at 118 K peaks
+    #     0.56 % above its final output (bench); a 10 K move 0.8 %.  The band
+    #     also widens by the ramp's lead while the setpoint is moving, so this
+    #     is margin rather than the whole allowance.
     #
-    # The band being fixed rather than following is the pre-rule-5 behaviour
-    # and is understood to be a trade, taken knowingly: it buys a usable
-    # setpoint range today against a model whose LEVEL is stale (see
-    # `GAUGE_WINDOW` in `ltspm3/model/_fitted_table.py`, and HANDOFF item A).
-    # Re-gauge, turn the feedforward back on at 4c, and the band follows the
-    # setpoint again -- at which point this number goes back to being about
-    # control room rather than range.
-    authority_pct: 0.25
+    # Bench, 2 K at 118 K, `move_speed` 0.15, everything else as here:
+    #
+    #     authority   arrives (95 %)    railed
+    #     0.25        10.8 min          0        <- band-limited
+    #     0.50         4.6 min          0
+    #     1.00         4.6 min          0
+    #
+    # It was 0.25 from 2026-09-16, chosen as a wider FIXED band while the
+    # centre did not follow the setpoint (see `operating_point_pct` above) --
+    # setpoint RANGE, +/-3 K, rather than control room.  The centre follows
+    # now, so this is back to being about control room.
+    #
+    # What this is NOT: the "is the delivered power wrong" threshold.  That is
+    # the watt residual's job (`warn_sigma`, `fault_mw` below), and Jeff's
+    # 2026-09-17 ruling is that the band must not double as it.  At 13 K/%
+    # this is +/-13 K of authority about the model's answer, and `hard_max_pct`
+    # is still the cap nothing moves.
+    authority_pct: 1.0
     hard_min_pct: 0.0
     # THE ONE CAP NOTHING MOVES.  Whatever the model, the setpoint or the
     # arithmetic says, the output cannot exceed this.  Above it the fit is
@@ -325,6 +342,17 @@ control:
                                   # present temperature instead of this
 
   feedforward:
+    # OFF: the model's LEVEL is stale (0.336 % of power since the 09-16
+    # reseat) and the term drove the sample 350 mK down on 2026-09-16.  It
+    # stays off until somebody re-gauges.
+    #
+    # **AND WHEN IT COMES ON, `move_speed` MUST BE RE-GRADED.**  Bench,
+    # 2026-09-17: with this term on, a 3 K move at 118 K at `move_speed: 0.15`
+    # overshoots 10.9 % (3.1 % with it off), because the term stacks a level
+    # step on a loop that already supplies the drive.  `move_speed: 0.5` with
+    # the term on is 1.7 %.  `BENCH_MOVE_SPEED` in bench_plant.py records the
+    # numbers.  The band no longer waits on this switch (rule 5 asks
+    # `has_curve`), so it governs the drive TERM and nothing else.
     enabled: false
     # THE SHIPPED FIT, not the CD10 steady-state curve.  They agree to 4-5 K
     # where CD10 measured (64.3-68.5 %) and to THIRTEEN KELVIN where it did
@@ -366,7 +394,7 @@ control:
     # four numbers that used to disagree by a factor of twenty.
     max_rate_k_per_min: 5.0
     # Corner rounding.  The corner IS the closed-loop response time,
-    # `move_speed * tau(T)` -- 24 s at 30 K, 260 s at 118 K -- because a
+    # `move_speed * tau(T)` -- 24 s at 30 K, 77 s at 118 K -- because a
     # trajectory with corners sharper than the loop's own response is one the
     # loop cannot follow, and what comes out is lag in and overshoot out.  This
     # is the FLOOR under it, in dead times, for the cold end where tau is
@@ -421,43 +449,57 @@ control:
     # and above the floor kp is simply 1 / (speed * K(T)).  The floor binds in
     # `move` from 10 to 30 K, where the cryostat settles faster than this loop
     # can see it.
-    # **12, NOT THE 3 THIS SHIPPED WITH, and it is the one number here that is
-    # a GUESS rather than a measurement.**  2026-09-17.
+    # **0.25 AND 0.15, 2026-09-17 -- JEFF'S REQUIREMENTS, graded on the
+    # bench** (docs/ltspm3/requirements.md; `test_stage_4d_fast_move.py`).
     #
-    # The 19 h armed on 09-16 put 19.7 mK into the 90-240 min band against
-    # 2.6 mK open loop the night before -- 5.6x worse at 39 min of averaging,
-    # at the loop's OWN natural period, `2*pi*sqrt(tau*Ti/(Kp*K))` = 142 min
-    # against measured peaks at 118-147.  The loop was stirring, not
-    # correcting: the heater led the sample by +108 deg at coherence 0.77,
-    # which is what an integral-dominated PI does.
+    # `move_speed: 0.15`: a 2 K move at 118 K must arrive in about five
+    # minutes.  The shipped 0.5 -- "twice as fast as the plant" -- stacked a
+    # 260 s trajectory corner on a 260 s closed loop and came out about as slow
+    # as turning the knob by hand: measured on the cryostat 11:14-11:33, 86 %
+    # of a 2.1 K move in 19 minutes, against ~26 minutes for an open-loop step
+    # to 95 %.  Bench, 2 K at 118 K, band 1.0, rate 5:
     #
-    # How much it stirs scales with the loop's authority in that band, and at
-    # 118 K that is about `2.2 / hold_speed`:
+    #     move_speed   arrives (95 %)   overshoot   overdrive above final
+    #     0.50           > 30 min          --          0.14 %
+    #     0.25          17.0 min        -22 mK         0.36 %
+    #     0.20          10.2 min         -5 mK         0.45 %
+    #     0.15           4.6 min          7 mK         0.56 %    <- this
+    #     0.12           3.3 min         96 mK         0.64 %
     #
-    #     armed 09-16 (fixed kp 0.02, ti 900)     |L| at 2 h = 0.37   -> 5.6x
-    #     hold_speed 3 (the tuner's default)      |L| at 2 h = 0.74
-    #     hold_speed 12                           |L| at 2 h = 0.19
-    #     hold_speed 24                           |L| at 2 h = 0.09
+    # The same 0.15 arrives in 3.8 / 5.0 / 4.9 min at 100 / 140 / 180 K and in
+    # 1.9 min at 30 K.  Known cost: at 60 K it overshoots 0.39 K (19 %) because
+    # the 5 K/min output rate limit is slow there relative to the 22 s corner
+    # and the integral winds up behind it; 0.25 does not, and arrives in 4.2.
+    # Raising the rate ceiling to 10 or 20 K/min did NOT help -- it tripped
+    # `anomaly_demand_pct` at 60 K and was SLOWER at 118 K -- so the ceiling
+    # stays at 5 and the 60 K overshoot is the open item.
     #
-    # So turning the tuner on at its DEFAULT would have doubled the authority
-    # in exactly the band that misbehaved.  12 is the guess that it roughly
-    # quarters it.  **It costs a ramp nothing** -- a ramp runs on `move_speed`,
-    # and `test_hold_speed_does_not_touch_the_move_gains` pins that.
+    # `hold_speed: 0.25`: the STRONG direction.  Jeff's hold benchmark is noise
+    # at 15 s, 1 min and 5 min no worse than open loop and the slow wander much
+    # better.  Bench, 3 h holds at 118 K, Allan deviation as a ratio to the
+    # same plant open loop:
     #
-    # It is a guess because THE MODEL CANNOT SETTLE IT: PI on a single pole is
-    # unconditionally stable, |S| <= 1 at every period, phase margin 96 deg --
-    # the model says the 09-16 oscillation is impossible and it happened.  The
-    # plant's hour-scale dynamics have never been measured.  One night, graded
-    # by `python -m analysis.hold_quality` against a matched OPEN-LOOP window,
-    # settles it; a ratio near 1 is the target, and if it is still above about
-    # 1.5 the two directions are weaker again (24) or much stronger (0.25, so
-    # the loop has real authority there instead of stirring).
+    #     hold_speed     10 s    15 s    60 s   300 s   900 s
+    #     12 (was)       0.99    0.98    0.97   1.10    2.15
+    #      3 (default)   0.99    0.99    0.98   1.08    1.75
+    #      1             0.99    0.99    0.98   0.98    1.02
+    #      0.5           0.99    0.99    0.97   0.91    0.86
+    #      0.25          1.00    1.00    0.97   0.81    0.71   <- this
     #
-    # **Do not read a quiet hour as success.**  The loop is 1.00x open loop out
-    # to tau = 72 s and only diverges after; 4a's one-hour gate could not have
-    # seen this, because the Allan criterion runs to L/4.
-    hold_speed: 12.0              # slower than the plant: noise never amplified
-    move_speed: 0.5               # faster than the plant: bandwidth is the point
+    # The weak loops (3, 12) are the ones that stir at long tau -- that is the
+    # 2026-09-16 night, whose 142 min oscillation was an integral-dominated PI
+    # with almost no proportional authority.  The bench plant has white sensor
+    # noise and no slow disturbance, so this can only show that a strong hold
+    # does not amplify noise; how much it improves the real cryostat's wander
+    # is what `analysis/hold_quality.py` grades against the 09-15 open-loop
+    # night.  It does not slow a move: 4.7 min at 118 K with either number.
+    #
+    # 12 was a one-night guess in the WEAK direction against the 09-16
+    # oscillation; the night it was armed for was not graded before this
+    # retune.  Its arithmetic (stirring ~ 2.2/hold_speed at 118 K) described
+    # the weak regime and the bench table above is where that regime ends.
+    hold_speed: 0.25              # STRONGER than the plant: real authority at a hold
+    move_speed: 0.15              # a 2 K move at 118 K in ~5 min
     delay_floor: 4.0              # x the DERIVED dead time, 3.0 s -> 12 s
     move_error_k: 0.25
     hold_error_k: 0.10

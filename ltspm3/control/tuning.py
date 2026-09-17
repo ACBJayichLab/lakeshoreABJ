@@ -73,10 +73,13 @@ Holding and moving want opposite things, so they get different ``speed``:
 * **HOLD** -- stabilising at temperature for hours.  Disturbances are slow
   (bath drift, radiation) and the measurement floor is a few mK of *correlated*
   noise.  A slow loop rejects that noise; a fast one amplifies it into the
-  heater.  ``hold_speed: 3`` -- three times slower than the cryostat.
+  heater.  The default ``hold_speed: 3`` is three times slower than the
+  cryostat; **the armed LTSPM3 file runs 0.25**, four times faster, because
+  the slow regime turned out to stir rather than correct
+  (docs/ltspm3/requirements.md).
 * **MOVE** -- following a commanded sweep, or approaching setpoint after a
   fault.  Here bandwidth is the point, and a few mK of extra noise on the way
-  is irrelevant.  ``move_speed: 0.5`` -- twice as fast as the cryostat.
+  is irrelevant.  ``move_speed`` 0.5 by default, 0.15 in the armed file.
 
 Switching between them is hysteretic, because a loop that oscillates between
 tunings is worse than either.
@@ -160,11 +163,18 @@ class TuningConfig:
 
     enabled: bool = True
 
-    #: Stabilising: SLOWER than the plant, so measurement noise is never
-    #: amplified into the heater.  3 is Jeff's, 2026-09-11.
+    #: Stabilising.  The DEFAULT is 3 -- slower than the plant, Jeff's
+    #: 2026-09-11 instinct that a hold should never amplify noise -- and the
+    #: bench envelope (`BENCH_HOLD_SPEED`) is calibrated to it.  **The armed
+    #: file ships 0.25** (docs/ltspm3/requirements.md, 2026-09-17): the weak
+    #: regime stirred at its own natural period on the cryostat, and on the
+    #: bench a hold at 0.25 is 1.00x open loop at 10-15 s and 0.71x at 900 s,
+    #: where 12 was 2.15x.  The tables are in config-ltspm3-armed.yaml.
     hold_speed: float = 3.0
     #: Sweeping or approaching: faster than the plant, because bandwidth is the
-    #: point and a few mK of extra noise on the way is irrelevant.
+    #: point and a few mK of extra noise on the way is irrelevant.  The armed
+    #: file ships 0.15 -- a 2 K move at 118 K in 4.6 min on the bench, against
+    #: a hand step's ~26; 0.5 stacked a 260 s corner on a 260 s loop.
     move_speed: float = 0.5
 
     #: How many dead times the closed loop must be slower than, whatever the

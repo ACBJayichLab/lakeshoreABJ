@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from bench_plant import BENCH_TEMPERATURES, FittedHarness
+from bench_plant import BENCH_TEMPERATURES, STAGE_ENVELOPE, STAGE_FILE, FittedHarness
 from ltspm3.control import LoopMode, SupervisorState
 from ltspm3.model.fitted_response import DRIFT_T0_UNIX
 
@@ -472,41 +472,59 @@ def test_a_heater_at_half_power_at_30_k_faults_as_authority_exhausted():
     assert h.sup.state is SupervisorState.IDLE
 
 
-@pytest.mark.parametrize("kelvin,per_hour,minutes", [(118.0, 2.0, 180),
-                                                    (30.0, 20.0, 90)])
-def test_a_rising_sink_warns_however_far_it_goes(kelvin, per_hour, minutes):
+@pytest.mark.parametrize("kelvin,per_hour,minutes,stage,keeps_up", [
+    (118.0, 2.0, 180, STAGE_ENVELOPE, False),
+    (118.0, 2.0, 180, STAGE_FILE, True),
+    (30.0, 20.0, 90, STAGE_ENVELOPE, False),
+])
+def test_a_rising_sink_warns_however_far_it_goes(kelvin, per_hour, minutes, stage,
+                                                  keeps_up):
     """**Scenario 1, and it never faults** (Jeff, 2026-09-15).
 
     The bath moves, the loop needs less heat, and the worst case is a sample
     colder than intended -- the safe direction.  A ramp-down would not improve
     it and a lockout would stop the loop resuming when the bath recovers.
 
-    Two cases, both measured.  At 118 K and 2 K/h the error reaches 2.7 K and
-    the output falls 63.96 -> 57.18 %: the error row warns and nothing else
-    happens.  At 30 K and 20 K/h the output reaches the hard minimum after
-    58 minutes and the sample then runs 16 K over setpoint: the FLOOR warning
-    is what says so, and it is a warning precisely because there is nothing
-    left for the loop to do about it.  Ninety minutes for that one: the sink
-    correction is linear in `Lambda'` at the midpoint, and twenty kelvin an
-    hour leaves the range that is honest in soon after.
+    Three cases, all measured.  At 118 K and 2 K/h on the design ENVELOPE
+    (`move_speed` 0.5) the error reaches 2.7 K and the output falls 63.96 ->
+    57.18 %: the error row warns and nothing else happens.  The same
+    disturbance on the FILE the cryostat is armed with (`move_speed` 0.15,
+    docs/ltspm3/requirements.md, 2026-09-17) is **kept up with**: worst error
+    0.54 K, under `warn_error_k`, so nothing warns because nothing is wrong --
+    a loop that tracks a 2 K/h bath drift to half a kelvin is the point of the
+    retune, and this is where that is graded.  At 30 K and 20 K/h the output reaches
+    the hard minimum after 58 minutes and the sample then runs 16 K over
+    setpoint: the FLOOR warning is what says so, and it is a warning precisely
+    because there is nothing left for the loop to do about it.  Ninety minutes
+    for that one: the sink correction is linear in `Lambda'` at the midpoint,
+    and twenty kelvin an hour leaves the range that is honest in soon after.
 
     Before this step the sink was scenery -- `_aux_base` moved the thermometer
     and left the plant where it was -- so the disturbance the loop was supposed
     to react to did not exist, and the old row hedged with `if faulted`.
     """
-    h = armed(kelvin)
+    h = armed(kelvin, stage=stage)
     h.history.clear()
+    worst_error_k = 0.0
     for i in range(int(minutes * 60 / h.DT)):
         h.sink_offset(per_hour * (i * h.DT / 3600.0))
-        h.step(1)
+        st = h.step(1)
         assert h.sup.state is SupervisorState.TRACKING, (
             f"scenario 1 must never stop the loop: {h.history[-1].alarms}")
+        if st.error_k is not None:
+            worst_error_k = max(worst_error_k, abs(st.error_k))
 
     outs = [x.output_pct for x in h.history if x.output_pct is not None]
     assert outs[-1] < outs[0], "the loop should need LESS heat, not more"
     for a, b in zip(outs, outs[1:]):
         assert b <= a + 2 * h.sup.cfg.dac_step_pct + 1e-9, "the output rose"
-    assert alarms_matching(h, "warn_error_k"), "a kelvin of error and no warning"
+    if keeps_up:
+        # The strong loop's whole point: a slow bath drift is corrected, not
+        # reported.  If this starts failing the hold has been weakened again.
+        assert worst_error_k < h.sup.cfg.warn_error_k, worst_error_k
+        assert not alarms_matching(h, "warn_error_k")
+    else:
+        assert alarms_matching(h, "warn_error_k"), "a kelvin of error and no warning"
     if min(outs) <= h.sup.cfg.hard_min_pct + h.sup.cfg.dac_step_pct:
         assert alarms_matching(h, "at its floor"), (
             "the heater reached its floor and nothing said so")

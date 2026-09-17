@@ -68,6 +68,29 @@ BENCH_TUNING = True
 #: that wants the commissioning number takes `stage="file"`.
 BENCH_HOLD_SPEED = 3.0
 
+#: THE FIFTH, 2026-09-17, for the same reason as the fourth.  The armed file
+#: went to `move_speed: 0.15` (docs/ltspm3/requirements.md: 2 K at 118 K in
+#: five minutes) and the envelope read it from the file, so every §3.7
+#: "3 K move" scenario re-graded itself against a different loop -- and four
+#: of six FAILED, at 8-17 % overshoot.  Measured apart:
+#:
+#:     118 K, 3 K at 5 K/min, move 0.15:  feedforward OFF  3.1 %   ON 10.9 %
+#:                             move 0.5:   feedforward OFF  1.0 %   ON  1.7 %
+#:      60 K, 3 K at 5 K/min, move 0.15:  feedforward OFF 16.1 %   ON 17.5 %
+#:
+#: Two different things.  At 60 K it is the output rate limiter (0.8 %/min
+#: against a 22 s corner) and the integral winding up behind it, feedforward
+#: or not -- pinned as an open item by `test_stage_4d_fast_move.py`.  At
+#: 118 K it is the positional feedforward TERM stacking on a fast loop that
+#: already supplies the drive: with the term OFF, which is what the file
+#: ships, the same move is 3.1 % over and 0.3 % over on 2 K.
+#:
+#: So the envelope keeps the design value it was proved over, and **turning
+#: the feedforward term on -- 4c's last step, after a gauge -- has to re-grade
+#: `move_speed`**: 0.15 with the term on is not acceptable as measured.  A
+#: scenario that wants the commissioning number takes `stage="file"`.
+BENCH_MOVE_SPEED = 0.5
+
 #: `stage="file"` instead, for a scenario that wants the COMMISSIONING STAGE
 #: the cryostat is armed at rather than the design envelope: the three switches
 #: above, and `operating_point_pct`, come from `BENCH_CONFIG` verbatim.  That is
@@ -222,7 +245,8 @@ class FittedHarness(Harness):
                                                    dataclasses.replace(
                                                        cfg.tuning,
                                                        enabled=BENCH_TUNING,
-                                                       hold_speed=BENCH_HOLD_SPEED)),
+                                                       hold_speed=BENCH_HOLD_SPEED,
+                                                       move_speed=BENCH_MOVE_SPEED)),
                          filter_kwargs=filter_kwargs or dict(cfg.filter),
                          cadence_s=self.DT if cadence_s is None else cadence_s,
                          start_k=self.bench_k, model=plant, **kw)
