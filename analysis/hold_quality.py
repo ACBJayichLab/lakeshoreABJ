@@ -28,12 +28,14 @@ It reports three things, and the middle one is the one that localises a fault:
 * a **band table** -- rms in the 10-40, 40-90 and 90-240 minute bands.  Allan
   tells you that averaging stopped helping; the bands tell you *at what period*
   the energy sits, which is what identifies a mechanism.  The 2026-09-16 night
-  put 19.7 mK into 90-240 min against 3.8 open loop, and the loop's own
-  characteristic period from the gains is `2*pi*tau/sqrt(Kp*K)` = 143 min;
+  put 19.7 mK into 90-240 min against 2.6 open loop, and the closed loop's own
+  natural period, `2*pi*sqrt(tau*Ti/(Kp*K))`, is 142 min on the armed gains.
+  (That reduces to the more familiar `2*pi*tau/sqrt(Kp*K)` only when
+  `Ti == tau`, which is what SIMC picks and is NOT what the armed file runs.);
 * the **ratio**, per band and per tau, when a reference window is given.
 
 A ratio near 1 is a loop that is not making things worse.  Under 1 is a loop
-that is earning its place.  The 2026-09-16 numbers are 1.7 / 3.4 / 5.2.
+that is earning its place.  The 2026-09-16 bands are 1.63 / 3.34 / 7.59.
 
 Run it::
 
@@ -227,7 +229,7 @@ def main() -> int:
     else:
         print("  VERDICT: the loop IS making the hold worse.  Look at the band "
               "table\n           above for the period, and compare it to "
-              "2*pi*tau/sqrt(Kp*K).")
+              "2*pi*sqrt(tau*Ti/(Kp*K)).")
     return 0
 
 
