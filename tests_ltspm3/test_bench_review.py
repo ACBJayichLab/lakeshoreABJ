@@ -182,14 +182,11 @@ def step_blind(h, n):
 
 
 def test_one_failed_read_does_not_finish_the_descent():
-    """3R.0.D, measured: output 63.96 %, one `TransportError`, target 0.0,
-    complete.
-
-    `_rampdown_target` read the heater with `default=safe_output_pct`, so a
-    failed read said the heater was already at zero: `min(proposed, current)`
-    was zero and the descent declared itself finished.  If the write failed
-    too, the loop locked out with the heater still at 64 % and a log line
-    saying it had reached base.  This shape predates step 5.
+    """3R.0.D: `_rampdown_target` read the heater with
+    `default=safe_output_pct`, so a failed read said the heater was already at
+    zero -- `min(proposed, current)` was zero and the descent declared itself
+    finished.  If the write failed too, the loop locked out with the heater
+    still near its operating point and a log line saying it had reached base.
     """
     from lschart.transport import TransportError
 
@@ -215,6 +212,11 @@ def test_one_failed_read_does_not_finish_the_descent():
 
     assert h.sup.state is SupervisorState.RAMPING_DOWN
     assert not h.sup._rampdown_complete
+    # Half a percent is the gap between the two outcomes, not a measurement: a
+    # descent at the one rate moves the output by a few hundredths of a percent
+    # in a single cycle, while the defect took it to `safe_output_pct` -- tens
+    # of percent -- in that same cycle.  Anything in between is a bug either
+    # way and should fail here.
     assert s.output_pct == pytest.approx(before, abs=0.5), (
         "the descent jumped on a failed read")
     assert h.sup.output_pct > h.sup.cfg.safe_output_pct + 1.0
@@ -320,16 +322,13 @@ def assert_descent_obeys_the_one_rate(h):
 
 @pytest.mark.parametrize("kelvin", WATT_TEMPERATURES)
 def test_the_first_write_of_a_descent_obeys_the_one_rate(kelvin):
-    """3R.0.C, on the public path: a heater delivering 12 % less leaves the
-    sample 14 to 21 K low, and the descent then starts from the curve's answer
-    for THAT temperature rather than from anywhere near the present output.
+    """3R.0.C, on the public path.
 
-    Measured before this step -- first write, in one 2 s cycle:
-
-        60 K   59.250 -> 55.630 %   3.62 %, against 0.047 allowed
-        100 K  62.640 -> 60.920 %   1.72 %, against 0.015
-        140 K  65.680 -> 64.260 %   1.42 %, against 0.013
-        180 K  68.840 -> 67.630 %   1.21 %, against 0.014
+    A heater delivering 12 % less leaves the sample far below its setpoint, and
+    the descent then starts from the curve's answer for THAT temperature rather
+    than from anywhere near the present output -- so the first write was a jump
+    of a percent or more, one to two orders of magnitude past what the one rate
+    allows in a cycle.
 
     The lost-sensor row cannot see any of this: its plant IS the model and its
     sample is on setpoint, so the curve's answer equals the output it is
@@ -361,8 +360,8 @@ def test_the_lost_sensor_descent_is_bounded_too(kelvin):
 
 def test_a_fault_before_the_filter_primes_still_descends_at_the_one_rate():
     """3R.0.F: with no trusted temperature the descent fell back to
-    `min_rate_pct_per_min` -- 0.20 %/min, which is 63 % to zero in over five
-    hours against the 23 minutes the docs promise.
+    `min_rate_pct_per_min`, which is hours rather than the tens of minutes a
+    fault descent at the one rate takes (docs/ltspm3/control.md).
 
     The state that reaches it is not exotic: `acknowledge` resets the filter,
     so the cycles immediately after an `ack` and a re-arm have no primed
@@ -383,6 +382,10 @@ def test_a_fault_before_the_filter_primes_still_descends_at_the_one_rate():
             break
     assert h.sup.state is SupervisorState.LOCKED_OUT, "never finished the descent"
     minutes = (h.clock.t - t0) / 60.0
+    # Forty minutes separates the two branches rather than grading the descent:
+    # the one rate finishes in roughly half that from 118 K
+    # (`test_stage_4a.py`'s `RAMPDOWN_MINUTES`), and the floor rate this defect
+    # fell back to takes hours.  Nothing in between is reachable.
     assert minutes < 40.0, f"the descent took {minutes:.0f} min"
 
 
@@ -485,19 +488,19 @@ def test_a_rising_sink_warns_however_far_it_goes(kelvin, per_hour, minutes, stag
     colder than intended -- the safe direction.  A ramp-down would not improve
     it and a lockout would stop the loop resuming when the bath recovers.
 
-    Three cases, all measured.  At 118 K and 2 K/h on the design ENVELOPE
-    (`move_speed` 0.5) the error reaches 2.7 K and the output falls 63.96 ->
-    57.18 %: the error row warns and nothing else happens.  The same
-    disturbance on the FILE the cryostat is armed with (`move_speed` 0.15,
-    docs/ltspm3/requirements.md, 2026-09-17) is **kept up with**: worst error
-    0.54 K, under `warn_error_k`, so nothing warns because nothing is wrong --
-    a loop that tracks a 2 K/h bath drift to half a kelvin is the point of the
-    retune, and this is where that is graded.  At 30 K and 20 K/h the output reaches
-    the hard minimum after 58 minutes and the sample then runs 16 K over
-    setpoint: the FLOOR warning is what says so, and it is a warning precisely
-    because there is nothing left for the loop to do about it.  Ninety minutes
-    for that one: the sink correction is linear in `Lambda'` at the midpoint,
-    and twenty kelvin an hour leaves the range that is honest in soon after.
+    Three cases.  At 118 K and 2 K/h on the design ENVELOPE (`STAGE_ENVELOPE`,
+    the speeds `bench_plant` pins) the loop cannot keep up: the error passes
+    `warn_error_k`, the error row warns, and nothing else happens.  The same
+    disturbance on the FILE the cryostat is armed with (`STAGE_FILE`, a
+    stronger hold -- docs/ltspm3/requirements.md §3) is **kept up with**, so
+    nothing warns because nothing is wrong.  A loop that tracks a slow bath
+    drift instead of reporting it is the point of the retune, and this is where
+    that is graded.  At 30 K and 20 K/h the output reaches the hard minimum
+    partway through and the sample then runs well over setpoint: the FLOOR
+    warning is what says so, and it is a warning precisely because there is
+    nothing left for the loop to do about it.  Ninety minutes for that one: the
+    sink correction is linear in `Lambda'` at the midpoint, and twenty kelvin
+    an hour leaves the range that is honest in soon after.
 
     Before this step the sink was scenery -- `_aux_base` moved the thermometer
     and left the plant where it was -- so the disturbance the loop was supposed

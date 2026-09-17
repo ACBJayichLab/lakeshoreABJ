@@ -26,33 +26,21 @@ the code is, and it is the detail that goes stale — edit it there, not here.
 in `docs/recorder/`; anything calibrated to LTSPM3 belongs in `docs/ltspm3/`. A
 generic document that mentions THE CHONKE is in the wrong file.
 
-## Priorities (Jeff, 2026-09-11)
+## Priorities
 
 **One program, two halves: a person watching their cryostat, and a safe
-software PID.** Neither outranks the other any more.
+software PID.** Neither outranks the other.
 
-Until 2026-09-11 this section said the software PID was complete and off
-limits and that the viewer, MATLAB and Windows deployment came first. The
-viewer and the MATLAB interface exist and are exercised end to end; the
-recorder has run on the cryostat's own Windows machine since 2026-08-24. The
-monitoring half is in service and stays in service.
+**What the loop is graded against is
+[`docs/ltspm3/requirements.md`](docs/ltspm3/requirements.md)** — Jeff's words,
+and only he changes them. [`PID_PLAN.md`](PID_PLAN.md) is the route to meeting
+them; [`HANDOFF.md`](HANDOFF.md) is where things stand today.
 
-The software PID closed on the cryostat on 2026-09-16 and moved its first
-setpoint on 2026-09-17. **Its requirements are
-[`docs/ltspm3/requirements.md`](docs/ltspm3/requirements.md)**, in Jeff's
-words: a 2 K move at 118 K in five minutes, a hold no noisier than open loop at
-15 s to 5 min and much steadier at long averaging, a band that follows the
-setpoint, 5 K/min as a ceiling only. The goal had drifted in the documents as
-measurements came in, until they said the loop had nothing to offer a hold;
-that is why the requirements now live in one file that only he changes.
-[`PID_PLAN.md`](PID_PLAN.md) is the route.
-
-**`ltspm3/control/` is therefore open to change — under the eight rules of
+**`ltspm3/control/` is open to change — under the eight rules of
 [safety](docs/ltspm3/safety.md), one rule-scoped commit at a time, each
-reviewed against the rule it touches.** The instinct the old instruction
-protected is still right: no "while I am in here" changes, and nothing lands
-in `control/` without a test on the virtual-clock harness and a line in
-`PID_PLAN.md` saying which step it is.
+reviewed against the rule it touches.** No "while I am in here" changes:
+nothing lands in `control/` without a test on the virtual-clock harness and a
+line in `PID_PLAN.md` saying which step it is.
 
 ## The invariants
 
@@ -64,21 +52,12 @@ in the linked document.
 2. **The recorder owns the port, exclusively.** A COM port has exactly one
    holder; two processes on one GPIB board garble replies. Everything else goes
    through files. → [file-interface](docs/recorder/file-interface.md)
-3. **Seven write interlocks, all off by default**: `transport.read_only` (byte
-   level) · `allow_writes` (driver policy) · `ipc.accept_commands` ·
-   `ipc.allow_heater_range` (a 33x range) · `ipc.allow_analog_output` (a 218
-   analog output) · `ipc.allow_pid` (retuning a loop) · `ipc.sources` (**which
-   client** may ask, narrowed at runtime by `sources.json` and never widened).
-   A command arriving by file passes exactly the gates a command typed at the
-   CLI passes. The two power gates are separate on purpose: different commands,
-   different boxes, and a cryostat usually wants one open and not the other.
-   **Every gate applies in both directions** — commanding a range or an output
-   to *zero* needs the same permission as raising it, because cutting a heater
-   stops heating and can also crash the stage. The only exemptions anywhere are
-   the panic kinds `heaters_off` and `hold`, which bypass the source policy and
-   the two power gates and nothing else; the exemption belongs to the command
-   kind, so MATLAB gets it too.
-   → [instruments](docs/recorder/instruments.md) ·
+3. **Seven write interlocks, all off by default**, and a file command passes
+   exactly the gates a command typed at the CLI passes. **Every gate applies in
+   both directions** — commanding an output to *zero* needs the same permission
+   as raising it. The only exemptions are the panic kinds `heaters_off` and
+   `hold`. The list, what each one covers and why the two power gates are
+   separate: → [instruments](docs/recorder/instruments.md) ·
    [file-interface](docs/recorder/file-interface.md)
 4. **Nothing raises a heater range as a side effect of anything.** A setpoint
    does nothing while the range is 0; raising it is what applies power.
@@ -87,18 +66,13 @@ in the linked document.
    `allow_writes` gate and a `max_output_pct` ceiling in config, never a
    constant in code.
 5. **Writes are applied asynchronously** — a query issued too soon answers with
-   the previous value. Hence `write_settle_s`, which is the transport's pacing
-   gap between a write and the next transaction on that link, **and** readback
-   verification. A stale readback returns the **old** value, so any step larger
-   than `readback_tol_pct` fails the comparison and is caught rather than
-   confirmed; **below that tolerance the check is undecidable at any settle
-   time.** That is every hold write under dither, and every 5 K/min ramp write
-   at 118 K — 0.012 % per 2 s cycle against a 0.015 % tolerance — so on this
-   cryostat the check is discriminating at the cold end and silent by
-   arithmetic at the warm one. Knowing which of those it is doing matters more
-   than the settle number: 100 ms wants a three-command check on the box, not a
-   characterisation. → [instruments](docs/recorder/instruments.md) ·
-   [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) W1
+   the previous value. Hence `write_settle_s` and readback verification. A
+   stale readback returns the **old** value, so a step larger than
+   `readback_tol_pct` is caught; **below that tolerance the check is
+   undecidable at any settle time**, and knowing which of the two it is doing
+   matters more than the settle number. The arithmetic for this cryostat is in
+   → [running](docs/ltspm3/running.md);
+   the mechanism in → [instruments](docs/recorder/instruments.md)
 6. **Availability of the cryostat outranks control quality.** Every ambiguous
    case holds the output and raises an alarm; nothing raises the heater in
    response to a fault. The eight design rules are in
@@ -150,8 +124,7 @@ lschart/                    GENERIC -- any Lake Shore cryostat
                      source policy, and it is NOT a panic kind.  It lands on the
                      NEXT row, because the cycle writes the CSV before it drains
                      the spool.  Nothing else in the recorder records what a
-                     PERSON did, and the column was empty across both September
-                     2026 events.
+                     PERSON did.
   gui/               The strip chart. A SEPARATE PROCESS, not a thread.
     source.py        CsvTail + StatusSource, plus the arithmetic the window is
                      not allowed to hold: region statistics, hover lookup, the
@@ -219,33 +192,32 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
     thermal_response.py The one measured P(pct)/T(P) curve. Shared by the
                      simulator and the feedforward so they cannot drift.
     sim_response.py  Two-pole calibrated model + measured cross-channel coupling.
-                     ONE tau, 620 s, from a single step at 137 K. Right there and
-                     wrong elsewhere; the control harness is calibrated to it.
+                     ONE tau, from a single step; right there and wrong
+                     elsewhere. The control harness is calibrated to it.
+                     -> docs/ltspm3/thermal-response.md
     fitted_response.py Same seam, driven by the ODE fitted to the 43 h sweep:
                      C(T) dT/dt = Q(u) - [Lambda(T) - Lambda(T_c)], so tau runs
-                     from under a second at 10 K to about 580 s at 137 K and the
-                     steady state is the measured one. The curves come frozen
+                     over orders of magnitude across the range and the steady
+                     state is the measured one. The curves come frozen
                      in _fitted_table.py (GENERATED by
                      analysis/export_response.py; regenerate after a refit).
                      What `sweep --simulate` rehearses against.
-                     REFITTED 2026-09-13 and 4-5 K WARMER at a given output than
-                     every number written before that date: 60.597% read 70.0 K
-                     and reads 75.09. **Its LEVEL is a calibration with a shelf
-                     life** -- the header carries a delivered-power gauge and
-                     the day it was measured, because handling the heater wiring
-                     moves it by up to 0.8%, which is 3 K at 118 K. The SHAPE
-                     does not expire. -> REFIT_PLAN.md 7.3
+                     **Its LEVEL is a calibration with a shelf life** -- the
+                     header carries a delivered-power gauge and the day it was
+                     measured, because handling the heater wiring moves it. The
+                     SHAPE does not expire. -> REFIT_PLAN.md 7.3,
+                     docs/ltspm3/thermal-response.md
                      Also THE RESIDUAL AND ITS BAND, 2026-09-14:
                      `missing_power_w` is what the monitor and the supervisor
                      judge the cryostat by, and `sigma_q_w` is how wrong it is
                      allowed to be -- ONE source, so the two cannot disagree
                      about what typical means. The band's six terms are frozen
                      into _fitted_table.py beside the curves.
-                     **`bias_q_w` is deliberately NOT in the band**: the 0.7%
-                     the heater circuit may not deliver is a constant that moves
-                     when somebody handles the wiring, and in the band it would
-                     make 3 sigma at 118 K 14 mW -- three times the 09-10 fault
-                     the monitor has to catch. -> PID_PLAN.md 3
+                     **`bias_q_w` is deliberately NOT in the band**: the
+                     fraction the heater circuit may not deliver is a constant
+                     that moves when somebody handles the wiring, and in the
+                     band it would widen 3 sigma past the faults the monitor
+                     has to catch. -> PID_PLAN.md 3
   config.py          The `control:` section; registers itself on import.
   app.py             build() -- the only module that knows both halves.
   __main__.py        Swaps one BUILDER; everything else is shared with lschart.
@@ -254,13 +226,14 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      life so far.  `judge.py` is where the reasoning is; read it
                      first.  It alarms on the CHANGE in the residual against a
                      slow baseline, not on its level, because the level carries
-                     the calibration and the unmodelled drift -- and Jeff
-                     recalibrates once per cooldown (2026-09-14), over which the
-                     full band would reach 31 K.  **The baseline is a FRACTION
-                     OF DELIVERED POWER**, which is what a series resistance in
-                     a voltage-driven heater is; in watts or in kelvin the same
-                     1% calibration error is a different number at 40 K and at
-                     140 K and the baseline chases the sweep instead.  It
+                     the calibration and the unmodelled drift, and the
+                     cryostat is recalibrated only once per cooldown -- over
+                     which the full band grows far past anything useful as a
+                     level.  **The baseline is a FRACTION OF DELIVERED POWER**,
+                     which is what a series resistance in a voltage-driven
+                     heater is; in watts or in kelvin the same calibration
+                     error is a different number cold and warm, and the
+                     baseline chases the sweep instead.  It
                      FREEZES whenever the verdict is not typical, or it learns
                      the fault it is judging.  source.py reads a live recorder
                      CSV or the archive; report.py writes plant.json and a daily
@@ -269,9 +242,9 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      pid, tuning, feedforward, ramp, filters, dither.
                      `panic_hold()`/`panic_off()`/`arm()`/`acknowledge()` and
                      `set_setpoint()`/`sweep_to()` are the only METHODS lschart
-                     calls here -- the last two since 2026-09-17, which is when
-                     an armed loop's setpoint first became movable from outside
-                     the process at all (`send setpoint --software`);
+                     calls here -- the last two are what makes an armed loop's
+                     setpoint movable from outside the process at all
+                     (`send setpoint --software`);
                      `status.py` also READS `band` and `cfg.warn_error_k`
                      for the status file's `control` block.  All of it
                      duck-typed by name and defaulted, so invariant 1 holds --
@@ -283,8 +256,8 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      sweep.py -- drives a RUNNING recorder up a ladder of heater
                      outputs through the command spool, holding each rung until
                      it would grade by analysis/steps.py's rule rather than for
-                     a fixed time.  tau spans 1 s to 500 s over 5-110 K, so a
-                     fixed dwell is wrong at both ends.  --simulate rehearses
+                     a fixed time -- tau spans orders of magnitude across the
+                     range, so a fixed dwell is wrong at both ends.  --simulate rehearses
                      the whole procedure on a virtual clock.  The ladder comes
                      from analysis/plan_sweep.py.
 
@@ -383,11 +356,10 @@ analysis/            EXPLORATORY, not shipped. Fits the thermal model from the
                        come apart exactly where it matters -- a stretch can be
                        quiet at ten seconds and wander at an hour, and the rms
                        over the window is the same number for both.  Open loop
-                       at 118 K it floors at 7.38 mK at tau = 130 s and rises
-                       after: AVERAGING STOPS HELPING AT TWO MINUTES, where
-                       the old 1/sqrt(N) prediction had it still
-                       improving at ten.  Validated against white noise, a
-                       linear drift and a sine.  -> PID_PLAN.md section 1
+                       it floors and then RISES: averaging stops helping, where
+                       the old 1/sqrt(N) prediction had it still improving.
+                       Validated against white noise, a linear drift and a
+                       sine.  -> plans/pid-4-commissioning.md C6
 ```
 
 ## Conventions

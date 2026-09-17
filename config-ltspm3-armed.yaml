@@ -1,65 +1,20 @@
 # LTSPM3 -- the SOFTWARE PID.  `config-ltspm3-heater.yaml` plus a `control:`
 # section, which is the only difference and is the whole difference.
 #
-#   python -m lschart -c config-ltspm3-armed.yaml check    REFUSES -- see below
+#   python -m lschart -c config-ltspm3-armed.yaml check    REFUSES: `control:`
 #   python -m ltspm3  -c config-ltspm3-armed.yaml check    validate, touch nothing
 #   python -m ltspm3  -c config-ltspm3-armed.yaml run      record; loop NOT armed
 #   python -m ltspm3  -c config-ltspm3-armed.yaml run --arm    close the loop
 #
-# ---------------------------------------------------------------------------
-# WHAT THIS FILE IS FOR TODAY
-# ---------------------------------------------------------------------------
+# `lschart` refuses it because `control:` is a section only `ltspm3` registers,
+# so a recorder-only install cannot be asked to close a heater loop
+# (invariant 1).  Choosing this file is not arming.  Running it:
+# docs/ltspm3/running.md.  What is armed right now: HANDOFF.md.
 #
-# **THIS FILE HAS BEEN ARMED, and the loop has held with it.**  2026-09-16:
-# armed 14:11:42 at 117.06 K, one hour to -22 mK with a 13 mK scatter, which is
-# the open-loop noise floor.  4a MET.  `run --arm` is still a deliberate second
-# act on top of choosing this file -- choosing it is not arming -- but it is no
-# longer hypothetical, and an edit here reaches the cryostat at the next arm.
-#
-# **RETUNED 2026-09-17 TO JEFF'S REQUIREMENTS** (docs/ltspm3/requirements.md):
-# a 2 K move at 118 K arrives in 5 minutes, and a hold with real authority.
-# `authority_pct` 0.25 -> 1.0, `move_speed` 0.5 -> 0.15, `hold_speed` 12 ->
-# 0.25, and the band follows the setpoint whether or not the feedforward term
-# is on.  Graded on the bench by `tests_ltspm3/test_stage_4d_fast_move.py`;
-# NOT yet graded on the cryostat.  The loop that was running when this was
-# written was armed on the previous numbers.
-#
-# The bench loads the CRYOSTAT's limits from here -- `hard_max_pct`, the rates,
-# the guard's thresholds -- so the numbers the harness proves are the numbers
-# the cryostat runs.  It does NOT load the COMMISSIONING SWITCHES below
-# (`authority_pct`, `operating_point_pct`, `feedforward.enabled`,
-# `tuning.enabled`) nor the two speed ratios (`hold_speed`, `move_speed`):
-# `tests_ltspm3/bench_plant.py` pins its own envelope for those, which is what
-# lets this file ship the stage it is armed at.  `test_stage_4a.py`,
-# `test_stage_4c_tuning.py` and `test_stage_4d_fast_move.py` grade THIS
-# file's numbers.
-#
-# The gain and time-constant SCHEDULE is not here.  It lives in
-# `ltspm3/control/tuning.py`, pasted from
-# `python analysis/pid_tuning.py --rows` with the fit's cache key on every row,
-# because a table that must match the shipped `_fitted_table.FIT_KEY` is not
-# something to retype into a YAML file.  PID_PLAN.md's "pastes rot" trap.
-#
-# ---------------------------------------------------------------------------
-# WHY `lschart` REFUSES THIS FILE
-# ---------------------------------------------------------------------------
-#
-# `control:` is a section `ltspm3` registers on import.  Under plain `lschart`
-# it is an unknown key and the load fails, saying so.  That is the interlock:
-# a config file cannot quietly ask a recorder-only install to close a heater
-# loop.  Invariant 1, enforced at load time.
-#
-# ---------------------------------------------------------------------------
-# PHASE 3 IS IN PROGRESS AND THIS FILE MOVES WITH IT
-# ---------------------------------------------------------------------------
-#
-# All eight steps have landed, and so have the ten review fixes of
-# 2026-09-15 (plans/pid-3-review.md): the filter chain has no low pass and the
-# loop's dead time is derived from it, `control/` reads the fitted curve, the
-# tuning is a ratio to the plant's own tau, the band follows the setpoint,
-# there is ONE RATE in kelvin, and the premise check is in WATTS -- with the
-# two kelvin rows underneath it for the cold end, where the watt residual has
-# nothing to say.
+# The bench harness reads the CRYOSTAT's limits from here and pins its own
+# envelope for the commissioning switches and the speed ratios -- see
+# `tests_ltspm3/bench_plant.py`.  Every number below is graded against
+# docs/ltspm3/requirements.md.
 
 log_level: INFO
 
@@ -75,7 +30,8 @@ instruments:
       resource: GPIB0::15::INSTR
       read_only: false
       timeout_ms: 3000
-      read_termination: "\n"      # MEASURED: the 218 ends a reply with a bare LF
+      read_termination: "\n"      # the 218 ends a reply with a bare LF; the
+                                  # 336 uses the CRLF default.  cryostat.md
       inter_command_delay: 0.05
       reconnect: true
       retry_min_s: 1.0
@@ -86,16 +42,15 @@ instruments:
       2: Coldplate
       5: Magnet
 
-    # THE DIFFERENCE FROM THE MANUAL FILE.  The software loop steers by input
-    # 1, and this is what tells it so.  A `control:` section with
-    # `control_input: 0` is a loop with no sensor.
+    # THE DIFFERENCE FROM THE MANUAL FILE: the software loop steers by input 1.
+    # A `control:` section with `control_input: 0` is a loop with no sensor.
     control_input: 1
 
     analog_output: 1
     analog_decimals: 3
 
     allow_writes: true
-    max_output_pct: 70.0          # the ceiling.  ~13 K/% up here; see below
+    max_output_pct: 70.0          # the ceiling; matches supervisor.hard_max_pct
     verify_writes: false          # the supervisor confirms its own writes
                                   # (`verify_readback`); paying twice would put
                                   # a second transaction in every cycle
@@ -104,7 +59,7 @@ instruments:
     read_status: true
     status_every_n_cycles: 15
 
-  # The 336: loop 2 holds THE CHONKE at 290 K, heater 2 railed.  Not ours.
+  # The 336: loop 2 holds THE CHONKE and is not ours.  docs/ltspm3/cryostat.md.
   - name: ls336
     model: "336"
     enabled: true
@@ -129,9 +84,9 @@ instruments:
 # ---------------------------------------------------------------- acquisition
 
 acquisition:
-  # 2 s, and the loop's derived dead time is computed FROM this number:
-  # `median_window // 2 * cadence + cadence / 2` is 3.0 s at a median of 3.
-  # Changing it changes the delay floor under `tau_cl`.
+  # 2 s (docs/ltspm3/cryostat.md), and the loop's dead time is DERIVED from it
+  # together with `filter.median_window`, so changing it changes the delay
+  # floor under `tau_cl`.
   interval_s: 2.0
   log_every_n: 1
   ringbuffer_size: 43200
@@ -139,14 +94,13 @@ acquisition:
 recorder:
   enabled: true
   directory: data
-  # A THIRD prefix.  A run in which software moved the heater is a different
-  # kind of record from one in which a person did, and six months from now the
-  # filename is the only thing that will still say which.
+  # A prefix per config, on purpose: the filename is the only thing that will
+  # still say what could move the heater during a run.
   filename_prefix: ltspm3-armed
   flush_every_sample: true
 
 runtime:
-  lock_path: data/ltspm3.lock     # ONE GPIB board, one holder
+  lock_path: data/ltspm3.lock     # ONE GPIB board, one holder (invariant 2)
   single_instance: true
 
 # ------------------------------------------------------------------------ ipc
@@ -168,72 +122,26 @@ control:
   enabled: true
 
   supervisor:
-    # THE BAND FOLLOWS THE SETPOINT.  It is centred on the output the model
-    # says holds the setpoint the loop is chasing right now, widened while a
-    # ramp is running by exactly the lead that ramp needs, and clamped by the
-    # two hard limits.  So `operating_point_pct` is no longer the band: it is
-    # only the fallback centre for a loop with no model, and the output a loop
-    # adopts when it has never read one.  NOTHING HERE NEEDS RE-CENTRING when
-    # the cryostat is moved to a new temperature, which is what the old comment
-    # in this place asked an operator to remember.
+    # THE BAND FOLLOWS THE SETPOINT whenever the model has a curve (`has_curve`,
+    # not `feedforward.enabled`), widened while a ramp runs by exactly that
+    # ramp's lead and clamped by the two hard limits.  So this field is only
+    # the fallback centre for a loop with no model, and the output a loop
+    # adopts when it has never read one: nothing needs re-centring before a
+    # move.  The model's LEVEL is a calibration with a shelf life -- handling
+    # the heater wiring moves it -- so the half-width below has to cover
+    # whatever level error it carries.  docs/ltspm3/thermal-response.md.
+    operating_point_pct: 63.960   # a settled point on the shipped fit
+    # The window's HALF-WIDTH, in output percent either side of the centre.
+    # Sized to the model's LEVEL ERROR (a half-width below it cuts the heater
+    # at arming, pinned by
+    # `test_a_band_narrower_than_the_level_error_cuts_the_heater_at_arming`)
+    # plus the OVERDRIVE a fast move needs.  Graded on the bench:
+    # docs/ltspm3/requirements.md section 3.
     #
-    # **Since 2026-09-17 that is true WHETHER OR NOT THE FEEDFORWARD TERM IS
-    # ON.**  Until then the centre asked `feedforward.enabled`, so with the
-    # term off (as it is below) the band sat pinned at this constant and a
-    # setpoint more than ~3 K from where the loop was armed railed against a
-    # window that never moved -- a +2 K move at 140 K faulted on the bench.
-    # The centre asks `has_curve` now, like the ramp-down and the rate limiter.
-    # This field is therefore what its first paragraph says: the fallback for a
-    # loop with no model, and nothing on this cryostat reads it as the band.
-    #
-    # The fit says 63.960 % settles at 118.3 K.  On the cryostat as wired since
-    # 2026-09-16 it settles about 116.7 K: handling the heater wiring cost
-    # 0.336 % of delivered power, which is 0.107 % of output at this point, and
-    # the model's LEVEL has been stale since.  The centre is therefore about
-    # 0.1 % below where the sample actually needs the heater, which the loop's
-    # integral absorbs and the half-width below has to cover.
-    operating_point_pct: 63.960   # fitted: 63.960% settles at 118.3 K
-    # The window's HALF-WIDTH.  A percent of output either side of the centre.
-    # The one systematic that moves the centre is the heater circuit's
-    # delivered fraction, 0.7 % of POWER = 0.35 % of output.
-    #
-    # **THIS FILE SHIPS WHAT THE CRYOSTAT IS ARMED AT, NOT THE BENCH'S
-    # ENVELOPE.**  Since 2026-09-16 `tests_ltspm3/bench_plant.py` pins its own
-    # `BENCH_AUTHORITY_PCT` and `BENCH_FEEDFORWARD`, so this value is free to
-    # move with commissioning and be committed while it does.  Before that the
-    # two were the same field and the working configuration could not be
-    # committed at all.
-    #
-    # **1.0, 2026-09-17, sized to two things** (docs/ltspm3/requirements.md):
-    #
-    #   * the LEVEL ERROR the model may carry.  Today 0.107 % of output; up to
-    #     0.35 % after somebody handles the heater wiring (0.7 % of power).  A
-    #     half-width below the level error cuts the heater at arming -- the
-    #     ceiling lands under where the heater already sits -- and
-    #     `test_a_band_narrower_than_the_level_error_cuts_the_heater_at_arming`
-    #     pins that with 0.1;
-    #   * the OVERDRIVE a fast move needs.  A 2 K move in 5 min at 118 K peaks
-    #     0.56 % above its final output (bench); a 10 K move 0.8 %.  The band
-    #     also widens by the ramp's lead while the setpoint is moving, so this
-    #     is margin rather than the whole allowance.
-    #
-    # Bench, 2 K at 118 K, `move_speed` 0.15, everything else as here:
-    #
-    #     authority   arrives (95 %)    railed
-    #     0.25        10.8 min          0        <- band-limited
-    #     0.50         4.6 min          0
-    #     1.00         4.6 min          0
-    #
-    # It was 0.25 from 2026-09-16, chosen as a wider FIXED band while the
-    # centre did not follow the setpoint (see `operating_point_pct` above) --
-    # setpoint RANGE, +/-3 K, rather than control room.  The centre follows
-    # now, so this is back to being about control room.
-    #
-    # What this is NOT: the "is the delivered power wrong" threshold.  That is
-    # the watt residual's job (`warn_sigma`, `fault_mw` below), and Jeff's
-    # 2026-09-17 ruling is that the band must not double as it.  At 13 K/%
-    # this is +/-13 K of authority about the model's answer, and `hard_max_pct`
-    # is still the cap nothing moves.
+    # What it is NOT: the "is the delivered power wrong" threshold.  That is
+    # the watt residual's job (`warn_sigma`, `fault_mw` below), and the band
+    # must not double as it (Jeff, 2026-09-17).  `hard_max_pct` is still the
+    # cap nothing moves.
     authority_pct: 1.0
     hard_min_pct: 0.0
     # THE ONE CAP NOTHING MOVES.  Whatever the model, the setpoint or the
@@ -241,39 +149,22 @@ control:
     # extrapolation and nobody has measured what happens.
     hard_max_pct: 70.0
 
-    # THE OUTPUT RATE FLOOR, and the second of the two rate fields left of
-    # eight (the first is control.ramp.max_rate_k_per_min).  The heater's
-    # percent rate is `max_rate_k_per_min / K(T)` -- the one rate through the
-    # gain, so 5 K/min means 5 K/min everywhere -- and this is the floor under
-    # it where there is no curve to ask.  The one rate is 0.40 %/min at 118 K
-    # and 14.9 at 10 K on the 2026-09-13 fit; the 0.38 and 14.6 written before
-    # that date were the pre-refit gains.  Both conversions ask whether a CURVE
-    # exists, not whether this stage's feedforward or tuning is switched on --
-    # they asked the switches until 2026-09-16, which is why a fault ramp-down
-    # at 4a took five hours instead of 23 minutes.
-    #
-    # It replaces `max_step_pct: 0.02` and `max_rate_pct_per_min: 0.20`, which
-    # were trim rates: ten kelvin is 29 % of output at the cold end, so
-    # 0.2 %/min allowed two and a half hours for a two-minute sweep and the
-    # premise check called the cryostat broken long before it arrived.
+    # THE OUTPUT RATE FLOOR.  The heater's percent rate is
+    # `ramp.max_rate_k_per_min / K(T)` -- the one rate through the gain, so a
+    # kelvin rate means the same thing everywhere -- and this is the floor
+    # under it where there is no curve to ask.  The conversion asks whether a
+    # CURVE exists, not whether a commissioning switch is on.
+    # docs/ltspm3/thermal-response.md for K(T).
     min_rate_pct_per_min: 0.20
 
     # THE PREMISE IS THAT THE WATTS ADD UP.  `dQ` is the same residual the
     # monitor judges by, from the same two model functions, so the loop and the
     # judge cannot disagree about what typical means -- only about what to do.
     # It is valid at a hold AND during a sweep, which a kelvin check is not.
-    #
-    # `max_error_k: 1.0`, `anomaly_hold_s`, `response_lag_s`, `max_ramp_error_k`
-    # and `model_trust_k: 15.0` are gone.  One kelvin threshold cannot serve a
-    # cryostat whose gain spans forty-fold, and the ramp allowance that propped
-    # it up was excusing the loop's own 60 s filter as much as anything about
-    # the cryostat.
     warn_error_k: 1.0             # WHILE THE SETPOINT IS NOT MOVING.  ALARMS
                                   # and keeps tracking; it does not freeze.
-                                  # Under about 40 K -- below min_output_pct,
-                                  # or where the plant is faster than the slope
-                                  # is measured -- it is the only check there
-                                  # is, which is why it is not optional.
+                                  # Below min_output_pct it is the only check
+                                  # there is, which is why it is not optional.
     warn_sigma: 3.0               # sigma_q_w from the model
     fault_mw: 10.0                # Jeff, 2026-09-14.  A FLOOR under 3 sigma...
     fault_window_s: 1800.0        # ...and a STEP within half an hour, not a
@@ -298,21 +189,17 @@ control:
                                   # underneath (Jeff, 2026-09-14).
     coldplate_channel: Coldplate  # Lambda(T_s) - Lambda(T_c) needs the sink
     sink_stale_s: 30.0            # and past this the residual has NO OPINION
-                                  # rather than running on a remembered one.
-                                  # The sink term is the largest in a settled
-                                  # band up here -- Lambda' at 6.6 K is nine
-                                  # times Lambda' at 118 -- so a coldplate that
-                                  # moves while the channel is down would land
-                                  # in dQ as if it were the sample's problem.
+                                  # rather than running on a remembered one: a
+                                  # coldplate moving while the channel is down
+                                  # would land in dQ as the sample's problem.
 
     anomaly_demand_pct: 0.50      # a one-cycle lurch in the FEEDBACK terms is a
-                                  # bad reading driving the loop.  Kept: it is
-                                  # about the reading, not about the cryostat.
+                                  # bad reading driving the loop -- about the
+                                  # reading, not about the cryostat.
 
     max_feedforward_pct: 0.40
-    # A CEILING ON THE DERIVED VELOCITY FEEDFORWARD, not the value.  What a
-    # ramp needs is rate*tau/K and the loop computes it -- 0.02 % at 10 K,
-    # 3.28 % at 118 K, 4.10 % at 180 K -- and the band widens by the same
+    # A CEILING ON THE DERIVED VELOCITY FEEDFORWARD, not the value.  The loop
+    # computes what a ramp needs as rate*tau/K, and the band widens by the same
     # number, so the drive a ramp needs and the authority it is granted cannot
     # disagree.  This is only the most it may ever come to.
     max_velocity_ff_pct: 6.00
@@ -320,9 +207,7 @@ control:
 
     # The fault ramp-down descends at THE SAME ONE RATE, in kelvin, through the
     # model's inverse curve -- so it needs no sensor (rule 3: the fault may BE
-    # the sensor).  Three percent-rate fields and a knee at 40 % are gone with
-    # it; they existed because a rate in percent is a different descent at
-    # every temperature, and the knee was patching that by hand.
+    # the sensor).
     safe_output_pct: 0.0
     require_ack_after_fault: true
 
@@ -342,27 +227,19 @@ control:
                                   # present temperature instead of this
 
   feedforward:
-    # OFF: the model's LEVEL is stale (0.336 % of power since the 09-16
-    # reseat) and the term drove the sample 350 mK down on 2026-09-16.  It
-    # stays off until somebody re-gauges.
-    #
-    # **AND WHEN IT COMES ON, `move_speed` MUST BE RE-GRADED.**  Bench,
-    # 2026-09-17: with this term on, a 3 K move at 118 K at `move_speed: 0.15`
-    # overshoots 10.9 % (3.1 % with it off), because the term stacks a level
-    # step on a loop that already supplies the drive.  `move_speed: 0.5` with
-    # the term on is 1.7 %.  `BENCH_MOVE_SPEED` in bench_plant.py records the
-    # numbers.  The band no longer waits on this switch (rule 5 asks
-    # `has_curve`), so it governs the drive TERM and nothing else.
+    # This switch governs the positional DRIVE TERM and nothing else: the band
+    # follows the setpoint either way.  OFF until the model's level is
+    # re-gauged against the heater circuit's delivered power
+    # (docs/ltspm3/thermal-response.md), and when it comes on `move_speed` must
+    # be re-graded -- the term stacks a level step on a loop that already
+    # supplies the drive (docs/ltspm3/requirements.md section 3).
     enabled: false
-    # THE SHIPPED FIT, not the CD10 steady-state curve.  They agree to 4-5 K
-    # where CD10 measured (64.3-68.5 %) and to THIRTEEN KELVIN where it did
-    # not: 59.2 % is 73.72 K on the old curve and 60.41 K on the fit, and the
-    # local gain there is 5.9 K/% against 9.1.  Everything below 64 % was a
-    # power law extrapolating out of its own range.
+    # THE SHIPPED FIT, not the CD10 steady-state curve: below the range CD10
+    # measured, CD10 was a power law extrapolating out of its own range and the
+    # two disagree by more than ten kelvin.  docs/ltspm3/thermal-response.md.
     #
-    # `fitted` has no parameters at all -- it is a table with a cache key.  The
-    # three below configure `cd10` only and are kept so the pre-refit record
-    # can still be read back.
+    # `fitted` has no parameters -- it is a table with a cache key.  The three
+    # below configure `cd10` only, kept so the pre-refit record reads back.
     source: fitted
     t_bath_k: 4.0
     ref_pct: 63.076
@@ -372,13 +249,13 @@ control:
   guard:
     valid_min_k: 1.0
     valid_max_k: 400.0
-    # Two-tier: genuine cooldowns reach 1.63 K/s corroborated on all three
-    # inputs, while the observed glitch runs 7.3 K/s on input 1 alone.
+    # Two-tier: a genuine cooldown is corroborated on the other inputs and the
+    # observed glitch is faster and alone.  docs/ltspm3/safety.md.
     max_slew_k_per_s: 5.0
     corroborate_slew_k_per_s: 0.5
     curvature_ratio: 1.5
     curvature_floor_k: 0.5
-    fault_after_s: 600.0          # the longest observed glitch healed in 280 s
+    fault_after_s: 600.0          # longer than any observed self-healing glitch
     recover_samples: 5
     recover_samples_from_fault: 15
 
@@ -390,137 +267,63 @@ control:
   ramp:
     # THE ONE RATE (Jeff, 2026-09-11).  It is the default sweep rate, the rate
     # the post-fault approach walks in at, the rate the open-loop fault
-    # ramp-down descends at, and the ceiling on anything a client asks for --
-    # four numbers that used to disagree by a factor of twenty.
+    # ramp-down descends at, and the ceiling on anything a client asks for.
+    # A safety ceiling, not a target (docs/ltspm3/requirements.md).
     max_rate_k_per_min: 5.0
     # Corner rounding.  The corner IS the closed-loop response time,
-    # `move_speed * tau(T)` -- 24 s at 30 K, 77 s at 118 K -- because a
-    # trajectory with corners sharper than the loop's own response is one the
-    # loop cannot follow, and what comes out is lag in and overshoot out.  This
-    # is the FLOOR under it, in dead times, for the cold end where tau is
-    # shorter than the measurement.  Eight, measured: a 3 K move at 30 K
-    # overshoots 17.9 % at four and 0.1 % at eight.
-    #
-    # It replaced a flat 300 s, which was measured at 0.5 K/min where a ramp
-    # lasts hours.  At 5 K/min a 10 K sweep lasts 120 s and a 300 s corner
-    # meant the loop never approached the rate it was given.
+    # `move_speed * tau(T)`, because a trajectory with corners sharper than the
+    # loop's own response gives lag in and overshoot out.  This is the FLOOR
+    # under it, in dead times, for the cold end where tau is shorter than the
+    # measurement; graded on the bench (docs/ltspm3/requirements.md).
     smooth_delays: 8.0
 
   tuning:
-    # **ON since 2026-09-17 -- this is the TUNING step of 4c.**  It is the one
-    # commissioning switch that does NOT wait on the gauge, and that is the
-    # whole reason it comes before the feedforward:
+    # Gain scheduling.  It is the one commissioning switch that does NOT wait
+    # on a re-gauge, and that is why it comes before the feedforward:
+    # `feedforward` commands the model's LEVEL, which is stale, while `tuning`
+    # reads only K(T) and tau(T) -- the model's SHAPE, which a refit of the
+    # level does not move.  The same distinction `has_curve` draws for the
+    # fault ramp-down and the output rate limiter.  That the two switches come
+    # apart is pinned by `tests_ltspm3/test_stage_4c_tuning.py`.
     #
-    #   `feedforward` commands the model's LEVEL, which is stale (HANDOFF A).
-    #   `tuning` reads only K(T) and tau(T) -- the model's SHAPE, which the
-    #   refit did not move.
-    #
-    # Same distinction `has_curve` already draws for the fault ramp-down and
-    # the output rate limiter (AUDIT-2026-09-16 findings 2 and 3).
-    # `tests_ltspm3/test_stage_4c_tuning.py` pins that the two switches come
-    # apart, with a control case, because at 118.3 K the two band centres agree
-    # to three figures and the assertion would otherwise not be able to fail.
-    #
-    # WHAT IT BUYS, and the reason it is worth a stage of its own: THREE things
-    # are gated on `tuner.enabled` and all three were off.  The scheduled gains
-    # (`move_speed` is an 8x kp), the velocity feedforward (`rate*tau/K`, the
-    # drive a ramp needs), and `ramp_lead_pct` (the authority to use it).  With
-    # all three off the loop drags the sample with P+I inside a fixed band, and
-    # a +2 K move at ANY rate arrives about a kelvin late -- bench, from a
-    # settled 116.88 K, forty minutes:
-    #
-    #     rate          off            on
-    #     0.2 K/min     1.045 K        0.065 K       short by
-    #     1.0 K/min     0.982 K        0.041 K
-    #     5.0 K/min     0.970 K        0.037 K
-    #
-    # The RATE is not what binds -- all three land within 0.1 K of each other.
-    # It never rails and never faults; it arrives late with a `warn_error_k`
-    # warning, which is graceful and useless for an experiment.
+    # Three things are gated on it: the scheduled gains, the velocity
+    # feedforward (the drive a ramp needs) and `ramp_lead_pct` (the authority
+    # to use it).  With it off a move arrives late with a `warn_error_k`
+    # warning at any rate -- graceful, and useless for an experiment.
     enabled: true
-    # RATIOS TO THE PLANT'S OWN TIME CONSTANT, not absolute times.  tau(T) runs
-    # from 0.1 s at 10 K to 611 s at 180 K, so the 1800 s / 300 s this replaced
-    # was three times the plant at the top and eighteen THOUSAND times it at
-    # the bottom -- one pair of numbers meaning "gentle" up there and "asleep"
-    # down here.
+    # RATIOS TO THE PLANT'S OWN TIME CONSTANT, not absolute times, because
+    # tau(T) spans orders of magnitude over this cryostat's range:
     #
     #   tau_cl = max(speed * tau(T), delay_floor * delay_s)
     #
     # and above the floor kp is simply 1 / (speed * K(T)).  The floor binds in
-    # `move` from 10 to 30 K, where the cryostat settles faster than this loop
-    # can see it.
-    # **0.25 AND 0.15, 2026-09-17 -- JEFF'S REQUIREMENTS, graded on the
-    # bench** (docs/ltspm3/requirements.md; `test_stage_4d_fast_move.py`).
-    #
-    # `move_speed: 0.15`: a 2 K move at 118 K must arrive in about five
-    # minutes.  The shipped 0.5 -- "twice as fast as the plant" -- stacked a
-    # 260 s trajectory corner on a 260 s closed loop and came out about as slow
-    # as turning the knob by hand: measured on the cryostat 11:14-11:33, 86 %
-    # of a 2.1 K move in 19 minutes, against ~26 minutes for an open-loop step
-    # to 95 %.  Bench, 2 K at 118 K, band 1.0, rate 5:
-    #
-    #     move_speed   arrives (95 %)   overshoot   overdrive above final
-    #     0.50           > 30 min          --          0.14 %
-    #     0.25          17.0 min        -22 mK         0.36 %
-    #     0.20          10.2 min         -5 mK         0.45 %
-    #     0.15           4.6 min          7 mK         0.56 %    <- this
-    #     0.12           3.3 min         96 mK         0.64 %
-    #
-    # The same 0.15 arrives in 3.8 / 5.0 / 4.9 min at 100 / 140 / 180 K and in
-    # 1.9 min at 30 K.  Known cost: at 60 K it overshoots 0.39 K (19 %) because
-    # the 5 K/min output rate limit is slow there relative to the 22 s corner
-    # and the integral winds up behind it; 0.25 does not, and arrives in 4.2.
-    # Raising the rate ceiling to 10 or 20 K/min did NOT help -- it tripped
-    # `anomaly_demand_pct` at 60 K and was SLOWER at 118 K -- so the ceiling
-    # stays at 5 and the 60 K overshoot is the open item.
-    #
-    # `hold_speed: 0.25`: the STRONG direction.  Jeff's hold benchmark is noise
-    # at 15 s, 1 min and 5 min no worse than open loop and the slow wander much
-    # better.  Bench, 3 h holds at 118 K, Allan deviation as a ratio to the
-    # same plant open loop:
-    #
-    #     hold_speed     10 s    15 s    60 s   300 s   900 s
-    #     12 (was)       0.99    0.98    0.97   1.10    2.15
-    #      3 (default)   0.99    0.99    0.98   1.08    1.75
-    #      1             0.99    0.99    0.98   0.98    1.02
-    #      0.5           0.99    0.99    0.97   0.91    0.86
-    #      0.25          1.00    1.00    0.97   0.81    0.71   <- this
-    #
-    # The weak loops (3, 12) are the ones that stir at long tau -- that is the
-    # 2026-09-16 night, whose 142 min oscillation was an integral-dominated PI
-    # with almost no proportional authority.  The bench plant has white sensor
-    # noise and no slow disturbance, so this can only show that a strong hold
-    # does not amplify noise; how much it improves the real cryostat's wander
-    # is what `analysis/hold_quality.py` grades against the 09-15 open-loop
-    # night.  It does not slow a move: 4.7 min at 118 K with either number.
-    #
-    # 12 was a one-night guess in the WEAK direction against the 09-16
-    # oscillation; the night it was armed for was not graded before this
-    # retune.  Its arithmetic (stirring ~ 2.2/hold_speed at 118 K) described
-    # the weak regime and the bench table above is where that regime ends.
-    hold_speed: 0.25              # STRONGER than the plant: real authority at a hold
+    # `move` at the cold end, where the cryostat settles faster than this loop
+    # can see it.  Both ratios are Jeff's requirements graded on the bench:
+    # docs/ltspm3/requirements.md section 3, `test_stage_4d_fast_move.py`.
+    # A known cost is recorded there: a 2 K move near 60 K overshoots, because
+    # the output rate limit is slow relative to the corner and the integral
+    # winds up behind it.  The rate ceiling is not the lever -- raising it was
+    # measured and made moves worse.
+    hold_speed: 0.25              # below 1 = real authority at a hold
     move_speed: 0.15              # a 2 K move at 118 K in ~5 min
-    delay_floor: 4.0              # x the DERIVED dead time, 3.0 s -> 12 s
+    delay_floor: 4.0              # x the DERIVED dead time
     move_error_k: 0.25
     hold_error_k: 0.10
     hold_settle_s: 120.0
     # The gain and time-constant schedule is NOT here and is not a table
     # anywhere: `FittedSchedule` reads K(T) and tau(T) from
     # ltspm3/model/fitted_response.py, so a refit moves the controller and the
-    # simulator together and there is no paste to rot.  Agrees with
-    # `python analysis/pid_tuning.py --rows` to better than 0.5 %.
+    # simulator together and there is no paste to rot.
 
   filter:
-    # NO LOW PASS (Jeff, 2026-09-11), and the class stays in the chain so that
-    # a cryostat whose noise moves into the band where a pole would help is a
-    # config edit away.  The 60 s this replaced was slower than the cryostat
-    # itself below 60 K and bought 0.41x/0.73x rather than the promised 0.18x.
+    # NO LOW PASS (Jeff), and the class stays in the chain so that a cryostat
+    # whose noise moves into the band where a pole would help is a config edit
+    # away.  Where this cryostat's noise lives: docs/ltspm3/noise.md.
     #
-    # THESE TWO NUMBERS SET THE LOOP'S DEAD TIME, which is derived from them
-    # and the measured cadence and is never typed anywhere:
-    #   median_window // 2 * cadence + cadence / 2 + tau / 2 = 3.0 s at 2 s
-    # and `tau_cl` is floored at 4 x that.  Widen the median and the loop slows
-    # down on its own, which is the point of deriving it.
+    # THESE TWO NUMBERS SET THE LOOP'S DEAD TIME, derived from them and the
+    # measured cadence and never typed anywhere; `tau_cl` is floored at
+    # `delay_floor` times it.  Widen the median and the loop slows down on its
+    # own, which is the point of deriving it.
     tau: 0.0
     median_window: 3
     spike_sigma: 8.0
@@ -536,4 +339,5 @@ monitor:
   warn_mw: 5.0                    # Jeff, 2026-09-14, as a FLOOR under 3 sigma
   fault_mw: 10.0                  # ...and a STEP inside fault_window_s
   fault_window_s: 1800.0
-  warn_after_s: 600.0             # what puts the 09-10 event at 14 min
+  warn_after_s: 600.0             # long enough that a settling transient is
+                                  # not an alarm.  plans/pid-2-monitor.md

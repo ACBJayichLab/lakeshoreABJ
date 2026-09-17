@@ -171,9 +171,9 @@ cycle.
 
 `analog` is manual control of a 218 analog output, in percent. It is the 218's
 equivalent of `range` and `setpoint` at once, because that box has neither: the
-percentage *is* the power. **Know the gain before typing a number** — on LTSPM3
-it is ~10 K/%, and the recorder's `max_output_pct` is what stands between a
-misplaced decimal and the cryostat.
+percentage *is* the power. **Know your cryostat's gain before typing a number**
+— a percent can be tens of kelvin — and the recorder's `max_output_pct` is what
+stands between a misplaced decimal and the cryostat.
 
 `pid` sets the **instrument's own** gains — nothing to do with any software
 loop. All three go together, because `PID` is one command on the box and the
@@ -220,10 +220,10 @@ python -m lschart -c config.yaml send setpoint 119 --software --rate 1.0
 ```
 
 It **ramps** there — the controller's own `max_rate_k_per_min` unless `--rate`
-says otherwise, so the one rate stays in one place. On LTSPM3 that rate is a
-ceiling: a move that fits inside the band is governed by the closed loop's own
-speed (about five minutes for 2 K at 118 K), and `--rate` only matters for
-moves large enough to need it. `--software` and `--loop`
+says otherwise, so the one rate stays in one place. That rate is a **ceiling**:
+a move that fits inside the authority band is governed by the closed loop's own
+speed, and `--rate` only matters for moves large enough to need it (see
+[`../ltspm3/control.md`](../ltspm3/control.md)). `--software` and `--loop`
 are mutually exclusive, and the flag is explicit rather than inferred from
 which instrument was named, because the two are different acts with different
 gates: an instrument setpoint is inert until a range is raised, while the

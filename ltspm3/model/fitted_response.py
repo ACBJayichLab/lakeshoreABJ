@@ -1,34 +1,23 @@
 """The simulated cryostat, driven by the fitted ODE instead of a two-pole lag.
 
-``sim_response.ThermalModel`` was the best available when it was written and is
-now the second best.  It carries **one** time constant -- 620 s, inferred from a
-single clean step at 137 K -- onto a steady state interpolated from the CD10
-percent-to-kelvin table.  The 43 h sweep of 2026-09 and the ODE fitted to it
-say both halves are wrong away from that one point:
+``sim_response.ThermalModel`` carries **one** time constant onto a steady state
+interpolated from a handful of legacy points, and both halves are wrong away
+from the single temperature that one step was measured at:
 
-* ``tau`` is not a constant.  ``tau = C/Lambda'`` runs from **under a second at
-  10 K to about 490 s at 110 K** -- a factor of a thousand, because C falls
-  steeply as the cryostat cools while the link's conductance does not.
-* the steady state is out by up to **17 K** in the middle, where CD10 had two
-  points twenty percentage points apart and the curve between them was a power
-  law doing the best it could.
+* ``tau`` is not a constant.  ``tau = C/Lambda'`` moves by three orders of
+  magnitude across this cryostat's range, because C falls steeply as the
+  cryostat cools while the link's conductance does not.
+* the steady state is out by many kelvin in the middle of the range, where the
+  legacy table had two points far apart and a power law between them.
 
 Neither error is visible in a control test that sits at one temperature, which
-is why this went unnoticed: at 137 K the two models agree, and that is where
-almost everything was tested.  It is very visible in a *sweep*, which is the
-one thing that crosses the whole range -- rehearse a 30-rung ladder against the
-old response and two thirds of the rungs come back cut off mid-relaxation, none
-of it telling you anything about the cryostat.
+is why a two-pole model survived so long.  It is very visible in a *sweep*,
+which is the one thing that crosses the whole range.
 
-**That contradiction has since been paid.**  The programmed ladder of
-2026-09-05 measured this table's predecessor low by up to 4.5 K across 40-98 K;
-the refit of 2026-09-13 reconciled the two and the shipped table is 4-5 K warmer
-at a given output than every number written before that date.  What remains true
-is narrower and does not expire: **the LEVEL is a calibration with a shelf
-life** -- handling the heater wiring moves it by up to 0.8 %, which is 3 K at
-118 K -- while the SHAPE does not.  See the header of
-:mod:`ltspm3.model._fitted_table` for the gauge, the window and the day it was
-measured.
+**The LEVEL is a calibration with a shelf life** -- handling the heater wiring
+moves it, and by enough to matter in kelvin -- while the SHAPE does not.  See
+the header of :mod:`ltspm3.model._fitted_table` for the gauge, the window and
+the day it was measured, and REFIT_PLAN.md 7.3 for the refit that set it.
 
 What the table also carries now is its own error band -- ``SIGMA_MODEL_K`` and
 the rest -- and the two functions that use it, :func:`missing_power_w` and
@@ -194,7 +183,9 @@ def coldplate_k(kelvin: float) -> float:
 
 
 def tau_s(kelvin: float) -> float:
-    """The local time constant, ``C/Lambda'``.  0.01 s at 4.9 K, 619 s at 195 K."""
+    """The local time constant, ``C/Lambda'``.  It spans three orders of
+    magnitude over the table's range; the endpoints are in
+    :mod:`ltspm3.model._fitted_table`'s header."""
     slope = lambda_slope_w_per_k(kelvin)
     return heat_capacity_j_per_k(kelvin) / (slope if slope > 1e-12 else 1e-12)
 
@@ -522,8 +513,8 @@ class FittedResponse:
 
     #: Substeps are capped here.  Past a few dozen the answer has stopped
     #: moving and the cost has not, and the case that needs many is the cold
-    #: end, where tau is 0.01 s against a 2 s cadence and the rung is settled
-    #: several hundred time constants before the next sample arrives anyway.
+    #: end, where tau is orders of magnitude shorter than the cadence and the
+    #: rung is settled long before the next sample arrives anyway.
     MAX_SUBSTEPS = 64
 
     #: Substep whenever one step would cover more than this much of a time

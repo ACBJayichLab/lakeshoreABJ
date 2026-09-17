@@ -147,35 +147,37 @@ def test_control_without_the_218_is_rejected():
         cfg.validate()
 
 
-def test_the_band_the_docs_quote_is_the_band_the_config_produces():
+def test_no_document_quotes_a_literal_band():
     """A stale band in a document is not a cosmetic error.
 
-    `docs/ltspm3/running.md` and `control.md` both show a worked `check` line,
-    and both quoted 58.076-68.076% -- five times too wide -- while
-    `authority_pct` was 1.0.  The band is what decides whether the output you
-    are sitting on is one the loop may keep, so a reader who trusted the page
-    would conclude an output was inside the band when it was above the ceiling.
+    The docs once showed a worked `check` line quoting a fixed pair of numbers,
+    and it was five times too wide.  The band is now centred on the model's
+    output for the setpoint and moves with it, so there is no pair of numbers a
+    page could quote and stay right.  The docs must therefore quote none, and
+    `check` must be the thing that says what the band is.
     """
     import re
     from pathlib import Path
 
-    from ltspm3.control import SupervisorConfig
-
-    c = SupervisorConfig()
-    lo = max(c.hard_min_pct, c.operating_point_pct - c.authority_pct)
-    hi = min(c.hard_max_pct, c.operating_point_pct + c.authority_pct)
-
     docs = Path(__file__).resolve().parents[1] / "docs" / "ltspm3"
-    pattern = re.compile(r"authority band\s*:\s*([\d.]+)%\s*\.\.\s*([\d.]+)%")
-    seen = 0
+    literal = re.compile(r"authority band\s*:\s*[\d.]+%\s*\.\.\s*[\d.]+%")
     for page in docs.glob("*.md"):
-        for got_lo, got_hi in pattern.findall(page.read_text(encoding="utf-8")):
-            seen += 1
-            assert (float(got_lo), float(got_hi)) == (lo, hi), (
-                f"{page.name} quotes a band of {got_lo}-{got_hi}%, but the "
-                f"shipped config produces {lo:.3f}-{hi:.3f}%"
-            )
-    assert seen, "no worked `check` band found in docs/ltspm3 -- did they move?"
+        assert not literal.search(page.read_text(encoding="utf-8")), (
+            f"{page.name} quotes a literal band; it follows the setpoint, so "
+            "point the reader at `check` instead")
+
+
+def test_check_says_the_band_follows_the_setpoint(capsys):
+    """The other half of the test above: what `check` prints is the answer."""
+    from pathlib import Path
+
+    import lschart.__main__ as cli
+
+    armed = Path(__file__).resolve().parents[1] / "config-ltspm3-armed.yaml"
+    assert cli.main(["-c", str(armed), "check"]) == 0
+    out = capsys.readouterr().out
+    assert "authority band : +/-" in out
+    assert "AROUND THE SETPOINT" in out
 
 
 # -- 3R.9: the supervisor's own thresholds ----------------------------------

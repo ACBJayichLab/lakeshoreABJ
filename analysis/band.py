@@ -308,7 +308,7 @@ def measure(r: dict, g: dict) -> dict:
 #: The matched-output pair either side of the 2026-09-10 fault -- 33 h at
 #: 64.0155 % before it and 33 h at 64.0100 % after the reseat.  Two holds, the
 #: same heater output, four days apart, and the only measurement in the archive
-#: of what the reseat left behind.  HANDOFF-2026-09-13 names this pair as what
+#: of what the reseat left behind.  archive/HANDOFF-2026-09-13.md names this pair as what
 #: ``missing_power_w`` is to be written against, and this is that check.
 FAULT_PAIR = ("pc-20260908-154814", "pc-20260910-144849")
 

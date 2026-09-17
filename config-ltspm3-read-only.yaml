@@ -1,81 +1,15 @@
-# LTSPM3 -- the two boxes on the GPIB board, READ-ONLY.
-#
-# This is a chart recorder and nothing else.  It has no `control:` section, so
-# it is a plain `lschart` config: it records every thermometer and the sample
-# heater's output percentage, and it cannot change instrument state.
+# LTSPM3 -- the two boxes on the GPIB board, READ-ONLY.  A chart recorder and
+# nothing else: no `control:` section, so plain `lschart` runs it.
 #
 #   python -m lschart -c config-ltspm3-read-only.yaml check     validate, touch nothing
 #   python -m lschart -c config-ltspm3-read-only.yaml probe     read everything once
 #   python -m lschart -c config-ltspm3-read-only.yaml run       record until interrupted
 #   python -m lschart.gui -c config-ltspm3-read-only.yaml       the strip chart
 #
-# SAFETY.  Three interlocks, and the fourth does not apply because there is no
-# control section at all:
-#
-#   transport.read_only: true   refuses to transmit ANY command, at the layer
-#                               where bytes leave -- so a bug anywhere above it
-#                               still cannot write.  On BOTH boxes.
-#   allow_writes: false         driver policy on the 336: no SETP / RANGE / PID.
-#   ipc.accept_commands: false  the file interface is readable, not commandable.
-#
-# The 336's loop 2 holds THE CHONKE, and the 218's analog output 1 is the
-# sample heater.  Both are somebody else's right now.  This config watches
-# them; turning any interlock off is a deliberate, reviewed act and is not
-# needed for monitoring.
-#
-# THE CRYOSTAT, read from this recorder's own CSV at 2026-08-31 13:05.
-#
-# A DATED BLOCK IS NOT THE PRESENT STATE.  The earlier version of this said
-# 4.742 K and 0.0%, measured 2026-08-24 15:54, and was read four days later as
-# though it still held -- by which time the sample had been warmed to 149 K by
-# hand.  It was honestly labelled and still misled.  Read `data/status.json` or
-# the tail of the CSV before trusting anything below.
-#
-#   218  Sample    148.980 K     336  A RAD SHIELD   39.881 K
-#        Coldplate   8.304 K          B THE CHONKE  289.150 K  <- loop 2
-#        Magnet      6.913 K          C 1st Stage    28.534 K
-#                                     D 2nd Stage     4.031 K
-#
-#   ^ COLDPLATE HERE IS PRE-CALIBRATION: the box was on the wrong curve, and
-#     8.304 K was really 6.762 K.  See the note below the block.
-#
-#   218 analog out 1 (SAMPLE HEATER)  66.598%   <- warmed by hand since 08-24
-#   loop 1  setpoint 28.5 K,  heater 1 at 0.0%,   range 0
-#   loop 2  setpoint 289.2 K, heater 2 at 100.0%, range 3
-
-# TWO CHANGES AT THE BOX, 2026-09-04 12:07
-# ---------------------------------------------------------------------------
-# The recorder was stopped at 12:07:16 and both of these were made by hand:
-#
-#   Coldplate (input 2) recalibrated.  The 218 was carrying X186276's curve on
-#     this input; the Coldplate is X186279.  A different thermometer, about 12%
-#     higher in resistance at every temperature, so the cold end of this
-#     cryostat read high for as long as that curve was loaded.  EVERY COLDPLATE
-#     NUMBER TIMESTAMPED BEFORE THE CUTOVER CARRIES THAT ERROR, including the
-#     one in the dated block above and every Coldplate figure in
-#     reference/logs/ and docs/.  It is not an offset -- 6 K logged was 4.93 K,
-#     77 K logged was 65.33 K -- but it IS exactly computable, and the
-#     pre-cutover logs have been reprocessed into data/coldplate-recal/.
-#     Both curves are in reference/sensor-curves/; the tool is
-#     `python -m lschart.tools.recalibrate --report --from ... --to ...`.
-#
-#   Magnet moved from input 3 to input 5.  Input 3 is now empty.  Only the
-#     input number changed; the thermometer and its column are the same, so
-#     `Magnet` before and after the seam is the same sensor and is comparable.
-#
-# The pre-cutover log for that day is kept at
-# data/pre-recal-2026-09-04/ltspm3-heater_2026-09-04.csv, so that no single
-# CSV spans both calibrations.  Open it with:
-#     lschart-view --csv "data/pre-recal-2026-09-04/ltspm3-heater_2026-09-04.csv"
-# See docs/ltspm3/cryostat.md.
-# ---------------------------------------------------------------------------
-#
-# Heater 2 is RAILED at 100% -- loop 2 has no headroom left, so anything that
-# adds heat to THE CHONKE will simply lose.  That is a reason to watch it, and a
-# reason not to touch it.  (The setpoint memory had at 290.6 K reads 289.2 K.)
-#
-# The sample has been steady at 66.598% since 08-27: 148.75 K then, 148.98 K
-# now, which is 0.003 K/h.  It is settled.  See docs/ltspm3/thermal-response.md.
+# Three interlocks are shut here: `transport.read_only` on both boxes,
+# `allow_writes` on the 336, `ipc.accept_commands`.  Wiring, addresses and
+# box-level changes: docs/ltspm3/cryostat.md.  Running it:
+# docs/ltspm3/running.md.  Present state: `data/status.json`, never a comment.
 
 log_level: INFO
 
@@ -91,46 +25,31 @@ instruments:
       resource: GPIB0::15::INSTR
       read_only: true           # <-- INTERLOCK.  Leave this on.
       timeout_ms: 3000
-      # MEASURED on this box, 2026-08-24: the 218 ends a reply with a bare LF
-      # and the 336 ends one with CRLF.  The default is CRLF, so the 218 needs
-      # this line and the 336 does not.
-      #
-      # It reads correctly either way, which is the trap: GPIB asserts EOI at
-      # the end of the reply, so the read finishes regardless and `.strip()`
-      # removes the stray byte.  What it costs is a pyvisa warning on every
-      # read, and a dependence on EOI -- get the terminator wrong and any reply
-      # that arrives without EOI blocks until the 3 s timeout instead.
+      # The 218 ends a reply with a bare LF; the default (CRLF) works only
+      # because GPIB asserts EOI.  docs/ltspm3/cryostat.md.
       read_termination: "\n"
       inter_command_delay: 0.05
-      # A GPIB board does not re-enumerate the way USB does, but a box that is
-      # power-cycled or taken off the bus should not end the run.
+      # A box power-cycled or taken off the bus must not end the run.
       reconnect: true
       retry_min_s: 1.0
       retry_max_s: 30.0
 
-    # MOVED 2026-09-04: Magnet was on input 3 and is now on input 5.  Input 3
-    # is empty, and 4 and 6-8 always were, so this map is deliberately
-    # non-contiguous -- listing only what exists keeps five permanently-dead
-    # columns out of the CSV and five queries out of every cycle.  The name is
-    # what becomes a CSV column, so `Magnet` stays `Magnet` and the column
-    # keeps its meaning across the move; the input number never reaches the log.
+    # Deliberately non-contiguous: only populated inputs are listed, which
+    # keeps dead columns out of the CSV and dead queries out of every cycle.
+    # The name is the CSV column, so moving a thermometer costs one line and
+    # the column keeps its meaning.  docs/ltspm3/cryostat.md.
     channels:
       1: Sample
       2: Coldplate
       5: Magnet
 
-    # 0 = "this box is only being logged".  It is what makes `check` report
-    # "records only", and it is the honest declaration for a config with no
-    # control section: nothing here computes a heater output.
-    #
-    # Analog output 1 is still READ every cycle, as ls218.aout1 -- that is
-    # AOUT?, a query, and it is how the log shows what the sample heater is
-    # actually doing while something else drives it.
+    # 0 = "this box is only being logged"; `check` reports "records only".
+    # Analog output 1 is still READ every cycle as ls218.aout1 (AOUT? is a
+    # query), so the log shows what the heater does while something else drives it.
     control_input: 0
 
     # RDGST? costs one query per channel, so it is polled occasionally rather
-    # than every cycle: a fault that matters also shows up in the reading
-    # itself immediately.  Every 15th cycle at 2 s is once every 30 s.
+    # than every cycle: a fault that matters shows up in the reading itself.
     read_status: true
     status_every_n_cycles: 15
 
@@ -148,24 +67,16 @@ instruments:
       retry_min_s: 1.0
       retry_max_s: 30.0
 
-    # Empty = ask the instrument for the labels set on its own front panel
-    # (INNAME?).  The legacy logs name the four in input order, so `probe`
-    # should print exactly this:
-    #
-    #     A: RAD SHIELD    B: THE CHONKE    C: 1st Stage    D: 2nd Stage
-    #
-    # That column order is the legacy recorder's convention, not something
-    # read back from the box, which is why it is a prediction here and not a
-    # setting.  Once `probe` confirms it, pasting it in as {A: RAD SHIELD,
-    # ...} is the more stable choice -- a column then cannot change meaning
-    # because somebody relabelled the front panel mid-run.
+    # Empty = ask the box for its own front-panel labels (INNAME?).  Naming the
+    # four explicitly is the more stable choice: a column then cannot change
+    # meaning because somebody relabelled the front panel mid-run.
+    # docs/ltspm3/cryostat.md has the four.
     channels: {}
 
     read_setpoints: true        # SETP? on each loop -> a column each
     read_heaters: true          # HTR? and RANGE? -> what the heaters are doing
-    # Analog outputs 3 and 4 are unused on this cryostat: the legacy 336 log has the
-    # columns and they are empty for all 12,912 rows.  Leave this off rather
-    # than spend two queries a cycle on two dead columns.
+    # Analog outputs 3 and 4 are unused on this cryostat, so this would cost
+    # two queries a cycle for two empty columns.
     read_analog_outputs: false
     read_status: true
     status_every_n_cycles: 15
@@ -175,13 +86,8 @@ instruments:
 # ---------------------------------------------------------------- acquisition
 
 acquisition:
-  # 2 s, not the 1 s default, for the first live bring-up.  Two boxes on one
-  # GPIB board is a fuller cycle than the single-instrument case the 1 s
-  # recommendation was measured on, and this board is shared with whatever else
-  # on this machine talks GPIB.  It is still twice the resolution of the 4 s
-  # legacy cadence -- which was 10 s on the 218 and 20 s on the 336, measured
-  # from the time column of the last logs.  Drop it to 1.0 once `check`'s
-  # budget and a real run agree there is room.
+  # 2 s, not the 1 s default: two boxes on one GPIB board do not fit in 1 s at
+  # `check`'s transaction budget.  docs/ltspm3/cryostat.md.
   interval_s: 2.0
   log_every_n: 1              # 1 = record every sample.  CSV has no row limit.
   ringbuffer_size: 43200      # 24 h at 2 s, for plotting only -- never the log
@@ -193,18 +99,16 @@ recorder:
   flush_every_sample: true    # a power cut should cost one sample, not an hour
 
 runtime:
-  # Two recorders on one GPIB board interleave transactions and the symptom is
-  # occasional garbled replies, not an honest error.  `run` takes this lock
-  # before it opens anything.
+  # THE SAME LOCK every LTSPM3 config takes: one GPIB board, one holder
+  # (invariant 2).  Two recorders interleave transactions and the symptom is
+  # garbled replies, not an honest error.
   lock_path: data/ltspm3.lock
   single_instance: true
 
 # ------------------------------------------------------------------------ ipc
 #
 # status.json for the strip chart and for MATLAB; no command spool.  Reading
-# status is one permission and being commanded is another, and this cryostat is for
-# watching -- a command would be refused twice over anyway, by `allow_writes:
-# false` and by `read_only: true`.
+# status is one permission and being commanded is another.
 ipc:
   enabled: true
   directory: data

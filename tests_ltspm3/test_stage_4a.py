@@ -2,33 +2,23 @@
 
 Everything else in this directory grades the design ENVELOPE -- authority 1.0,
 feedforward on, tuning on -- which is where phase 3 proved the loop and where
-4c ends.  Nothing graded the three switches the cryostat actually runs on
-today, and `93c6f9c` flipping one of them with "497 tests pass unchanged" is
-proof of the split working *and* proof that no test noticed
-(AUDIT-2026-09-16 finding 1).
+4c ends.  This module grades the commissioning switches instead: `stage="file"`
+takes `authority_pct`, `operating_point_pct`, `feedforward.enabled` and
+`tuning.enabled` from `config-ltspm3-armed.yaml` verbatim, so a change to that
+file lands here as a failing assertion rather than as a surprise on the
+cryostat (AUDIT-2026-09-16 finding 1).
 
-So: `stage="file"`, which takes `authority_pct`, `operating_point_pct`,
-`feedforward.enabled` and `tuning.enabled` from `config-ltspm3-armed.yaml`
-verbatim.  What is pinned here is what 4a is, and the two findings that were
-only visible from here -- the fault ramp-down's rate (finding 2) and the output
-rate limiter's (finding 3) -- have a test each, because both are properties
-somebody has to re-read after changing that file.
+Two kinds of test live here:
 
-**THE FILE MOVED ON 2026-09-17, and this module is now two things.**
-`tuning.enabled` went true (the tuning step of 4c -- see the file, and
-`test_stage_4c_tuning.py`), so `stage="file"` is no longer 4a.
+* those that grade **whatever the file says**, through `armed()`.  They have to
+  keep being true of the running cryostat;
+* those that reproduce **stage 4a** -- the 2026-09-16 walk-down, the band that
+  does not widen, the 3 K move that is not delivered -- through `at_4a()`,
+  which forces the tuner off rather than following the file.  Each documents a
+  real event or a real limitation, and following the file would re-grade them
+  against a different stage.
 
-* Tests that grade **whatever the file says today** still use `armed()`.  They
-  are the ones that have to keep being true of the running cryostat.
-* Tests that reproduce **stage 4a as the cryostat was armed on 2026-09-16** --
-  the 13:35 walk-down, the band that does not widen, the 3 K move that is not
-  delivered -- now use `at_4a()`, which forces the tuner off explicitly.  Those
-  three document a real event and a real limitation; pinning them to the file
-  would have quietly re-graded them against a different stage, which is the
-  same mistake `BENCH_AUTHORITY_PCT` exists to prevent.
-
-**The plant is SETTLED on a weak heater**, which is the recipe HANDOFF item D
-was missing.  See `FittedHarness.equilibrate`.
+**The plant is SETTLED on a weak heater**; see `FittedHarness.equilibrate`.
 """
 
 from __future__ import annotations
@@ -36,20 +26,13 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-from bench_plant import (STAGE_FILE, FittedHarness, bench_control_config)
+from bench_plant import DELIVERED_FRAC, STAGE_FILE, FittedHarness, bench_control_config
 
 from ltspm3.control import SupervisorState
 from ltspm3.model import fitted_response as _M
 
-#: The cryostat as wired on 2026-09-16: the heater delivers 0.336 % less power
-#: than `P(u)` claims, measured (HANDOFF section 3), which is 0.48 of the
-#: +/-0.7 % envelope the model already carries for handling the wiring.  It is
-#: the whole reason the first arm misbehaved, so it is the default here.
-DELIVERED_FRAC = 1.0 - 0.00336
-
-#: What the model says holds 118.3 K, which is `operating_point_pct` in the
-#: file.  (Until 2026-09-17 that constant was also the band's centre while the
-#: feedforward was off; the centre is the model's answer for the setpoint now.)
+#: The temperature the cryostat has spent its life at, and what
+#: `operating_point_pct` in the file is the model's answer for.
 BENCH_K = 118.3
 
 
@@ -64,9 +47,9 @@ def armed(**kw):
 def at_4a(**kw):
     """The same, pinned to **stage 4a**: the tuner off, whatever the file says.
 
-    For the three scenarios that document how the cryostat behaved on
-    2026-09-16 rather than how it behaves now.  `hold_speed` comes with it
-    because the file's 12 is a 2026-09-17 commissioning guess and 4a ran 3.
+    For the scenarios that document how the cryostat behaved at 4a rather than
+    how it behaves now.  `hold_speed` is pinned with it, at the code default
+    the stage ran, because the armed file's hold has been retuned since.
     """
     cfg = bench_control_config()
     kw.setdefault("tuning_cfg", dataclasses.replace(
@@ -85,11 +68,9 @@ def test_stage_file_really_is_the_file():
     assert h.sup.feedforward.enabled is cfg.feedforward.enabled
     assert h.sup.tuner.enabled is cfg.tuning.enabled
     # And the STAGE is what those say it is, so a change to the file lands here
-    # as a failing assertion rather than as a surprise on the cryostat.
-    #
-    # 2026-09-17: the tuner went ON -- the tuning step of 4c, which needs no
-    # gauge because it reads the model's SHAPE and not its LEVEL.  The
-    # feedforward is what waits on the gauge, and it is still off.
+    # as a failing assertion rather than as a surprise on the cryostat.  The
+    # tuner is on -- it reads the model's SHAPE and needs no gauge -- and the
+    # feedforward, which commands its LEVEL, waits for one.
     assert h.sup.feedforward.enabled is False
     assert h.sup.tuner.enabled is True
 
@@ -102,16 +83,23 @@ def test_stage_4a_is_still_reachable_for_the_tests_that_reproduce_it():
 
 
 def test_a_settled_plant_is_below_the_model_s_answer_for_its_own_output():
-    """The state the cryostat was in at 13:35 and the harness could not make.
+    """The state the cryostat was in on 2026-09-16 and the harness could not make.
 
-    0.336 % of delivered power is 1.4 K here, and the sign is what matters: the
-    model's answer for the output the heater is already at is WARMER than the
-    sample. A loop that drives to the model's answer therefore drives DOWN.
+    The sign is what matters: the model's answer for the output the heater is
+    already at is WARMER than the sample, so a loop that drives to the model's
+    answer drives DOWN.
     """
     h = FittedHarness(kelvin=BENCH_K, stage=STAGE_FILE, settled=True,
                       delivered_frac=DELIVERED_FRAC)
     settled = h.equilibrium_k
-    assert settled == pytest.approx(116.88, abs=0.05)
+    # Where the plant must come to rest, derived rather than quoted: the
+    # temperature whose steady power equals the power this heater actually
+    # delivers at the output the nominal curve chose.  50 mK for the
+    # integration's own convergence.
+    want = _M.steady_temperature_k(DELIVERED_FRAC * _M.power_w(h.bench_pct))
+    assert settled == pytest.approx(want, abs=0.05)
+    # And that is over a kelvin of model error -- enough to matter at
+    # `warn_error_k` 1.0, which is why this state is the one to arm on.
     assert h.sup.feedforward.kelvin_for(h.sup.output_pct) - settled > 1.0
 
 
@@ -119,15 +107,14 @@ def test_a_settled_plant_is_below_the_model_s_answer_for_its_own_output():
 
 @pytest.mark.parametrize("authority", [0.1, 0.25])
 def test_feedforward_on_walks_the_heater_down_at_either_band_width(authority):
-    """**The 350 mK of 2026-09-16 13:35**, on the virtual clock.
+    """**The 2026-09-16 walk-down**, on the virtual clock.
 
-    Armed where the cryostat is, with the feedforward the file shipped until
-    `93c6f9c`: the term is referenced at arming against a model whose LEVEL is
-    stale, so the loop commands the model's answer -- 63.93 % against the
-    63.98 % the sample actually needs -- and walks the sample down with it.
-    The band's width does not save it at either 0.1 or 0.25, because the walk
-    is towards the band's own centre -- the model's answer -- and well inside
-    both.
+    Armed where the cryostat was, with the positional feedforward on: the term
+    is referenced at arming against a model whose LEVEL is stale, so the loop
+    commands the model's answer for the output rather than the one the sample
+    actually needs, and walks the sample down with it.  The band's width does
+    not save it at either 0.1 or 0.25, because the walk is towards the band's
+    own centre -- the model's answer -- and well inside both.
 
     Nothing faults and nothing rails: this is a loop doing exactly what it was
     configured to do, which is why it took a trace and not an alarm to find.
@@ -157,14 +144,14 @@ def test_the_armed_stage_holds_where_it_was_armed(authority):
     nothing references a stale level at arming.
 
     This is 4a's gate in miniature: an hour inside `warn_error_k`, `tracking`
-    throughout.  On the cryostat it was 90 mK against 1 K.
+    throughout.
 
     **The band is centred on the MODEL's answer for the setpoint** (rule 5,
-    since 2026-09-17 whether or not the feedforward term is on), and the model
-    is 0.107 % of output away from where this cryostat actually holds.  So the
-    half-width has to cover that error or the ceiling cuts the heater at
-    arming -- which is the test below, and why the 0.1 this used to run at is
-    no longer in the list.
+    whether or not the feedforward term is on), and the model's answer is not
+    where this cryostat actually holds -- it carries the level error the model
+    is allowed to carry (see `_fitted_table`'s header).  So the half-width has
+    to cover that error or the ceiling cuts the heater at arming, which is the
+    test below and why 0.1 is not in the list here.
     """
     cfg = bench_control_config()
     h = armed(sup_cfg=dataclasses.replace(cfg.supervisor,
@@ -176,22 +163,26 @@ def test_the_armed_stage_holds_where_it_was_armed(authority):
         assert st.state is SupervisorState.TRACKING
         worst = max(worst, abs(st.filtered_k - at_arm))
     assert worst < cfg.supervisor.warn_error_k
-    assert worst < 0.1
+    # And not merely inside the warning: a hold that only just cleared
+    # `warn_error_k` would pass the line above while being a tenth of a kelvin
+    # from alarming every hour.  A tenth of the warning is the margin this
+    # stage was accepted on.
+    assert worst < 0.1 * cfg.supervisor.warn_error_k
 
 
 def test_a_band_narrower_than_the_level_error_cuts_the_heater_at_arming():
     """Why `authority_pct` is sized to the model's calibration envelope.
 
     With the centre on the model's answer, a half-width of 0.1 % puts the
-    ceiling BELOW the output this settled cryostat is already at (the level is
-    0.107 % off), and the first cycle cuts the heater to the ceiling.  The
-    sample falls -- less heat is the safe direction, so nothing faults -- but
-    the loop has been made to leave a hold that was fine.  Rule 5's ceiling is
-    doing what it says; the number under it was wrong.
+    ceiling BELOW the output this settled cryostat is already at, because the
+    level error the model is allowed to carry (see `_fitted_table`'s header) is
+    larger than that.  The first cycle then cuts the heater to the ceiling and
+    the sample falls -- less heat is the safe direction, so nothing faults --
+    but the loop has been made to leave a hold that was fine.  Rule 5's ceiling
+    is doing what it says; the number under it was wrong.
 
-    The shipped file carries 1.0, which covers the 0.8 % that handling the
-    heater wiring has been measured to move the level by, with room for the
-    overdrive a fast move needs on top.
+    The shipped file's half-width covers that level error with room for the
+    overdrive a fast move needs on top (docs/ltspm3/requirements.md §3).
     """
     cfg = bench_control_config()
     h = armed(sup_cfg=dataclasses.replace(cfg.supervisor, authority_pct=0.1))
@@ -207,18 +198,15 @@ def test_a_band_narrower_than_the_level_error_cuts_the_heater_at_arming():
 
 # -- finding 2: what the fault ramp-down costs at this stage ---------------
 
-#: **MEASURED UNDER THE FILE'S SWITCHES.**  118 K to base at the one rate is
-#: what `docs/ltspm3/control.md` promises and what the supervisor's own comment
-#: quotes: about 23 minutes.
+#: 118 K to base at `ramp.max_rate_k_per_min`, which is what
+#: `docs/ltspm3/control.md` promises for a fault descent at this stage; the
+#: descent took the no-curve branch and its 0.20 %/min floor instead until the
+#: `has_curve` seam landed (AUDIT-2026-09-16 finding 2).
 #:
-#: It was **320** until the `has_curve` seam landed, because with
-#: `feedforward.enabled: false` the descent took `_rampdown_target`'s no-curve
-#: branch and fell at `min_rate_pct_per_min` -- 0.20 %/min, five and a third
-#: hours from 64 %, on a cryostat whose thermometer had just stopped being
-#: trusted.  Slower was the safe side of rule 1 and it was not a heater hazard;
-#: it was also not what anybody had reasoned about, and the comment in that
-#: branch called it unreachable while it was the armed configuration.
-#: AUDIT-2026-09-16 finding 2.
+#: The tolerance is two minutes because the rule is written in kelvin and
+#: applied in percent through a curve: the sample falls at the one rate only to
+#: the accuracy of the local gain the descent converts with, and the assertion
+#: on the rate itself below is the statement that matters.
 RAMPDOWN_MINUTES = 24.0
 RAMPDOWN_TOL_MIN = 2.0
 
@@ -263,8 +251,8 @@ def test_the_output_rate_limiter_converts_the_one_rate_at_either_stage(stage):
     file's `ramp.max_rate_k_per_min` names, and 0.6 K/min at 30 K.
     AUDIT-2026-09-16 finding 3.
 
-    **Asserted at BOTH stages since 2026-09-17**, which is what the finding
-    actually claims: the limiter asks `has_curve` -- is there a curve to convert
+    **Asserted at BOTH stages**, which is what the finding actually claims:
+    the limiter asks `has_curve` -- is there a curve to convert
     with -- and NOT whether this stage's tuner is switched on.  Running it only
     at whatever the file happens to say would have let the tuner's arrival hide
     a regression back to the floor, and the floor is a five-hour fault
@@ -305,13 +293,12 @@ def test_a_three_kelvin_setpoint_move_is_not_delivered_at_five_k_per_min():
     limiter cannot follow, so the error stands long after the trajectory is
     over.
 
-    Measured: the smoothed setpoint has arrived within two minutes and the
-    sample is still 1 K short half an hour later -- and `warn_error_k` is 1.0.
-    The
-    limiter is only half of that at this stage; the gains are the other half,
-    since `tuning.enabled: false` leaves `kp` at the file's starting 0.02
-    rather than the scheduled value.  Both halves are the same switch
-    conflation, and 4d's 10 K sweep is written against 5 K/min.
+    The smoothed setpoint has arrived within two minutes and half an hour
+    later the sample has delivered less than two of the three kelvin asked
+    for -- more than `warn_error_k` of error, standing.  The limiter is only
+    half of that at this stage; the gains are the other half, since
+    `tuning.enabled: false` leaves `kp` at the file's starting value rather
+    than the scheduled one.  Both halves are the same switch conflation.
     """
     h = at_4a()
     h.minutes(2)

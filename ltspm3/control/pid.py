@@ -2,20 +2,20 @@
 
 Two departures from a textbook PID, both driven by this cryostat:
 
-* **Derivative on a regressed slope, not on the error.**  Differencing a 10 mK-rms
-  signal at 4 s would produce 3.5 mK/s of pure noise; the caller supplies a
-  least-squares dT/dt instead (see :class:`~ltspm3.control.filters.SlopeEstimator`).
-  Taking it on the measurement rather than the error also removes setpoint kick.
+* **Derivative on a regressed slope, not on the error.**  Differencing a
+  millikelvin-rms signal at the 2 s cycle would produce more noise than signal;
+  the caller supplies a least-squares dT/dt instead (see
+  :class:`~ltspm3.control.filters.SlopeEstimator`).  Taking it on the
+  measurement rather than the error also removes setpoint kick.
 
 * **Integral clamped in output units.**  ``Ki * integral`` is limited directly to
   the authority band, so the integral alone can never demand more than the
   supervisor would allow -- windup cannot survive a long clamp.
 
-Gains are in output percent per kelvin.  With the local gain of ~10.0 K/% at
-the 63% operating point, a Kp of 0.02 %/K is a loop gain of ~0.2 -- gentle on
-purpose.  (The 7.6 K/% quoted here previously came from the superseded n = 5
-fit.  Up at 66.6% the measured gain is ~13.8 K/%, so the same Kp is a loop gain
-near 0.28 there -- which is why the gains are SCHEDULED and not fixed.)
+Gains are in output percent per kelvin, and the same pair means different
+things at different temperatures because the local gain does -- which is why
+the gains are SCHEDULED (:mod:`ltspm3.control.tuning`) rather than fixed.  The
+values in :class:`PIDConfig` are only what an unscheduled loop falls back to.
 """
 
 from __future__ import annotations
@@ -120,8 +120,9 @@ class PID:
           percent, so its contribution scales with the new ``ki``;
         * the proportional term is ``kp * error``, so with any standing error a
           change in ``kp`` steps the output directly.  Scheduling from the HOLD
-          tuning to the MOVE tuning is a 10x change in ``kp``; against a 3 K
-          error that is a 0.54% step, which on this cryostat is several kelvin.
+          tuning to the MOVE tuning changes ``kp`` by a large factor, and
+          against a standing error of a few kelvin that step in output is worth
+          several kelvin on this cryostat.
 
         So the integral is re-solved to hold ``P + I`` fixed across the change.
         Gain scheduling is only safe if it is invisible in the output.

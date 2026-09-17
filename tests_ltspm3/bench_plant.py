@@ -45,59 +45,32 @@ BENCH_CONFIG = Path(__file__).resolve().parents[1] / "config-ltspm3-armed.yaml"
 #: a gauge somebody believes, and `plans/pid-4-commissioning.md` records why.
 BENCH_AUTHORITY_PCT = 1.0
 BENCH_FEEDFORWARD = True
-#: The third switch, and it was invisible until 2026-09-16: `Harness` passed no
-#: `tuning_config` at all, so every scenario here ran `TuningConfig()` --
-#: enabled -- while the cryostat is armed with `tuning.enabled: false`.  It is
-#: pinned for the same reason as the other two, and it is now pinned out loud.
+#: The tuner on: the envelope is the loop with its gains scheduled, which is
+#: where 4c ends.
 BENCH_TUNING = True
 
-#: The FOURTH, and it arrived the same way the third did -- by moving and being
-#: noticed downstream.  `enabled` was pinned above but `hold_speed` was still
-#: read from the file, so raising it to 12 on 2026-09-17 (the commissioning
-#: guess against the 09-16 oscillation -- see the file) quietly handed every
-#: envelope scenario a loop four times weaker at a hold.
-#:
-#: It surfaced as `test_the_judge_keeps_an_opinion_while_a_closed_loop_is_running`
-#: failing on `moved > 100`: that test needs a loop that dithers HARD, because
-#: what it grades is the monitor keeping an opinion while the output moves a
-#: DAC code most cycles.  At `hold_speed: 12` the loop moved 16 times in 1200
-#: and the test proved nothing -- a true observation about the new tuning, and
-#: the wrong question for that test to be asking.
-#:
-#: 3.0 is the design value and what phase 3 proved the loop over.  A scenario
-#: that wants the commissioning number takes `stage="file"`.
+#: Pinned at the design 3.0 so the envelope scenarios are not re-graded
+#: whenever the armed file retunes the hold.  A scenario that wants the
+#: commissioning number takes `stage="file"`.
 BENCH_HOLD_SPEED = 3.0
 
-#: THE FIFTH, 2026-09-17, for the same reason as the fourth.  The armed file
-#: went to `move_speed: 0.15` (docs/ltspm3/requirements.md: 2 K at 118 K in
-#: five minutes) and the envelope read it from the file, so every §3.7
-#: "3 K move" scenario re-graded itself against a different loop -- and four
-#: of six FAILED, at 8-17 % overshoot.  Measured apart:
-#:
-#:     118 K, 3 K at 5 K/min, move 0.15:  feedforward OFF  3.1 %   ON 10.9 %
-#:                             move 0.5:   feedforward OFF  1.0 %   ON  1.7 %
-#:      60 K, 3 K at 5 K/min, move 0.15:  feedforward OFF 16.1 %   ON 17.5 %
-#:
-#: Two different things.  At 60 K it is the output rate limiter (0.8 %/min
-#: against a 22 s corner) and the integral winding up behind it, feedforward
-#: or not -- pinned as an open item by `test_stage_4d_fast_move.py`.  At
-#: 118 K it is the positional feedforward TERM stacking on a fast loop that
-#: already supplies the drive: with the term OFF, which is what the file
-#: ships, the same move is 3.1 % over and 0.3 % over on 2 K.
-#:
-#: So the envelope keeps the design value it was proved over, and **turning
-#: the feedforward term on -- 4c's last step, after a gauge -- has to re-grade
-#: `move_speed`**: 0.15 with the term on is not acceptable as measured.  A
-#: scenario that wants the commissioning number takes `stage="file"`.
+#: Pinned for the same reason, and with one of its own: the envelope runs the
+#: positional feedforward ON, and with that term on a fast `move_speed`
+#: overshoots (docs/ltspm3/requirements.md §3).  0.5 is what phase 3 proved
+#: this envelope over.
 BENCH_MOVE_SPEED = 0.5
 
 #: `stage="file"` instead, for a scenario that wants the COMMISSIONING STAGE
-#: the cryostat is armed at rather than the design envelope: the three switches
-#: above, and `operating_point_pct`, come from `BENCH_CONFIG` verbatim.  That is
-#: what `test_stage_4a.py` grades.  Everything else is identical, so the two
-#: stages differ by exactly the four fields and nothing else.
+#: the cryostat is armed at rather than the design envelope: the commissioning
+#: switches and the two speed ratios come from `BENCH_CONFIG` verbatim, and
+#: everything else is identical.  That is what `test_stage_4a.py` grades.
 STAGE_ENVELOPE = "envelope"
 STAGE_FILE = "file"
+
+#: The heater as wired since the 2026-09-16 reseat delivers 0.336 % less power
+#: than `P(u)` claims (docs/ltspm3/requirements.md §3).  Defined once here and
+#: imported by the stage tests, so they all grade the same cryostat.
+DELIVERED_FRAC = 1.0 - 0.00336
 
 #: The six the plan grades at.  They are not evenly spaced in kelvin because
 #: nothing about this cryostat is: 10 and 30 K are where the delay floor binds
@@ -131,12 +104,9 @@ class FittedHarness(Harness):
     * the cadence is the config's **2 s**, not `Harness.DT`'s 4.  The loop's
       dead time is derived from the cadence, so a bench that runs at twice the
       real period is proving a loop with twice the delay floor.
-    * the authority band is re-centred on the scenario's own operating point.
-      **That is the bench doing what the cryostat cannot**, and it is exactly
-      what step 4 removes: `HeaterSupervisor.band` is two config constants and
-      `_apply_band_to_pid()` runs once, in `__init__`, so a band centred at
-      63.96 % cannot reach 24.22 % where 10 K lives.  Until step 4 lands, every
-      scenario here is a loop that was handed the right window in advance.
+    * the authority band is re-centred on the scenario's own operating point,
+      because one band centred where 118 K lives cannot also contain the
+      output that holds 10 K.
     """
 
     def __init__(self, *, kelvin: float, sup_cfg=None, pid_cfg=None,
@@ -196,27 +166,19 @@ class FittedHarness(Harness):
                                    "218.2": self._sink_locus_k + sink_offset_k})
         kw.setdefault("aux_coupling", {**LTSPM3_AUX_COUPLING, "218.2": slope})
 
-        # **THE STAGE SWITCHES ARE PINNED HERE, NOT READ FROM THE FILE.**
-        #
-        # Everything else this harness takes from `config-ltspm3-armed.yaml`
-        # is a property of the CRYOSTAT -- `hard_max_pct`, the rates, the
-        # guard's thresholds -- and reading them from the file is what makes
-        # the bench grade the numbers the cryostat runs.  These two are not.
-        # They are where COMMISSIONING has got to, and 4a runs at
-        # `authority_pct: 0.1` with feedforward off while 4c ends at 1.0 with
-        # it on.  Both are the same cryostat.
-        #
-        # Reading them from the file made the file mean two things at once, so
-        # the operational values could not be committed: narrowing to 4a's
-        # numbers failed 26 scenarios here, because the 10-180 K sweeps rail
-        # against +/-0.1 % by construction.  That left the working
-        # configuration sitting uncommitted in somebody's tree, one
-        # `git checkout` away from restoring the feedforward that cost 350 mK
-        # on 2026-09-16 (HANDOFF, item B).
+        # **THE STAGE SWITCHES ARE PINNED HERE, NOT READ FROM THE FILE**, and
+        # that is the invariant this harness keeps: everything else it takes
+        # from `config-ltspm3-armed.yaml` is a property of the CRYOSTAT --
+        # `hard_max_pct`, the rates, the guard's thresholds -- so the bench
+        # grades the numbers the cryostat runs.  The commissioning switches and
+        # the two speed ratios are not that.  They say where commissioning has
+        # got to, they move, and reading them would silently re-grade the
+        # design envelope every time somebody retunes the armed file.
         #
         # So: the bench grades the ENVELOPE, and the file says what is
-        # actually armed today.  A test that wants a different envelope passes
-        # its own `sup_cfg`/`ff_cfg`, exactly as before.
+        # actually armed.  A test that wants a different envelope passes its
+        # own `sup_cfg`/`ff_cfg`/`tuning_cfg`, and a test that wants the armed
+        # stage passes `stage=STAGE_FILE`.
         if stage not in (STAGE_ENVELOPE, STAGE_FILE):
             raise ValueError(f"stage must be {STAGE_ENVELOPE!r} or "
                              f"{STAGE_FILE!r}, got {stage!r}")
@@ -280,9 +242,9 @@ class FittedHarness(Harness):
         moves it again.
 
         The cryostat on the 16th was in the other state.  It had sat for hours
-        on a heater delivering 0.336 % less than the model claims -- SETTLED,
-        and 1.4 K below the model's answer for its own output.  Arm there and
-        the walk-down is reproducible; see `test_stage_4a.py`.
+        on the under-delivering heater `DELIVERED_FRAC` describes -- SETTLED,
+        and over a kelvin below the model's answer for its own output.  Arm
+        there and the walk-down is reproducible; see `test_stage_4a.py`.
 
         Integrating the plant directly rather than stepping the loop through
         two virtual hours: the supervisor is in `OFF`, where it writes nothing

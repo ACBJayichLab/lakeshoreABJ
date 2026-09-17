@@ -220,14 +220,13 @@ def cmd_check(args) -> int:
         s = control.supervisor
         lo = max(s.hard_min_pct, s.operating_point_pct - s.authority_pct)
         hi = min(s.hard_max_pct, s.operating_point_pct + s.authority_pct)
-        # **SAY WHICH BAND THIS IS.**  The centre follows the setpoint
-        # whenever the model has a curve to ask -- which, since 2026-09-17, is
-        # independent of the feedforward switch (that switch governs only the
-        # drive TERM).  It is the constant `operating_point_pct` only for a
-        # loop with no `feedforward:` section at all, and one pair of numbers
-        # would otherwise mean two different things.  Duck-typed and
-        # defaulted, like everything `lschart` reads out of a section `ltspm3`
-        # registered (invariant 1).
+        # **SAY WHICH BAND THIS IS.**  The centre follows the setpoint whenever
+        # the model has a curve to ask, independently of the feedforward switch
+        # (that switch governs only the drive TERM); it is the constant
+        # `operating_point_pct` only for a loop with no `feedforward:` section
+        # at all.  One pair of numbers would otherwise mean two different
+        # things.  Duck-typed and defaulted, like everything `lschart` reads
+        # out of a section `ltspm3` registered (invariant 1).
         follows = getattr(control, "feedforward", None) is not None
         if follows:
             print(f"  authority band : +/-{s.authority_pct:g}% AROUND THE "
@@ -240,11 +239,10 @@ def cmd_check(args) -> int:
                   f"model curve, so the centre is operating_point_pct "
                   f"and does not follow the setpoint  (on_exit={s.on_exit})")
         # **AND SAY WHETHER THE GAINS ARE SCHEDULED**, because THREE behaviours
-        # hang off that one switch and until 2026-09-17 nothing printed any of
-        # them: the gains, the velocity feedforward, and whether the band
-        # widens during a ramp.  With it off a +2 K move arrives about a kelvin
-        # late at ANY commanded rate -- bench-measured, and read for months as
-        # "the ramp is too fast".  Duck-typed and defaulted like the band above.
+        # hang off that one switch: the gains, the velocity feedforward, and
+        # whether the band widens during a ramp.  With it off a move arrives
+        # late at ANY commanded rate, which reads from outside as "the ramp is
+        # too fast".  Duck-typed and defaulted like the band above.
         tun = getattr(control, "tuning", None)
         pid = getattr(control, "pid", None)
         if bool(getattr(tun, "enabled", False)):

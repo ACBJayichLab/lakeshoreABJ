@@ -1,21 +1,15 @@
-# lschart configuration
+# lschart configuration -- the worked example, on simulated boxes.  Anything
+# omitted takes its default from lschart/config.py; unknown keys are a hard
+# error, because a dropped typo in a safety limit is the failure this prevents.
 #
-# Every value here has a default in lschart/config.py; anything omitted takes
-# that default.  Unknown keys are a hard error rather than being ignored, since
-# a silently-dropped typo in a safety limit is exactly the failure this file is
-# meant to prevent.
+#   python -m ltspm3 -c config.yaml check      validate, touch nothing
+#   python -m ltspm3 -c config.yaml run        record
+#   python -m ltspm3 -c config.yaml run --arm  close the heater loop
 #
-# This file carries a `control:` section, so it is an LTSPM3 config: run it with
-# `ltspm3`, not with `lschart`.  Plain `lschart` will refuse it and say so --
-# a recorder-only install must not silently ignore a request to drive a heater.
-#
-#   .venv/bin/python -m ltspm3 -c config.yaml check     validate, touch nothing
-#   .venv/bin/python -m ltspm3 -c config.yaml run       record
-#   .venv/bin/python -m ltspm3 -c config.yaml run --arm close the heater loop
-#
-# GOING LIVE is the two `driver:` lines below.  Nothing else changes, and no
-# code changes.  On Windows that also needs the NI-VISA runtime installed for
-# pyvisa to see GPIB0::.
+# It carries a `control:` section, which `ltspm3` registers on import, so plain
+# `lschart` refuses it: a recorder-only install must not silently ignore a
+# request to drive a heater (invariant 1).  GOING LIVE is the two `driver:`
+# lines below and nothing else.  docs/ltspm3/running.md.
 
 log_level: INFO
 
@@ -40,7 +34,7 @@ instruments:
     channels:                 # {input number: display name}; only these are read
       1: Sample
       2: Coldplate
-      5: Magnet         # was input 3 until 2026-09-04
+      5: Magnet         # docs/ltspm3/cryostat.md for the input map
     control_input: 1          # the sample -- this is what the software PID controls
     # Polling RDGST? for every input costs 8 transactions a cycle and is the
     # single thing that makes a 1 s cadence impossible.  Poll it occasionally
@@ -58,19 +52,17 @@ instruments:
     channels: {}              # empty = ask the instrument (INNAME?)
     read_setpoints: true
     read_heaters: true
-    # Loop 2 independently holds THE CHONKE at ~290.6 K with heater 2 near 98%.
-    # This software records the 336 and stays out of its way.  Leave this false.
+    # Loop 2 independently holds THE CHONKE and is not ours
+    # (docs/ltspm3/cryostat.md).  This software records the 336 and stays out
+    # of its way.  Leave this false.
     allow_writes: false
 
 # ---------------------------------------------------------------- acquisition
 
 acquisition:
-  # 2 s, which is what the live recorder has actually run at for six days on
-  # this GPIB board.  This said 1.0 and reasoned about correlated noise, which
-  # is sound as far as it goes -- but `check` on the real driver reports a
-  # budget of ~26 transactions and ~1.30 s per cycle, so 1 Hz does not fit
-  # without trimming that budget first, and a cadence the bus cannot hold is
-  # not a faster cadence, it is dropped cycles.  Measure before lowering it.
+  # 2 s: two boxes on one GPIB board do not fit in 1 s at `check`'s transaction
+  # budget, and a cadence the bus cannot hold is dropped cycles, not speed.
+  # docs/ltspm3/cryostat.md.  Measure before lowering it.
   interval_s: 2.0
   log_every_n: 1            # 1 = record every sample.  CSV has no row limit.
   ringbuffer_size: 43200    # 24 h at 2 s, for plotting only -- never the log
@@ -78,20 +70,14 @@ acquisition:
 recorder:
   enabled: true
   directory: data
-  # A DIFFERENT prefix from both the read-only and the manual-heater configs,
-  # for the reason given in config-ltspm3-heater.yaml: a run in which a
-  # SOFTWARE LOOP could move the heater is a third kind of record, and in six
-  # months the filename is the only thing that will still say which one this is.
+  # A prefix per config, on purpose: the filename is the only thing that will
+  # still say what could move the heater during a run.
   filename_prefix: ltspm3-pid
   flush_every_sample: true  # a power cut should cost one sample, not an hour
 
 runtime:
-  # THE SAME LOCK the two recorder configs take.  This is not tidiness: one GPIB
-  # board has exactly one holder (invariant 2), and this config writes to the
-  # same `data/status.json` they do.  Left on the default `data/lschart.lock`,
-  # nothing stopped this running alongside the live recorder -- two processes
-  # interleaving transactions on one bus and overwriting each other's status
-  # file, which is the failure the lock exists to prevent.
+  # THE SAME LOCK every LTSPM3 config takes: one GPIB board, one holder
+  # (invariant 2), and one `data/status.json`.
   lock_path: data/ltspm3.lock
   single_instance: true
 
@@ -104,18 +90,19 @@ control:
   enabled: false
 
   supervisor:
-    # THE BAND FOLLOWS THE SETPOINT (phase 3 step 4).  It is centred on the
-    # output the model says holds the present setpoint, so this number is only
-    # the fallback for a loop with no model and the value a loop adopts when it
-    # has never read an output.  There is nothing to re-centre before arming.
-    operating_point_pct: 63.076   # measured: 63.076% settles at 99.60 K
-    authority_pct: 1.0            # the window's HALF-WIDTH, in output percent
+    # THE BAND FOLLOWS THE SETPOINT whenever the model has a curve, so this is
+    # only the fallback centre for a loop with no model, and the output a loop
+    # adopts when it has never read one.  Nothing to re-centre before arming.
+    operating_point_pct: 63.076   # a settled point from the steady-state curve
+    authority_pct: 1.0            # the window's HALF-WIDTH, in output percent.
+                                  # Sized to the model's level error plus the
+                                  # overdrive a fast move needs;
+                                  # docs/ltspm3/requirements.md section 3
     hard_min_pct: 0.0
     hard_max_pct: 70.0
     # The output rate is `ramp.max_rate_k_per_min / K(T)` -- the one rate
-    # through the gain, 0.40 %/min at 118 K and 14.9 at 10 K.  This is only
-    # the floor under it where the model has no opinion.  It replaces
-    # `max_step_pct` and `max_rate_pct_per_min`, both trim rates.
+    # through the gain -- and this is only the floor under it where the model
+    # has no opinion.  docs/ltspm3/thermal-response.md for K(T).
     min_rate_pct_per_min: 0.20
 
     # Premise checks, IN WATTS: `dQ` against the model's own band, the same
@@ -124,8 +111,9 @@ control:
     # error past fault_error_k with the loop railed at the CEILING of its band
     # (railed at the floor with the same error is a warning: less heat than the
     # model expects is the safe direction).
-    warn_error_k: 1.0             # while the setpoint is not moving.  Under
-                                  # about 40 K it is the only check there is
+    warn_error_k: 1.0             # while the setpoint is not moving.  At the
+                                  # cold end, below min_output_pct, it is the
+                                  # only check there is
     warn_sigma: 3.0
     fault_mw: 10.0
     fault_window_s: 1800.0
@@ -136,16 +124,10 @@ control:
     sink_stale_s: 30.0            # past this the residual has no opinion
     anomaly_demand_pct: 0.50
 
-    # Fault response.  Nothing here ever raises the heater.
-    #
-    # It descends at THE ONE RATE, in kelvin, through the model's inverse
-    # curve, so it needs no sensor -- rule 3 says the fault may BE the sensor.
-    # Three percent-rate fields and a knee at 40 % are gone with it: a rate in
-    # percent is a different descent at every temperature, and the knee was an
-    # attempt to patch that by hand.  118 K to base takes about 23 minutes.
-    #
-    # Still not an emergency stop.  A fault here is not an emergency, and a
-    # fast change remains the larger risk (invariant 6).
+    # Fault response.  Nothing here ever raises the heater.  The ramp-down
+    # descends at THE ONE RATE, in kelvin, through the model's inverse curve,
+    # so it needs no sensor -- rule 3 says the fault may BE the sensor.  Not an
+    # emergency stop: a fast change is the larger risk (invariant 6).
     safe_output_pct: 0.0
     # Once a ramp-down starts, AUTOMATION may not undo it -- a recovering sensor
     # does not resume the loop.  An operator still can: `send hold` freezes the
@@ -154,9 +136,9 @@ control:
     require_ack_after_fault: true
 
     dac_step_pct: 0.01
-    dither: true                  # one code is ~100 mK; the sample averages it.
-                                  # Averaging voltage is not averaging power
-                                  # (P ~ V^2), but the bias is ~2 uK: ignorable.
+    dither: true                  # sub-code resolution by averaging.  Averaging
+                                  # voltage is not averaging power (P ~ V^2),
+                                  # but the bias is microkelvin: ignorable.
     verify_readback: true
     on_exit: hold                 # zeroing a live sample heater is its own hazard
 
@@ -169,53 +151,39 @@ control:
     setpoint: 96.0                # `run --arm` with no --setpoint holds the
                                   # present temperature instead of this
 
-  # Feedforward supplies the bulk of an output change during a sweep, so the
-  # gentle gains above do not have to build it through the integral.
-  #
-  # IMPORTANT: the calibration curve was measured with the CRYOCOOLER RUNNING
-  # and the shields cold.  Percent-to-temperature depends on the cooling power
-  # available to fight the heater, so with the cooler off (before a cooldown,
-  # after a warmup) it does not apply -- the same percent runs much hotter and
-  # the gain is higher.  A temperature log cannot tell those regimes apart.
-  #
-  # Three things limit the damage: feedforward enters as a *difference* from
-  # the arming point, so a whole-curve offset cancels; max_feedforward_pct caps
-  # what a wrong slope can do; and the supervisor alarms when the watt
-  # residual leaves its band, which is the same disagreement measured in the
-  # variable that means the same thing at 10 K and at 180 K.
-  #
-  # In a regime this curve was not measured in, set enabled: false and let the
-  # integral do the work.  It is slower, and it is always correct.
+  # The positional feedforward DRIVE TERM, and nothing else -- the band follows
+  # the setpoint whether this is on or off.  It commands the model's LEVEL, so
+  # it is only trustworthy in the regime the curve was measured in (cryocooler
+  # running, shields cold); off, the integral does the work, slower and always
+  # correct.  docs/ltspm3/thermal-response.md.
   feedforward:
     enabled: true
-    # `fitted` (the shipped ODE fit) or `cd10` (the steady-state curve this
-    # loop was built on).  They disagree by 13 K below 64 %, where CD10 never
-    # measured and was extrapolating a power law.  The three fields below
-    # configure `cd10` only.
+    # `fitted` (the shipped ODE fit) or `cd10` (the steady-state curve).  They
+    # disagree where CD10 never measured and was extrapolating a power law.
+    # The three fields below configure `cd10` only.
     source: fitted
     t_bath_k: 4.0
     ref_pct: 63.076
     ref_rise_k: 95.6
-    # The output is a VOLTAGE into a stable 75.5 ohm heater, so P ~ pct**2
-    # exactly.  Only the thermal part is fitted: dT ~ P**thermal_exponent.
-    # Measured 3.16 (lumped n = 6.32, R^2 = 0.996) over 24 settled heater
-    # steps in cd10 monitor4/5.  Supersedes the old two-point n = 5.0.
+    # `cd10` only: the output is a VOLTAGE into a stable heater, so P ~ pct**2
+    # exactly and only the thermal part is fitted, dT ~ P**thermal_exponent.
+    # docs/ltspm3/thermal-response.md.
     thermal_exponent: 3.158
     # Leave `calibration` unset to use the measured curve in ltspm3/model/thermal_response.py.
 
   guard:
     valid_min_k: 1.0
     valid_max_k: 400.0
-    # Two-tier, because one number cannot separate these: genuine cooldowns
-    # reach 1.63 K/s (corroborated on all three inputs) while the observed
-    # sensor glitch runs 7.3 K/s and up.
+    # Two-tier, because one number cannot separate a genuine cooldown from the
+    # observed sensor glitch: the glitch is faster and uncorroborated.
+    # docs/ltspm3/safety.md for the glitch statistics.
     max_slew_k_per_s: 5.0         # hard physical impossibility, always rejected
     corroborate_slew_k_per_s: 0.5 # above this, another channel must agree
     # Reversal test: a real thermal signal is smooth, the glitch is not.
     curvature_ratio: 1.5
     curvature_floor_k: 0.5
-    # The longest observed self-healing glitch lasted 280 s.  At the old 60 s
-    # this turned a five-minute sensor burp into a lost cooldown.
+    # Longer than the longest observed self-healing glitch, so a sensor burp
+    # does not cost a cooldown.  docs/ltspm3/safety.md.
     fault_after_s: 600.0
     recover_samples: 5
     recover_samples_from_fault: 15
@@ -233,43 +201,34 @@ control:
     # sharper than the loop's own response cannot be followed.
     smooth_delays: 8.0
 
-  # Gain scheduling.  The controller is tuned from two LOCAL numbers -- gain
-  # K(T) in K/% and time constant tau(T) -- because those are what a step test
-  # measures.  A global percent-to-temperature curve cannot serve: two forms
-  # fit the reference data to R^2 0.9969 and 0.99998 and then disagree by tens
-  # of kelvin outside it.
-  #
-  # IMC/pole-cancellation: Ti = tau, Kp = tau/(K*tau_cl).  That makes the
-  # closed loop first order -- no overshoot at any gain -- and tau_cl IS the
-  # closed-loop response time, so it is the only number to choose.
-  #
-  # THE SCHEDULE IS NOT A TABLE ANY MORE.  K(T) and tau(T) come from
-  # ltspm3/model/fitted_response.py -- the 43 h sweep, fitted over the whole
-  # range -- so there is nothing here to keep in step with a refit.  A cryostat
-  # that does have a measured table can still supply one as `schedule:`.
+  # Gain scheduling, from two LOCAL numbers: gain K(T) and time constant
+  # tau(T), which are what a step test measures.  IMC/pole-cancellation gives
+  # Ti = tau and Kp = tau/(K*tau_cl), so tau_cl -- the closed-loop response
+  # time -- is the only number to choose.  The schedule is not a table here:
+  # `FittedSchedule` reads K(T) and tau(T) from ltspm3/model/fitted_response.py,
+  # so a refit moves the controller with it.  A cryostat with a measured table
+  # can still supply one as `schedule:`.
   tuning:
     enabled: true
     # RATIOS to the plant's own tau(T), not absolute times -- see
     # ltspm3/control/tuning.py.  tau_cl = max(speed * tau(T), 4 * delay_s).
-    hold_speed: 0.25              # stabilising with real authority (LTSPM3, 2026-09-17)
-    move_speed: 0.15              # a 2 K move at 118 K in ~5 min; see the armed file
+    # Both graded on the bench: docs/ltspm3/requirements.md section 3.
+    hold_speed: 0.25              # below 1 = real authority at a hold
+    move_speed: 0.15              # a 2 K move at 118 K in ~5 min
     delay_floor: 4.0              # x the derived dead time
     move_error_k: 0.25            # enter MOVE above this error
     hold_error_k: 0.10            # return to HOLD below this...
     hold_settle_s: 120.0          # ...and only after settling this long
 
   filter:
-    # NO LOW PASS (Jeff, 2026-09-11).  `tau: 0` is pass-through and the
-    # class stays in the chain, so a cryostat whose noise moves into the band
-    # where a pole would help is a config edit away.  The 60 s it replaced was
-    # slower than the cryostat itself below 60 K, and measured on this
-    # cryostat's own holds it bought 0.41x and 0.73x, not the 0.18x a
-    # white-noise model promises.  docs/ltspm3/noise.md.
+    # NO LOW PASS (Jeff).  `tau: 0` is pass-through and the class stays in the
+    # chain, so a cryostat whose noise moves into the band where a pole would
+    # help is a config edit away.  Where this cryostat's noise lives, and what
+    # a pole buys against it: docs/ltspm3/noise.md.
     tau: 0.0
     # Three, not five.  Five rejects a two-sample glitch silently; three lets
     # it reach the guard, which rejects it by slew and SAYS SO.  It also halves
-    # the median's group delay, which is the largest term in the loop's
-    # derived dead time.
+    # the median's group delay, the largest term in the loop's derived dead time.
     median_window: 3
     spike_sigma: 8.0
     stale_after_s: 30.0           # past this the stored trend is not about now

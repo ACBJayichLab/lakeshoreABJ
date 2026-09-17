@@ -1,20 +1,18 @@
 # Windows deployment
 
 **This is the real target.** Development is macOS; everything below that is
-not marked as verified is an expectation, not a measurement.
-
-First deployed to the LTSPM3 cryostat on **2026-08-24**: Windows 10 Pro 19045, an
-NI PXI-GPIB board, a 218 at `GPIB0::15` and a 336 at `GPIB0::12`, recording a
-cold cryostat at a 2 s cadence. What that run settled is marked *verified*
-below. It also found one real bug — see **The single-instance lock** — which
-had made `runtime.single_instance` ineffective on Windows.
+not marked as verified is an expectation, not a measurement. "Verified" means
+it was settled on a real Windows 10 machine with an NI PXI-GPIB board driving
+two Lake Shore boxes at a 2 s cadence. That deployment also found one real bug
+— see **The single-instance lock** — which had made `runtime.single_instance`
+ineffective on Windows.
 
 ## Python version
 
-`pyproject.toml` asks for **>= 3.11**. The LTSPM3 machine had only **3.10.0**,
-and installing a second Python onto a machine running a live experiment is not
-a free action. The full suite (257 tests) passes on 3.10.0 — nothing in the
-codebase uses a 3.11-only feature — so it was installed there with:
+`pyproject.toml` asks for **>= 3.11**, and a cryostat machine may well have
+something older; installing a second Python onto a machine running a live
+experiment is not a free action. The full suite passes on **3.10.0** — nothing
+in the codebase uses a 3.11-only feature — so it can be installed with:
 
 ```
 python -m pip install -e ".[dev,gui]" --ignore-requires-python
@@ -92,9 +90,9 @@ exercises that on Windows rather than skipping it.
 ## Three Windows-specific things to verify
 
 Two of the three are now settled. The clock-resolution worry is pinned by tests
-that run on Windows in CI; the command path has since been exercised on the
-cryostat's own machine with `config-ltspm3-heater.yaml`, which also retires most
-of the `movefile` question. What is left is `os.replace` under a real reader.
+that run on Windows in CI; the command path has since been exercised end to end
+on a deployed machine, which also retires most of the `movefile` question. What
+is left is `os.replace` under a real reader.
 
 1. **`os.replace` over an open `status.json`.** On Windows, replacing a file
    another process has open can fail with a sharing violation. **Not
@@ -134,9 +132,9 @@ of the `movefile` question. What is left is `os.replace` under a real reader.
    first, which is what clamps the filename prefix monotonic.
 
    **The end-to-end path is settled separately, and later.** The *first*
-   deployment recorded only, with `accept_commands: false`. Since then
-   `config-ltspm3-heater.yaml` has been run on that machine and commanded
-   successfully (Jeff, 2026-08-28), so commands do cross that spool.
+   deployment recorded only, with `accept_commands: false`. A commanding config
+   has since been run on a deployed machine and commanded successfully, so
+   commands do cross a Windows spool.
 3. **`movefile` from MATLAB is a rename**, not a copy-then-delete. The command
    spool depends on the rename being what makes a file visible.
 

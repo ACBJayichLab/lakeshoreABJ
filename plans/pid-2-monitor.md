@@ -67,7 +67,7 @@ different shapes.
 
 | | |
 |---|---|
-| reads | the recorder's CSV tail (`t` from the monotonic `Time` column, never the timestamp — AUDIT-2026-09-10 finding 4); `status.json` for `control` |
+| reads | the recorder's CSV tail (`t` from the monotonic `Time` column, never the timestamp — [archive/AUDIT-2026-09-10.md](../archive/AUDIT-2026-09-10.md) finding 4); `status.json` for `control` |
 | writes | `plant.json` beside `status.json`: arrays not objects, `SCHEMA_VERSION`, `os.replace`; `plant_YYYY-MM-DD.csv`, one row per cycle |
 | config | its own `monitor:` section: `warn_sigma: 3`, `warn_after_s`, `settle_taus: 3`, `window_s` |
 
@@ -160,8 +160,9 @@ open diagnostic, not a monitor bug, and no threshold in this file closes it.
 
 **One thing the cold-head check corroborates on its way past.** Five steps in
 four settled days before the fault; six in the one and a half disturbed days
-after the reseat — four times the rate. HANDOFF-2026-09-13 measured the same
-period as carrying **twice the wander over 300–1200 s**, by a completely
+after the reseat — four times the rate.
+[archive/HANDOFF-2026-09-13.md](../archive/HANDOFF-2026-09-13.md) measured the
+same period as carrying **twice the wander over 300–1200 s**, by a completely
 different method. Two independent signatures, same conclusion: reseated is not
 repaired.
 

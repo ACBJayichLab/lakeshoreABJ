@@ -24,16 +24,15 @@ The layers, outermost first -- a proposal must survive all of them:
 4. **Authority band.**  A window ``authority_pct`` wide either side of THE
    OUTPUT THAT HOLDS THE PRESENT SETPOINT, widened while a ramp is running by
    exactly the lead that ramp needs, and intersected with an absolute
-   never-exceed range.  It used to be two config constants and it could not
-   span 4 to 300 K: 10 K is 24 % of output and 180 K is 69 %, against a window
-   one point wide.  See :meth:`HeaterSupervisor.band`.
+   never-exceed range.  A window fixed by config constants cannot span 4 to
+   300 K.  See :meth:`HeaterSupervisor.band`.
    The **ceiling** is hard and immediate: however wrong everything else goes,
    the heater cannot go above this window, and ``hard_max_pct`` is the part of
    it that nothing moves.
    The **floor** bounds what the PID may *ask* for, not what the DAC must
-   carry -- enforcing it on the output too meant the clamp ran after the rate
-   limiter and undid it, so a loop told to freeze at 20% wrote 62% on the next
-   cycle.  Below the band is less heat, which is never the dangerous direction.
+   carry -- enforced on the output too, the clamp runs after the rate limiter
+   and undoes it, so a frozen heater moves anyway on the next cycle.  Below the
+   band is less heat, which is never the dangerous direction.
    And it is never above where the heater already is: a floor that is would
    COMPEL heat, which is invariant 4 broken by the safety layer itself.
 5. **Rate limit.**  Per-update step and per-minute rate caps.
@@ -95,11 +94,8 @@ class SupervisorState(enum.Enum):
 #: stopped itself and nobody has looked at the cryostat yet -- and only
 #: :meth:`HeaterSupervisor.acknowledge` clears either.
 #:
-#: One tuple because the three places that ask were three literals, and they
-#: drifted: the OFF-mode early return in `_step` excepted LOCKED_OUT and not
-#: CRASHED, so a transient crash was latched for exactly one cycle and `arm`
-#: was accepted with no `ack` on the next one.  The bench's crash row could not
-#: see it because its sabotage re-crashed every cycle.
+#: One tuple, because every place that asks has to ask the same question: as
+#: separate literals they drifted, and a crash was cleared without an `ack`.
 #:
 #: RAMPING_DOWN is deliberately NOT here.  It refuses automation as well, but
 #: it is a descent in progress rather than a latch, and an operator's `hold` is
@@ -111,66 +107,54 @@ LATCHED = (SupervisorState.LOCKED_OUT, SupervisorState.CRASHED)
 class SupervisorConfig:
     """All limits are in output percent unless the name says kelvin.
 
-    **The band is no longer centred here.**  Phase 3 step 4: it is centred on
-    the model's answer for the present setpoint, so there is nothing to
-    re-centre by hand and nothing that goes stale when the cryostat is moved to
-    a new temperature.  What is left in this class is the WIDTH of the window
-    and the absolute limits around it.
+    **The band is not centred here.**  It is centred on the model's answer for
+    the present setpoint, so there is nothing to re-centre by hand and nothing
+    that goes stale when the cryostat is moved to a new temperature.  What is
+    left in this class is the WIDTH of the window and the absolute limits
+    around it.
 
-    The width is in percent and the gain is not constant -- 0.34 K/% at 10 K
-    against 12.7 at 140 K -- so one percent of authority is worth 0.34 K down
-    there and 13 K up here.  That asymmetry is correct rather than unfortunate:
-    what the band is protecting against is the loop wandering away from the
-    output the model says is right, and a percent of output is a percent of
-    output wherever it happens.
+    The width is in percent and the gain is not constant, so one percent of
+    authority is worth a fraction of a kelvin at the cold end and many kelvin
+    at the warm one.  That asymmetry is correct rather than unfortunate: what
+    the band is protecting against is the loop wandering away from the output
+    the model says is right, and a percent of output is a percent of output
+    wherever it happens.
     """
 
-    #: The band's centre when there is NO model to ask -- feedforward
-    #: disabled, or a cryostat with no fitted curve.  It is no longer the band
-    #: itself: see `HeaterSupervisor.band_centre_pct`, which asks the model
-    #: what output holds the present setpoint.  Also the output a loop adopts
-    #: when it has never read one.
+    #: The band's centre when there is NO model to ask -- a cryostat with no
+    #: fitted curve.  It is not the band itself: see
+    #: `HeaterSupervisor.band_centre_pct`, which asks the model what output
+    #: holds the present setpoint.  Also the output a loop adopts when it has
+    #: never read one.
     operating_point_pct: float = 63.076
     #: Half-width of the band, around whatever the centre is, PLUS the lead a
     #: commanded ramp needs (`ramp_lead_pct`).
     #:
-    #: One percent is not arbitrary against the one systematic that moves the
-    #: centre: the heater circuit may fail to deliver `DELTA_P_FRAC` = 0.7 % of
-    #: the POWER, and u goes as sqrt(P), so that is 0.35 % of output.  The
-    #: remaining 0.65 % is genuine margin, and the model's own shape error
-    #: (0.135 K in-epoch) is far smaller than either.
+    #: It is control room, and it is not arbitrary: it has to cover the level
+    #: error the model is allowed to carry -- the heater circuit may fail to
+    #: deliver `DELTA_P_FRAC` of the POWER, and u goes as sqrt(P), so half of
+    #: that lands on the output -- plus the overdrive a fast move needs.  A
+    #: half-width below the level error cuts the heater at arming.  What the
+    #: bench measured of each width is in docs/ltspm3/requirements.md 3.
     authority_pct: float = 1.0
     hard_min_pct: float = 0.0
     #: **The one cap nothing moves.**  Whatever the model, the setpoint or the
     #: arithmetic says, the output cannot exceed this.
     hard_max_pct: float = 70.0
 
-    #: **THE OUTPUT RATE FLOOR, and one of the two rate fields left of eight.**
-    #: The heater's percent rate is `max_rate_k_per_min / K(T)` -- the one rate
-    #: converted through the gain, so 5 K/min means 5 K/min everywhere -- and
-    #: this is what it falls back to where there is no model to ask.  The one
-    #: rate is 0.40 %/min at 118 K and 14.9 %/min at 10 K on the 2026-09-13
-    #: fit; the 0.38 and 14.6 written everywhere before that were the pre-refit
-    #: gains.
-    #:
-    #: What it replaces is `max_step_pct: 0.02` and `max_rate_pct_per_min:
-    #: 0.20`, both of which were trim rates: ten kelvin is 29 % of output at
-    #: the cold end's 0.34 K/%, so 0.2 %/min allowed two and a half hours for a
-    #: two-minute sweep and the premise check called the cryostat broken long
-    #: before it arrived.
+    #: **THE OUTPUT RATE FLOOR.**  The heater's percent rate is
+    #: `max_rate_k_per_min / K(T)` -- the one rate converted through the gain,
+    #: so 5 K/min means 5 K/min everywhere -- and this is what it falls back to
+    #: where there is no model to ask.
     min_rate_pct_per_min: float = 0.20
 
     # -- premise checks: THE WATTS ADD UP -----------------------------------
     #
-    # Phase 3 step 6 rewrites rule 4.  It used to be "this should only ever be
-    # a small correction", in kelvin, with `max_error_k: 1.0` and an allowance
-    # for a commanded ramp.  A kelvin threshold cannot serve a cryostat whose
-    # gain spans forty-fold: the same 1 K is a trim at 180 K and the whole
-    # range at 10 K, and the allowance was excusing the loop's own filter as
-    # much as anything about the cryostat.  `max_error_k`, `anomaly_hold_s`,
-    # `max_ramp_error_k`, `response_lag_s` and `model_trust_k` are gone with it.
+    # Rule 4 is checked in WATTS, not in kelvin.  A kelvin threshold cannot
+    # serve a cryostat whose gain spans forty-fold: the same 1 K is a trim at
+    # the warm end and the whole range at the cold one.
     #
-    # The premise is now the residual the monitor judges by -- the SAME two
+    # The premise is the residual the monitor judges by -- the SAME two
     # functions, so the two cannot disagree about what typical means:
     #
     #     dQ = C(T) dT/dt + [Lambda(T) - Lambda(T_c)] - P(u)
@@ -251,27 +235,24 @@ class SupervisorConfig:
     max_feedforward_pct: float = 0.40
     #: **A ceiling on the DERIVED velocity feedforward, not the value itself.**
     #: What a ramp needs is `rate*tau/K` and the loop computes it
-    #: (`ramp_lead_pct`); this is the most it may ever come to, for a rate
-    #: nobody meant to command.  It was 1.00 and that was the value rather than
-    #: the ceiling -- against the 4.10 % a 5 K/min sweep needs at 180 K, which
-    #: meant the feedforward supplied a quarter of the drive and the integral
-    #: wound up the rest and then overshot when the ramp ended.
-    #:
-    #: 6.0 is above the 4.10 % the fastest commanded rate needs at the worst
-    #: temperature, with margin, and far below `hard_max_pct`.
+    #: (`HeaterSupervisor.ramp_lead_pct`, which is where that lead is derived);
+    #: this is the most it may ever come to, for a rate nobody meant to
+    #: command.  It sits well above what the fastest commanded rate needs at
+    #: the worst temperature and far below `hard_max_pct` -- a ceiling set at
+    #: the lead itself is not a ceiling but a throttle, and leaves the integral
+    #: to supply the rest of the drive and overshoot when the ramp ends.
     max_velocity_ff_pct: float = 6.00
     #: "Settled" for the reported model error: slope below this and no ramp.
     model_check_slope_k_per_s: float = 0.002
     # Fault response.  THE SAME ONE RATE, in kelvin, through the model's
-    # inverse curve -- `_rampdown_target`.  Three percent-rate fields and a
-    # knee are gone with it: they existed because a rate in percent means a
-    # different thing at every temperature, and the knee at 40 % was an attempt
-    # to patch that by hand.  Descending at `max_rate_k_per_min` by the model's
-    # reckoning is the same descent everywhere, and it needs no sensor.
+    # inverse curve -- `_rampdown_target`, which is where the descent and how
+    # long it takes are described.  Descending at `max_rate_k_per_min` by the
+    # model's reckoning is the same descent at every temperature, which a rate
+    # in percent is not, and it needs no sensor.
     #
     # Still nothing like an emergency stop.  A fault on this cryostat is not an
     # emergency, and the risk of a fast change remains larger than the risk of a
-    # slow one (invariant 6).  118 K to base takes about 23 minutes.
+    # slow one (invariant 6).
     safe_output_pct: float = 0.0
     require_ack_after_fault: bool = True
 
@@ -455,45 +436,33 @@ class HeaterSupervisor:
     def delay_s(self) -> float:
         """The loop's pure delay -- the filter chain at the measured cadence.
 
-        3.0 s on this cryostat: a median-3 at 2 s, plus the zero-order hold,
-        plus nothing for a low pass that is switched off.  Derived from the
-        chain that produces it (:meth:`MeasurementFilter.group_delay_s`) so it
-        cannot come to disagree with the filter it describes.
+        Derived from the chain that produces it
+        (:meth:`MeasurementFilter.group_delay_s`, where the terms of the sum
+        are set out) so it cannot come to disagree with the filter it
+        describes.
         """
         return self.filter.group_delay_s(self._cadence_s or 0.0)
 
     def _smooth_tau_s(self, kelvin: float | None = None) -> float:
         """How long the corner of a commanded ramp is rounded over.
 
-        **The closed-loop response time in `move`**, floored on the loop's dead
-        time.  ``move_speed * tau(T)``: 4.5 s at 30 K, 260 s at 118 K, 306 s at
-        180 K.
+        **The corner IS ``tau_cl``**: ``move_speed * tau(T)``, the closed-loop
+        response time in `move`, floored on the loop's dead time.
 
-        That is not a tuning knob dressed up -- it is the same number
-        ``tau_cl`` is, and it has to be.  A setpoint trajectory with corners
-        sharper than the closed loop's own response is one the loop cannot
-        follow by construction, and what comes out is lag going in and
-        overshoot coming out, which no retuning fixes.  Rounding over exactly
-        `tau_cl` asks for the fastest trajectory that IS followable.
+        That is not a tuning knob dressed up, and it has to be this number.  A
+        setpoint trajectory with corners sharper than the closed loop's own
+        response is one the loop cannot follow by construction, and what comes
+        out is lag going in and overshoot coming out, which no retuning fixes.
+        Rounding over exactly ``tau_cl`` asks for the fastest trajectory that
+        IS followable -- shorter and the loop lags the corner, longer and the
+        trajectory, not the loop, is what the move waits on.
 
-        Measured on the fitted plant, a 10 K sweep at 118 K with the premise
-        check out of the way, against corner length:
-
-            12 s     8.46 K of lag, 5.3 % overshoot, arrives in 11.3 min
-            60 s     6.24 K,        5.6 %,            10.8 min
-            180 s    2.65 K,        0.3 %,            30.4 min
-            450 s    0.80 K,       -0.3 %,            50.6 min
-
-        and ``move_speed * tau`` is 260 s there.  The two flat values this
-        replaced are both visible in that table: 300 s was measured at
-        0.5 K/min where it is about right at 118 K and eighty times too long at
-        30 K, and the 12 s the first draft of step 5 derived from the dead time
-        alone is the top row.
-
-        **A rate is a ceiling, not a promise.**  What the table also says is
-        that a 519 s plant does not move 10 K in the two minutes 5 K/min
-        implies, whatever anybody configures; it takes about eleven at best,
-        and thirty if you want the trajectory followed.
+        A FLAT corner length can only be right at one temperature, because
+        ``tau`` spans three orders of magnitude over this cryostat's range;
+        the floor (`RampConfig.smooth_delays` dead times) covers the cold end,
+        where ``tau`` is shorter than the loop's own delay.  What the bench
+        measured of moves under this rule is in
+        docs/ltspm3/requirements.md section 3.
         """
         floor = self.ramp.cfg.smooth_delays * self.delay_s
         if kelvin is None:
@@ -515,20 +484,17 @@ class HeaterSupervisor:
     # -- is there a model to ask? ------------------------------------------
     #
     # **TWO SEAMS, AND NEITHER OF THEM IS A COMMISSIONING SWITCH.**
-    # AUDIT-2026-09-16 findings 2 and 3 are the same mistake made twice: a
-    # question about whether the model EXISTS was asked of a flag that says
-    # whether a commissioning stage TRUSTS it.
     #
     #   `feedforward.enabled`  should the loop drive to the model's LEVEL?
     #   `tuner.enabled`        should the gains be rescheduled with T?
     #
-    # Neither is "is there a curve to convert kelvin into percent with".  The
-    # fault ramp-down asked the first and the output rate limiter the second,
-    # so at 4a -- both off -- the descent fell at `min_rate_pct_per_min`
-    # (320 minutes from 64 %, bench-measured) and the one rate never reached
-    # the output at all (0.20 %/min, which is 2.6 K/min at 118 K against the
-    # configured 5).  Both are properties of the CRYOSTAT's model, and a
-    # stale level does not make a curve's shape unusable.
+    # Neither is "is there a curve to convert kelvin into percent with".  Ask
+    # one of them that question -- as the fault ramp-down and the output rate
+    # limiter did (AUDIT-2026-09-16 findings 2 and 3) -- and with both switches
+    # off the descent and the rate limit both fall back to the floor rate and
+    # the one rate never reaches the heater.  Both are properties of the
+    # CRYOSTAT's model, and a stale level does not make a curve's shape
+    # unusable.
 
     @property
     def has_curve(self) -> bool:
@@ -550,14 +516,12 @@ class HeaterSupervisor:
     def target_band_centre_pct(self) -> float:
         """The output that holds the setpoint the loop is chasing RIGHT NOW.
 
-        **The band follows the setpoint (phase 3 step 4, rule 5 reworded).**
-        It used to be ``operating_point_pct`` -- one config constant, fixed for
-        the life of the process, with ``_apply_band_to_pid()`` called once in
-        ``__init__``.  On a cryostat that is asked to run from 4 to 300 K that
-        cannot work: 10 K is 24.22 % of output and 180 K is 68.73 %, a span of
-        44 points, against a window one point wide.  No sweep below 60 K was
-        arithmetically possible, and above 100 K a completed sweep faulted
-        afterwards because the window was still centred where it started.
+        **The band follows the setpoint** (rule 5).  A centre fixed for the
+        life of the process cannot serve a cryostat asked to run from 4 to
+        300 K: the outputs that hold the two ends of that range are tens of
+        points apart, against a window about one point wide, so any setpoint
+        far from where the loop was armed rails against a window that never
+        moved.
 
         This is where the centre is HEADING.  :meth:`band_centre_pct` is where
         it has got to, and the difference between the two is the whole safety
@@ -567,58 +531,40 @@ class HeaterSupervisor:
         a loop that has wandered cannot drag its own window along behind it.
 
         **Whenever a curve EXISTS -- `has_curve`, not `feedforward.enabled`.**
-        Until 2026-09-17 this asked the feedforward switch, which is the same
-        conflation AUDIT-2026-09-16 findings 2 and 3 removed from the fault
-        ramp-down and the output rate limiter: a question about whether the
-        model exists, asked of a flag that says whether a commissioning stage
-        trusts its LEVEL.  With the feedforward off -- the armed configuration
-        since 2026-09-16 -- the band sat pinned at `operating_point_pct`, and
-        a setpoint more than about 3 K from where the loop was armed railed
-        against a window that never moved.  Bench, 2026-09-17: a +2 K move
-        commanded at 140 K faulted `authority exhausted` and ramped the heater
-        down, and the same move at 180 K took the output to zero.  Jeff,
-        2026-09-17: the band follows the setpoint; a different setpoint
-        trivially needs a different power, and whether the POWER is wrong is
-        the watt residual's question, not the band's.
+        Asking the feedforward switch is the conflation described under "two
+        seams" above: a question about whether the model exists, asked of a
+        flag that says whether a commissioning stage trusts its LEVEL.  Jeff's
+        requirement is that the band follows the setpoint -- a different
+        setpoint trivially needs a different power, and whether the POWER is
+        wrong is the watt residual's question, not the band's.  See
+        docs/ltspm3/requirements.md.
 
-        The stale level the switch was protecting against is the positional
-        feedforward TERM's problem (the 2026-09-16 walk-down), not the band's:
-        the band caps, it does not drive, and `authority_pct` is sized to
-        cover the level error the model is allowed to carry.
+        The stale level that switch was protecting against is the positional
+        feedforward TERM's problem, not the band's: the band caps, it does not
+        drive, and `authority_pct` is sized to cover the level error the model
+        is allowed to carry.
         """
         if self.has_curve:
             return self.feedforward.percent_for(self.pid.cfg.setpoint)
         return self.cfg.operating_point_pct
 
-    #: Kept as an alias because the centre is not slew limited and there is
-    #: exactly one answer.  It was, for one draft of step 4, and that is worth
-    #: recording because the reasoning looked right: `set_setpoint(x,
-    #: ramp=False)` steps the setpoint and resets the smoother, so an
-    #: unlimited centre opens the ceiling in one cycle.  **Limiting it is
-    #: unnecessary and it breaks arming**: a loop armed with the heater at 0 %
-    #: gets a window at 0 % that then crawls toward the setpoint at
-    #: the output rate limit, and 0 to 63 % at a trim rate is hours during
-    #: which the loop cannot reach anything.  Measured: 115 tests.
-    #:
-    #: The band opening is not what moves the heater.  Three things bound the
-    #: consequence of a stepped setpoint and none of them is the centre's
-    #: speed: `hard_max_pct`, which nothing moves; the OUTPUT rate limiter,
-    #: which is what actually governs how fast the heater travels into a newly
-    #: opened window; and rule 8's premise check, which refuses a setpoint step
-    #: larger than `max_error_k` outright.  A band that opens instantly onto an
-    #: output that can only move 0.2 %/min has not applied any heat.
+    #: An alias, because the centre is deliberately NOT slew limited: opening
+    #: the window applies no heat, and what bounds a stepped setpoint is
+    #: `hard_max_pct`, the OUTPUT rate limiter and rule 8's refusal of a step
+    #: larger than `warn_error_k`.  Limiting it also breaks arming -- a loop
+    #: armed with the heater at 0 % would crawl toward its setpoint for hours.
     band_centre_pct = target_band_centre_pct
 
     def ramp_lead_pct(self) -> float:
         """The output lead a commanded ramp genuinely needs, in percent.
 
-        A first-order plant following a ramp of rate ``r`` sits at an output
-        ``r*tau/K`` above the one that would HOLD where it is -- that is what
-        makes it move.  At 5 K/min this is 0.02 % at 10 K and **4.10 % at
-        180 K**, which is four times the authority band and is why
-        ``max_velocity_ff_pct: 1.00`` could not have worked: the feedforward
-        was capped at a quarter of the drive, the integral had to supply the
-        rest, and it then overshot when the ramp ended.
+        **This docstring is the one home for that number.**  A first-order
+        plant following a ramp of rate ``r`` sits at an output ``r*tau/K``
+        above the one that would HOLD where it is -- that is what makes it
+        move.  At 5 K/min it is 0.02 % at 10 K and **4.23 % at 180 K**, several
+        times the authority band, which is why a flat ceiling on the velocity
+        feedforward is a throttle rather than a ceiling: it caps the drive, the
+        integral supplies the rest, and it then overshoots when the ramp ends.
 
         So the band widens by exactly this while a ramp is running, and by
         nothing when one is not.  The authority is granted to the TRAJECTORY,
@@ -630,13 +576,11 @@ class HeaterSupervisor:
         a cliff while the cryostat is still catching up.
 
         **Still gated on `tuner.enabled`, deliberately, where the ramp-down and
-        the output rate limiter are not.**  Those two were failing SLOW, and
-        slow is the safe side of rule 1.  This one widens the authority band,
-        which is the one direction that grants the loop more heater than it had
-        -- so it stays where it is until a stage asks for it, and a stage with
-        the tuning off runs a band that does not widen during a ramp.  That is
-        the conservative half of the same conflation and it is left in place on
-        purpose (AUDIT-2026-09-16 finding 3, and rule 5).
+        the output rate limiter are not.**  Those two fail SLOW, and slow is
+        the safe side of rule 1.  This one widens the authority band, which is
+        the one direction that grants the loop more heater than it had -- so it
+        stays off until a stage asks for it, and a stage with the tuning off
+        runs a band that does not widen during a ramp (rule 5).
         """
         rate = abs(getattr(self.smoother, "rate_k_per_s", 0.0) or 0.0)
         if rate <= 0 or not self.tuner.enabled:
@@ -659,22 +603,15 @@ class HeaterSupervisor:
         hi = min(c.hard_max_pct, centre + half)
         # **THE FLOOR MAY NEVER BE ABOVE WHERE THE HEATER ALREADY IS.**  The
         # floor bounds what the PID may ASK for -- it is anti-windup, not a
-        # demand -- and with a fixed centre that distinction never mattered
-        # because the loop lived inside its own window.  With a centre that
-        # follows the setpoint it matters immediately: in a regime the model
-        # does not describe, the centre lands somewhere the cryostat is not,
-        # and a floor above the present output makes `out_min` compel heat the
-        # loop never asked for.  Measured on the cooler-off regime: a loop
-        # holding steadily at 63.09 % was walked up to 64.68 % by its own
-        # envelope, which is invariant 4 -- nothing raises the heater as a side
-        # effect of anything -- broken by the safety layer itself.
+        # demand.  With a centre that follows the setpoint, a regime the model
+        # does not describe puts the centre somewhere the cryostat is not, and
+        # a floor above the present output then makes `out_min` compel heat the
+        # loop never asked for: invariant 4 broken by the safety layer itself.
+        #
         # And it must not be pinned TO it either, which is what `min(lo, here)`
         # does and it is a RATCHET: `out_min` equal to the present output means
         # the PID can never ask for less than it is already producing, so every
-        # upward wiggle is locked in.  Measured in the cooler-off regime, where
-        # the centre clamps to the ceiling and the nominal floor sits above the
-        # loop entirely: the output walked 63.11 -> 63.51 % in seven minutes
-        # with the error oscillating around zero and nothing asking for heat.
+        # upward wiggle is locked in and the output walks up on noise alone.
         #
         # So when the window is somewhere the loop is not, the floor is simply
         # the hard one.  Full downward freedom, which is the safe direction.
@@ -709,23 +646,18 @@ class HeaterSupervisor:
         Stepped, not ramped: the caller has already established that this is
         where the cryostat is now, so there is nothing to traverse.
 
-        **The refusal is checked FIRST.**  It used to move the setpoint and
-        then discover it was locked out, which left a loop that had refused to
-        arm carrying a setpoint somebody had asked for and it had not accepted.
-        It also meant the refusal could be pre-empted by whatever
-        `set_setpoint` touched on the way -- after a crash, by the very thing
-        that crashed.
+        **The refusal is checked FIRST**, before anything is moved: otherwise a
+        loop that refused to arm is left carrying a setpoint it never accepted,
+        and the refusal itself can be pre-empted by whatever `set_setpoint`
+        touched on the way -- after a crash, by the very thing that crashed.
 
         **ARMING AN ARMED LOOP IS REFUSED**, and that belongs here rather than
-        at whichever button somebody pressed.  `set_mode` no-ops when the mode
-        is already PID, but `set_setpoint` above it does not: on a tracking
-        loop this was "step the setpoint now, no ramp", plus a cleared
-        `_pending_approach` and a reset smoother -- a dumped trajectory behind
-        a command that says something else.  Rule 8 bounds the step to
-        `warn_error_k`, so it was never a hazard; it was a surprise, which is
-        its own kind of unsafe.  The viewer greyed its button out on 2026-09-16
-        and the spool went on accepting it -- `send arm` from the CLI, and
-        MATLAB, which has only the spool (AUDIT-2026-09-16 finding 4).
+        at whichever button somebody pressed: the CLI and MATLAB reach this
+        through the spool whatever the viewer greys out (AUDIT-2026-09-16
+        finding 4).  On a tracking loop it would step the setpoint, clear
+        `_pending_approach` and reset the smoother -- a dumped trajectory
+        behind a command that says something else.  Rule 8 bounds the step, so
+        it is not a hazard; it is a surprise, which is its own kind of unsafe.
 
         The way to move an armed loop's setpoint is `hold` and then `arm`,
         which is what the viewer's own tooltip says, and it is bumpless: `hold`
@@ -848,17 +780,11 @@ class HeaterSupervisor:
                and abs(kelvin - here) > self.cfg.warn_error_k)
         if not ramp and big:
             # **RULE 8, ENFORCED WHERE IT BELONGS.**  "Move the setpoint by
-            # ramping it, never by stepping it" used to be enforced by the
-            # premise check -- a step bigger than `max_error_k` produced an
-            # error the check read as a broken premise, so the loop froze and
-            # eventually ramped down.  Rule 8 was protecting the cryostat by
-            # BREAKING the loop, and it only worked because the check could not
-            # tell a commanded move from a fault.
-            #
-            # Step 6 gives it one that can (the watt residual), so the kelvin
-            # error is a warning now and a stepped setpoint would simply be
-            # obeyed -- a typo of 300 K would walk the sample to the top of the
-            # table at 5 K/min.  So the refusal moves here, where it is a
+            # ramping it, never by stepping it" cannot be left to the premise
+            # check: that check can tell a commanded move from a fault (the
+            # watt residual), so a stepped setpoint is simply obeyed, and a
+            # typo of 300 K would walk the sample to the top of the table at
+            # the rate ceiling.  So the refusal lives here, where it is a
             # statement about the REQUEST rather than a consequence of the
             # loop's distress: a step this large becomes a ramp at the one
             # rate.  `ramp=False` still means what its docstring says it means,
@@ -940,14 +866,13 @@ class HeaterSupervisor:
         The controller half of ``lschart``'s ``hold`` command, called
         duck-typed by name so ``lschart`` still never imports ``ltspm3``.
 
-        **This disengages the loop -- it does not switch it to manual.**  It
-        used to, and manual was not a hold: a manual output is still clamped to
-        the authority band, so a `hold` taken while the heater sat outside that
-        band moved it *on the next cycle*.  Measured: told to freeze at 20% it
-        reported "holding 20.000%" and wrote 62.080%; told to freeze at 68% it
-        wrote 64.070%.  It only ever really held when the heater happened
-        already to be inside the band.  A freeze that freezes only sometimes,
-        and reports a number it is about to leave, is worse than no freeze.
+        **This disengages the loop -- it does not switch it to manual.**
+        Manual is not a hold: a manual output is still clamped to the authority
+        band, so a `hold` taken while the heater sat outside that band would
+        move it on the next cycle, and only ever really hold when the heater
+        happened already to be inside the band.  A freeze that freezes only
+        sometimes, and reports a number it is about to leave, is worse than no
+        freeze.
 
         So: ``abort_ramp()`` to stop any sweep where it stands, then ``OFF``,
         which writes nothing at all, ever.  The heater keeps the value it has.
@@ -1449,10 +1374,9 @@ class HeaterSupervisor:
             if gain > 0:
                 vel = self.smoother.rate_k_per_s * tau / gain
                 # THE SAME NUMBER THE BAND WIDENED BY, so the drive a ramp
-                # needs and the authority it is granted cannot disagree.  They
-                # did: the cap was a flat 1.00 % against the 4.10 % a 5 K/min
-                # sweep needs at 180 K, so the feedforward supplied a quarter
-                # of the drive and the integral wound up the rest.
+                # needs and the authority it is granted cannot disagree.  See
+                # `ramp_lead_pct` for what that lead is and why a flat cap on
+                # it is not a ceiling but a throttle.
                 limit = self.ramp_lead_pct()
                 vel = max(-limit, min(limit, vel))
         self.pid.velocity_ff_pct = vel
@@ -1465,12 +1389,10 @@ class HeaterSupervisor:
         anomalies: list[str] = []
         faults: list[str] = []
 
-        # THE PREMISE IS THAT THE WATTS ADD UP.  The whole ramp-allowance
-        # machinery that used to stand here is gone with `max_error_k`: it
-        # existed because one kelvin threshold had to cover a hold and a sweep,
-        # and once the PHASE decides which check applies there is nothing left
-        # for it to do.  `_check_premise` is the replacement, and it is the
-        # largest single deletion in phase 3.
+        # THE PREMISE IS THAT THE WATTS ADD UP -- `_check_premise`.  There is
+        # no ramp allowance here and there is nothing for one to do: a kelvin
+        # allowance existed only because one threshold had to cover a hold and
+        # a sweep, and the residual is valid during both.
         self._check_premise(t, s, terms, anomalies, faults, dt)
 
         # What this check is for is a *bad reading* driving the loop: the
@@ -1564,16 +1486,12 @@ class HeaterSupervisor:
           they are not symmetrical: too little heat leaves a cold sample, and
           too little authority to warm one is not something a ramp-down helps.
 
-        **The gate used to be the TUNER's phase, and that made both kelvin rows
-        unreachable.**  "In `hold` only" meant "while the setpoint is not
-        moving", and the tuner's phase was a fair proxy for that until the
-        error itself started driving it: `update_phase` enters `move` on any
-        error over `move_error_k`, which is 0.25 K, so an error of 1 K -- let
-        alone 5 -- was by construction in the phase that switched both rows
-        off.  Measured: a heater delivering half its power at 30 K left the
-        sample 14.3 K low, railed at the ceiling, for an hour, in `tracking`,
-        with no alarm of any kind.  The phase is a tuning choice and decides
-        nothing about alarms now.
+        **The gate on the kelvin rows is the TRAJECTORY, never the tuner's
+        phase.**  The phase looks like a proxy for "the setpoint is not moving"
+        and is not one: `update_phase` enters `move` on any error past
+        `move_error_k`, so an error large enough to alarm is by construction in
+        the phase that would switch the alarm off.  The phase is a tuning
+        choice and decides nothing about alarms.
         """
         cfg = self.cfg
         band_lo, band_hi = self.band
@@ -1614,13 +1532,13 @@ class HeaterSupervisor:
                 f"{cfg.warn_error_k} K"
                 + (" (below min_output_pct, where dQ has no opinion)"
                    if cold_end else ""))
-        # AUTHORITY EXHAUSTED IS A `hold`-PHASE FAULT ONLY, and that is not a
-        # detail.  Railed with a large error is the NORMAL state of a loop
-        # following a ramp the plant cannot keep up with -- it is what the
-        # velocity feedforward exists to produce.  Measured on a 10 K sweep at
-        # 30 K: railed at the band ceiling with 7.9 K of error for three
-        # minutes, every bit of it commanded, and the loop ramped the heater
-        # down and locked out over a sweep it was executing correctly.
+        # **AUTHORITY EXHAUSTED IS GATED ON THE TRAJECTORY** -- the same
+        # `holding` as the row above, i.e. while the setpoint is not moving --
+        # and that is not a detail.  Railed with a large error is the NORMAL
+        # state of a loop following a ramp the plant cannot keep up with; it is
+        # what the velocity feedforward exists to produce.  Judged while the
+        # setpoint is moving, this would ramp the heater down and lock out over
+        # a sweep the loop was executing correctly.
         #
         # What makes exhaustion a fault is that it persists once the setpoint
         # has STOPPED moving: the cryostat is then asking for more than this
@@ -1653,26 +1571,22 @@ class HeaterSupervisor:
         # a level genuinely does get less well known as the gauge ages, the
         # warning keeps tracking, and the monitor's trailing baseline is what
         # judges the drift itself.  `fast` has no date in it and it is what a
-        # STEP is judged against, because a step is a CHANGE and nothing that
-        # grows at 0.29 mW/day can happen inside thirty minutes.
+        # STEP is judged against, because a step is a CHANGE and the drift term
+        # grows too slowly to happen inside thirty minutes.
         #
-        # The monitor has always judged its step this way (`sigma_q_fast_w`,
-        # judge.py).  This is the loop agreeing with it, which this method's
-        # docstring has always claimed it did and which it did not: a month
-        # after the gauge the loop would not have faulted on a step five times
-        # the 2026-09-10 event, and the monitor still would.
+        # The monitor judges its step the same way (`sigma_q_fast_w`,
+        # judge.py).  Judging a step against the whole band instead means the
+        # loop goes deaf to real steps as the gauge ages while the monitor,
+        # looking at the same residual, still calls them.
         dq, sigma, fast, why = self._missing_power(s)
         s.missing_power_w, s.sigma_q_w, s.residual_reason = dq, sigma, why
         if dq is None:
             # **THE STEP HISTORY BREAKS HERE**, and clearing it is the point
             # rather than merely not appending.  A range taken across a gap is
             # not a step in the residual, it is the difference between two
-            # residuals that were never comparable -- the monitor learned this
-            # on the 2026-09-05 ladder, where a range across a commanded move
-            # read as 21 mW.  Here the gap that mattered was ARMING: the window
-            # at 180 K still reached back into the pre-tracking samples and
-            # read 12.18 mW of "step" over a sweep whose residual never left
-            # +/-2 mW.
+            # residuals that were never comparable.  The gap that matters most
+            # here is ARMING: without this, the window reaches back into the
+            # pre-tracking samples and reads their offset as a step.
             self._dq_hist.clear()
             self._dq_slow = None
             return
@@ -1685,22 +1599,17 @@ class HeaterSupervisor:
 
         # **THE STEP TEST SEES AN AVERAGED RESIDUAL**, and it has to.
         #
-        # `dQ` carries `C dT/dt`, and dT/dt is a regression over 15 samples of
-        # a measurement whose noise is 1.36e-6 T^2 -- 44 mK rms at 180 K.  That
-        # puts **1.50 mW rms of pure estimator noise** into the residual up
-        # there, and a RANGE statistic over half an hour is about six sigma of
-        # whatever noise it is fed: 9 to 12 mW, with nothing whatever happening.
-        # Measured, and it faulted a 3 K move at 180 K whose residual never left
-        # +/-7 mW of a band that allows 12.
+        # `dQ` carries `C dT/dt`, and dT/dt is a regression over a window of a
+        # noisy measurement, so milliwatts of pure estimator noise reach the
+        # residual at the warm end.  A RANGE statistic over half an hour is
+        # about six sigma of whatever noise it is fed, so unaveraged it faults
+        # on the estimator with nothing whatever happening.  A LEVEL check does
+        # not have this problem, which is why the range needed its own answer
+        # rather than a bigger threshold.
         #
-        # A level check does not have this problem -- 3 sigma of 1.5 mW is
-        # 4.5 mW and the residual sits inside it -- which is exactly why the
-        # range needed its own answer rather than a bigger threshold.
-        #
-        # One minute of averaging costs the test nothing it was measuring: the
-        # 2026-09-10 event reached its full -5 mW in SEVEN minutes, and this
-        # fault is specified as a step within thirty.  It buys sqrt(30) on the
-        # noise, which is 0.27 mW at 180 K.
+        # A minute of averaging costs the test nothing it was measuring: the
+        # fault it is specified to catch is a step within thirty minutes, and
+        # the 2026-09-10 event reached its level in seven.
         if dt > 0:
             alpha = 1.0 if self._dq_slow is None else 1.0 - math.exp(
                 -dt / self.STEP_AVERAGE_S)
@@ -1715,20 +1624,16 @@ class HeaterSupervisor:
         recent = [x[1] for x in self._dq_hist]
         step = max(recent) - min(recent)
         s.dq_step_w = step
-        # A FLOOR UNDER THE BAND, not a replacement for it: at a settled 118 K
-        # the floor binds (band 1.4 mW) and on a 5 K/min sweep at 180 K the
-        # band does (8.8 mW), and a flat 10 mW there would fault every sweep.
+        # A FLOOR UNDER THE BAND, not a replacement for it: at a settled hold
+        # the floor binds and during a sweep at the warm end the band does, and
+        # a flat floor there would fault every sweep.
         #
         # **The band is the WIDEST it was anywhere in the window**, and it is
         # the FAST band -- no drift, no calibration -- because the range is a
-        # statement about a change over half an hour.  Not its value at this
-        # instant, because the range is a statement about the
-        # whole window.  Evaluated at the instant, a window that contains a
-        # sweep gets judged against the settled band: measured at 180 K, a 3 K
-        # move whose residual swung -7.07 to +4.68 mW -- an 11.75 mW range, and
-        # every bit of it inside the 12.6 mW the band allows while sweeping --
-        # faulted against a 10 mW floor that only applies when nothing is
-        # moving.
+        # statement about a change over the whole window, not about this
+        # instant.  Evaluated at the instant, a window that contains a sweep
+        # gets judged against the settled band and faults on motion that was
+        # inside the band the whole time it was moving.
         widest = max(x[2] for x in self._dq_hist)
         fault_at = max(cfg.fault_mw * 1e-3, cfg.warn_sigma * widest)
         if step >= fault_at:
@@ -1766,31 +1671,21 @@ class HeaterSupervisor:
         if not _M.T_MIN_K <= s.filtered_k <= _M.T_MAX_K:
             return None, 0.0, 0.0, "sample outside the table"
         # **NO OPINION WHERE THE PLANT IS FASTER THAN THE SLOPE IS MEASURED.**
-        # `dQ` carries `C dT/dt`, and dT/dt here is a regression over the
-        # slope window -- 30 s at this cadence.  Where tau is shorter than
-        # that, a transient is over before the window has seen it, the
-        # estimate is an average of two regimes, and what comes out is tens of
-        # milliwatts of residual that is about the estimator rather than the
-        # cryostat.  Measured at 30 K (tau 9 s): a 10 K move put a 10.09 mW
-        # range into a residual whose band is 6.6 mW.
+        # `dQ` carries `C dT/dt`, and dT/dt here is a regression over the slope
+        # window.  Where tau is shorter than that window, a transient is over
+        # before the window has seen it, the estimate is an average of two
+        # regimes, and what comes out is tens of milliwatts of residual that is
+        # about the estimator rather than the cryostat.  The monitor's own
+        # transient gate is floored at its slope window for the same reason
+        # (plans/pid-2-monitor.md 2.5).
         #
-        # The monitor learned the same thing from the other end -- its
-        # transient gate is floored at its own slope window for exactly this
-        # reason (plans/pid-2-monitor.md 2.5).  At a settled hold the dynamic
-        # term is zero and the question does not arise, which is why this is
-        # conditioned on moving at all.
-        # **MOVING means moving, not "the estimate is not exactly zero".**
-        # This read `if s.slope_k_per_s`, and with a real filter the slope
-        # estimate is never exactly zero -- so wherever the plant's tau is
-        # under the slope window the residual had no opinion at a SETTLED hold
-        # either, and between `min_output_pct` and about 40 K there was no
-        # check of any kind.  `model_check_slope_k_per_s` is the threshold this
-        # file already calls settled.
-        #
-        # Measured over an hour of settled hold with this in place: an opinion
-        # on every one of 1800 cycles at 30 K and at 60 K, worst residual
-        # +0.29 mW against a 3.98 mW band and +0.38 against 1.54, and a largest
-        # step of 0.03 mW.  The comment above is what it always claimed to do.
+        # **MOVING means moving, not "the estimate is not exactly zero".**  At
+        # a settled hold the dynamic term is zero and the question does not
+        # arise, so the gate is the slope this file already calls settled
+        # (`model_check_slope_k_per_s`).  Keyed to a bare non-zero slope -- and
+        # with a real filter it is never exactly zero -- the residual has no
+        # opinion at a settled hold either, and below about 40 K there is then
+        # no check of any kind.
         window_s = self.filter.slope.window * (self._cadence_s or 0.0)
         if (abs(s.slope_k_per_s) > cfg.model_check_slope_k_per_s
                 and _M.tau_s(s.filtered_k) < window_s):
@@ -1863,12 +1758,10 @@ class HeaterSupervisor:
         ``percent_for``, which is arithmetic on a fitted table and asks the
         cryostat nothing.
 
-        This replaces three percent-rate fields and a knee at 40 %.  They
-        existed because a rate in percent is a different descent at every
-        temperature -- 1 %/min is 13 K/min at 140 K and 0.34 K/min at 10 K --
-        and the knee was an attempt to patch that by hand.  In kelvin there is
-        nothing to patch: 118 K to base takes about 23 minutes and the sample
-        falls at the one rate the whole way.
+        In kelvin there is nothing to patch, where a rate in percent is a
+        different descent at every temperature: the sample falls at the one
+        rate the whole way, and **118 K to base takes about 23 minutes**.
+        This docstring is the one home for that figure.
 
         **It only ever lowers the heater** (rule 1).  A model that is wrong
         high cannot turn a fault response into a heat-up.
@@ -1881,15 +1774,12 @@ class HeaterSupervisor:
             self._rampdown_t0 = None
         s.alarms.append(f"ramping down: {why}")
 
-        # **A FAILED READ MUST NOT FINISH THE DESCENT.**  This used to read
-        # with `default=safe_output_pct`, so one `TransportError` made
-        # `current` zero, `min(proposed, current)` zero, and
-        # `_rampdown_complete` True: measured at an output of 63.96 %, one
-        # failed read, target 0.0, complete.  If the write then failed too the
-        # loop locked out with the heater still at 64 % and a log line saying
-        # the descent had finished -- and if only the read had failed, the
-        # heater went to zero in a single write, which is the one thing rule 1
-        # says a fault response may not do.
+        # **A FAILED READ MUST NOT FINISH THE DESCENT.**  Defaulting `current`
+        # to `safe_output_pct` makes one `TransportError` look like a completed
+        # descent: the target goes to zero, `_rampdown_complete` is set, and
+        # either the loop locks out with the heater still high or the heater
+        # goes to zero in a single write -- the one thing rule 1 says a fault
+        # response may not do.
         #
         # So: fall back to what we last commanded, and if there is not even
         # that, HOLD.  A descent that has to guess where it is descending from
@@ -1915,11 +1805,10 @@ class HeaterSupervisor:
         # not a guess: `kelvin_for(current)` is what an OPEN-LOOP descent
         # stands on anyway, so a descent that starts from it is the same
         # descent, just with the first number coming from the curve instead of
-        # from a filter that has not primed.  Without it the fall-back was
-        # `min_rate_pct_per_min` -- 63 % to zero in over five hours, measured,
-        # against the 23 minutes the documents promise.  Reachable whenever the
-        # sensor faults before the filter primes, which is the state
-        # immediately after an `ack` and a re-arm.
+        # from a filter that has not primed.  Without it the descent falls back
+        # to `min_rate_pct_per_min`, which is hours, whenever the sensor faults
+        # before the filter primes -- the state immediately after an `ack` and
+        # a re-arm.
         if self._rampdown_t0 is None:
             self._rampdown_from_k = (
                 self.filter.value if self.filter.primed
@@ -1939,29 +1828,22 @@ class HeaterSupervisor:
             if target_k <= _M.T_MIN_K:
                 # **THE INVERSE CURVE BOTTOMS OUT ABOVE ZERO**, and the descent
                 # has to know that.  `percent_for` clamps at the table's cold
-                # end, which is 4.7 K and 0.72 % of output -- so a ramp-down
-                # that only ever asked the curve would stop there and never
-                # reach `safe_output_pct`, never complete, and never lock out.
-                # Measured: RAMPING_DOWN still, three hours after a lost sensor
-                # at 60 K.
+                # end, at a small but non-zero output, so a ramp-down that only
+                # ever asked the curve would stop there and never reach
+                # `safe_output_pct`, never complete, and never lock out.
                 #
                 # Once the target is at the bottom of the table there is
                 # nothing left to ramp: the sample is at base temperature and
-                # the remaining 0.72 % is worth a fraction of a kelvin.
+                # what remains is worth a fraction of a kelvin.
                 proposed = safe
             else:
                 proposed = self.feedforward.percent_for(target_k)
         else:
             # **No curve at all** -- a cryostat with no fitted response.  The
-            # floor rate is all there is to descend at, and it is slow: 63 % at
-            # `min_rate_pct_per_min` is over five hours.
-            #
-            # This branch used to be reachable whenever the FEEDFORWARD was
-            # switched off, which is every fault ramp-down at commissioning
-            # stage 4a -- the comment here said it was unreachable and it was
-            # the armed configuration (AUDIT-2026-09-16 finding 2).  It is
-            # gated on `has_curve` now: whether there is a curve, not whether
-            # this stage drives to its level.
+            # floor rate is all there is to descend at, and it is slow enough
+            # to be measured in hours, which is why the gate above is
+            # `has_curve`: whether there is a curve, not whether the present
+            # stage drives to its level (AUDIT-2026-09-16 finding 2).
             proposed = current - self._rate_pct_per_min(None) * (dt / 60.0)
 
         # Never upward.  Rule 1, and the one line that makes a wrong model
@@ -1969,20 +1851,15 @@ class HeaterSupervisor:
         proposed = min(proposed, current)
         # **AND NEVER FASTER THAN THE ONE RATE, INCLUDING ON THE FIRST CYCLE.**
         # RAMPING_DOWN skips `_rate_limit` -- it has to, or the descent could
-        # never leave the authority band -- and the rate it descends at is
-        # supposed to be the one rate through the curve.  It was, from the
-        # SECOND write on: the first one jumped straight to
-        # `percent_for(last trusted T)`, which is only near the present output
-        # when the sample is on its setpoint and the model is right.  Measured
-        # on a heater delivering 12 % less, which leaves the sample 14 to 21 K
-        # low before it faults: the first write moved 1.21 % at 180 K and
-        # 3.62 % at 60 K, against the 0.013 and 0.047 % the one rate allows.
-        # At 10 K with the sample 5 K low it is 21.6 % in one cycle.
+        # never leave the authority band -- so the one rate has to be enforced
+        # here instead, including on the FIRST write.  Without this, that first
+        # write jumps straight to `percent_for(last trusted T)`, which is only
+        # near the present output when the sample is on its setpoint and the
+        # model is right; where it is not, the jump is orders of magnitude
+        # larger than the one rate allows.
         #
-        # There is no separate descent rate (Jeff, 2026-09-15): the knee rates
-        # were superseded by the one rate, and the first write obeys it like
-        # every later one.  The curve still sets the PATH; this only says no
-        # single write may jump along it.
+        # There is no separate descent rate: the curve sets the PATH, and this
+        # only says no single write may jump along it.
         proposed = max(proposed, current - self._rampdown_step_pct(current, dt))
         # `current` is known by now -- read, or the value we last commanded and
         # confirmed.  That is what makes this a statement about the heater
@@ -2030,18 +1907,16 @@ class HeaterSupervisor:
         """**The one rate, converted through the gain.**
 
         ``max_rate_k_per_min / K(T)``, floored at ``min_rate_pct_per_min``
-        where there is no schedule to ask: 14.9 %/min at 10 K, 0.40 %/min at
-        118 K, 0.42 %/min at 180 K, measured off the shipped table.  The same
-        five kelvin a minute at every one of them, which is what a rate limit in
-        percent can never be -- the gain spans forty-fold across this cryostat.
+        where there is no schedule to ask.  The same kelvin per minute at every
+        temperature, which is what a rate limit in percent can never be -- the
+        gain spans forty-fold across this cryostat.
 
-        **The conversion needs the SCHEDULE, not the scheduler.**  This asked
-        `tuner.enabled` until 2026-09-16, so a stage with the tuning switched
-        off ran the output limiter on its floor -- 2.6 K/min at 118 K and
-        0.6 K/min at 30 K, against a configured 5 -- while `set_setpoint` went
-        on ramping in kelvin at the rate the file names.  A loop told 5 K/min
-        and delivering 2.6 is one somebody will "tune" without knowing why.
-        AUDIT-2026-09-16 finding 3.
+        **The conversion needs the SCHEDULE, not the scheduler.**  Gated on
+        `tuner.enabled` instead, a stage with the tuning switched off runs the
+        output limiter on its floor while `set_setpoint` goes on ramping in
+        kelvin at the rate the config file names, and a loop told one rate and
+        delivering another is one somebody will "tune" without knowing why
+        (AUDIT-2026-09-16 finding 3).
         """
         floor = self.cfg.min_rate_pct_per_min
         schedule = self.schedule

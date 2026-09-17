@@ -724,9 +724,10 @@ the read lands. That is honest, and it is a sliver rather than a window.
 The re-read skips any log whose own first and last rows fall outside the
 span — read from the rows, not from the filename, which is the same evidence
 a full parse would have produced and two lines of it instead of a day's.
-Without that skip the cost was the whole archive: on the LTSPM3 machine a
-one-hour zoom took 0.9 s against a week of logs and 10.2 s against three
-months, for the same 1950 rows recovered. It is now flat at about 135 ms.
+Without that skip the cost was the whole archive: measured on a deployed
+recorder, a one-hour zoom took 0.9 s against a week of logs and 10.2 s against
+three months, for the same 1950 rows recovered. It is now flat at about
+135 ms.
 
 A span so wide that re-reading it whole would exceed
 `CsvTail.SPAN_READ_BUDGET_BYTES` (32 MiB, a bit over three days of this

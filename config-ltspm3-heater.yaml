@@ -1,10 +1,8 @@
 # LTSPM3 -- the two boxes on the GPIB board, with the SAMPLE HEATER LIVE.
-#
-# This is `config-ltspm3-read-only.yaml` with the write path opened: manual control of the
-# 218's analog output 1, which on this cryostat is the sample heater, AND the
-# 336's own loops.  Keep both files.  `config-ltspm3-read-only.yaml` stays the default for
-# watching; this one is picked up on purpose, and choosing it is the first half
-# of the decision to heat something.
+# `config-ltspm3-read-only.yaml` with the write path opened for MANUAL control:
+# the 218's analog output 1 (the sample heater) and the 336's own loops.  There
+# is no `control:` section, so plain `lschart` runs it and every percentage it
+# sends was typed by a person.
 #
 #   python -m lschart -c config-ltspm3-heater.yaml check     validate, touch nothing
 #   python -m lschart -c config-ltspm3-heater.yaml probe     read everything once
@@ -12,146 +10,19 @@
 #   python -m lschart -c config-ltspm3-heater.yaml send analog 5.0
 #   python -m lschart -c config-ltspm3-heater.yaml send heaters_off
 #
-# ---------------------------------------------------------------------------
-# WHAT THIS FILE TURNS OFF, AND WHAT IT LEAVES ON
-# ---------------------------------------------------------------------------
+# Opened: `transport.read_only` and `allow_writes` on both boxes,
+# `ipc.accept_commands`, `ipc.allow_analog_output`, `ipc.allow_heater_range`.
+# Shut: `ipc.allow_pid`.  Open by omission: `ipc.sources` -- see that section.
+# Both power gates cover ZERO as well as anything above it; `send heaters_off`
+# and `send hold` are exempt and are what an abort uses.
 #
-# Opened, on BOTH boxes:
-#
-#   transport.read_only: false      bytes that change state may now leave this
-#                                   program -- for the 218 and for the 336
-#   allow_writes: true              the 218's ANALOG command, and the 336's
-#                                   SETP / RANGE / PID / RAMP.  Driver policy,
-#                                   so it gates `set` at the CLI as well as the
-#                                   file path
-#   ipc.accept_commands: true       a file may command this recorder
-#   ipc.allow_analog_output: true   ...including moving the sample heater
-#   ipc.allow_heater_range: true    ...and changing a 336 heater range
-#
-# READ THIS ONE TWICE.  `allow_writes` on the 336 plus `ipc.allow_heater_range`
-# means a file command can change the range on heater 2 -- the heater holding
-# THE CHONKE, railed at 100%, with no headroom.  Nothing in this software will
-# do that on its own (no setpoint, no arm, no fault response raises a range),
-# but a typed command or a script can.  That is the deliberate consequence of
-# opening the 336; if that is not what you want, this is the file to change.
-#
-# Still shut, deliberately:
-#
-#   ipc.allow_pid: false            a file may not retune a loop.  Gains apply
-#                                   no power, but they change how a loop
-#                                   behaves for the rest of the run, quietly
-#   max_output_pct: 70.0            a ceiling BELOW full scale.  See below --
-#                                   this is the guard that matters most
-#
-# Open by OMISSION, which is the seventh interlock and the easiest to overlook:
-#
-#   ipc.sources: (empty)            WHICH CLIENT may ask.  Empty means no
-#                                   policy, so any process that can write into
-#                                   `data/commands` may command this heater.
-#                                   The other six gate the action; only this one
-#                                   gates the asker.  See the `ipc:` section for
-#                                   the three named clients and what closing it
-#                                   would cost.
-#
-# Note both power gates cover ZERO as well as anything above it: cutting a
-# heater is not automatically the safe direction.  What always works regardless
-# is `send heaters_off` and `send hold` -- the two panic commands are the only
-# things exempt from any of this.
-#
-# ---------------------------------------------------------------------------
-# WHY THE CEILING IS THE GUARD THAT MATTERS
-# ---------------------------------------------------------------------------
-#
-# The 218 has no heater loop and no range.  A 336 separates "where to go"
-# (SETP, inert on its own) from "how much power you may use" (RANGE, the act
-# that applies it), and you can gate those separately.  Here there is one
-# number and it IS the power.  Nothing about `analog 40` looks more dangerous
-# than `analog 4`.
-#
-# From `docs/ltspm3/thermal-response.md`, measured over 24 settled heater steps:
-#
-#     43%     ->   18.2 K
-#     63.076% ->   99.6 K          local gain here: ~10 KELVIN PER PERCENT
-#     66.95%  ->  151.0 K
-#
-# So a decimal point in the wrong place is not a small mistake, and "0 to 100
-# is a valid percentage" is not a useful bound.  70% is the supervisor's own
-# `hard_max_pct` and sits just above the hottest step in the reference logs;
-# above it the fit is extrapolation and nobody has measured what happens.
-#
-# Note also what the ceiling is NOT: it is not a ramp and not a step limit.
-# `send analog 60` from 0 is one command and the heater goes there as fast as
-# the cryostat allows.  Walking up in steps is an operator discipline here, not
-# something the software enforces -- enforcing it is what `ltspm3`'s supervisor
-# is for, and that is a different program.
-#
-# ---------------------------------------------------------------------------
-# THE CRYOSTAT, read from this recorder's own CSV at 2026-09-12 13:40
-# ---------------------------------------------------------------------------
-#
-# A DATED BLOCK IS NOT THE PRESENT STATE, and this one has now been wrong
-# twice.  It first said 4.742 K and 0.0%, measured 2026-08-24 16:10, and was
-# read four days later as though it still held -- by which time this very file
-# had warmed the sample to 149 K.  It then said 148.980 K at 66.598% and stood
-# for twelve days while the sample was walked down to 118 K and the heater
-# circuit faulted and was reseated under it.  Read `data/status.json` or the
-# tail of the CSV first.  Hourly means over the last hour:
-#
-#   218  Sample    118.298 K     336  A RAD SHIELD   40.403 K
-#        Coldplate   6.636 K          B THE CHONKE  289.999 K  <- loop 2
-#        Magnet      6.783 K          C 1st Stage    28.748 K
-#                                     D 2nd Stage     3.959 K
-#
-#   ^ Coldplate is now POST-calibration and is the box's own number; see the
-#     note below the block for what that changed.
-#
-#   218 analog out 1 (SAMPLE HEATER)  64.010%  <- what this file can move
-#   336 loop 1  setpoint 28.5 K,  heater 1 at 0.0%, range 0
-#   336 loop 2  setpoint 290.0 K, heater 2 at 90.8%, range 3
-#
-#   The output has been at 64.010% since 2026-09-10 14:49, when a connector on
-#   the sample heater was reseated after the fault of that morning.  It read
-#   64.0154% before.  RESEATED IS NOT REPAIRED -- see docs/ltspm3/cryostat.md.
-
-# TWO CHANGES AT THE BOX, 2026-09-04 12:07
-# ---------------------------------------------------------------------------
-# The recorder was stopped at 12:07:16 and both of these were made by hand:
-#
-#   Coldplate (input 2) recalibrated.  The 218 was carrying X186276's curve on
-#     this input; the Coldplate is X186279.  A different thermometer, about 12%
-#     higher in resistance at every temperature, so the cold end of this
-#     cryostat read high for as long as that curve was loaded.  EVERY COLDPLATE
-#     NUMBER TIMESTAMPED BEFORE THE CUTOVER CARRIES THAT ERROR, including the
-#     one in the dated block above and every Coldplate figure in
-#     reference/logs/ and docs/.  It is not an offset -- 6 K logged was 4.93 K,
-#     77 K logged was 65.33 K -- but it IS exactly computable, and the
-#     pre-cutover logs have been reprocessed into data/coldplate-recal/.
-#     Both curves are in reference/sensor-curves/; the tool is
-#     `python -m lschart.tools.recalibrate --report --from ... --to ...`.
-#
-#   Magnet moved from input 3 to input 5.  Input 3 is now empty.  Only the
-#     input number changed; the thermometer and its column are the same, so
-#     `Magnet` before and after the seam is the same sensor and is comparable.
-#
-# The pre-cutover log for that day is kept at
-# data/pre-recal-2026-09-04/ltspm3-heater_2026-09-04.csv, so that no single
-# CSV spans both calibrations.  Open it with:
-#     lschart-view --csv "data/pre-recal-2026-09-04/ltspm3-heater_2026-09-04.csv"
-# See docs/ltspm3/cryostat.md.
-# ---------------------------------------------------------------------------
-#
-# The sample was walked from 4.7 K to here in 45 manual steps starting
-# 2026-08-24 17:11, and has been steady at 66.598% since 08-27 -- 148.75 K then,
-# 148.98 K now, 0.003 K/h.  Two numbers came out of that record and they are
-# better than the curve above, because they were measured through this file on
-# this cryostat:
-#
-#   tau = 709 s  (R^2 = 0.9973, the +0.500% step of 08-24 17:31)
-#   K  ~= 13.8 K/%  (seven settled points, 66.235% -> 66.598%)
-#
-# Note K: it is much steeper than the 10.0 K/% quoted at the 63% operating
-# point, so a step that would be a trim down there is not one up here.
-# See docs/ltspm3/thermal-response.md.
+# The 218 has no range, so its ONE number IS the power and `max_output_pct` is
+# the guard that matters most -- the local gain is several kelvin per percent
+# (docs/ltspm3/thermal-response.md), so a misplaced decimal point is not a
+# small mistake.  The ceiling is not a ramp or a step limit: `send analog 60`
+# from 0 goes there as fast as the cryostat allows.  Wiring, addresses and
+# box-level changes: docs/ltspm3/cryostat.md.  Running it:
+# docs/ltspm3/running.md.  Present state: `data/status.json`, never a comment.
 
 log_level: INFO
 
@@ -172,71 +43,53 @@ instruments:
       read_only: false
 
       timeout_ms: 3000
-      # MEASURED on this box, 2026-08-24: the 218 ends a reply with a bare LF
-      # and the 336 ends one with CRLF.  The default is CRLF, so the 218 needs
-      # this line and the 336 does not.  Getting it wrong is not a visible
-      # failure -- GPIB's EOI ends the read anyway -- it just costs a warning
-      # per read and a hidden dependence on EOI.
+      # The 218 ends a reply with a bare LF; the default (CRLF) works only
+      # because GPIB asserts EOI.  docs/ltspm3/cryostat.md.
       read_termination: "\n"
       inter_command_delay: 0.05
       reconnect: true
       retry_min_s: 1.0
       retry_max_s: 30.0
 
-    # MOVED 2026-09-04: Magnet was on input 3 and is now on input 5.  Input 3
-    # is empty, and 4 and 6-8 always were, so this map is deliberately
-    # non-contiguous -- listing only what exists keeps five permanently-dead
-    # columns out of the CSV and five queries out of every cycle.  The name is
-    # what becomes a CSV column, so `Magnet` stays `Magnet` and the column
-    # keeps its meaning across the move; the input number never reaches the log.
+    # Deliberately non-contiguous: only populated inputs are listed, which
+    # keeps dead columns out of the CSV and dead queries out of every cycle.
+    # The name is the CSV column, so moving a thermometer costs one line and
+    # the column keeps its meaning.  docs/ltspm3/cryostat.md.
     channels:
       1: Sample
       2: Coldplate
       5: Magnet
 
-    # Still 0.  This config has no `control:` section and computes no heater
-    # output: every percentage it sends was typed by a person.  `control_input`
-    # is what a SOFTWARE loop would steer by, and there is no software loop
-    # here -- that is `ltspm3`, and it is a different program.
+    # 0: what a SOFTWARE loop would steer by, and there is no software loop
+    # here -- that is `ltspm3`, a different program.
     control_input: 0
 
     analog_output: 1
     analog_decimals: 3
 
-    # <-- OPENED.  Permits the ANALOG command, and nothing else exists on this
-    # box.  Read the ceiling below before changing anything here.
+    # <-- OPENED.  Permits the ANALOG command, the only write on this box.
     allow_writes: true
 
-    # THE CEILING.  ~10 K/% near the operating point; see the header.  Raise
-    # this only with a reason you would write down.
+    # THE CEILING, and the guard that matters most here (header).  It matches
+    # the supervisor's `hard_max_pct`; above it the model extrapolates.
     max_output_pct: 70.0
 
-    # Every write is confirmed by reading AOUT? back.  These boxes apply
-    # commands asynchronously -- measured on the 336, never disproved on the
-    # 218 -- and an unverified readback can be a whole write behind, which
-    # looks exactly like success.  Leave this on for manual control: the cost
-    # is one extra query per command, and commands are rare.
+    # Confirm every write by reading AOUT? back: these boxes apply commands
+    # asynchronously (invariant 5) and a stale readback looks like success.
     verify_writes: true
 
     # How far the readback may sit from what was commanded and still count.
-    # The DAC steps 0.01% and AOUT? answers to two decimals, so an exact
-    # comparison would fail on writes that worked perfectly.  0.02% is two DAC
-    # codes -- far tighter than any step an operator will type, so a write that
-    # did not land is still caught.
+    # Two DAC codes -- tighter than any step an operator types, loose enough
+    # that a write that worked is not failed by AOUT?'s two decimals.
     readback_tol_pct: 0.02
 
     read_status: true
     status_every_n_cycles: 15
 
-  # The 336: WRITABLE.  Loop 2 is holding THE CHONKE and heater 2 is railed at
-  # 100% -- no headroom, and not ours.  Those two facts sit in the same comment
-  # on purpose: this box will now accept a setpoint, a ramp or a range from
-  # this program, and one of its loops is doing something somebody else is
-  # relying on.  Check which loop you are addressing before you send anything.
-  #
-  # The loop table (`send`-free: it is in status.json, and the viewer draws it)
-  # is the quickest way to see which sensor each loop reads and what it is
-  # doing, straight from the box's own OUTMODE?.
+  # The 336: WRITABLE.  Loop 2 holds THE CHONKE with no headroom and is not
+  # ours (docs/ltspm3/cryostat.md), so check which loop you are addressing
+  # before sending anything.  status.json's loop table -- the box's own
+  # OUTMODE? -- says which sensor each loop reads and what it is doing.
   - name: ls336
     model: "336"
     enabled: true
@@ -261,20 +114,17 @@ instruments:
 
     allow_writes: true         # <-- OPENED.  Permits SETP, RANGE, PID and RAMP
                                #     on this box.  Driver policy, so it gates
-                               #     `set` at the CLI too, not only the file
-                               #     path -- `send pid` needs ipc.allow_pid on
-                               #     top of it, and that is left off.
-                               #
-                               #     No max_setpoint_k is set here, so the
-                               #     350 K default is the only thing standing
-                               #     between a typo and a loop.
+                               #     `set` at the CLI as well as the file path;
+                               #     `send pid` also needs ipc.allow_pid, off.
+                               #     No max_setpoint_k here, so the 350 K
+                               #     default is all that stands between a typo
+                               #     and a loop.
 
 # ---------------------------------------------------------------- acquisition
 
 acquisition:
-  # 2 s, as in the read-only config.  Note that a command is applied once per
-  # cycle, between two frames, so this is also the worst-case latency from
-  # `send` to the heater moving -- plus the settle and the verifying readback.
+  # 2 s, as in the read-only config.  A command is applied once per cycle, so
+  # this is also the worst-case latency from `send` to the heater moving.
   interval_s: 2.0
   log_every_n: 1
   ringbuffer_size: 43200
@@ -282,17 +132,14 @@ acquisition:
 recorder:
   enabled: true
   directory: data
-  # A DIFFERENT prefix from the read-only config, on purpose.  A run in which
-  # the heater could move is a different kind of record from a run in which it
-  # could not, and six months from now the filename is the only thing that will
-  # still say which one you are looking at.
+  # A prefix per config, on purpose: the filename is the only thing that will
+  # still say what could move the heater during a run.
   filename_prefix: ltspm3-heater
   flush_every_sample: true
 
 runtime:
-  # Deliberately the SAME lock file as config-ltspm3-read-only.yaml.  One GPIB board has
-  # one holder; running the watching recorder and this one at once would be two
-  # processes interleaving transactions on one bus.
+  # THE SAME LOCK every LTSPM3 config takes: one GPIB board, one holder
+  # (invariant 2).
   lock_path: data/ltspm3.lock
   single_instance: true
 
@@ -302,48 +149,29 @@ ipc:
   enabled: true
   directory: data
 
-  # <-- OPENED.  The recorder owns the GPIB board exclusively while it runs, so
-  # this is the ONLY way to move the heater without stopping the log.  MATLAB,
-  # the GUI and `lschart send` all write into the same spool.
+  # <-- OPENED.  The recorder owns the GPIB board exclusively, so this is the
+  # only way to move the heater without stopping the log.
   accept_commands: true
 
-  # A command older than this is refused rather than applied.  A recorder that
-  # was down must not come back and replay a backlog into a live cryostat: the
-  # traversal is the hazard, not the destination.
+  # A command older than this is refused rather than applied: a recorder that
+  # was down must not come back and replay a backlog into a live cryostat.
   command_ttl_s: 30.0
 
-  # <-- OPENED.  This is the switch that makes the sample heater movable from a
-  # file, in EITHER direction: `analog 0` needs it too, because cutting this
-  # heater stops heating and can also crash the stage.  `send heaters_off` and
-  # `send hold` are exempt from this gate and are what an abort should use.
+  # <-- OPENED: the sample heater is movable from a file, in EITHER direction
+  # (`analog 0` needs it too -- invariant 3).
   allow_analog_output: true
 
-  # <-- OPENED, and this is the one to think hardest about.  A file may change
-  # a heater range on the 336, which is the act that applies power there -- and
-  # heater 2 is the one holding THE CHONKE.
-  #
-  # The gate covers 0 as well as anything above it: cutting a heater is not
-  # automatically the safe direction, so this is not "on for raising, free for
-  # lowering".  To stop the cryostat regardless of any of these gates, use
-  # `send heaters_off` or `send hold`.
+  # <-- OPENED, and the one to think hardest about: a file may change a 336
+  # heater range, which is the act that applies power there, and heater 2 holds
+  # THE CHONKE (docs/ltspm3/cryostat.md).  Zero needs it too.
   allow_heater_range: true
 
-  # <-- OPEN, BY OMISSION, and it is the seventh interlock.  Every gate above
-  # answers "may this action happen"; this one answers "may this CLIENT ask",
-  # which none of the others can express.  Absent or empty means there is no
-  # policy and ANY process that can write into `data/commands` may command this
-  # heater -- which on this file is the sample heater and a 336 range.
-  #
-  # It is left open deliberately rather than by oversight.  There are three
-  # named clients -- `lschart-cli/<pid>`, `matlab`, and `ltspm3-sweep/<pid>` --
-  # and writing them here flips `default:` to false, so a client that turns up
-  # under a fourth label is refused mid-run.  On a cryostat where availability
-  # outranks control quality, that trade is Jeff's to make and not a default.
-  #
-  # To close it, uncomment and check every label against what the clients
-  # actually stamp; a typo fails closed, which is the right direction but is
-  # discovered at the worst moment.  `sources.json` in the IPC directory can
-  # narrow this at runtime without a restart, and can never widen it.
+  # <-- OPEN BY OMISSION -- the seventh interlock, and the only one that gates
+  # the ASKER rather than the action.  Empty means any process that can write
+  # into `data/commands` may command this heater.  Left open deliberately:
+  # naming the clients flips `default:` to false and a client under a fourth
+  # label is refused mid-run, which availability outranks (invariant 6).
+  # `sources.json` narrows it at runtime and can never widen it.
   #
   # sources:
   #   lschart-cli: true

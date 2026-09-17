@@ -1423,7 +1423,7 @@ TIER2_SEED = (0.0, 0.0)
 #: three are in the key.  Delete the directory to force a refit.
 #:
 #: Resolved against ``REPO_ROOT`` and not against the working directory, which
-#: is AUDIT-2026-09-10 finding 5 one more time.  ``load_rows`` was fixed and
+#: is archive/AUDIT-2026-09-10.md finding 5 one more time.  ``load_rows`` was fixed and
 #: this was not, so running a script from inside ``analysis/`` created
 #: ``analysis/analysis/.fit_cache`` and quietly refitted everything from
 #: scratch against a second cache -- no error, no warning, just a quarter of an
@@ -2038,7 +2038,7 @@ def ladder(rows, title, out=None, workers=None, base=None):
             # `_data.resolve` searches relative to the CWD as well as to
             # REPO_ROOT.  A worker that resolved a different `measured.csv`
             # would fit different anchors and say nothing -- which is
-            # AUDIT-2026-09-10 finding 5 with a process boundary in it.  One
+            # archive/AUDIT-2026-09-10.md finding 5 with a process boundary in it.  One
             # round trip, no fitting.
             here = specs[0].key()
             there = pool.submit(_worker_key, specs[0]).result()

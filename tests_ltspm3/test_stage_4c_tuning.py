@@ -13,7 +13,8 @@ three rates, and that the two switches can be flipped independently.
 
 **Three things are gated on `tuner.enabled`, and only one of them is a gain:**
 
-* the scheduled `(kp, ti)` -- `move_speed: 0.5` is an 8x kp against `hold_speed: 3`;
+* the scheduled `(kp, ti)` -- `move_speed` is a faster closed loop than
+  `hold_speed`, so a move gets the larger `kp`;
 * the **velocity feedforward** (`supervisor.py`, `_step`), which is the drive
   `rate*tau/K` a ramp needs and which no amount of integral action supplies in
   time;
@@ -21,16 +22,14 @@ three rates, and that the two switches can be flipped independently.
   exists.
 
 With `tuning.enabled: false` all three are zero, and the loop has to drag the
-sample with P+I inside a fixed +/-0.25 % window.  It does not rail and it does
+sample with P+I inside a band that never widens.  It does not rail and it does
 not fault -- it simply arrives late by about a kelvin whatever rate it is
 given, because the rate is not what is binding.  That is what these tests pin.
 
-**`tuning` and `feedforward` are not the same dependency**, which is why the
-tuner can come on while the feedforward stays off.  The feedforward commands
-the model's LEVEL, and the level is stale (HANDOFF item A).  The tuner reads
-only `K(T)` and `tau(T)` -- the SHAPE -- which is what `has_curve` already
-distinguishes for the ramp-down and the output rate limiter
-(AUDIT-2026-09-16 findings 2 and 3).
+**`tuning` and `feedforward` are not the same dependency** -- see
+`test_the_feedforward_stays_off_when_the_tuner_comes_on` below, and
+`config-ltspm3-armed.yaml`'s `feedforward:` block for why the level waits on a
+gauge while the shape does not.
 """
 
 from __future__ import annotations
@@ -38,15 +37,13 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-from bench_plant import STAGE_FILE, FittedHarness, bench_control_config
+from bench_plant import DELIVERED_FRAC, STAGE_FILE, FittedHarness, bench_control_config
 
-from ltspm3.control.tuning import ControlPhase
+from ltspm3.control.tuning import ControlPhase, simc_pi
 
-#: Same cryostat as `test_stage_4a.py`: the heater delivering 0.336 % less
-#: power than `P(u)` claims, settled on it.  Sharing the number matters -- a
-#: ramp test on a healthier cryostat than the hold tests run on would be
-#: grading two things at once.
-DELIVERED_FRAC = 1.0 - 0.00336
+#: Same cryostat as the other stage tests -- `DELIVERED_FRAC`, settled on it.
+#: Sharing it matters: a ramp test on a healthier cryostat than the hold tests
+#: run on would be grading two things at once.
 BENCH_K = 118.3
 
 
@@ -146,19 +143,20 @@ def test_the_feedforward_stays_off_when_the_tuner_comes_on():
 
 
 def test_the_band_follows_the_setpoint_with_the_feedforward_off():
-    """**Rule 5 is not suspended by the feedforward switch** (2026-09-17).
+    """**Rule 5 is not suspended by the feedforward switch.**
 
-    Until 2026-09-17 the centre asked `feedforward.enabled`, and with it off
-    -- the armed configuration -- the band sat pinned at
-    `operating_point_pct`.  A setpoint more than about 3 K from where the loop
-    was armed then railed against a window that never moved: bench, a +2 K
-    move at 140 K faulted `authority exhausted`.  The centre now asks
-    `has_curve`, the same seam the ramp-down and the rate limiter use.
+    The centre used to ask `feedforward.enabled`, and with it off -- the armed
+    configuration -- the band sat pinned at `operating_point_pct`, so a
+    setpoint a few kelvin from where the loop was armed railed against a window
+    that never moved.  It asks `has_curve` now, the same seam the ramp-down and
+    the output rate limiter use.
 
-    Asserted where the two answers DIFFER.  At 118.3 K `operating_point_pct`
-    is 63.960 and the shipped table reads 63.9837, so a test at the operating
-    point alone could pass either way; the move to 140 K is where a pinned
-    band and a following band come apart by two whole percent.
+    Asserted where the two answers DIFFER.  At the operating point the model's
+    answer and `operating_point_pct` are only hundredths of a percent apart
+    (the first assertion below pins that they are not the same number at all,
+    which is what makes the comparison meaningful), so a test there alone could
+    pass either way; the move to 140 K is where a pinned band and a following
+    band come apart by percents.
     """
     cfg = bench_control_config()
     h = harness(tuning=True)
@@ -181,59 +179,98 @@ def test_the_band_follows_the_setpoint_with_the_feedforward_off():
 
 # -- does the setpoint arrive? --------------------------------------------
 
+#: A 2 K move, and "arrived" is 5 % of it -- the same criterion as
+#: `test_stage_4d_fast_move.py`'s.
+MOVE_K = 2.0
+ARRIVE_K = 0.05 * MOVE_K
+
+
 @pytest.mark.parametrize("rate", [0.2, 1.0, 5.0])
 def test_4a_arrives_about_a_kelvin_late_whatever_rate_it_is_given(rate):
     """The rate is not what is binding -- the drive is.
 
-    A +2 K move at 0.2, 1 and 5 K/min all land within 0.1 K of each other after
-    forty minutes, about a kelvin short.  A test that only ran 5 K/min would
-    read as "the ramp is too fast", which is the wrong diagnosis.
+    A +2 K move at three rates spanning a factor of 25 all land in the same
+    place after forty minutes, most of a kelvin short.  A test that only ran
+    5 K/min would read as "the ramp is too fast", which is the wrong diagnosis.
     """
-    r = ramp(harness(tuning=False), rate_k_per_min=rate, delta_k=2.0,
+    cfg = bench_control_config()
+    r = ramp(harness(tuning=False), rate_k_per_min=rate, delta_k=MOVE_K,
              minutes=40)
-    assert r["short_by_k"] > 0.8
+    # The defect, stated against the thing it would set off: the standing error
+    # is most of `warn_error_k`, so this stage sits just under an alarm forever
+    # rather than arriving.
+    assert r["short_by_k"] > 0.8 * cfg.supervisor.warn_error_k
     # Late, but never dangerous: it does not rail and it does not fault.
     assert r["railed_cycles"] == 0
 
 
 @pytest.mark.parametrize("rate", [0.2, 1.0, 5.0])
 def test_the_tuner_makes_the_setpoint_arrive(rate):
-    """Under 0.1 K short at forty minutes, against about 1.0 K at 4a."""
-    r = ramp(harness(tuning=True), rate_k_per_min=rate, delta_k=2.0,
+    """Arrived, by the 5 % criterion, where 4a stood most of a kelvin short."""
+    cfg = bench_control_config()
+    r = ramp(harness(tuning=True), rate_k_per_min=rate, delta_k=MOVE_K,
              minutes=40)
-    assert abs(r["short_by_k"]) < 0.1
-    assert r["worst_error_k"] < 1.0      # below `warn_error_k`, so no alarm
+    assert abs(r["short_by_k"]) < ARRIVE_K
+    # And nothing warned on the way: `warn_error_k` is the alarm this move has
+    # to stay under at every cycle, not merely at the end.
+    assert r["worst_error_k"] < cfg.supervisor.warn_error_k
     assert r["railed_cycles"] == 0
     assert r["peak_vff_pct"] > 0.0
 
 
 # -- hold_speed is the hold's knob, and only the hold's --------------------
 
-def test_hold_speed_does_not_touch_the_move_gains():
-    """Which is what makes it free to raise.
+#: Two hold speeds, both explicit, neither read from the file -- the file's
+#: number moves with commissioning, and comparing it against itself would pass
+#: on nothing.  `SLOW_HOLD` is weaker than the plant and `QUICK_HOLD` is the
+#: code default; the assertions below hold for any ordered pair.
+SLOW_HOLD, QUICK_HOLD = 12.0, 3.0
 
-    The 2026-09-16 night put 19.7 mK into the 90-240 min band against 2.6 open
-    loop, and the loop's authority in that band scales as `1/hold_speed`.  So
-    `hold_speed` is the knob for the hold -- and this pins that raising it
-    costs a ramp nothing, because a ramp runs on `move_speed`.
+
+def test_hold_speed_does_not_touch_the_move_gains():
+    """Which is what makes it free to retune.
+
+    `hold_speed` is the knob for the hold -- the loop's authority at long
+    averaging times scales as `1/hold_speed` (docs/ltspm3/requirements.md §3)
+    -- and this pins that changing it costs a ramp nothing, because a ramp runs
+    on `move_speed`.
     """
-    # Both explicit.  `harness(tuning=True)` reads `hold_speed` from the file,
-    # and since 2026-09-17 the file says 12 -- so comparing against it would
-    # have been comparing 12 with 12 and passing on neither.
-    slow = harness(tuning=True, hold_speed=12.0).sup.tuner
-    quick = harness(tuning=True, hold_speed=3.0).sup.tuner
-    slow_hold = slow.gains_for(BENCH_K, ControlPhase.HOLD)
-    quick_hold = quick.gains_for(BENCH_K, ControlPhase.HOLD)
-    assert slow_hold[0] < quick_hold[0] / 2.0
+    slow = harness(tuning=True, hold_speed=SLOW_HOLD).sup.tuner
+    quick = harness(tuning=True, hold_speed=QUICK_HOLD).sup.tuner
+    slow_kp, _ = slow.gains_for(BENCH_K, ControlPhase.HOLD)
+    quick_kp, _ = quick.gains_for(BENCH_K, ControlPhase.HOLD)
+
+    # The bound is `simc_pi`'s own arithmetic rather than a factor somebody
+    # chose: kp = tau / (K (speed*tau + delay)), so the two hold gains stand in
+    # the ratio of their closed-loop time constants and nothing else.  Asked of
+    # the rule directly, so a change to the tuning law fails here rather than
+    # being absorbed by a loose inequality.
+    gain = quick.schedule.gain_at(BENCH_K)
+    tau = quick.schedule.tau_at(BENCH_K)
+    for tuner, speed, kp in ((slow, SLOW_HOLD, slow_kp),
+                             (quick, QUICK_HOLD, quick_kp)):
+        want, _ = simc_pi(gain, tau, tuner.tau_cl_for(ControlPhase.HOLD, BENCH_K),
+                          tuner.delay_s,
+                          min_ti_s=tuner.cfg.min_ti_delays * tuner.delay_s)
+        assert kp == pytest.approx(want, rel=1e-9), speed
+    assert slow_kp < quick_kp, "a slower hold must not be the stronger loop"
+
+    # And the move gains are untouched, which is the point of the test.
     assert (slow.gains_for(BENCH_K, ControlPhase.MOVE)
             == quick.gains_for(BENCH_K, ControlPhase.MOVE))
 
 
 def test_a_slower_hold_still_ramps():
-    """Raising `hold_speed` must not break the thing the tuner was turned on for."""
-    r = ramp(harness(tuning=True, hold_speed=12.0), rate_k_per_min=1.0,
-             delta_k=2.0, minutes=40)
-    assert abs(r["short_by_k"]) < 0.2
+    """Retuning `hold_speed` must not break the thing the tuner was turned on for.
+
+    Twice the arrival window, not the window itself: once the trajectory is
+    over the phase falls back to HOLD, so the last of the approach is made on
+    the weak hold gains.  What is graded here is that the ramp still delivers
+    the move, not that a deliberately weak hold closes it as tightly.
+    """
+    r = ramp(harness(tuning=True, hold_speed=SLOW_HOLD), rate_k_per_min=1.0,
+             delta_k=MOVE_K, minutes=40)
+    assert abs(r["short_by_k"]) < 2 * ARRIVE_K
     assert r["railed_cycles"] == 0
 
 

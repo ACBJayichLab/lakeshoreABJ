@@ -80,33 +80,93 @@ call; the eight safety rules.
 
 ## 3. What the bench measured, 2026-09-17
 
-All on the fitted plant with the heater delivering 0.336 % less than the model
-claims, which is the cryostat as wired. Full tables are in the comments of
-`config-ltspm3-armed.yaml`; the shape of the result is:
+**This section is the single home for these numbers.** Config comments, code
+docstrings and tests point here rather than repeating them
+([style.md](../style.md)). All runs are on the fitted plant with the heater
+delivering 0.336 % less power than the model claims, which is the cryostat as
+wired since the 2026-09-10 connector reseat; the test that grades the shipped
+file is `tests_ltspm3/test_stage_4d_fast_move.py`.
+
+**The move: 2 K at 118 K, band 1.0 %, rate ceiling 5 K/min**, against
+`move_speed` (the closed-loop time constant as a ratio of the plant's):
+
+| `move_speed` | arrives (95 %) | overshoot | overdrive above final output |
+|---|---|---|---|
+| 0.50 (was shipped) | over 30 min | — | 0.14 % |
+| 0.25 | 17.0 min | −22 mK | 0.36 % |
+| 0.20 | 10.2 min | −5 mK | 0.45 % |
+| **0.15** | **4.6 min** | **7 mK** | **0.56 %** |
+| 0.12 | 3.3 min | 96 mK | 0.64 % |
+
+The cryostat itself, on 0.50 that morning: 86 % of a 2.1 K move in 19 min,
+against about 26 min for an open-loop hand step to reach 95 %.
+
+**The same move at 0.15, other temperatures and sizes:**
+
+| case | arrives (95 %) | overshoot | note |
+|---|---|---|---|
+| 2 K at 30 K | 1.9 min | 3 mK | delay floor binds |
+| 2 K at 60 K | 3.5 min | **387 mK** | rate-limiter windup; open item below |
+| 2 K at 100 K | 3.8 min | 17 mK | |
+| 2 K at 140 K | 5.0 min | 34 mK | **faulted** before the band followed the setpoint |
+| 2 K at 180 K | 4.9 min | 19 mK | output went to **zero** before the band followed |
+| −2 K at 118 K | 4.9 min | −3 mK | symmetric |
+| 10 K at 118 K | 15.9 min | 20 mK | overdrive 0.80 %, never railed |
+| 10 K at 140 K | 15.0 min | −26 mK | |
+
+**The band's width**, 2 K at 118 K, `move_speed` 0.15: 0.25 % arrives in
+10.8 min (band-limited), 0.50 % and 1.00 % both in 4.6 min. A half-width
+below the model's level error cuts the heater at arming, which is pinned by
+`test_a_band_narrower_than_the_level_error_cuts_the_heater_at_arming`.
+
+**The rate ceiling is not the lever.** Raising `max_rate_k_per_min` from 5 to
+20 tripped the demand-anomaly freeze at 60 K and slowed 118 K to 6.9 min;
+10 K/min slowed 118 K to 5.4 min; lowering it to 2 or 1 made 60 K overshoot
+30–40 %. It stays at 5.
+
+**The hold: 3 h at 118 K, Allan deviation as a ratio to the same plant open
+loop** (the bench plant has white sensor noise and no slow disturbance, so this
+grades only the "not degrading" half of answer 2):
+
+| `hold_speed` | 10 s | 15 s | 60 s | 300 s | 900 s |
+|---|---|---|---|---|---|
+| 12 (was shipped) | 0.99 | 0.98 | 0.97 | 1.10 | 2.15 |
+| 3 (code default) | 0.99 | 0.99 | 0.98 | 1.08 | 1.75 |
+| 1 | 0.99 | 0.99 | 0.98 | 0.98 | 1.02 |
+| 0.5 | 0.99 | 0.99 | 0.97 | 0.91 | 0.86 |
+| **0.25** | **1.00** | **1.00** | **0.97** | **0.81** | **0.71** |
+
+The weak loops stir at long averaging times; that is the 2026-09-16 night. A
+strong hold does not slow a move: 4.7 min at 118 K with either 0.25 or 12.
+
+**Before and after, in one table:**
 
 | | before (armed 09-17 morning) | after |
 |---|---|---|
-| 2 K at 118 K, time to 95 % | not within 30 min (cryostat: 86 % at 19 min) | **4.6 min** |
-| overdrive above the final output | 0.14 % | 0.56 % |
-| same move at 100 / 140 / 180 K | 140 and 180 K **faulted** — band pinned | 3.8 / 5.0 / 4.9 min |
-| 10 K at 118 K | — | 16 min, never railed |
-| hold, Allan ratio to open loop at 15 s / 60 s / 300 s / 900 s | 0.98 / 0.97 / 1.10 / **2.15** | 1.00 / 0.97 / 0.81 / **0.71** |
+| 2 K at 118 K, time to 95 % | not within 30 min | 4.6 min |
+| same move at 100 / 140 / 180 K | 140 and 180 K faulted | 3.8 / 5.0 / 4.9 min |
+| hold, Allan ratio at 15 s / 60 s / 300 s / 900 s | 0.98 / 0.97 / 1.10 / 2.15 | 1.00 / 0.97 / 0.81 / 0.71 |
 
 The three numbers that changed: `authority_pct` 0.25 → 1.0, `move_speed`
 0.5 → 0.15, `hold_speed` 12 → 0.25. One code change: the band centre follows
 the setpoint whenever the model has a curve, not only when the feedforward term
 is on.
 
+**With the positional feedforward term ON** (a future stage, after a power
+gauge), a 3 K move at 118 K at `move_speed` 0.15 overshoots 10.9 % against
+3.1 % with it off, and 1.7 % at 0.5; at 60 K it is 16–18 % either way. The
+term stacks a level step on a loop that already supplies the drive. The bench
+envelope therefore keeps 0.5 (`BENCH_MOVE_SPEED`), and that stage must
+re-grade `move_speed` when it comes.
+
 **Open, and written down so it is not lost:**
 
-- **60 K overshoots 0.39 K on a 2 K move.** The output rate limit is slow there
-  relative to the loop and the integral winds up behind it. Anti-windup against
-  the rate limiter is the fix. Pinned by a test so it is not forgotten.
-- **The feedforward term, when it comes on, needs `move_speed` re-graded.**
-  With the term on (a future stage, after a power gauge) a 3 K move at 118 K
-  overshoots 10.9 % at 0.15, against 3.1 % with it off, because the level step
-  stacks on a loop that already supplies the drive. The bench envelope keeps
-  0.5 for that reason; the file ships 0.15 with the term off.
+- **60 K overshoots 0.39 K on a 2 K move.** The output rate limit there is
+  slow relative to the loop's 22 s corner and the integral winds up behind it.
+  Back-calculation anti-windup against the rate limiter is the fix, a
+  `control/` change under rule 8. Pinned by a test so it is not forgotten.
+- **The feedforward term, when it comes on, needs `move_speed` re-graded**
+  (table above).
 - **10 K takes 16 min for 2 K.** Below `min_output_pct` the loop is in a regime
   nobody has looked at since the retune. Not on Jeff's path today.
 - **Nothing here has run on the cryostat yet.** The loop that was armed when

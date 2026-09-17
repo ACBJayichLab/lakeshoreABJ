@@ -15,12 +15,22 @@ kept for reference only and is not part of the build.
 On cadence: the legacy logs vary 2–20 s, but that was the 65,536-row Excel
 limit forcing slower polling on long runs, not a cryostat constraint.
 
-> **The GPIB path is exercised; the software loop is not.** Since 2026-08-24 the
-> recorder has run against both boxes over GPIB, and the 218's analog output has
-> been moved by hand. What has *never* run on this cryostat is the closed loop.
-> Numbers here that predate 08-24 still come from the reference logs — see
-> [thermal-response](thermal-response.md) for which ones have since been
-> measured.
+The loop's status — what is armed, what has run, what is next — is in
+[`HANDOFF.md`](../../HANDOFF.md). Numbers here that predate the recorder's own
+logs come from the reference logs; see [thermal-response](thermal-response.md)
+for which ones have since been measured.
+
+## Changelog — what changed at the box
+
+This is the one list. A config comment may point here; it may not restate a
+line of it.
+
+| date | change |
+|---|---|
+| 2026-08-24 | recorder in service against both boxes over GPIB; the 218's `read_termination` measured as a bare LF (the 336 is CRLF) |
+| 2026-09-04 12:07 | recorder stopped; **Coldplate (218 input 2) recalibrated** onto X186279's curve, and **Magnet moved from input 3 to input 5**. Both by hand. See the seam section below |
+| 2026-09-10 14:39–14:41 | a connector on the sample heater **reseated** after that morning's fault. **Reseated is not repaired**, and it moved the delivered power — the heater circuit's level is a calibration with a shelf life ([thermal-response](thermal-response.md), [`REFIT_PLAN.md`](../../REFIT_PLAN.md) §7.3) |
+| 2026-09-16 | heater wiring handled again; the model's level has been stale since ([requirements.md](requirements.md) §3) |
 
 ## The 218's thermometers, and the seam at 2026-09-04 12:07
 

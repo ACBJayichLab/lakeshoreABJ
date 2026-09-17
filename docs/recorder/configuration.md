@@ -140,8 +140,8 @@ The 218 needs its own thinking, and `max_output_pct` is why. A 33x setpoint is
 inert until a range is raised, so its two commands can be gated separately and
 a typo'd setpoint sits harmlessly on the display. **A 218 has no inert half**:
 one `ANALOG` command, and the percentage is the power. Nothing about `40` looks
-more dangerous than `4`, and on LTSPM3 the difference between them is about
-350 K.
+more dangerous than `4`, and on a sample heater the difference between them can
+be hundreds of kelvin.
 
 So the ceiling is the guard that matters, and it is deliberately not defaulted
 to something clever — what a safe percentage is depends entirely on the heater
@@ -151,8 +151,8 @@ it.
 
 `readback_tol_pct` must exceed the DAC step plus the readback's display
 rounding, or a write that worked perfectly is reported as a failure: the DAC
-quantises to 0.01% and `AOUT?` answers to two decimals, so the cryostat's own
-63.076% operating point can never read back exactly. It still catches the
+quantises to 0.01% and `AOUT?` answers to two decimals, so an operating point
+carrying more than two decimals can never read back exactly. It still catches the
 failure that matters — a write that did not land at all sits a whole commanded
 step away.
 

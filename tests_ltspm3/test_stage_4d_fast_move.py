@@ -25,16 +25,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from bench_plant import STAGE_FILE, FittedHarness
+from bench_plant import DELIVERED_FRAC, STAGE_FILE, FittedHarness
 
 from ltspm3.control import SupervisorState
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "analysis"))
 import allan  # noqa: E402
 
-#: Same cryostat as `test_stage_4a.py` and `test_stage_4c_tuning.py`: the
-#: heater delivering 0.336 % less than `P(u)` claims, settled on it.
-DELIVERED_FRAC = 1.0 - 0.00336
+#: Same cryostat as the other stage tests -- `DELIVERED_FRAC`, settled on it.
 BENCH_K = 118.3
 
 #: JEFF'S NUMBER: five minutes for two kelvin at 118 K.
@@ -87,10 +85,12 @@ def move(h, delta_k, minutes):
 # -- the move ----------------------------------------------------------------
 
 def test_two_kelvin_at_118_arrives_in_five_minutes():
-    """THE benchmark.  Measured 4.6-4.7 min with the shipped numbers."""
+    """THE benchmark (docs/ltspm3/requirements.md §2, §3 for the measurement)."""
     r = move(settled_loop(), 2.0, minutes=30)
     assert r["arrived_min"] is not None and r["arrived_min"] <= ARRIVE_MIN
-    assert r["overshoot_k"] < ARRIVE_FRAC * 2.0          # under 100 mK; measured 7
+    # "No overshoot worth the name": worth the name is the arrival window
+    # itself, so an overshoot inside it never delayed arrival.
+    assert r["overshoot_k"] < ARRIVE_FRAC * 2.0
     assert r["railed"] == 0
     assert r["states"] == {SupervisorState.TRACKING}
     assert abs(r["final_error_k"]) < 0.05
@@ -98,7 +98,9 @@ def test_two_kelvin_at_118_arrives_in_five_minutes():
 
 def test_the_move_back_is_as_quick():
     """Down as well as up: the smoother and the gains are symmetric, and the
-    plant's local gain barely changes over 2 K.  Measured 4.9 min."""
+    plant's local gain barely changes over 2 K.  Half a minute of slack on
+    Jeff's five, because the descent is the plant relaxing rather than the
+    heater driving and the two are not quite the same time constant."""
     r = move(settled_loop(), -2.0, minutes=30)
     assert r["arrived_min"] is not None and r["arrived_min"] <= ARRIVE_MIN + 0.5
     assert r["overshoot_k"] < ARRIVE_FRAC * 2.0
@@ -106,16 +108,19 @@ def test_the_move_back_is_as_quick():
     assert r["states"] == {SupervisorState.TRACKING}
 
 
+#: Jeff's five minutes is stated at 118 K; the warm end is slower because the
+#: plant's own tau is longer there, so it is graded with a minute of slack
+#: rather than being let off.  (docs/ltspm3/requirements.md §3 for the times.)
 @pytest.mark.parametrize("kelvin,limit_min", [
-    (100.0, 5.0),    # measured 3.8
-    (140.0, 6.0),    # measured 5.0 -- and FAULTED before the band followed
-    (180.0, 6.0),    # measured 4.9 -- and went to zero output before
+    (100.0, 5.0),
+    (140.0, 6.0),
+    (180.0, 6.0),
 ])
 def test_the_same_move_arrives_where_experiments_run(kelvin, limit_min):
     """**Where the cryostat has actually been run.**  With the band pinned at
-    `operating_point_pct` (the state until 2026-09-17) the 140 K case faulted
-    `authority exhausted` and ramped the heater down, and the 180 K case took
-    the output to zero.  Both arrive now."""
+    `operating_point_pct` the 140 K case faulted `authority exhausted` and
+    ramped the heater down, and the 180 K case took the output to zero.  Both
+    arrive now that the band follows the setpoint."""
     r = move(settled_loop(kelvin=kelvin), 2.0, minutes=30)
     assert r["arrived_min"] is not None and r["arrived_min"] <= limit_min
     assert r["overshoot_k"] < ARRIVE_FRAC * 2.0
@@ -126,18 +131,21 @@ def test_the_same_move_arrives_where_experiments_run(kelvin, limit_min):
 def test_sixty_kelvin_overshoots_and_that_is_the_open_item():
     """**A limitation pinned so it cannot be forgotten**, not a pass.
 
-    At 60 K the plant's corner is 22 s and the 5 K/min output rate limit is
-    0.8 %/min, so the 0.6 % of overdrive the move needs takes 45 s to build
-    and the integral winds up behind the limiter: 0.39 K over on a 2 K move,
-    settling afterwards.  `move_speed: 0.25` does not overshoot here but takes
-    10 min at 118 K; a rate ceiling of 10 or 20 K/min was measured WORSE
-    (tripped `anomaly_demand_pct`, slower at 118 K).  Anti-windup against the
-    rate limiter is the fix, and it is a `control/` change under rule 8.
+    At 60 K the output rate limit is slow against the loop's own corner, so the
+    overdrive the move needs cannot build in time and the integral winds up
+    behind the limiter.  Anti-windup against the rate limiter is the fix, a
+    `control/` change under rule 8; the open item and the measurements are in
+    docs/ltspm3/requirements.md §3.
 
     If this starts failing on the LOW side the item is closed: delete this
     test and move 60 K into the parametrised one above.
     """
     r = move(settled_loop(kelvin=60.0), 2.0, minutes=30)
+    # Both bounds say something.  The LOWER one is the open item: an overshoot
+    # this far outside the arrival window is a defect, and if it stops
+    # happening somebody has fixed it and this test has to be retired rather
+    # than left passing by accident.  The UPPER one is the guard: whatever else
+    # is retuned, 60 K must not get worse than it is today.
     assert 0.2 < r["overshoot_k"] < 0.6
     assert r["arrived_min"] is not None and r["arrived_min"] <= 6.0
     assert r["railed"] == 0
@@ -145,9 +153,11 @@ def test_sixty_kelvin_overshoots_and_that_is_the_open_item():
 
 
 def test_a_ten_kelvin_move_stays_inside_the_band():
-    """The band is 1.0 % and a 10 K move needs 0.8 % of overdrive on a 0.77 %
-    step.  It arrives in about 16 minutes without touching the ceiling, which
-    is the band widening by the ramp's lead doing its job."""
+    """A big move needs most of the band in overdrive, and gets it without
+    touching the ceiling -- the band widening by the ramp's lead doing its job.
+    Twenty minutes is the bound because a 10 K move at 5 K/min is a trajectory
+    several times longer than a 2 K one, so Jeff's five minutes does not
+    apply; the measured time is in docs/ltspm3/requirements.md §3."""
     r = move(settled_loop(), 10.0, minutes=60)
     assert r["arrived_min"] is not None and r["arrived_min"] <= 20.0
     assert r["overshoot_k"] < ARRIVE_FRAC * 10.0
@@ -177,12 +187,12 @@ def hold_record(armed: bool):
 
 
 def test_a_hold_does_not_degrade_the_noise_and_helps_at_long_tau():
-    """Jeff, 2026-09-17: "equal or better 0.25, 1 and 5 minute noise".
+    """Jeff's hold benchmark: "equal or better 0.25, 1 and 5 minute noise".
 
-    Allan deviation of the SAME plant, same seed, armed against open loop.
-    Measured over 3 h at `hold_speed: 0.25`: 1.00 / 1.00 / 0.97 / 0.81 / 0.71
-    at 10 / 15 / 60 / 300 / 900 s.  The weak hold this replaced (12) read 1.10
-    at 300 s and 2.15 at 900 s -- the stirring the 2026-09-16 night showed.
+    Allan deviation of the SAME plant, same seed, armed against open loop, over
+    `HOLD_HOURS`.  The ratios the shipped hold achieves are in
+    docs/ltspm3/requirements.md §3; a weak hold stirs at the long end and that
+    is what the last assertion catches.
     """
     t_open, y_open = hold_record(armed=False)
     t_arm, y_arm = hold_record(armed=True)
@@ -193,5 +203,8 @@ def test_a_hold_does_not_degrade_the_noise_and_helps_at_long_tau():
     # run-to-run scatter at edf in the hundreds, not a concession.
     for tau in (10.0, 15.0, 60.0, 300.0):
         assert ratio[tau] <= 1.05, (tau, ratio)
-    # And the loop is earning its place where averaging is long.
+    # And the loop is earning its place where averaging is long.  Jeff asked
+    # for "vastly improving" there and gave no number, so the bound is the
+    # least that can be told apart from not helping: 10 % better, twice the
+    # run-to-run scatter allowed above.
     assert ratio[900.0] < 0.9, ratio

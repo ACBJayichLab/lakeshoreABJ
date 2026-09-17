@@ -1,10 +1,8 @@
 """Gain scheduling, IMC tuning, and the HOLD/MOVE split.
 
-The controller is tuned from two *local* numbers -- gain K(T) in K/% and time
-constant tau(T) -- because those are what a step test measures and what a
-weakly-pinned island's changing heat capacity and conductance actually alter.
-A global percent-to-temperature curve cannot serve: two forms fit the reference
-data to R^2 0.9969 and 0.99998 and disagree by tens of kelvin outside it.
+The controller is tuned from two *local* numbers -- gain K(T) and time constant
+tau(T) -- rather than from a global percent-to-temperature curve; the argument
+is in `ltspm3/control/tuning.py`'s module docstring and PID_PLAN.md §3.2.
 """
 
 import pytest
@@ -60,12 +58,10 @@ TABLE = (
     OperatingPoint(137.3, 13.0, 620.0),
     OperatingPoint(170.7, 13.4, 620.0),
 )
-"""The retired `PROVISIONAL_SCHEDULE`, kept HERE as a fixture.
+"""A four-row table, here as a fixture rather than in `control/` as a default.
 
-`PlantSchedule` is still the class a cryostat with a measured table uses, so it
-still needs testing -- but LTSPM3 no longer has a table, and leaving these four
-rows in `control/` as a default was how one measured step response at 137 K
-came to be quoted as a schedule for the whole range.
+`PlantSchedule` is the class a cryostat with a measured table uses and still
+needs testing; LTSPM3 itself has no table and takes `FittedSchedule` instead.
 """
 
 
@@ -104,11 +100,18 @@ def test_an_empty_schedule_means_the_shipped_fit():
 def test_the_schedule_agrees_with_what_pid_tuning_would_have_pasted():
     """PID_PLAN.md's "pastes rot" trap, closed by not having a paste.
 
-    These are the rows `python analysis/pid_tuning.py --rows` printed from the
-    PRODUCTION fit on 2026-09-14, which under §3.2 as first written would have
-    been pasted into this package by hand.  The model's own functions reproduce
-    them to better than 1 %, so the paste is unnecessary -- and this test is
-    what would notice if the two ever came apart.
+    These are the rows `python analysis/pid_tuning.py --rows` printed, which
+    under §3.2 as first written would have been pasted into this package by
+    hand.  The model's own functions reproduce them, so the paste is
+    unnecessary -- and this test is what would notice if the two ever came
+    apart.
+
+    **One per cent, and that is the claim.**  The rows are the analysis
+    script's own rounding of the same fit, so the residual here is quantisation
+    and not disagreement; `FittedSchedule`'s docstring says "better than 0.5 %",
+    which the gain misses at the cold end.  `abs=0.05` on tau because tau(10 K)
+    is a tenth of a second and a relative bound on it is a bound on the
+    printed decimal place.
     """
     from ltspm3.model import fitted_response as M
 
@@ -198,16 +201,16 @@ def test_identify_rejects_data_with_no_step():
 # -- closed loop ------------------------------------------------------------
 
 def test_a_sweep_arrives_without_meaningful_overshoot(harness):
-    """Smoothing the trajectory plus velocity feedforward: 464 mK of overshoot
-    without either.
+    """Smoothing the trajectory plus velocity feedforward: without either this
+    plant overshoots by hundreds of millikelvin.
 
-    The gate was 100 mK and this now lands at 102.  The corner is scheduled
-    from phase 3 step 5 -- ``move_speed * tau(T)``, about 220 s at the
-    temperature this harness holds -- where it used to be a flat 300 s, and
-    this harness's plant is the two-pole model with 620 s EVERYWHERE, so the
-    scheduled corner is shorter here than the constant it replaced.  On the
-    fitted plant, which is the one the cryostat has, the same move overshoots
-    33 to 93 mK across 60-180 K (tests_ltspm3/test_bench.py).
+    **150 mK, and not the 100 mK the phase 3 gate was written at.**  The corner
+    is scheduled as ``move_speed * tau(T)`` now, where the gate was measured
+    against a flat 300 s, and this harness's plant is the two-pole model with
+    ONE tau everywhere -- so the scheduled corner is shorter here than the
+    constant it replaced and the loop is correspondingly more aggressive.  The
+    cryostat's own plant is the fitted one, and a 3 K move on it is graded by
+    `test_bench.py` at all six bench temperatures.
     """
     cfg = SupervisorConfig()
     h = harness(response=ResponseParams(tau_fast=620.0), sup_cfg=cfg)

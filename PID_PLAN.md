@@ -1,48 +1,11 @@
 # Software PID — the plan
 
-**Status: PHASE 0 DONE. PHASE 1 DONE 2026-09-14 — the model is finished and it
-carries its own error band.** REFIT_PLAN.md Phase B closed on 09-13 (§1's three
-rows green, the table 4-5 K warmer at a given output than every number written
-before it, the level on a dated delivered-power gauge). §1.2 closed on 09-14:
-the band constants are in `_fitted_table.py`, `missing_power_w` and `sigma_q_w`
-are in `fitted_response.py`, and the two of them are what §3 below is now
-written against.
-
-**PHASE 2 IS BUILT, 2026-09-14.** `ltspm3/monitor/` — report only, no port, no
-commands. The 2026-09-10 fault warns fourteen minutes after it happened at
-−5.08 mW, and does not fault — because a fault is a step and that one is 5 mW.
-**What is left of phase 2 is the live soak, and its length is ONE DIURNAL
-CYCLE rather than the 72 h this plan used to ask for** (2026-09-15): the 72 was
-a round number with nothing behind it, the false-alarm rate is established by
-the replay over 63 days of archive, and a 16 mK diurnal term plus `measure.py`'s
-24 h harmonic make a day the longest measured timescale short of the campaign
-drift — which no soak of any length covers. It does NOT need the
-recorder restarted — the monitor is a separate process that tails the CSV — and
-it is one command in a second window, now that the file-selection defect is
-fixed: the tail chose the last `*.csv` by name in a directory it does not own,
-which on the cryostat was a nine-day-old sweep table, and then its own plant
-log. → plans/pid-2-monitor.md's opening.
-
-**PHASE 3 IS BUILT, 2026-09-14**, in eight commits, each naming the rule it
-touched. The bench is green at all six temperatures on all eight scenarios;
-`safety.md` rules 4, 5 and 8 are reworded. What is left of it is §3.6's soak —
-the quiet hold is one simulated hour rather than a real one, and the Allan
-criterion has no closed-loop record to grade yet.
-
-**PHASE 4 — commissioning — is the next thing, and it is the first that needs
-the cryostat.** Update this line as phases land.
-
-**4a MET 2026-09-16. 4c's TUNING step taken 2026-09-17**, and **the loop
-was retuned to Jeff's requirements the same afternoon** — see
-[docs/ltspm3/requirements.md](docs/ltspm3/requirements.md). The morning's two
-conclusions ("the hold was the loop's problem", "the ramp is the plant's") were
-measurements of the loop *as shipped*: a hold twelve times slower than the plant
-stirs, and a move governed by a 260 s corner stacked on a 260 s loop is as slow
-as a hand step. Neither is a property of the cryostat. With `move_speed: 0.15`,
-`hold_speed: 0.25`, `authority_pct: 1.0` and a band that follows the setpoint
-whether or not the feedforward term is on, the bench does 2 K at 118 K in 4.6
-min and holds with no noise penalty; the cryostat has not yet run those
-numbers. → [HANDOFF.md](HANDOFF.md)
+**Phase status is the table below; each row carries its exit gate.** What is
+armed right now, what ran today and what is next live in
+[HANDOFF.md](HANDOFF.md) and nowhere else. The requirements this plan is
+graded against, and the bench results that graded them, are
+[docs/ltspm3/requirements.md](docs/ltspm3/requirements.md) — in Jeff's words,
+and only he changes them.
 
 **Goal.** A software PID that holds and sweeps the LTSPM3 sample from 4 to
 300 K, fails gracefully, and judges from the thermal characterisation whether
@@ -226,9 +189,10 @@ live runs alike.
 
 **Settled 2026-09-11.** Report-only monitor. `control/` open. Heater 1.68 W,
 wiring fine. Rising coldplate never faults; authority exhausted does. One
-rate. Quiet hold tested, not limited. `ltspm3/model/` done. `FROZEN`.
-Median-3, low-pass off (`tau: 0`, class kept). Speed ratios 3 / 0.5. The
-end-rate grading question was moot. The 09-10 mask goes in with the next
+rate. `ltspm3/model/` done. `FROZEN`. Median-3, low-pass off (`tau: 0`, class
+kept). ~~Quiet hold tested, not limited.~~ ~~Speed ratios 3 / 0.5.~~ Both
+superseded 2026-09-17 → [docs/ltspm3/requirements.md](docs/ltspm3/requirements.md).
+The end-rate grading question was moot. The 09-10 mask goes in with the next
 archive export, not before.
 
 **Settled 2026-09-14.** **Recalibrate at most once per cooldown**, and typical
@@ -301,9 +265,9 @@ Two of the four resolved differently from how this section imagined them.
 4. ~~**Correct** four documents.~~ **DONE**, and the fourth was not a stale
    sentence but a missing measurement: the stability figures were a
    1/√N *prediction* with no drift term in it. `analysis/allan.py` measures it
-   instead — **averaging stops helping at about two minutes**, floor 7.38 mK at
-   τ = 130 s, rising to 24.5 mK at 6.6 h, and the prediction was optimistic by
-   nearly 4× at 600 s.
+   instead — **averaging stops helping after a couple of minutes**, where the
+   prediction had it still improving. The measured ladder is in
+   [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) C6.
 
 **Exit gate: MET, 2026-09-12.** `curate.py --propose` clean ✔; the four
 documents corrected ✔; `send note "x"` in the CSV ✔ — proved on the live

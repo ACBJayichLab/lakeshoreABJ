@@ -5,15 +5,15 @@ Calibrated to ``reference/logs/``; the generic fakes it plugs into live in
 is *not* an attempt at cryostat physics; it reproduces the four things the
 control software actually has to cope with:
 
-1. a steeply nonlinear steady state.  The output is a voltage into a fixed
-   75.5 ohm heater, so ``P ~ pct**2`` exactly; the rest is thermal, measured as
-   ``dT ~ P**3.16`` over 24 settled heater steps.  Together that is a lumped
-   ``pct**6.32`` and a local gain near 10 K/% at 63%;
-2. two very different time constants -- the one clean step response in the logs
-   gives ~620 s at 137 K, against the ~360 s previously assumed;
-3. temperature-dependent sensor noise -- quadratic in T: ~1.8 mK at 18 K,
-   ~14 mK at 96 K, ~110 mK at 290 K;
-4. 1 mK reporting quantisation.
+1. a steeply nonlinear steady state.  The curve, the exponents and where they
+   were measured are in :mod:`ltspm3.model.thermal_response`, which is their
+   one home; this module uses them and restates none of them;
+2. two very different time constants.  ``tau_fast`` here is ONE number from one
+   clean step, right where it was measured and wrong elsewhere;
+   :mod:`ltspm3.model.fitted_response` is the one that varies with T;
+3. temperature-dependent sensor noise, quadratic in T
+   (:class:`ltspm3.model.fitted_response.FittedParams`, shared);
+4. reporting quantisation.
 
 Build a cryostat with :func:`ltspm3_cryostat`, which wires this response and the measured
 cross-channel couplings into the generic :class:`~lschart.instruments.sim.SimulatedCryostat`.
@@ -34,16 +34,15 @@ class ResponseParams:
     """Calibrated against the 2026-07 cooldown; see module docstring."""
 
     t_bath: float = 4.0
-    #: The analog output is a VOLTAGE into a stable 75.5 ohm heater, so power goes
-    #: as pct**2 exactly.  The remaining nonlinearity is thermal -- changing
-    #: heat capacity and conductance -- and is carried by ``thermal_exponent``:
+    #: The analog output is a VOLTAGE into a fixed heater, so power goes as
+    #: pct**2 exactly.  The remaining nonlinearity is thermal -- changing heat
+    #: capacity and conductance -- and is carried here:
     #:
     #:     P  ~ pct**2                          (exact, temperature-independent)
-    #:     dT ~ P**thermal_exponent             (measured 3.16 over 116-171 K)
+    #:     dT ~ P**thermal_exponent
     #:
-    #: so a T-vs-percent plot shows a lumped exponent of 2*3.158 = 6.32, fitted
-    #: over 24 settled heater steps in cd10 monitor4/5 with R^2 = 0.9962.  The
-    #: previous value of 5.0 came from two points and was too shallow.
+    #: The fit, its range and its provenance are in
+    #: :mod:`ltspm3.model.thermal_response`.
     thermal_exponent: float = 3.158
     ref_pct: float = 63.076        # the operating point the cryostat actually sat at
     ref_rise: float = 95.6         # T_ss - T_bath there: 99.60 K absolute
@@ -52,21 +51,16 @@ class ResponseParams:
     #: back to the pure power law -- which is how model mismatch between the
     #: response and the controller's idea of it gets injected in tests.
     calibration: tuple = MEASURED_CURVE
-    tau_fast: float = 620.0        # s   measured from the one clean step
-                                   #     response in the logs (65.9% -> 137.3 K)
+    tau_fast: float = 620.0        # s   ONE measured step, right where it was
+                                   #     measured and wrong elsewhere; see
+                                   #     fitted_response for tau(T)
     tau_slow: float = 14400.0      # s   (~4 h)
     fast_fraction: float = 0.90    # of the step lands on the fast pole
-    #: Sensor noise, measured by 3-point local detrending over cd9+cd10:
-    #:
-    #:     18 K   1.8 mK        190 K   45 mK
-    #:     96 K  13.6 mK        240 K   73 mK
-    #:                          290 K  109 mK
-    #:
-    #: That is *quadratic* in T, not linear -- the previous linear model was
-    #: calibrated at 96 K and underestimated 290 K noise by about 4x.  It
-    #: matters for the sweep requirement: at room temperature the measurement
-    #: floor is ~110 mK, so millikelvin stability is unreachable up there
-    #: however good the control is.
+    #: Sensor noise, *quadratic* in T rather than linear.  The same two numbers
+    #: as :class:`ltspm3.model.fitted_response.FittedParams`, which is their
+    #: home -- the thermometer did not change when the model did.  It matters
+    #: for the sweep requirement: at room temperature the measurement floor
+    #: alone puts millikelvin stability out of reach however good the control.
     noise_floor_k: float = 0.0018  # rms at low T
     noise_quadratic: float = 1.36e-6   # rms = this * T**2
     quantum_k: float = 0.001       # reported resolution

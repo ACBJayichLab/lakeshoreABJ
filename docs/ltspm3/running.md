@@ -30,14 +30,16 @@ python -m ltspm3 -c config.yaml check
 
 ```
 control        : enabled
-authority band : 62.076% .. 64.076%  (on_exit=hold)
+authority band : +/-<half>% AROUND THE SETPOINT -- the model's output for whatever it is chasing ...  (on_exit=hold)
 ```
 
-**That is the number `check` actually prints on the shipped config**, and this
-example said `58.076% .. 68.076%` — five times too wide — until 2026-08-31. Read
-the band off `check`, never off a document: `authority_pct` is 1.0, so the band
-is **two percent wide, not ten**, and at ~10 K/% that is ±10 K of authority
-rather than ±50 K.
+**`check` prints the band the shipped config will actually arm on. Read it
+there, never off a document.** The band is *not* a fixed pair of numbers: it is
+centred on the model's output for the current setpoint and follows the setpoint
+as it moves ([requirements.md](requirements.md)), with `authority_pct` as the
+half-width. A band quoted in prose was wrong by five-fold once already, and a
+stale band is not a cosmetic error — it decides whether the output you are
+sitting on is one the loop may keep.
 
 The band is a cap on heat (rule 5) and it is **two-sided**. The ceiling is hard
 and immediate; the floor bounds what the PID may ask for. Both matter before
@@ -179,7 +181,7 @@ before you read the warning marks:
   never light the mark. On the shipped numbers a *tracking* loop cannot rail
   at all while the setpoint is steady. A *sweeping* loop rails routinely and
   legitimately — that is what the velocity feedforward produces — which is why
-  `fault_error_k` only applies in the `hold` phase.
+  `fault_error_k` only applies while the setpoint is not moving.
 - **When health goes bad both marks go quiet**, because the loop has stopped
   trying. The row is coloured red instead. An unhealthy loop is not a loop
   failing to reach a setpoint; it is a loop that has stopped chasing one.
@@ -219,10 +221,12 @@ Which means, on this cryostat:
 - **at a hold the check is vacuous by design.** `dither: true` moves one 0.01 %
   code at a time, deliberately below the 0.015 % tolerance. Worst case is one
   code;
-- **at 118 K it is vacuous while ramping too.** At ~13.8 K/% a full 5 K/min ramp
-  is 0.36 %/min, or 0.012 % per 2 s cycle — also under tolerance;
-- **at the cold end it bites.** The gain falls toward 0.35 K/%, the same rate is
-  ~0.48 % per cycle, and there the readback is doing real work.
+- **at 118 K it is vacuous while ramping too.** At the local gain there
+  ([thermal-response.md](thermal-response.md)) a full 5 K/min ramp is
+  0.36 %/min, or **0.012 % per 2 s cycle — under the 0.015 % tolerance**;
+- **at the cold end it bites.** The gain falls by more than an order of
+  magnitude, the same rate is ~0.48 % per cycle, and there the readback is
+  doing real work.
 
 So `verify_readback` will be silent through the whole of stage 4a, and it will
 be silent because of the arithmetic rather than because it is passing. Knowing
@@ -238,8 +242,8 @@ slowly, on the numbers it shipped with. The same day it was retuned to
 [requirements.md](requirements.md) (five minutes for 2 K at 118 K, a hold with
 real authority, a band that follows the setpoint) and graded on the bench. It
 has not run on the cryostat on those numbers. Arm with the viewer open, move
-2 K, and compare the recorder's CSV with the bench's 4.6 minutes before
-believing either.
+2 K, and compare the recorder's CSV with the bench figure in
+[requirements.md](requirements.md) §3 before believing either.
 
 ```bash
 python -m ltspm3 -c config-ltspm3-armed.yaml check      # read the band and the ratios
@@ -250,17 +254,14 @@ python -m lschart -c config-ltspm3-armed.yaml send setpoint 120 --software
 ### 3. A deliberate step test at two or three temperatures
 
 Still the highest-value hardware measurement available, but no longer from
-scratch. The live data now gives **τ = 709 s at R² = 0.9973** (the +0.500% step
-of 2026-08-24) and **K ≈ 13.8 K/%** across seven settled points at 66.2–66.6%.
-The first confirms the provisional τ ≈ 620 s; the second is a genuinely new
-number, and much steeper than the 10.0 K/% quoted at the 63% operating point.
+scratch: the live data has already given a confirmed fast pole and a local
+gain, and the settled ladder has given the gain a *shape* over the top of the
+range. Those numbers, and how far they are to be trusted, are in
+[thermal-response.md](thermal-response.md).
 
-What is missing is *other temperatures*. As of 2026-09-03 the settled ladder
-reaches 181 K and gives **K ≈ 13.0 K/% across 155–181 K**, so the *gain* now has
-a shape; τ still rests on that single 2026-08-24 step, because every heater move
-since has been an up-down doublet thrashed within minutes rather than a step
-held. The descending staircase in
-campaign in
+What is missing is *other temperatures* for τ, which still rests on a single
+step, because every heater move since has been an up-down doublet thrashed
+within minutes rather than a step held. The descending staircase in
 [plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md) is what
 fixes it, with the rung list from `analysis/plan_sweep.py`.
 
@@ -309,14 +310,25 @@ after it happened**, as a warning, and flags two genuine steps in 57 days.
 [plans/pid-2-monitor.md](../../plans/pid-2-monitor.md) §2.4 is the replay row by
 row, including the two rows it does not meet and why.
 
+## The cryostat's own machine
+
+The recorder runs on the LTSPM3 machine itself — Windows 10 Pro 19045, Python
+3.10.0 installed with `--ignore-requires-python`, an NI PXI-GPIB board, the 218
+at `GPIB0::15` and the 336 at `GPIB0::12`, 2 s cadence. First deployed
+2026-08-24, recording only; a commanding config has been run there and
+commanded successfully since. The generic Windows findings that deployment
+produced — the single-instance lock, `os.replace` over an open `status.json`,
+clock resolution and `movefile` — are in
+[../recorder/windows.md](../recorder/windows.md).
+
 ## Replay: the only test on genuine data
 
 ```bash
 python -m ltspm3.tools.replay "reference/logs/CD*/*.xls"
 ```
 
-Runs the real pipeline over 63 days of historical logs. Currently **12.8
-rejections/day and 0 samples ever reaching FAULT**. It found the
+Runs the real pipeline over the reference logs. The rejection rate it reports,
+and what counts as acceptable, are in [safety.md](safety.md). It found the
 stale-slew-reference bug that no simulated fault would have.
 
 `reference/logs` is ~110 MB and deliberately not gitignored.

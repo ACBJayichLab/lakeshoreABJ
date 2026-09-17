@@ -19,8 +19,8 @@ anywhere above it still cannot write.
 | `LoopbackTransport` | `sim` | in-process fake |
 
 **Read terminators differ between Lake Shore models on GPIB, and a wrong one
-still appears to work.** Measured on the LTSPM3 board, 2026-08-24, by reading
-`*IDN?` with `read_termination` disabled and looking at the raw bytes:
+still appears to work.** Measured on an NI GPIB board by reading `*IDN?` with
+`read_termination` disabled and looking at the raw bytes:
 
 | Box | ends a reply with |
 |---|---|
@@ -118,10 +118,10 @@ The percentage **is** the power, so:
 - `LS218.set_analog_percent` is gated by `allow_writes` exactly as a 33x
   `RANGE` is, and defaults off;
 - there is a `max_output_pct` ceiling in configuration, because `0 ≤ pct ≤ 100`
-  is not a useful bound when the local gain is tens of kelvin per percent (on
-  LTSPM3 it is ~10 K/% — see [`../ltspm3/thermal-response.md`](../ltspm3/thermal-response.md)). What
-  the ceiling should be depends entirely on the heater on the other end, so the
-  generic default is 100 and the cryostat's config supplies the real number;
+  is not a useful bound when the local gain can be tens of kelvin per percent.
+  What the ceiling should be depends entirely on the heater on the other end, so
+  the generic default is 100 and the cryostat's config supplies the real
+  number;
 - every write is confirmed by reading `AOUT?` back. Mind the granularity: the
   DAC steps 0.01% and `AOUT?` answers to two decimals, so `readback_tol_pct`
   must exceed both or a write that worked perfectly is reported as a failure;

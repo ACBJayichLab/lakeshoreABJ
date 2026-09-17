@@ -1,12 +1,13 @@
 """Open-loop estimate of the heater setting a temperature needs.
 
-The PID here is deliberately gentle -- ``kp`` of 0.02 %/K against a response of
-several K/% is a loop gain near 0.2, chosen so that a bad reading cannot
-produce a violent correction.  That is the right trade for holding a
-temperature, but it means feedback alone takes an integral time (900 s) to
-build the output change a new setpoint needs.  A sweep asked the loop to
-follow, it fell 3 K behind, and by the time the ramp finished the loop was
-still crawling.  Feedforward fixes that without touching the gains.
+**Why this still matters with scheduled gains.**  The gains are no longer a
+fixed pair (:mod:`ltspm3.control.tuning`), so the loop is as fast as the plant
+allows -- but feedback still has to BUILD the output a new setpoint needs, an
+integral time at a time, and the integral time is the plant's own tau.  A
+model that already knows what output holds a temperature supplies that level
+outright, so the loop only has to correct it.  What feedforward buys is the
+*shape*: the output moves when the setpoint moves instead of lagging it by a
+thermal time constant.
 
 The model, in two stages
 ------------------------
@@ -20,64 +21,31 @@ the awkward nonlinearity lives in the *thermal* relation between power and
 temperature, where the heat capacity and the conductance to the cold stage
 both change with T::
 
-    T - T_bath = A * P**m           with m ~= 3.16 measured
+    T - T_bath = A * P**m
 
 Keeping these separate matters.  Lumping them into a single ``T ~ pct**n`` fit
-(the previous model, with n = 5) hides the fact that only one of the two
-factors is uncertain, and it invites re-fitting the exponent to absorb errors
-that actually belong to the fixed quadratic.
-
-Measured, not assumed
----------------------
-
-``reference/logs/CD10/*_monitor4,5.xls`` contain ~200 ``ANALOG`` commands in
-their Notes column.  Twenty-four of those settled long enough to read a steady
-state, giving a regression over 64.3-68.5% / 116-171 K::
-
-    lumped   n = 6.32   (dT ~ pct**n)      R^2 = 0.9962
-    thermal  m = 3.16   (dT ~ P**m)
-
-That is much steeper than the n = 5.0 previously fitted from two points, and it
-is closer to Jeff's recollection that "65-ish is around 150 K" -- the logs put
-151.05 K at 66.95%.
+hides the fact that only one of the two factors is uncertain, and it invites
+re-fitting the exponent to absorb errors that actually belong to the fixed
+quadratic.  The exponents, the range they were fitted over and their
+provenance are in :mod:`ltspm3.model.thermal_response`, which is their home.
 
 **No single exponent covers the whole range**, which is exactly what changing
-conductances imply: extrapolating m = 3.16 down to 43% predicts 12.8 K where
-18.2 K was measured.  So a calibration table is used where real points exist
-and the power law only extrapolates beyond them.
+conductances imply.  So a calibration table is used where real points exist and
+the power law only extrapolates beyond them.  Accuracy is not critical either
+way -- any residual is absorbed by the integral.
 
-Accuracy is not critical either way -- any residual is absorbed by the
-integral.  What feedforward buys is the *shape*, so the output moves when the
-setpoint moves instead of lagging it by a thermal time constant.
+Two curves
+----------
 
-Two curves, and the default changed
------------------------------------
+``source: cd10`` is the legacy steady-state curve, kept for reading the
+pre-refit record.  **The default is ``source: fitted``** --
+:mod:`ltspm3.model.fitted_response`, the ODE fitted to the 43 h sweep.
 
-Everything above describes ``source: cd10``, which is what this module was
-built on and is kept for reading the pre-refit record.  **The default is now
-``source: fitted``** -- ``ltspm3.model.fitted_response``, the ODE fitted to the
-43 h sweep and refitted 2026-09-13.  Phase 3 step 2.
-
-They do not agree, and outside the band CD10 actually measured they do not
-nearly agree.  The 4-5 K quoted in REFIT_PLAN 7.3 is the disagreement at the
-top, where both have data:
-
-======  ==========  ==========
-pct     cd10        fitted
-======  ==========  ==========
-24.20     4.81 K      9.99 K
-52.40    41.99 K     29.98 K
-59.20    73.72 K     60.41 K
-62.60    96.06 K    100.12 K
-65.60   133.22 K    139.63 K
-68.70   173.92 K    179.67 K
-======  ==========  ==========
-
-**Thirteen kelvin at 59 %**, because CD10's 24 settled points span 64.3-68.5 %
-and everything below that is a power law extrapolating out of its own range.
-The local gain is as bad: 7.3 K/% against 13.0 at 62.6 %, which is the number
-the loop tunes itself with.  The fit is not an improvement on the old curve
-down there; it is the only measurement there has ever been.
+They do not agree, and below the narrow band the legacy points actually span
+they do not nearly agree -- by tens of kelvin, and by as much again in the
+local gain, which is the number the loop tunes itself with.  The fit is not an
+improvement on the old curve down there; it is the only measurement there has
+ever been.  REFIT_PLAN.md 7.3 has the comparison.
 """
 
 from __future__ import annotations
@@ -209,9 +177,10 @@ class Feedforward:
     def enabled(self) -> bool:
         """Whether the loop may use the model's LEVEL as a control term.
 
-        A commissioning decision, and at 4a it is `false`: the level is a
-        calibration with a shelf life and the loop must not drive to it.  See
-        :attr:`has_curve` for the question this is repeatedly mistaken for.
+        A commissioning decision, and it stays off until a power gauge exists:
+        the level is a calibration with a shelf life and the loop must not
+        drive to one it cannot check.  See :attr:`has_curve` for the question
+        this is repeatedly mistaken for.
         """
         return self.cfg.enabled
 
@@ -219,18 +188,18 @@ class Feedforward:
     def has_curve(self) -> bool:
         """Whether there is a steady-state curve to ASK, enabled or not.
 
-        **A different question from :attr:`enabled`, and the two were one
-        switch until 2026-09-16** (AUDIT-2026-09-16 findings 2 and 3).
-        `enabled` answers "should the loop trust the model's level"; this
-        answers "is there a curve to convert kelvin into percent with".  The
-        fault ramp-down needs the second and was asking the first, so at 4a it
-        descended at `min_rate_pct_per_min` -- five and a third hours from
-        64 %, against the 23 minutes the documents promise.
+        **A different question from :attr:`enabled`** (AUDIT-2026-09-16
+        findings 2 and 3).  `enabled` answers "should the loop trust the
+        model's level"; this answers "is there a curve to convert kelvin into
+        percent with".  The fault ramp-down and the output rate limiter need
+        the second, and asking the first leaves both crawling at their floor
+        rate whenever a stage has the level switched off -- hours instead of
+        the descent `HeaterSupervisor._rampdown_target` describes.
 
-        The shape of the curve did not expire when its level did: a descent at
-        5 K/min walked on a curve whose level is 1.4 K off is still a descent
-        at about 5 K/min, and it is bounded at every write by
-        `_rampdown_step_pct` besides.
+        The shape of a curve does not expire when its level does: a descent at
+        the one rate walked on a curve whose level is a kelvin or two off is
+        still a descent at about the one rate, and it is bounded at every write
+        by `_rampdown_step_pct` besides.
 
         False only for a cryostat with no fitted response at all, which is what
         the fallback branches exist for.

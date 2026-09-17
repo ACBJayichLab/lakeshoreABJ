@@ -109,8 +109,10 @@ Kp     = tau_eff / (K(T) × (tau_cl + theta))     = 1 / (speed × K(T)) above th
 Ti     = min(tau_eff, 4 × (tau_cl + theta))      -- NOT tau(T) flat; finding D
 ```
 
-`hold_speed: 3` (slower than the plant; noise never amplified),
-`move_speed: 0.5`. `tau(T)` and `K(T)` from the schedule, which
+~~`hold_speed: 3` (slower than the plant; noise never amplified),
+`move_speed: 0.5`.~~ **Superseded 2026-09-17** — both ratios are now set by
+[docs/ltspm3/requirements.md](../docs/ltspm3/requirements.md), and both are
+*faster* than the plant. `tau(T)` and `K(T)` from the schedule, which
 `pid_tuning.py --rows` prints from the fitted table every 10 K with the fit's
 cache key in `note` — today `24e2736fe6c28ba503e53546b19acd92`, which must
 equal `_fitted_table.FIT_KEY`. `PROVISIONAL_SCHEDULE` deleted.
@@ -132,13 +134,14 @@ disagrees with a fresh export by more than the fit's error fails.
   118 K, 14.9 %/min at 10 K on the 2026-09-13 fit (the 0.38 / 14.6 written
   before that date are the pre-refit gains). "No curve to ask" is
   `HeaterSupervisor.schedule`, not `tuning.enabled` — see
-  AUDIT-2026-09-16 finding 3.
+  [archive/AUDIT-2026-09-16.md](../archive/AUDIT-2026-09-16.md) finding 3.
 - Setpoint ramps, the post-fault approach and the fault ramp-down all use
   the one rate.
 - **Ramp-down is open loop through the model's inverse curve**:
   `u(t) = percent_for(T_target(t))`, `T_target` falling at the rate from the
-  last trusted temperature. It needs no sensor (rule 3). 118 K → base in
-  ~23 min. Only ever lowers the heater (rule 1). **Through
+  last trusted temperature. It needs no sensor (rule 3); the measured descent
+  time is in [pid-4-commissioning.md](pid-4-commissioning.md). Only ever lowers
+  the heater (rule 1). **Through
   `fitted_response`, not `thermal_response`** — finding C, and step 2 is what
   makes that true.
 - **Velocity feedforward from the model**: `du/dt = (dT/dt)/K(T)`;

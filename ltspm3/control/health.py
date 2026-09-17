@@ -38,30 +38,22 @@ class HealthState(enum.Enum):
 
 @dataclass
 class SensorGuardConfig:
-    """Thresholds calibrated against 1,510 h (63 days) of reference logs.
+    """Thresholds calibrated against the reference logs.
 
-    The earlier defaults came from two files and were wrong in both directions.
-    They assumed the failure mode was a drop toward 0 K and that the largest
-    legitimate one-sample change was 2.479 K.  Re-scanning all 24 logs shows:
-
-    * the real failure is a *single-channel* burst of scattered values, in both
-      directions, between 11 K and 298 K -- it never reads 0 K, so no floor
-      catches it (9 events, ~1 per 7 days, always Input 1);
-    * genuine cooldown transients reach **1.63 K/s** (-6.5 K in one 4 s sample,
-      corroborated by inputs 2 and 3), and ~2.97 K/s just after a heater cut.
-
-    So a single slew number cannot separate them: 1.25 K/s rejects real
-    cooldowns, and anything loose enough to pass those also passes much of the
-    glitch.  The split is now two-tier, with cross-channel corroboration
-    (:mod:`ltspm3.control.coherence`) deciding which tier applies.
+    **The glitch and what it looks like are described in
+    :mod:`ltspm3.control.coherence`, which is their one home**; the shape of it
+    is why the thresholds here are what they are.  A single slew number cannot
+    separate a sick sensor from a genuine fast transient -- one loose enough to
+    pass real cooldowns passes much of the glitch -- so the test is two-tier,
+    with cross-channel corroboration deciding which tier applies.
     """
 
     valid_min_k: float = 1.0
     valid_max_k: float = 400.0
 
-    #: Hard physical impossibility.  Rejected no matter who agrees.  The
-    #: observed glitch runs 7.3 K/s and up; the fastest real move on record is
-    #: 2.97 K/s, so this sits between them with margin on both sides.
+    #: Hard physical impossibility.  Rejected no matter who agrees.  It sits
+    #: between the slowest observed glitch and the fastest real move on record,
+    #: with margin on both sides; both are in :mod:`ltspm3.control.coherence`.
     max_slew_k_per_s: float = 5.0
     #: Below this, a move needs no corroboration at all -- it is within what
     #: the cryostat does on its own.  Comfortably above the p99 of 0.26 K/sample.
@@ -81,14 +73,12 @@ class SensorGuardConfig:
     #: Curvature (reversal) test.  A real thermal signal is a smooth function
     #: of time: its second difference is small even when the first difference
     #: is huge.  The observed glitch reverses direction violently every sample
-    #: -- 297 -> 151 -> 292 K -- so the second difference dwarfs the first.
+    #: (:mod:`ltspm3.control.coherence`), so its second difference dwarfs its
+    #: first, and this ratio separates the two cleanly over the reference logs.
     #:
-    #: Measured over the reference logs, ``curvature_ratio`` of 1.5 fires 7
-    #: times inside the known glitch, 0 times in a genuine 6.5 K-per-sample
-    #: cooldown, and 0 times in a week of quiet holding.  Crucially it needs no
-    #: trusted reference at all, so unlike the slew test it keeps working right
-    #: through a burst of rejections -- which is exactly when the slew
-    #: reference goes stale and stops protecting anything.
+    #: Crucially it needs no trusted reference at all, so unlike the slew test
+    #: it keeps working right through a burst of rejections -- which is exactly
+    #: when the slew reference goes stale and stops protecting anything.
     curvature_ratio: float = 1.5
     #: Only applied to moves this large; below it, ordinary noise reverses sign
     #: constantly and means nothing.
@@ -97,9 +87,9 @@ class SensorGuardConfig:
 
     #: One bad sample already freezes the output; this only governs the move to
     #: FAULT, which ramps the heater down and (with require_ack_after_fault)
-    #: ends the run.  The longest observed self-healing glitch lasted 280 s, so
-    #: 60 s would have converted a five-minute sensor burp into a lost cooldown.
-    #: Freezing the output for 10 min on a response with a 360 s pole is harmless.
+    #: ends the run.  It is longer than the longest self-healing glitch on
+    #: record (docs/ltspm3/safety.md), because a shorter one turns a sensor burp
+    #: into a lost cooldown and freezing the output meanwhile is harmless.
     fault_after_s: float = 600.0
     recover_samples: int = 5
     #: Leaving FAULT is harder than leaving SUSPECT -- the heater has been moving.

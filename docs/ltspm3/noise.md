@@ -121,7 +121,8 @@ attempt that read as "no effect". If that happens, suspect the setup: the
 window gives a filter that continually resets.
 
 Current setting: **4 points at 4 Hz** — τ ≈ 1 s, noise gain ≈ `1/sqrt(7)` ≈
-**2.6×**. Against the response's ~620 s pole, 1 s of lag is nothing. The
+**2.6×**. Against the response's slowest pole ([thermal-response.md](thermal-response.md)),
+1 s of lag is nothing. The
 mechanics, the sizing rule and the rate table are in
 [instruments.md](../recorder/instruments.md#how-a-218-actually-reads-a-thermometer).
 

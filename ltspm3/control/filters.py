@@ -1,9 +1,9 @@
-"""Noise reduction for a 4 s-cadence, ~10 mK-rms measurement.
+"""Noise reduction for a millikelvin-rms measurement on a jittering cadence.
 
-Sampling is nominally 4.000 s but the real logs jitter between 3.92 s and 4.07 s,
-so every filter here takes the actual ``dt`` and uses the exact exponential
-coefficient rather than a fixed alpha.  That keeps the effective time constant
-honest when the bus is slow or a retry costs a cycle.
+The recorder polls on a nominal cycle and the real interval wanders around it,
+so **every filter here is dt-aware**: it takes the actual ``dt`` and uses the
+exact exponential coefficient rather than a fixed alpha.  That keeps the
+effective time constant honest when the bus is slow or a retry costs a cycle.
 """
 
 from __future__ import annotations
@@ -40,25 +40,19 @@ class ExponentialFilter:
 
     **It buys much less than sqrt(dt/2*tau) suggests, and the difference is not
     small.**  That expression is the noise gain for *uncorrelated* samples, and
-    at tau=60 s, dt=4 s it promises 0.18x -- ~10 mK of sample noise becoming
-    ~1.8 mK.  Run over this cryostat's own settled holds the same filter
-    delivers **0.41x and 0.73x** on the two records in
-    ``reference/logs/CD10``, because the noise is not white: most of it sits at
-    periods of tens of seconds to tens of hours, where a low pass cannot reach
-    it without also removing the measurement.  Even tau=600 s only reaches
-    0.22x/0.49x.
+    this cryostat's noise is not white: most of it sits at periods of tens of
+    seconds to tens of hours, where a low pass cannot reach it without also
+    removing the measurement.  Measured against promised, per tau, is in
+    ``docs/ltspm3/noise.md``; ``python -m lschart.tools.noisespec`` re-derives
+    it.  **Plan with the measured numbers, never with the formula.**
 
-    Plan with the measured numbers.  ``docs/ltspm3/noise.md`` has the bands, the
-    tau sweep and the reasoning; ``python -m lschart.tools.noisespec`` re-derives
-    all of it.
-
-    **``tau = 0`` IS PASS-THROUGH, and on this cryostat that is the setting.**
-    Jeff, 2026-09-11: no low pass, a median-3, and about one cycle of dead
-    time.  The paragraph above is why -- the filter was buying 0.41x and 0.73x
-    against a promised 0.18x, and paying 60 s of lag for it, which below 60 K is
-    slower than the cryostat itself.  The class stays rather than being deleted
-    from the chain: a cryostat whose noise moves into the band where a pole
-    *would* help is a config edit away, and the group delay
+    **``tau = 0`` IS PASS-THROUGH, and on this cryostat that is the setting**
+    (Jeff: no low pass, a median-3, about one cycle of dead time).  The
+    paragraph above is why: what a pole bought here was a fraction of what it
+    promised, paid for in lag that at the cold end is slower than the cryostat
+    itself.  The class stays rather than being deleted from the chain: a
+    cryostat whose noise moves into the band where a pole *would* help is a
+    config edit away, and the group delay
     (:meth:`MeasurementFilter.group_delay_s`) already carries ``tau / 2`` so the
     loop retunes itself when that happens.
     """
@@ -181,12 +175,13 @@ class MeasurementFilter:
                                              Zero while it is switched off, and
                                              correct again the day it is not
 
-        3.0 s at the 2 s cadence and median-3 this cryostat runs.  It is the
-        floor under how fast the loop may be asked to go -- section 3.2's
-        ``tau_cl = max(speed * tau(T), 4 * delay_s)`` -- and below about 30 K
-        the plant's own tau is shorter than this, so it is the delay and not
-        the cryostat that sets the closed-loop speed.  Which is why the cold end
-        needs no schedule of its own.
+        3.0 s at the 2 s cadence and median-3 this cryostat runs, and this
+        method is the one home for that number.  It is the floor under how fast
+        the loop may be asked to go -- ``tau_cl = max(speed * tau(T),
+        delay_floor * delay_s)`` -- and at the cold end the plant's own tau is
+        shorter than this, so it is the delay and not the cryostat that sets
+        the closed-loop speed.  Which is why the cold end needs no schedule of
+        its own.
 
         It lives here rather than in :class:`TuningConfig` because it is a
         property OF THIS CHAIN.  A number copied into the tuning section would
@@ -230,7 +225,8 @@ class MeasurementFilter:
         """Robust (MAD-based) estimate of the current single-sample rms.
 
         Shown on the chart so the operator can watch the noise floor track
-        temperature -- on this cryostat it is ~1 mK at 18 K and ~10 mK at 96 K.
+        temperature -- on this cryostat it rises steeply with T, and what it
+        rises as is :class:`ltspm3.model.fitted_response.FittedParams`.
         """
         if len(self._residuals) < 8:
             return 0.0

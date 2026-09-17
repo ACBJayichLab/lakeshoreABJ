@@ -37,3 +37,38 @@ pick from this table rather than reaching for a synonym.
 - Classes describe what a thing *is* (`SimulatedCryostat`,
   `FirstOrderResponse`, `CommandSpool`); if a name needs "manager" or "helper"
   to make sense, the abstraction is wrong.
+
+# Numbers, dates and history in comments
+
+Every measured number has exactly **one home**. Everywhere else it is a
+pointer to that home, never a copy. A copy is a second place that goes stale
+the day the measurement is repeated, and this repository has been bitten by
+that in configs, docstrings and plans alike.
+
+| kind of number | home |
+|---|---|
+| Jeff's requirements and the bench results that graded them | `docs/ltspm3/requirements.md` |
+| thermal measurements: tau, gain, exponents, noise, ramp-down time | `docs/ltspm3/thermal-response.md` (prose); `ltspm3/model/` (code, with `_fitted_table.py`'s generated header for the fit) |
+| the sensor glitch statistics | `docs/ltspm3/safety.md`; `ltspm3/control/coherence.py` in code |
+| a threshold a test enforces | the test, with one sentence saying why the bound is what it is |
+| what a config knob does and the bound that fixes its value | the knob's own comment, in one to three lines, pointing at the home above |
+| the cryostat's wiring, addresses and box-level changes | `docs/ltspm3/cryostat.md` |
+| point-in-time state: what is armed, what happened today, what is next | `HANDOFF.md` only, archived under its date when superseded |
+| incidents and audits | `archive/` and git; a comment may name one in a sentence, not narrate it |
+
+Rules that follow:
+
+- **No dated current state in a durable file.** CLAUDE.md, `docs/`, `plans/`,
+  configs and code are read months later; "today", "since 2026-…", "this file
+  has been armed" belong in `HANDOFF.md`.
+- **A comment says why the code is as it is, not what it used to be.** Deleted
+  fields, superseded values and "until the fix of …" get one clause at most.
+  The commit message and `archive/` hold the story.
+- **Config comments are not documentation.** One to three lines per knob: what
+  it is, the bound that fixes its value, where the measurement lives. No tables.
+- **Generic docs (`docs/recorder/`) carry no LTSPM3 numbers or names.**
+- **A test's threshold is explained, not decorated.** Say which requirement or
+  rule the bound comes from; do not restate the measured value the assertion
+  already checks.
+- **Retired conclusions are struck, not left beside their replacement.** A
+  reader should not have to know which of two paragraphs is current.

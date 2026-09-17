@@ -105,9 +105,9 @@ temperature, so they move as the cryostat does, and the pair on screen is a fact
 about right now rather than a setting.
 
 **Why the band is published.** A software loop pinned at its clamp has run out
-of authority exactly the way a heater at 100 % has, but the number is nowhere
-near 100 — the band is about a percent wide on this cryostat. A client cannot
-work that out from the percentage alone, so it is told.
+of authority exactly the way a heater at 100 % has, but the number may be
+nowhere near 100 — an authority band can be a fraction of a percent wide. A
+client cannot work that out from the percentage alone, so it is told.
 
 **Why `demand_pct` is published beside `output_pct`.** The written value is
 quantised to a DAC code and the band is re-applied by stepping *down* a code,

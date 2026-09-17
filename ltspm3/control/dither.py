@@ -1,21 +1,16 @@
 """Sub-code output resolution by first-order sigma-delta modulation.
 
-The 218's analog output resolves 0.01%.  With a local gain near 10 K/%
-at the 63% operating point, one code is ~100 mK -- roughly ten times the
-sensor noise floor and far coarser than the few-mK stabilisation goal.  Plain
-rounding would therefore make millikelvin control impossible no matter how good
-the PID is.
-
-(The 7.6 K/% and ~76 mK quoted here previously came from the superseded n = 5
-single-power-law fit.  The measured curve is steeper at the operating point --
-see `test_one_dac_code_is_about_100_mK` -- so the code is coarser than was
-believed, and dithering matters more, not less.)
+The 218's analog output resolves 0.01%.  At the gain this cryostat has around
+its operating point (:mod:`ltspm3.model.fitted_response`), one code is worth
+far more than the sensor noise floor and far more than the few-mK stabilisation
+goal, so plain rounding would make millikelvin control impossible no matter how
+good the PID is.
 
 The fix is to let time carry the extra bits.  The requested value is quantised
 to the nearest code and the rounding error is carried forward, so the *sequence*
-of codes averages to the request.  The response's ~360 s fast pole low-passes the
-dither: at a 4 s update the residual ripple is roughly one code times dt/tau,
-i.e. under 1 mK here.
+of codes averages to the request.  The plant's own pole low-passes the dither:
+the residual ripple is roughly one code times dt/tau, which is well under a
+millikelvin anywhere tau is long enough for a code to matter.
 """
 
 from __future__ import annotations

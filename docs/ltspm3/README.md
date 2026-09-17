@@ -28,8 +28,8 @@ ltspm3     LTSPM3 only          IS the loop, on the 218's analog output
    and which box must not be touched.
 2. **[safety.md](safety.md)** — the eight design rules and the sensor glitch
    that shaped them. **Read this before running anything armed.**
-3. **[thermal-response.md](thermal-response.md)** — what the cryostat actually does, measured over
-   1,510 hours of logs.
+3. **[thermal-response.md](thermal-response.md)** — what the cryostat actually
+   does, measured over the reference logs. Every thermal number lives here.
 4. **[control.md](control.md)** — how the loop is built out of those numbers.
 5. **[running.md](running.md)** — `check`, `run --arm`, replay, step test.
 

@@ -156,7 +156,9 @@ therefore no check at all today, because the kelvin rows are dead too.
 - J. Retired knobs are still named where an operator or a coworker reads:
   `window.py:1987` (a tooltip), `docs/recorder/file-interface.md:97`,
   `docs/recorder/gui.md:243`, `ramp.py:5`, `supervisor.py:679`,
-  `docs/ltspm3/commissioning.md` (93 to 132, 522, 548, 930),
+  `docs/ltspm3/commissioning.md` (93 to 132, 522, 548, 930) — **historical:
+  that file no longer exists; its commissioning material is now
+  [pid-4-commissioning.md](pid-4-commissioning.md)** —
   `docs/ltspm3/control.md:34`.
 
 ## 3R.1 The bench stops depending on the date — rule 4
@@ -372,7 +374,9 @@ monitor's `move_k > 0` joins `validate_monitor`.
 No code. Every place in 3R.0.J gets the current name or the current
 mechanism, and the viewer's tooltip at `window.py:1987` names `warn_error_k`.
 `commissioning.md`'s knee ramp-down section becomes a two-line note that it
-was replaced by the one rate in step 5, pointing at `control.md`. `HANDOFF*`
+was replaced by the one rate in step 5, pointing at `control.md`. (That file
+was since retired; [pid-4-commissioning.md](pid-4-commissioning.md) carries
+commissioning now.) `HANDOFF*`
 and `AUDIT*` files are history and are not edited. Gate: `grep` for
 `max_error_k`, `max_step_pct`, `rampdown_pct_per_min`, `smooth_tau_s`,
 `anomaly_hold_s` finds nothing outside those archives and the "it used to be"

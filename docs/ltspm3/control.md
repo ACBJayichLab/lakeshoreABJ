@@ -30,8 +30,8 @@ heater sat outside the band moved it on the next cycle.
 — less heat is never the dangerous direction. The floor bounds what the PID may
 *ask* for (`_apply_band_to_pid` sets `out_min`), not what the DAC must carry.
 Enforcing it on the output too meant `clamp` ran after the rate limiter and
-undid it: arming with the heater at 0 % wrote 62.076 % in one step, past the
-per-cycle limit that exists for exactly that. It also meant the loop could not
+undid it: arming with the heater at 0 % wrote the band floor in one step, past
+the per-cycle limit that exists for exactly that. It also meant the loop could not
 hold any temperature whose steady-state output lay below the band — at base
 temperature it would command operating-point power and then fault.
 
@@ -101,9 +101,10 @@ stage trusts it** — `HeaterSupervisor.has_curve` and `.schedule`. They asked
 `feedforward.enabled` and `tuner.enabled` until 2026-09-16, which are answers
 to different questions: should the loop drive to the model's *level*, and
 should the gains be rescheduled with temperature. With both off — the armed 4a
-configuration — the descent fell at `min_rate_pct_per_min` (five hours from
-64 %, not 23 minutes) and the output limiter never left its floor (2.6 K/min at
-118 K, against the 5 configured). A model whose level is stale still has a
+configuration — the descent fell at `min_rate_pct_per_min`, an order of
+magnitude slower than the measured ramp-down
+([plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md)), and the
+output limiter never left its floor. A model whose level is stale still has a
 usable shape. `ramp_lead_pct` is the one that stays on `tuner.enabled`,
 because it widens the authority band rather than slowing something down.
 
@@ -121,8 +122,8 @@ correcting. The tables are in the config's comments.
 **The trajectory corner is the closed-loop time constant.** A commanded move
 is smoothed over `move_speed × tau(T)` and the loop then follows with the same
 time constant, so a move that fits inside the band arrives in about five of
-those — 4.6 min for 2 K at 118 K on the bench — and the commanded rate only
-governs moves large enough to need it. The rate ceiling is a safety limit, not
+those — the graded bench figure is in [requirements.md](requirements.md) §3 —
+and the commanded rate only governs moves large enough to need it. The rate ceiling is a safety limit, not
 a target.
 
 **The premise check is in watts.** `δQ` against the model's own band, the same
@@ -176,13 +177,14 @@ analog output, and config validation says so rather than letting an
 numbers worth reading before arming anything:
 
 ```
-authority band : 62.076% .. 64.076%  (on_exit=hold)
+authority band : +/-<half>% AROUND THE SETPOINT -- the model's output for whatever it is chasing ...  (on_exit=hold)
 ```
 
-**Read that off `check`, never off this page.** It said `58.076% .. 68.076%`
-until 2026-08-31 — five times too wide, because `authority_pct` is 1.0 and not
-5.0. A stale band in a document is not a cosmetic error: the band is what
-decides whether the output you are sitting on is one the loop may keep.
+**Read that off `check`, never off this page.** There is no fixed pair of
+numbers to quote: the band is centred on the model's output for the current
+setpoint and follows it, `authority_pct` being the half-width. A stale band in
+a document is not a cosmetic error — it decides whether the output you are
+sitting on is one the loop may keep.
 
 Every limit lives in one of those config classes. **Never hardcode one in
 `control/`.**

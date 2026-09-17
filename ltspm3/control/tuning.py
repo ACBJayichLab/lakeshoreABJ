@@ -39,14 +39,13 @@ buys on a cryostat where overshoot is wasted hours::
 
 ``tau_cl`` is chosen directly: it *is* the closed-loop response time.
 
-A ratio, not a time -- phase 3 §3.2
------------------------------------
+A ratio, not a time
+-------------------
 
-``tau_cl`` used to be configured as two absolute times, 1800 s holding and
-300 s moving.  An absolute time is the one thing it must not be here, because
-**tau(T) runs from 0.1 s at 10 K to 611 s at 180 K**: 1800 s is three times the
-plant at the top of the range and eighteen thousand times it at the bottom, so
-the same pair of numbers meant "gentle" up there and "asleep" down here.
+**An absolute ``tau_cl`` is the one thing this must not be**, and this section
+is where that argument lives.  ``tau(T)`` spans three orders of magnitude over
+this cryostat's range (:mod:`ltspm3.model.fitted_response`), so any pair of
+absolute times means "gentle" at the warm end and "asleep" at the cold one.
 
 So it is a ratio to the plant's own time constant::
 
@@ -58,11 +57,11 @@ and above the floor ``Kp`` is simply ``1 / (speed * K)``, which is the whole
 argument for configuring a ratio.
 
 ``theta`` is the loop's own dead time, derived from the filter chain and the
-measured cadence (``MeasurementFilter.group_delay_s``, about 3 s).  **It is
-not decoration.**  Pole cancellation is right only while the plant's pole is
-the slowest thing in the loop, and below about 30 K it is not: cancelling a
-0.1 s pole against a 3 s delay is a loop integrating a measurement it has not
-seen yet.  SIMC's ``min`` and the delay floor are what handle that, and
+measured cadence (``MeasurementFilter.group_delay_s``).  **It is not
+decoration.**  Pole cancellation is right only while the plant's pole is the
+slowest thing in the loop, and at the cold end it is not: cancelling a plant
+pole shorter than the measurement delay is a loop integrating a measurement it
+has not seen yet.  SIMC's ``min`` and the delay floor are what handle that, and
 together they are why the cold end needs no schedule of its own.
 
 Two phases
@@ -72,14 +71,15 @@ Holding and moving want opposite things, so they get different ``speed``:
 
 * **HOLD** -- stabilising at temperature for hours.  Disturbances are slow
   (bath drift, radiation) and the measurement floor is a few mK of *correlated*
-  noise.  A slow loop rejects that noise; a fast one amplifies it into the
-  heater.  The default ``hold_speed: 3`` is three times slower than the
-  cryostat; **the armed LTSPM3 file runs 0.25**, four times faster, because
-  the slow regime turned out to stir rather than correct
-  (docs/ltspm3/requirements.md).
+  noise.  A loop slower than the plant rejects that noise but stirs at long
+  averaging times; a faster one corrects the wander instead.
 * **MOVE** -- following a commanded sweep, or approaching setpoint after a
   fault.  Here bandwidth is the point, and a few mK of extra noise on the way
-  is irrelevant.  ``move_speed`` 0.5 by default, 0.15 in the armed file.
+  is irrelevant.
+
+The ratios this code defaults to are the conservative ones; **the ratios LTSPM3
+actually runs are in ``config-ltspm3-armed.yaml``, and what the bench measured
+of each is in ``docs/ltspm3/requirements.md``.**  Neither is repeated here.
 
 Switching between them is hysteretic, because a loop that oscillates between
 tunings is worse than either.
@@ -90,8 +90,7 @@ Where the numbers come from
 ``FittedSchedule`` reads ``K(T)`` and ``tau(T)`` out of
 :mod:`ltspm3.model.fitted_response` -- there is no table in this file to keep
 in step with the fit, which is PID_PLAN.md's "pastes rot" trap closed by not
-having a paste.  It agrees with ``analysis/pid_tuning.py --rows`` to better
-than 0.5 % everywhere that prints.
+having a paste.
 """
 
 from __future__ import annotations
@@ -125,56 +124,27 @@ class OperatingPoint:
     note: str = ""
 
 
-# `PROVISIONAL_SCHEDULE` was four rows, of which ONE was measured -- the
-# 65.9% -> 137.3 K step, tau ~= 620 s -- and the other three were the CD10
-# steady-state curve's local slope with that tau copied onto them.  Phase 3
-# step 3 deleted it.  Nothing replaced it with a better table: the gain and the
-# time constant are now read from `ltspm3.model.fitted_response`, which is the
-# 43 h sweep fitted over the whole range, and `FittedSchedule` below is the
-# whole of what that takes.
-#
-# For the record, what the provisional table claimed against what the fit
-# measures at the same temperatures:
-#
-#     18.2 K   1.6 K/%,  tau 300 s (guessed)   ->   0.66 K/%,  tau 0.8 s
-#     99.6 K  10.0 K/%,  tau 620 s (copied)    ->  12.42 K/%,  tau 440 s
-#    137.3 K  13.0 K/%,  tau 620 s (MEASURED)  ->  12.68 K/%,  tau 586 s
-#    170.7 K  13.4 K/%,  tau 620 s (copied)    ->  12.25 K/%,  tau 616 s
-#
-# The one measured row was good to 2.5 %.  The guessed tau at the cold end was
-# out by a factor of 375.
-
-
 @dataclass
 class TuningConfig:
     """Closed-loop speed as a RATIO to the plant's own, and the sane bounds.
 
-    Phase 3 §3.2.  ``hold_tau_cl_s: 1800`` and ``move_tau_cl_s: 300`` were
-    absolute times, and an absolute time is the one thing a closed-loop target
-    must not be on this cryostat: tau(T) runs from **0.1 s at 10 K to 611 s at
-    180 K**, so 1800 s is three times the plant at the top and eighteen
-    THOUSAND times it at the bottom.  The same two numbers meant "gentle" up
-    there and "asleep" down here.
+    Why a ratio and not an absolute time is argued in this module's docstring::
 
-    A ratio means the same thing everywhere::
-
-        tau_cl = max(speed * tau(T), 4 * delay_s)
+        tau_cl = max(speed * tau(T), delay_floor * delay_s)
     """
 
     enabled: bool = True
 
-    #: Stabilising.  The DEFAULT is 3 -- slower than the plant, Jeff's
-    #: 2026-09-11 instinct that a hold should never amplify noise -- and the
-    #: bench envelope (`BENCH_HOLD_SPEED`) is calibrated to it.  **The armed
-    #: file ships 0.25** (docs/ltspm3/requirements.md, 2026-09-17): the weak
-    #: regime stirred at its own natural period on the cryostat, and on the
-    #: bench a hold at 0.25 is 1.00x open loop at 10-15 s and 0.71x at 900 s,
-    #: where 12 was 2.15x.  The tables are in config-ltspm3-armed.yaml.
+    #: Stabilising.  The DEFAULT is the conservative one, slower than the
+    #: plant, and the bench envelope (`BENCH_HOLD_SPEED`) is calibrated to it.
+    #: What LTSPM3 ships is in config-ltspm3-armed.yaml and what it measured is
+    #: in docs/ltspm3/requirements.md.
     hold_speed: float = 3.0
     #: Sweeping or approaching: faster than the plant, because bandwidth is the
-    #: point and a few mK of extra noise on the way is irrelevant.  The armed
-    #: file ships 0.15 -- a 2 K move at 118 K in 4.6 min on the bench, against
-    #: a hand step's ~26; 0.5 stacked a 260 s corner on a 260 s loop.
+    #: point and a few mK of extra noise on the way is irrelevant.  A ratio
+    #: near 1 stacks a corner as long as the loop on the loop itself, since the
+    #: ramp smoother rounds over exactly `tau_cl`.  Shipped value and
+    #: measurements as above.
     move_speed: float = 0.5
 
     #: How many dead times the closed loop must be slower than, whatever the
@@ -192,18 +162,16 @@ class TuningConfig:
     #: Absolute bounds on the scheduled gains.  A bad schedule entry, or an
     #: operating point far outside the table, must not produce a violent loop.
     #:
-    #: **`max_kp` was 0.50 and the fitted schedule wants 0.519 at 40 K in
-    #: `move`**, so it clamped -- silently, which is the worst way for a limit
-    #: to bind.  1.0 is above every row the model produces (the largest is
-    #: 0.52) and still far below anything violent: at the 1.96 K/% gain of
-    #: 30 K, kp = 1.0 is a loop gain of 2.
+    #: `max_kp` sits above every row the fitted schedule produces, so the
+    #: clamp is a guard and never the thing that sets a gain -- a limit that
+    #: binds in normal operation binds silently, which is the worst way for one
+    #: to act -- and still far below anything violent at this cryostat's gains.
     min_kp_pct_per_k: float = 0.002
     max_kp_pct_per_k: float = 1.0
-    #: **`min_ti` was 60 s against a plant tau of 0.1 s at 10 K.**  An integral
-    #: time floored at 600x the plant is not a floor, it is a different
-    #: controller.  `Ti` is now floored on the loop's own delay instead --
-    #: `min_ti_delays * delay_s` -- which is the only timescale that means
-    #: anything down there.  See `Tuner.gains_for`.
+    #: `Ti` is floored on the LOOP's own delay, `min_ti_delays * delay_s`, and
+    #: not on an absolute time: at the cold end the plant is orders of
+    #: magnitude faster than any fixed floor, so a fixed one is not a floor but
+    #: a different controller.  See `Tuner.gains_for`.
     min_ti_delays: float = 1.0
     max_ti_s: float = 7200.0
 
@@ -230,19 +198,18 @@ def simc_pi(gain_k_per_pct: float, tau_s: float, tau_cl_s: float,
             delay_s: float = 0.0, *, min_ti_s: float = 0.0) -> tuple[float, float]:
     """PI gains for a first-order plant **with a dead time**.
 
-    :func:`imc_pi` above is this with ``delay_s = 0``, and it is what phase 3
-    §3.2 was first written as.  It is wrong at the cold end, and not by a
-    little::
+    :func:`imc_pi` above is this with ``delay_s = 0``, and it is wrong at the
+    cold end, and not by a little::
 
         Kc = tau_eff / (K (tau_c + theta))
         Ti = min(tau_eff, 4 (tau_c + theta))        Skogestad's SIMC
 
     Pole cancellation sets ``Ti = tau`` so that the controller's zero removes
     the plant's pole.  That is exactly right while the plant's pole is the
-    slowest thing in the loop -- and below about 30 K it is not.  tau(10 K) is
-    **0.1 s** against a measurement dead time of 3 s, so cancelling it leaves
-    an integral time thirty times shorter than the delay, which is a loop that
-    integrates a measurement it has not seen yet.  SIMC's ``min`` is what
+    slowest thing in the loop -- and at the cold end it is not.  There tau is
+    far shorter than the measurement dead time, so cancelling it leaves an
+    integral time shorter than the delay, which is a loop that integrates a
+    measurement it has not seen yet.  SIMC's ``min`` is what
     handles that, and the floor below is what keeps ``Ti`` above the delay
     itself.
 
@@ -314,7 +281,8 @@ class FittedSchedule:
     simulator together, in the same commit, by construction.
 
     It agrees with ``analysis/pid_tuning.py --rows`` -- the thing that would
-    have been pasted -- to better than 0.5 % at every temperature that prints.
+    have been pasted -- to within about 0.5 % at every temperature that prints
+    (the gain misses by exactly that at 10 K).
 
     Clamps at the table's ends rather than extrapolating, exactly as
     :class:`PlantSchedule` does, and for the same reason: past 195 K nobody has

@@ -42,7 +42,7 @@ glitch, a comms drop, a sustained fault to completion and lockout, and
 
 | gate | |
 |---|---|
-| replay | ~12.8 rejections/day and **0 samples reaching FAULT** over 63 days |
+| replay | the rejection rate of [safety.md](../docs/ltspm3/safety.md) and **0 samples reaching FAULT** over the reference logs |
 | simulated fault | ramps down at the one rate, latches, completes, locks out, and `acknowledge()` is the only way out |
 | spool | `hold` and `arm` round-trip |
 
@@ -133,15 +133,12 @@ but the number on the WARNING line is the thing to read, and it needs no DEBUG.
 traced three lines per query and made ~26 lines a cycle across the two boxes.
 `--bus-trace` is how you ask for that traffic when you want it.
 
-**Two cases this cannot cover, and neither needs it.** With `dither: true` the
-sigma-delta quantiser moves one 0.01 % code at a time, deliberately below the
-0.015 % tolerance, so a hold's writes are unverifiable by construction and the
-worst case is one code. And at 118 K the gain is ~13.8 K/%, so even a full
-5 K/min ramp is 0.36 %/min — 0.012 % per 2 s cycle, also under tolerance. The
-readback check only becomes discriminating at the cold end, where the gain falls
-toward 0.35 K/% and the same rate is ~0.48 % per cycle. That is the regime it is
-there for, and knowing it is silent by arithmetic rather than by passing is the
-point.
+**Two cases this cannot cover, and neither needs it**: a dithered hold and a
+ramp at the warm end both move the output by less than `readback_tol_pct` per
+cycle, so the check is silent there by arithmetic rather than by passing. It
+only becomes discriminating at the cold end. **The arithmetic is in
+[docs/ltspm3/running.md](../docs/ltspm3/running.md)**, which is its one home;
+knowing which of the two the check is doing is the point.
 
 ### W2 — make a ceiling refuse something
 
@@ -169,8 +166,8 @@ both power gates — so run it knowing it takes the sample off its hold.
 
 ## 4.2 Stage 4, attended
 
-A **third config**, `config-ltspm3-armed.yaml`: `authority_pct` narrowed,
-Phase 3's tables loaded. Arm only when `plant.json` has read typical on all
+A **third config**, `config-ltspm3-armed.yaml`: the authority band at the
+width the stage is armed on, Phase 3's tables loaded. Arm only when `plant.json` has read typical on all
 residuals for the past hour, and from a hold that has actually **settled** —
 open loop this cryostat comes to rest in hours, and an output ramping steadily
 at a fixed setpoint means something is still moving. Find out what before
@@ -206,12 +203,12 @@ after a gauge you believe.**
 
 Two consequences worth carrying:
 
-* **`operating_point_pct` stops being vestigial when feedforward is off.** The
-  rest of this document calls it "only the fallback centre for a loop with no
-  model" — true with feedforward on. At 4a it *is* the band centre, and
-  whether it brackets the output actually holding the setpoint is the check.
-* **`authority_pct: 0.1` needs no widening at 4a**, even on a stale gauge,
-  precisely because the centre is no longer the stale number.
+* **`operating_point_pct` was the band centre whenever feedforward was off** —
+  true only until 2026-09-17, when the centre became the model's answer for the
+  setpoint whenever a curve exists ([requirements.md](../docs/ltspm3/requirements.md)).
+  It is the fallback centre for a loop with no model, and nothing else.
+* **The narrow 4a band needed no widening**, even on a stale gauge, precisely
+  because the centre was not the stale number.
 
 ### The bench reproduces it now — HANDOFF item D, closed 2026-09-16
 
@@ -252,7 +249,8 @@ the fault ramp-down's rate and the output rate limiter's — see below.
 ### What 4a's two switches cost the rate limits — fixed 2026-09-16
 
 Both were the same conflation, and both were found by reading rather than by a
-failing test (AUDIT-2026-09-16, findings 2 and 3):
+failing test ([archive/AUDIT-2026-09-16.md](../archive/AUDIT-2026-09-16.md),
+findings 2 and 3):
 
 * **the fault ramp-down.** `_rampdown_target` walks a target temperature down
   at the one rate and turns it into an output through the model's inverse
@@ -285,14 +283,13 @@ that hands the loop more heater than it had. So at 4a the band does not widen
 during a ramp, and the velocity feedforward it caps is off with it. Switch them
 on at 4c with the tuning, not before.
 
-**4d's 10 K sweep can now be given 5 K/min and get it** as far as the output
-limiter is concerned. It will not arrive in two minutes: with `tuning.enabled:
-false` the gains are the file's starting `kp = 0.02` / `ti = 900 s`, and a 3 K
-move measured on the bench is still 1 K short after half an hour. Do 4c's
-tuning step before reading anything into 4d — and read 4d below for what the
-benchmark actually is now (five minutes for 2 K), because "a rate is a
-ceiling, not a promise" was a description of the loop as shipped, not of the
-requirement.
+**A move is only as fast as the scheduled gains let it be.** With
+`tuning.enabled: false` the loop runs the file's starting fixed gains and a
+small move is still short of its setpoint after half an hour — that is what 4c's
+tuning step exists to fix, and it is on in the shipped file. Read 4d below for
+what the benchmark is: a 2 K move at 118 K in five minutes
+([requirements.md](../docs/ltspm3/requirements.md)). The rate ceiling is not
+the lever.
 
 ### The file ships what is ARMED, and the bench grades the envelope
 
@@ -318,27 +315,24 @@ of the *cryostat* from the file. So:
 * **`tests_ltspm3/test_stage_4a.py` grades the file's own switches**, which
   nothing did until the audit asked.
 
-Read the band back after any edit, and read the sentence beside it — `check`
-says whether the band FOLLOWS the setpoint or is fixed at
-`operating_point_pct`, and at 4a it is fixed:
+Read the band back after any edit:
 
 ```bash
 python -m ltspm3 -c config-ltspm3-armed.yaml check
 ```
 
-**Expect the loop to sit high in its band.** The centre is the model's number,
-and since the wiring was handled on 2026-09-16 the cryostat sits 0.107 % of
-output above it: from the 63.99 % hold the rails are −0.28 %/+0.22 %. Do not
-read sitting high as the §4.3 abort signature — *railing against the ceiling
-while settled* means railing with room in the model, not railing because the
-throttle is tighter than the calibration offset.
+**Expect the loop to sit off the centre of its band**, because the centre is
+the model's number and the model's level has a shelf life. Do not read sitting
+high as the §4.3 abort signature — *railing against the ceiling while settled*
+means railing with room in the model, not railing because the throttle is
+tighter than the calibration offset.
 
 | step | gate |
 |---|---|
-| 4a — arm, `authority_pct` 0.1, **no tuning, no feedforward** — all three, see below | **MET 2026-09-16** — 1 h, 1750 samples, `tracking` on every one; worst error 90 mK against a 1 K warning; monitor and supervisor both clean |
+| 4a — arm on a narrow band, **no tuning, no feedforward** — all three, see below | **MET 2026-09-16** — one hour of `tracking`, monitor and supervisor both clean; the numbers are in "What 4a measured" below |
 | 4b — provoked fault at low temperature | ramps down at the one rate through the inverse curve, **does not resume when the sensor comes back**, latches, locks out, `ack` the only way out |
 | 4c — widen to 1.0 %, then tuning, then feedforward, one per watched hour | no `frozen` without a named cause. **TUNING STEP TAKEN 2026-09-17** — see below; the widen and the feedforward are still outstanding, and the feedforward waits on the gauge |
-| 4d — **a sweep ≥ 10 K**, at the fastest rate the plant allows | lag < 2 K, no warning at either end, `δQ` quiet. **The "5 K/min" this row used to name is a COLD-END number** — see below |
+| 4d — **the move benchmark**: a 2 K move at 118 K inside 5 min ([requirements.md](../docs/ltspm3/requirements.md)), and a sweep ≥ 10 K on top of it | arrives inside the benchmark, lag < 2 K on the long sweep, no warning at either end, `δQ` quiet — see below |
 
 ### 4c's tuning step, taken out of order and before the widen — 2026-09-17
 
@@ -352,19 +346,19 @@ heater the loop may command; the tuner changes only how it is scheduled, and
 **it is the one of the three that does not wait on the gauge** — `feedforward`
 commands the model's stale LEVEL while the tuner reads only `K(T)` and `tau(T)`,
 the SHAPE. Same distinction `has_curve` already draws for the ramp-down and the
-output rate limiter (AUDIT-2026-09-16 findings 2 and 3).
+output rate limiter ([archive/AUDIT-2026-09-16.md](../archive/AUDIT-2026-09-16.md)
+findings 2 and 3).
 
 It is also what made ramping testable at all: three things are gated on
 `tuner.enabled` — the scheduled gains, the velocity feedforward, and
 `ramp_lead_pct` — and with all three off a +2 K move arrives about a kelvin
 late at **any** commanded rate. `tests_ltspm3/test_stage_4c_tuning.py`.
 
-`hold_speed: 12` is a **guess against the 2026-09-17 hold finding** and the one
-number here that is not measured: the loop's authority in the 90–240 min band
-scales as ≈ `2.2 / hold_speed` at 118 K, the old fixed gains sat at 0.37 and made
-the hold 5.6x worse than open loop, and the tuner's *default* 3 would be 0.74 —
-worse again. It costs a ramp nothing, because a ramp runs on `move_speed`. One
-night graded by `analysis/hold_quality.py` settles it.
+~~`hold_speed: 12`~~ was a guess in the *weak* direction and is
+**superseded 2026-09-17**: asked, Jeff chose the strong direction, and the
+shipped ratio is in [requirements.md](../docs/ltspm3/requirements.md) §3 with
+the Allan table that graded it. One night on the cryostat, graded by
+`analysis/hold_quality.py`, still settles the long-averaging half.
 
 ### 4d — the move benchmark is five minutes for 2 K at 118 K — 2026-09-17
 
@@ -376,11 +370,13 @@ not Jeff's: asked, he set the benchmark at **a 2 K move arriving in 5 minutes
 at 118 K**, with 5 K/min a safety ceiling only
 ([docs/ltspm3/requirements.md](../docs/ltspm3/requirements.md)).
 
-The 260 s was `move_speed × tau` at 0.5, stacked twice — the trajectory corner
-and the closed loop are the same number by design — and `move_speed: 0.15`
-brings the same move to **4.6 min on the bench** with 7 mK of overshoot and
-nothing railed. The band had to widen to let it (0.56 % of overdrive against a
-0.25 % half-width), and the band had to follow the setpoint with the
+That 260 s was `move_speed × tau` at the old ratio, stacked twice — the
+trajectory corner and the closed loop are the same number by design — and the
+retuned `move_speed` brings the same move inside the benchmark with a few mK of
+overshoot and nothing railed ([requirements.md](../docs/ltspm3/requirements.md)
+§3 has the ladder). The band had to widen to let it, because the overdrive a
+fast move needs exceeded the old half-width, and the band had to follow the
+setpoint with the
 feedforward off, which it did not: a 2 K move at 140 K faulted on the bench
 until `target_band_centre_pct` asked `has_curve`.
 
@@ -429,7 +425,8 @@ cryostat has ever produced**:
 
 **The loop beats open loop everywhere the window can measure.** Open loop at
 this temperature floors at 7.38 mK at tau = 130 s and rises after — averaging
-stops helping at two minutes. Closed loop reaches **6.83 mK at 264 s**: a lower
+stops helping at two minutes; that ladder is C6's table below, and it is the
+home of those numbers. Closed loop reaches **6.83 mK at 264 s**: a lower
 minimum, and still improving twice as long.
 
 **The section-1 criterion reports NOT MET, and at one hour that means nothing.**
@@ -494,8 +491,8 @@ protocol and `--from-csv` scores holds already on disk. The rung list comes from
 `predicted_only`; it is not a table anybody should be writing by hand.
 
 **C3 — re-run replay against real armed data.** Feed the stage-4 CSVs through
-`replay.py`. The guard thresholds are calibrated against 63 days of *legacy*
-logs at 2–20 s cadence; this is the first chance to check them at the live
+`replay.py`. The guard thresholds are calibrated against the *legacy* logs at
+2–20 s cadence; this is the first chance to check them at the live
 cadence with the loop closed. **Updates:** `SensorGuardConfig` —
 `max_slew_k_per_s`, `corroborate_slew_k_per_s`, `curvature_ratio`,
 `fault_after_s` — and `CoherenceConfig`.

@@ -84,8 +84,10 @@ give, over 64.3-68.5% / 116-171 K::
     lumped   n = 6.32   R^2 = 0.9962
     thermal  m = 3.16
 
-That supersedes an earlier n = 5.0 fitted from two points, which was too
-shallow -- it predicted 65% -> 116 K where the logs show 66.95% -> 151.05 K.
+**This section is the one home for the exponents and their provenance.**  The
+rest of `ltspm3/model/` and `ltspm3/control/` point here rather than restating
+them; a fit from a handful of points is far too shallow, which is how the
+numbers here came to be measured over the whole set.
 """
 
 from __future__ import annotations
@@ -126,11 +128,11 @@ THERMAL_EXPONENT = 3.158
 REF_PCT = 63.076
 REF_RISE_K = 95.6
 
-#: The one clean step response in the logs: 65.9% -> 137.3 K settles with
-#: tau ~= 620 s.  The previously assumed 360 s was a guess.  Every other
-#: command in those logs is a sub-2 K trim, so this is a single measurement at
-#: a single temperature -- and heat capacity varies, so tau certainly does too.
-#: Treat it as a lower bound on the uncertainty, not as a calibration.
+#: The one clean step response in the legacy logs.  Every other command in them
+#: is a sub-2 K trim, so this is a single measurement at a single temperature
+#: -- and heat capacity varies, so tau certainly does too.  Treat it as a lower
+#: bound on the uncertainty, not as a calibration; :mod:`fitted_response` is
+#: what carries tau as a function of T.
 MEASURED_TAU_S = 620.0
 MEASURED_TAU_AT_K = 137.3
 
