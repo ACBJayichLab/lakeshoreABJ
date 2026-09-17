@@ -349,6 +349,43 @@ class Application:
             log.warning("arming to hold the present temperature, %.4f K", setpoint_k)
         self.supervisor.arm(setpoint_k)
 
+    def sweep_to(self, kelvin: float, rate_k_per_min: float | None = None) -> str:
+        """Move an ARMED software loop's setpoint, by ramping to it.
+
+        **The thing `arm`'s docstring has pointed at since it was written** --
+        "deliberate moves are sweeps, see the controller's own ``sweep_to``" --
+        and until 2026-09-17 there was no way to reach it from outside this
+        process.  The spool's software-loop verbs were `arm`, `hold`, `ack` and
+        `heaters_off`; `send setpoint` went to an INSTRUMENT loop, which on a
+        218 does not exist.  So the whole ramp path -- the smoother,
+        ``max_rate_k_per_min``, the velocity feedforward -- was reachable only
+        from the bench, and "ramping is untested" was not a tuning gap but a
+        missing command.
+
+        The only route was `hold` then `arm <kelvin>`, which is a STEP at the
+        new setpoint with the loop disengaged in between.  That is the one
+        thing rule 8 says not to do with a setpoint.
+
+        Duck-typed by name like ``panic_hold`` and ``panic_off``: what a
+        supervisor is belongs to `ltspm3`, and `lschart` may not import it.
+        ``rate_k_per_min`` of None means the controller's own configured rate,
+        so the default sweep rate lives in one place.
+        """
+        sweep = getattr(self.supervisor, "sweep_to", None)
+        setpoint = getattr(self.supervisor, "set_setpoint", None)
+        if not callable(sweep) or not callable(setpoint):
+            raise RuntimeError(
+                "no software loop is configured -- this is a recorder, and "
+                "there is nothing here with a setpoint of its own. A 33x loop "
+                "takes `setpoint --loop N` instead"
+            )
+        if rate_k_per_min is None:
+            setpoint(kelvin, ramp=True)
+            return f"software loop sweeping to {kelvin:.4f} K at its own rate"
+        sweep(kelvin, rate_k_per_min)
+        return (f"software loop sweeping to {kelvin:.4f} K at "
+                f"{rate_k_per_min:g} K/min")
+
     @property
     def has_loop(self) -> bool:
         """Is there a software loop here at all?

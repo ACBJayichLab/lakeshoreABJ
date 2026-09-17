@@ -619,8 +619,8 @@ def test_the_status_file_reports_the_pid_gate(tmp_path):
 class FakeLoop:
     """A software loop, duck-typed exactly as `IpcService` reaches for one.
 
-    Five names, which is the whole contract: `has_loop`, `hold`, `arm`,
-    `disarm` and `acknowledge`.  `present=False` is the recorder-only case --
+    Six names, which is the whole contract: `has_loop`, `hold`, `arm`,
+    `sweep_to`, `disarm` and `acknowledge`.  `present=False` is the recorder-only case --
     the object is still handed over, because "there is no loop here" is an
     answer a client needs by name.
 
@@ -635,6 +635,7 @@ class FakeLoop:
         self.disarmed = False
         self.acknowledged = False
         self.armed_at = "not armed"
+        self.swept_to = None
 
     def hold(self):
         if not self.has_loop:
@@ -646,6 +647,18 @@ class FakeLoop:
         if not self.has_loop:
             raise RuntimeError("no controller is configured -- this is a recorder")
         self.armed_at = setpoint_k
+
+    def sweep_to(self, kelvin, rate_k_per_min=None):
+        if not self.has_loop:
+            raise RuntimeError(
+                "no software loop is configured -- this is a recorder, and "
+                "there is nothing here with a setpoint of its own"
+            )
+        self.swept_to = (kelvin, rate_k_per_min)
+        if rate_k_per_min is None:
+            return f"software loop sweeping to {kelvin:.4f} K at its own rate"
+        return (f"software loop sweeping to {kelvin:.4f} K at "
+                f"{rate_k_per_min:g} K/min")
 
     def disarm(self):
         if not self.has_loop:
@@ -1002,3 +1015,70 @@ def test_the_poller_puts_a_pending_note_on_the_next_row(tmp_path):
     # is the tempting wrong answer.
     assert rows[0]["Notes"] == ""
     assert rows[1]["Notes"] == "[?] connector reseated"
+
+
+# -- `setpoint --software`: the software loop's own setpoint ----------------
+#
+# Until 2026-09-17 there was no way to move an ARMED software loop's setpoint
+# through the spool.  `setpoint` went to an instrument loop, which on a 218
+# does not exist, and the software verbs were `arm`, `hold`, `ack` and
+# `heaters_off` -- so the only route to a new setpoint was `hold` then
+# `arm <kelvin>`, which is a STEP with the loop disengaged in between.  The
+# whole ramp path existed and was reachable from nothing.
+
+def test_a_software_setpoint_ramps_rather_than_stepping(tmp_path):
+    svc = service(tmp_path, allow_analog_output=True)
+    svc.software_loop = FakeLoop()
+    cid = svc.spool.submit("setpoint", kelvin=119.0, software=True,
+                           rate_k_per_min=1.0)
+    entry = ack(tick(svc), cid)
+    assert entry["ok"]
+    assert svc.software_loop.swept_to == (pytest.approx(119.0), pytest.approx(1.0))
+    assert "1 K/min" in entry["message"]
+
+
+def test_a_software_setpoint_without_a_rate_uses_the_controllers_own(tmp_path):
+    """The one rate lives in the controller, not in whatever a client typed."""
+    svc = service(tmp_path, allow_analog_output=True)
+    svc.software_loop = FakeLoop()
+    cid = svc.spool.submit("setpoint", kelvin=119.0, software=True)
+    entry = ack(tick(svc), cid)
+    assert entry["ok"]
+    assert svc.software_loop.swept_to == (pytest.approx(119.0), None)
+    assert "its own rate" in entry["message"]
+
+
+def test_a_software_setpoint_is_refused_without_the_analog_gate(tmp_path):
+    """**Invariant 4's exception.**  A 33x setpoint is inert until a range is
+    raised; a software loop is already driving, so moving its setpoint changes
+    the heater on the next cycle.  Same gate as `arm`.
+    """
+    svc = service(tmp_path)
+    svc.software_loop = FakeLoop()
+    cid = svc.spool.submit("setpoint", kelvin=119.0, software=True)
+    entry = ack(tick(svc), cid)
+    assert not entry["ok"]
+    assert "ipc.allow_analog_output" in entry["message"]
+    assert svc.software_loop.swept_to is None
+
+
+def test_an_instrument_setpoint_still_needs_no_power_gate(tmp_path):
+    """And is unaffected -- the flag is what separates them, not the gate."""
+    svc = service(tmp_path)
+    svc.software_loop = FakeLoop()
+    cid = svc.spool.submit("setpoint", kelvin=77.0, loop=1)
+    entry = ack(tick(svc), cid)
+    assert entry["ok"], entry["message"]
+    assert svc.software_loop.swept_to is None
+
+
+def test_a_software_setpoint_on_a_recorder_with_no_loop_says_so_by_name(tmp_path):
+    """Asked BEFORE the gate: a recorder with no loop must not be sent off to
+    edit a permission key that would change nothing."""
+    svc = service(tmp_path)
+    svc.software_loop = FakeLoop(present=False)
+    cid = svc.spool.submit("setpoint", kelvin=119.0, software=True)
+    entry = ack(tick(svc), cid)
+    assert not entry["ok"]
+    assert "no software loop" in entry["message"]
+    assert "allow_analog_output" not in entry["message"]

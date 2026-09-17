@@ -430,11 +430,43 @@ class IpcService:
         return out
 
     def _do_setpoint(self, cmd: Command) -> str:
-        inst = self._target(cmd)
-        loop = _as_int(cmd.args, "loop", required=False, default=1)
+        """An instrument loop's setpoint, or -- with ``software`` -- the PID's.
+
+        **Two different acts behind one word, and the gates differ**, which is
+        why the flag is explicit rather than inferred from which instrument was
+        named.  A 33x setpoint is INERT: it does nothing until somebody raises
+        a range, which is invariant 4 and is why it needs no power gate here.
+        A software loop is already driving, so moving its setpoint changes the
+        heater on the next cycle -- the 218 has no inert half.  It is therefore
+        gated exactly like `arm`, which is the other command that puts the
+        software loop to work.
+        """
         kelvin = _as_float(cmd.args, "kelvin")
-        inst.set_setpoint(loop, kelvin)
-        return f"{inst.name} loop {loop} setpoint -> {kelvin:.4f} K"
+        if not cmd.args.get("software"):
+            inst = self._target(cmd)
+            loop = _as_int(cmd.args, "loop", required=False, default=1)
+            inst.set_setpoint(loop, kelvin)
+            return f"{inst.name} loop {loop} setpoint -> {kelvin:.4f} K"
+
+        # Before the gate, deliberately -- the same order as `arm`, and for the
+        # same reason: "there is no software loop here" is what a client needs
+        # to hear, not that it lacks permission for something impossible.
+        if not getattr(self.software_loop, "has_loop", False):
+            raise CommandError(
+                "this recorder has no software loop -- it only records. Drop "
+                "`--software` to move a 33x loop's setpoint, or see `ltspm3`"
+            )
+        if not self.allow_analog_output:
+            raise CommandError(
+                "moving the software loop's setpoint commands the heater on "
+                "the next cycle, and this recorder does not accept that from "
+                "a file; set ipc.allow_analog_output: true"
+            )
+        rate = _as_float(cmd.args, "rate_k_per_min", required=False, default=None)
+        try:
+            return self.software_loop.sweep_to(kelvin, rate)
+        except RuntimeError as exc:
+            raise CommandError(str(exc)) from None
 
     def _do_ramp(self, cmd: Command) -> str:
         inst = self._target(cmd)

@@ -42,8 +42,8 @@ def wire(tmp_path, harness, **kw):
 
     `software_loop` is the duck-typed object `lschart.app.Application` normally
     supplies.  Building the whole Application here would drag in a poller and a
-    thread; what the service actually reaches for is five names, and the
-    supervisor is what stands behind all five.
+    thread; what the service actually reaches for is six names, and the
+    supervisor is what stands behind all six.
     """
     kw.setdefault("accept_commands", True)
     svc = IpcService(
@@ -105,6 +105,14 @@ class SoftwareLoop:
 
     def arm(self, setpoint_k=None):
         self.sup.arm(setpoint_k if setpoint_k is not None else self.sup.filter.value)
+
+    def sweep_to(self, kelvin, rate_k_per_min=None):
+        if rate_k_per_min is None:
+            self.sup.set_setpoint(kelvin, ramp=True)
+            return f"software loop sweeping to {kelvin:.4f} K at its own rate"
+        self.sup.sweep_to(kelvin, rate_k_per_min)
+        return (f"software loop sweeping to {kelvin:.4f} K at "
+                f"{rate_k_per_min:g} K/min")
 
 
 def apply(svc, harness, kind, **kw):
@@ -287,3 +295,60 @@ def test_ack_then_arm_is_the_whole_way_back(armed_service):
     h.step(20)                                # a usable reading to arm onto
     assert apply(svc, h, "arm")["ok"]
     assert h.sup.mode is LoopMode.PID
+
+
+# -- setpoint --software: the one verb this seam was missing ------------------
+
+
+def test_a_software_setpoint_command_actually_moves_the_cryostat(armed_service):
+    """**The command that did not exist until 2026-09-17.**
+
+    `arm`'s docstring has said "deliberate moves are sweeps, see the
+    controller's own ``sweep_to``" since it was written, and nothing outside
+    this process could reach it: the spool's software verbs were `arm`, `hold`,
+    `ack` and `heaters_off`, and `setpoint` went to an INSTRUMENT loop, which
+    on a 218 does not exist.  So the ramp path -- the smoother, the one rate,
+    the velocity feedforward -- was exercised only by the bench, and "ramping
+    is untested" was a missing command rather than a tuning gap.
+
+    Asked the way an operator would ask it, like everything else in this file:
+    not whether a method was called, but whether the cryostat went anywhere.
+    """
+    svc, h = armed_service
+    start = h.sup.status.filtered_k
+    assert apply(svc, h, "setpoint", kelvin=start + 2.0, software=True,
+                 rate_k_per_min=1.0)["ok"]
+
+    for _ in range(600):
+        h.step(1)
+    moved = h.sup.status.filtered_k - start
+    assert moved > 0.5, f"the cryostat only moved {moved:.3f} K"
+    assert h.sup.status.state is SupervisorState.TRACKING
+
+
+def test_a_software_setpoint_ramps_instead_of_stepping(armed_service):
+    """Rule 8, and the reason `hold` + `arm <kelvin>` was the wrong route.
+
+    Immediately after the command the loop is chasing something close to where
+    it already is -- the smoothed setpoint -- not the far end.  Arming at a new
+    setpoint instead hands the PID the whole step at once.
+    """
+    svc, h = armed_service
+    start = h.sup.status.filtered_k
+    assert apply(svc, h, "setpoint", kelvin=start + 5.0, software=True,
+                 rate_k_per_min=0.5)["ok"]
+    h.step(2)
+    assert abs(h.sup.pid.cfg.setpoint - start) < 1.0, (
+        "the setpoint jumped to the target instead of ramping there")
+    assert h.sup.smoother.rate_k_per_s != 0.0, "not actually ramping"
+
+
+def test_a_software_setpoint_is_refused_when_the_gate_is_shut(tmp_path, armed):
+    """Gated like `arm`, not like a 33x setpoint.  The heater is already live."""
+    h = armed()
+    svc = wire(tmp_path, h, allow_analog_output=False)
+    before = h.sup.pid.cfg.setpoint
+    entry = apply(svc, h, "setpoint", kelvin=before + 3.0, software=True)
+    assert not entry["ok"]
+    assert "ipc.allow_analog_output" in entry["message"]
+    assert h.sup.pid.cfg.setpoint == pytest.approx(before)

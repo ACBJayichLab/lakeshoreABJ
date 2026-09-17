@@ -691,9 +691,26 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
                      help="seconds to wait for the acknowledgement")
     snd_sub = snd.add_subparsers(dest="kind", required=True)
 
-    sp = snd_sub.add_parser("setpoint", help="move a loop's setpoint")
+    sp = snd_sub.add_parser(
+        "setpoint", help="move a loop's setpoint, or the software loop's",
+        description="Without --software this moves an INSTRUMENT loop, which "
+                    "is inert until somebody raises that heater's range. With "
+                    "--software it moves the software PID, which is already "
+                    "driving -- so it ramps there rather than stepping, and it "
+                    "is gated like `arm`.",
+    )
     sp.add_argument("kelvin", type=float)
-    sp.add_argument("--loop", type=int, default=1)
+    where = sp.add_mutually_exclusive_group()
+    where.add_argument("--loop", type=int, default=1,
+                       help="which loop on the instrument (default 1)")
+    where.add_argument("--software", action="store_true",
+                       help="the SOFTWARE PID's setpoint, not an instrument's. "
+                            "Ramps to it at the controller's own rate; the "
+                            "loop must already be armed")
+    sp.add_argument("--rate", dest="rate_k_per_min", type=float, default=None,
+                    help="K/min for a --software sweep; omit for the "
+                         "controller's configured rate, which is the one rate "
+                         "and is where it belongs")
 
     rp = snd_sub.add_parser("ramp", help="set the instrument's setpoint ramp")
     rp.add_argument("rate_k_per_min", type=float,
@@ -809,7 +826,7 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     def _collect_send_args(parsed) -> list[tuple]:
         """Turn the chosen sub-parser's options into the command's arguments."""
         keys = {
-            "setpoint": ("kelvin", "loop"),
+            "setpoint": ("kelvin", "loop", "software", "rate_k_per_min"),
             "ramp": ("rate_k_per_min", "loop"),
             "range": ("value", "output"),
             "analog": ("percent",),

@@ -143,7 +143,8 @@ Handled on the acquisition thread, because that thread owns the bus.
 |---|---|
 | `ping` | proves the whole path, touching no instrument |
 | `note` | `text` — one line into the log's `Notes` column. Touches no instrument, so no power gate; lands on the **next** row |
-| `setpoint` | `loop`, `kelvin` |
+| `setpoint` | `loop`, `kelvin` — an **instrument** loop, inert until a range is raised |
+| `setpoint` + `software: true` | `kelvin`, optional `rate_k_per_min` — the **software PID's** setpoint, ramped to. **Applies power**: the loop is already driving, so this is gated like `arm` and not like the row above |
 | `ramp` | `loop`, `rate_k_per_min` (0 disables) |
 | `range` | `output`, `value` 0–3 — **applies power** on a 33x |
 | `analog` | `percent` — **applies power** on a 218; there is no inert half to it |

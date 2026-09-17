@@ -210,10 +210,30 @@ temperature the cryostat is at now.
 **A loop that is already armed refuses it.** `arm` means close the loop, and
 closing a closed one would step its setpoint with no ramp and dump whatever
 trajectory it was on — a sub-kelvin surprise rather than a hazard, since rule 8
-bounds the step, but a surprise behind a word that says something else. To move
-an armed loop's setpoint: `send hold`, then `send arm 117.0`. `hold` freezes
-the heater exactly where it is and `arm` primes from there, so the pair is
-bumpless.
+bounds the step, but a surprise behind a word that says something else.
+
+To move an armed loop's setpoint, **`send setpoint 119 --software`**:
+
+```
+python -m lschart -c config.yaml send setpoint 119 --software
+python -m lschart -c config.yaml send setpoint 119 --software --rate 1.0
+```
+
+It **ramps** there — the controller's own `max_rate_k_per_min` unless `--rate`
+says otherwise, so the one rate stays in one place. `--software` and `--loop`
+are mutually exclusive, and the flag is explicit rather than inferred from
+which instrument was named, because the two are different acts with different
+gates: an instrument setpoint is inert until a range is raised, while the
+software loop is already driving and this reaches the heater on the next cycle.
+So it needs `ipc.allow_analog_output`, exactly like `arm`.
+
+Until 2026-09-17 this command did not exist, and this paragraph said to use
+`send hold` then `send arm 117.0` instead. That works and is bumpless, but it
+is a **step** with the loop disengaged in between — which is the one thing rule
+8 says not to do with a setpoint — and it means the whole ramp path (the
+smoother, the one rate, the velocity feedforward) was reachable from nothing
+outside the process. `hold` + `arm` remains the right pair for *resuming* a
+loop, not for moving one.
 
 `ack` clears a software loop's fault lockout, which is what `arm` refuses on
 until it is cleared. It leaves the loop **disarmed** — recovery is `ack` then

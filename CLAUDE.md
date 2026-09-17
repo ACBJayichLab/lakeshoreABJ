@@ -264,9 +264,12 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      plant_*.csv.  -> plans/pid-2-monitor.md
   control/           supervisor (the envelope -- read first), health, coherence,
                      pid, tuning, feedforward, ramp, filters, dither.
-                     `panic_hold()`/`panic_off()`/`arm()`/`acknowledge()` are
-                     the only METHODS lschart calls
-                     here; `status.py` also READS `band` and `cfg.warn_error_k`
+                     `panic_hold()`/`panic_off()`/`arm()`/`acknowledge()` and
+                     `set_setpoint()`/`sweep_to()` are the only METHODS lschart
+                     calls here -- the last two since 2026-09-17, which is when
+                     an armed loop's setpoint first became movable from outside
+                     the process at all (`send setpoint --software`);
+                     `status.py` also READS `band` and `cfg.warn_error_k`
                      for the status file's `control` block.  All of it
                      duck-typed by name and defaulted, so invariant 1 holds --
                      and pinned against a real supervisor by
