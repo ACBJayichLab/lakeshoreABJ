@@ -157,7 +157,7 @@ useless for an experiment.
 
 ## What needs doing, in the order I would take it
 
-### A. The tuning step of 4c — the one that unblocks ramping
+### A. ~~The tuning step of 4c~~ — APPLIED 2026-09-17, and never armed
 
 `plans/pid-4-commissioning.md` already has this: 4c is *"widen to 1.0 %, then
 tuning, then feedforward, one per watched hour"*. **The tuning step does not
@@ -167,8 +167,9 @@ stale LEVEL, the tuner reads only `K(T)` and `τ(T)`, the SHAPE. Same distinctio
 (AUDIT-2026-09-16 findings 2 and 3), and `test_stage_4c_tuning.py` pins that the
 two switches come apart.
 
-**The edit, not applied — it changes what the next `run --arm` does, and 4c is
-"one per watched hour" with somebody watching:**
+**APPLIED to `config-ltspm3-armed.yaml`, and it reaches the cryostat only at the
+next `run --arm` — which has not happened. The running loop is HELD and its
+gains are still the 4a ones.**
 
 ```yaml
   tuning:
@@ -176,10 +177,25 @@ two switches come apart.
     hold_speed: 12.0       # was 3.0 -- see below
 ```
 
-Flipping it **will fail four tests in `test_stage_4a.py`**, which is the pinning
-working as designed: those tests assert the file's switches and would have to be
-handed explicit 4a configs to keep saying what they say about a stage that is
-MET and is now history.
+`check` now prints it, which it did not before:
+
+```
+  gain schedule  : ON -- kp/ti from the model at hold_speed 12.0, move_speed
+                   0.5; a ramp also gets velocity feedforward and the band
+                   widens while it runs
+```
+
+Read that line before arming. Three behaviours hang off the switch and nothing
+used to print any of them, which is how "a move arrives a kelvin late at any
+rate" was read as "the ramp is too fast".
+
+Flipping it broke seven tests, every one of them the pinning working:
+`test_stage_4a.py` is now two things (`armed()` follows the file, `at_4a()`
+forces the tuner off for the three scenarios that reproduce 2026-09-16), the
+rate limiter is asserted at both stages, and **`BENCH_HOLD_SPEED = 3.0` is a
+fourth envelope switch** — `enabled` was pinned but `hold_speed` was still read
+from the file, so raising it handed every envelope scenario a loop four times
+weaker and the monitor's dither test failed honestly.
 
 **`hold_speed` is a guess and is the one number here that is not measured.** The
 loop's authority in the 90–240 min band scales as `1/hold_speed`, and the
