@@ -22,10 +22,15 @@ cryostat, twice; the second time it held).
 > python -m lschart -c config-ltspm3-armed.yaml status
 > ```
 >
-> **The running process is still on the code of 2026-09-16 morning.** The whole
-> `control:` section is read at construction, so the AUDIT-2026-09-16 fixes —
-> the 24-minute fault ramp-down, the one rate reaching the output, `arm`
-> refusing on an armed loop — arrive at the next `run --arm`, not before.
+> **The AUDIT-2026-09-16 fixes ARE live.** Jeff restarted the recorder at
+> **09:04:28 on 2026-09-17**, after the audit branch merged, so the 24-minute
+> fault ramp-down, the one rate reaching the output and `arm` refusing on an
+> armed loop are all on the cryostat now — for the first time.
+>
+> **The overnight window graded below is NOT that process.** It was recorded by
+> the run that started on 09-16, on the pre-audit code. That does not touch the
+> finding: none of the audit fixes moves a gain, and `Kp 0.02 / Ti 900` is the
+> same either side of the restart.
 
 ## The finding: 19 h armed, and the loop made the hold 5.6x worse
 

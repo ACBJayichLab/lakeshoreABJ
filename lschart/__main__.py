@@ -237,6 +237,24 @@ def cmd_check(args) -> int:
             print(f"  authority band : {lo:.3f}% .. {hi:.3f}%, FIXED -- the "
                   f"feedforward is off, so the centre is operating_point_pct "
                   f"and does not follow the setpoint  (on_exit={s.on_exit})")
+        # **AND SAY WHETHER THE GAINS ARE SCHEDULED**, because THREE behaviours
+        # hang off that one switch and until 2026-09-17 nothing printed any of
+        # them: the gains, the velocity feedforward, and whether the band
+        # widens during a ramp.  With it off a +2 K move arrives about a kelvin
+        # late at ANY commanded rate -- bench-measured, and read for months as
+        # "the ramp is too fast".  Duck-typed and defaulted like the band above.
+        tun = getattr(control, "tuning", None)
+        pid = getattr(control, "pid", None)
+        if bool(getattr(tun, "enabled", False)):
+            print(f"  gain schedule  : ON -- kp/ti from the model at "
+                  f"hold_speed {getattr(tun, 'hold_speed', '?')}, move_speed "
+                  f"{getattr(tun, 'move_speed', '?')}; a ramp also gets "
+                  f"velocity feedforward and the band widens while it runs")
+        else:
+            print(f"  gain schedule  : OFF -- FIXED kp "
+                  f"{getattr(pid, 'kp', '?')}, ti {getattr(pid, 'ti', '?')}; a "
+                  f"ramp gets NO velocity feedforward and the band does NOT "
+                  f"widen, so a move arrives late at any rate")
     print("OK")
     return 0
 

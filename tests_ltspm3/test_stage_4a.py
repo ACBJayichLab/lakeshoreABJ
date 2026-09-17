@@ -14,6 +14,19 @@ only visible from here -- the fault ramp-down's rate (finding 2) and the output
 rate limiter's (finding 3) -- have a test each, because both are properties
 somebody has to re-read after changing that file.
 
+**THE FILE MOVED ON 2026-09-17, and this module is now two things.**
+`tuning.enabled` went true (the tuning step of 4c -- see the file, and
+`test_stage_4c_tuning.py`), so `stage="file"` is no longer 4a.
+
+* Tests that grade **whatever the file says today** still use `armed()`.  They
+  are the ones that have to keep being true of the running cryostat.
+* Tests that reproduce **stage 4a as the cryostat was armed on 2026-09-16** --
+  the 13:35 walk-down, the band that does not widen, the 3 K move that is not
+  delivered -- now use `at_4a()`, which forces the tuner off explicitly.  Those
+  three document a real event and a real limitation; pinning them to the file
+  would have quietly re-graded them against a different stage, which is the
+  same mistake `BENCH_AUTHORITY_PCT` exists to prevent.
+
 **The plant is SETTLED on a weak heater**, which is the recipe HANDOFF item D
 was missing.  See `FittedHarness.equilibrate`.
 """
@@ -40,27 +53,51 @@ BENCH_K = 118.3
 
 
 def armed(**kw):
-    """A settled 4a cryostat with the loop closed where it actually sits."""
+    """A settled cryostat, at WHATEVER STAGE THE FILE SAYS, loop closed."""
     kw.setdefault("delivered_frac", DELIVERED_FRAC)
     h = FittedHarness(kelvin=BENCH_K, stage=STAGE_FILE, settled=True, **kw)
     h.sup.arm(h.sup.status.filtered_k)
     return h
 
 
+def at_4a(**kw):
+    """The same, pinned to **stage 4a**: the tuner off, whatever the file says.
+
+    For the three scenarios that document how the cryostat behaved on
+    2026-09-16 rather than how it behaves now.  `hold_speed` comes with it
+    because the file's 12 is a 2026-09-17 commissioning guess and 4a ran 3.
+    """
+    cfg = bench_control_config()
+    kw.setdefault("tuning_cfg", dataclasses.replace(
+        cfg.tuning, enabled=False, hold_speed=3.0))
+    return armed(**kw)
+
+
 # -- the stage itself ------------------------------------------------------
 
 def test_stage_file_really_is_the_file():
-    """If this drifts, everything below is grading something else."""
+    """If this drifts, everything using `armed()` is grading something else."""
     cfg = bench_control_config()
     h = FittedHarness(kelvin=BENCH_K, stage=STAGE_FILE)
     assert h.sup.cfg.authority_pct == cfg.supervisor.authority_pct
     assert h.sup.cfg.operating_point_pct == cfg.supervisor.operating_point_pct
     assert h.sup.feedforward.enabled is cfg.feedforward.enabled
     assert h.sup.tuner.enabled is cfg.tuning.enabled
-    # And 4a is what those four say it is, so a change to the file lands here
+    # And the STAGE is what those say it is, so a change to the file lands here
     # as a failing assertion rather than as a surprise on the cryostat.
+    #
+    # 2026-09-17: the tuner went ON -- the tuning step of 4c, which needs no
+    # gauge because it reads the model's SHAPE and not its LEVEL.  The
+    # feedforward is what waits on the gauge, and it is still off.
     assert h.sup.feedforward.enabled is False
+    assert h.sup.tuner.enabled is True
+
+
+def test_stage_4a_is_still_reachable_for_the_tests_that_reproduce_it():
+    """`at_4a()` must not follow the file, or the three below stop meaning it."""
+    h = at_4a()
     assert h.sup.tuner.enabled is False
+    assert h.sup.feedforward.enabled is False
 
 
 def test_a_settled_plant_is_below_the_model_s_answer_for_its_own_output():
@@ -94,7 +131,7 @@ def test_feedforward_on_walks_the_heater_down_at_either_band_width(authority):
     configured to do, which is why it took a trace and not an alarm to find.
     """
     cfg = bench_control_config()
-    h = armed(sup_cfg=dataclasses.replace(cfg.supervisor,
+    h = at_4a(sup_cfg=dataclasses.replace(cfg.supervisor,
                                           authority_pct=authority),
               ff_cfg=dataclasses.replace(cfg.feedforward, enabled=True))
     at_arm = h.sup.status.filtered_k
@@ -183,15 +220,24 @@ def test_the_fault_ramp_down_walks_the_curve_down_at_the_one_rate():
 
 # -- finding 3: the output rate limiter, and what it is told ---------------
 
-def test_the_output_rate_limiter_converts_the_one_rate_with_tuning_off():
+@pytest.mark.parametrize("stage", ["4a", "file"])
+def test_the_output_rate_limiter_converts_the_one_rate_at_either_stage(stage):
     """The conversion needs the SCHEDULE; `tuning.enabled` says whether to
     reschedule the GAINS.  Two questions, and they were one switch.
 
     On the floor it was 0.20 %/min -- **2.6 K/min at 118 K**, against the 5 the
     file's `ramp.max_rate_k_per_min` names, and 0.6 K/min at 30 K.
     AUDIT-2026-09-16 finding 3.
+
+    **Asserted at BOTH stages since 2026-09-17**, which is what the finding
+    actually claims: the limiter asks `has_curve` -- is there a curve to convert
+    with -- and NOT whether this stage's tuner is switched on.  Running it only
+    at whatever the file happens to say would have let the tuner's arrival hide
+    a regression back to the floor, and the floor is a five-hour fault
+    ramp-down.
     """
-    h = armed()
+    h = at_4a() if stage == "4a" else armed()
+    assert h.sup.tuner.enabled is (stage != "4a")
     gain = h.sup.schedule.gain_at(BENCH_K)
     one_rate = h.sup.ramp.cfg.max_rate_k_per_min / gain
     assert one_rate == pytest.approx(0.40, abs=0.02)
@@ -210,7 +256,7 @@ def test_the_band_still_does_not_widen_during_a_ramp_at_this_stage():
     `tuner.enabled` where the ramp-down and the rate limiter no longer are.
     Both of those were failing slow, and slow is the safe side of rule 1.
     """
-    h = armed()
+    h = at_4a()
     h.minutes(2)
     h.sup.set_setpoint(h.sup.pid.cfg.setpoint + 3.0)
     h.minutes(1)
@@ -233,7 +279,7 @@ def test_a_three_kelvin_setpoint_move_is_not_delivered_at_five_k_per_min():
     rather than the scheduled value.  Both halves are the same switch
     conflation, and 4d's 10 K sweep is written against 5 K/min.
     """
-    h = armed()
+    h = at_4a()
     h.minutes(2)
     sp0 = h.sup.pid.cfg.setpoint
     start_k = h.sup.status.filtered_k

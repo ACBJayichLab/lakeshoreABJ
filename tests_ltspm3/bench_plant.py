@@ -51,6 +51,23 @@ BENCH_FEEDFORWARD = True
 #: pinned for the same reason as the other two, and it is now pinned out loud.
 BENCH_TUNING = True
 
+#: The FOURTH, and it arrived the same way the third did -- by moving and being
+#: noticed downstream.  `enabled` was pinned above but `hold_speed` was still
+#: read from the file, so raising it to 12 on 2026-09-17 (the commissioning
+#: guess against the 09-16 oscillation -- see the file) quietly handed every
+#: envelope scenario a loop four times weaker at a hold.
+#:
+#: It surfaced as `test_the_judge_keeps_an_opinion_while_a_closed_loop_is_running`
+#: failing on `moved > 100`: that test needs a loop that dithers HARD, because
+#: what it grades is the monitor keeping an opinion while the output moves a
+#: DAC code most cycles.  At `hold_speed: 12` the loop moved 16 times in 1200
+#: and the test proved nothing -- a true observation about the new tuning, and
+#: the wrong question for that test to be asking.
+#:
+#: 3.0 is the design value and what phase 3 proved the loop over.  A scenario
+#: that wants the commissioning number takes `stage="file"`.
+BENCH_HOLD_SPEED = 3.0
+
 #: `stage="file"` instead, for a scenario that wants the COMMISSIONING STAGE
 #: the cryostat is armed at rather than the design envelope: the three switches
 #: above, and `operating_point_pct`, come from `BENCH_CONFIG` verbatim.  That is
@@ -204,7 +221,8 @@ class FittedHarness(Harness):
                          tuning_cfg=tuning_cfg or (cfg.tuning if on_file else
                                                    dataclasses.replace(
                                                        cfg.tuning,
-                                                       enabled=BENCH_TUNING)),
+                                                       enabled=BENCH_TUNING,
+                                                       hold_speed=BENCH_HOLD_SPEED)),
                          filter_kwargs=filter_kwargs or dict(cfg.filter),
                          cadence_s=self.DT if cadence_s is None else cadence_s,
                          start_k=self.bench_k, model=plant, **kw)

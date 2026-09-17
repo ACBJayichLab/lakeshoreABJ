@@ -379,7 +379,37 @@ control:
     smooth_delays: 8.0
 
   tuning:
-    enabled: false
+    # **ON since 2026-09-17 -- this is the TUNING step of 4c.**  It is the one
+    # commissioning switch that does NOT wait on the gauge, and that is the
+    # whole reason it comes before the feedforward:
+    #
+    #   `feedforward` commands the model's LEVEL, which is stale (HANDOFF A).
+    #   `tuning` reads only K(T) and tau(T) -- the model's SHAPE, which the
+    #   refit did not move.
+    #
+    # Same distinction `has_curve` already draws for the fault ramp-down and
+    # the output rate limiter (AUDIT-2026-09-16 findings 2 and 3).
+    # `tests_ltspm3/test_stage_4c_tuning.py` pins that the two switches come
+    # apart, with a control case, because at 118.3 K the two band centres agree
+    # to three figures and the assertion would otherwise not be able to fail.
+    #
+    # WHAT IT BUYS, and the reason it is worth a stage of its own: THREE things
+    # are gated on `tuner.enabled` and all three were off.  The scheduled gains
+    # (`move_speed` is an 8x kp), the velocity feedforward (`rate*tau/K`, the
+    # drive a ramp needs), and `ramp_lead_pct` (the authority to use it).  With
+    # all three off the loop drags the sample with P+I inside a fixed band, and
+    # a +2 K move at ANY rate arrives about a kelvin late -- bench, from a
+    # settled 116.88 K, forty minutes:
+    #
+    #     rate          off            on
+    #     0.2 K/min     1.045 K        0.065 K       short by
+    #     1.0 K/min     0.982 K        0.041 K
+    #     5.0 K/min     0.970 K        0.037 K
+    #
+    # The RATE is not what binds -- all three land within 0.1 K of each other.
+    # It never rails and never faults; it arrives late with a `warn_error_k`
+    # warning, which is graceful and useless for an experiment.
+    enabled: true
     # RATIOS TO THE PLANT'S OWN TIME CONSTANT, not absolute times.  tau(T) runs
     # from 0.1 s at 10 K to 611 s at 180 K, so the 1800 s / 300 s this replaced
     # was three times the plant at the top and eighteen THOUSAND times it at
@@ -391,7 +421,42 @@ control:
     # and above the floor kp is simply 1 / (speed * K(T)).  The floor binds in
     # `move` from 10 to 30 K, where the cryostat settles faster than this loop
     # can see it.
-    hold_speed: 3.0               # slower than the plant: noise never amplified
+    # **12, NOT THE 3 THIS SHIPPED WITH, and it is the one number here that is
+    # a GUESS rather than a measurement.**  2026-09-17.
+    #
+    # The 19 h armed on 09-16 put 19.7 mK into the 90-240 min band against
+    # 2.6 mK open loop the night before -- 5.6x worse at 39 min of averaging,
+    # at the loop's OWN natural period, `2*pi*sqrt(tau*Ti/(Kp*K))` = 142 min
+    # against measured peaks at 118-147.  The loop was stirring, not
+    # correcting: the heater led the sample by +108 deg at coherence 0.77,
+    # which is what an integral-dominated PI does.
+    #
+    # How much it stirs scales with the loop's authority in that band, and at
+    # 118 K that is about `2.2 / hold_speed`:
+    #
+    #     armed 09-16 (fixed kp 0.02, ti 900)     |L| at 2 h = 0.37   -> 5.6x
+    #     hold_speed 3 (the tuner's default)      |L| at 2 h = 0.74
+    #     hold_speed 12                           |L| at 2 h = 0.19
+    #     hold_speed 24                           |L| at 2 h = 0.09
+    #
+    # So turning the tuner on at its DEFAULT would have doubled the authority
+    # in exactly the band that misbehaved.  12 is the guess that it roughly
+    # quarters it.  **It costs a ramp nothing** -- a ramp runs on `move_speed`,
+    # and `test_hold_speed_does_not_touch_the_move_gains` pins that.
+    #
+    # It is a guess because THE MODEL CANNOT SETTLE IT: PI on a single pole is
+    # unconditionally stable, |S| <= 1 at every period, phase margin 96 deg --
+    # the model says the 09-16 oscillation is impossible and it happened.  The
+    # plant's hour-scale dynamics have never been measured.  One night, graded
+    # by `python -m analysis.hold_quality` against a matched OPEN-LOOP window,
+    # settles it; a ratio near 1 is the target, and if it is still above about
+    # 1.5 the two directions are weaker again (24) or much stronger (0.25, so
+    # the loop has real authority there instead of stirring).
+    #
+    # **Do not read a quiet hour as success.**  The loop is 1.00x open loop out
+    # to tau = 72 s and only diverges after; 4a's one-hour gate could not have
+    # seen this, because the Allan criterion runs to L/4.
+    hold_speed: 12.0              # slower than the plant: noise never amplified
     move_speed: 0.5               # faster than the plant: bandwidth is the point
     delay_floor: 4.0              # x the DERIVED dead time, 3.0 s -> 12 s
     move_error_k: 0.25

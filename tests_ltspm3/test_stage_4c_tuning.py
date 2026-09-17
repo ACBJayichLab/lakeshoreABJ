@@ -197,8 +197,11 @@ def test_hold_speed_does_not_touch_the_move_gains():
     `hold_speed` is the knob for the hold -- and this pins that raising it
     costs a ramp nothing, because a ramp runs on `move_speed`.
     """
+    # Both explicit.  `harness(tuning=True)` reads `hold_speed` from the file,
+    # and since 2026-09-17 the file says 12 -- so comparing against it would
+    # have been comparing 12 with 12 and passing on neither.
     slow = harness(tuning=True, hold_speed=12.0).sup.tuner
-    quick = harness(tuning=True).sup.tuner
+    quick = harness(tuning=True, hold_speed=3.0).sup.tuner
     slow_hold = slow.gains_for(BENCH_K, ControlPhase.HOLD)
     quick_hold = quick.gains_for(BENCH_K, ControlPhase.HOLD)
     assert slow_hold[0] < quick_hold[0] / 2.0
@@ -212,3 +215,46 @@ def test_a_slower_hold_still_ramps():
              delta_k=2.0, minutes=40)
     assert abs(r["short_by_k"]) < 0.2
     assert r["railed_cycles"] == 0
+
+
+# -- and `check` has to SAY which of the two it is -------------------------
+
+def _check_output(capsys, path):
+    import lschart.__main__ as cli
+
+    import ltspm3.config  # noqa: F401  -- registers `control:`
+    assert cli.main(["-c", str(path), "check"]) == 0
+    return capsys.readouterr().out
+
+
+def test_check_says_the_gains_are_scheduled(capsys, tmp_path):
+    """**Three behaviours hang off `tuning.enabled` and `check` printed none.**
+
+    The band line has said which band it is since AUDIT-2026-09-16 finding 7.
+    This is the same argument one switch over: somebody deciding whether to arm
+    can now read whether a ramp will get its drive, rather than finding out
+    forty minutes into one.
+    """
+    from bench_plant import BENCH_CONFIG
+
+    out = _check_output(capsys, BENCH_CONFIG)
+    assert "gain schedule  : ON" in out
+    assert "velocity feedforward" in out
+
+    # And the other branch, from the same file with the one key flipped -- so
+    # this cannot pass by agreeing with whatever the file happens to say.
+    #
+    # Scoped to the `tuning:` block deliberately.  A bare replace of the first
+    # `enabled: true` rewrites the 218's, and the load then fails with
+    # "control.enabled requires ls218.enabled" rather than exercising anything.
+    head, sep, tail = BENCH_CONFIG.read_text(encoding="utf-8").partition(
+        "\n  tuning:\n")
+    assert sep, "the `tuning:` block moved; this test is rewriting the wrong key"
+    assert "\n    enabled: true\n" in tail
+    off = tmp_path / "tuning-off.yaml"
+    off.write_text(head + sep + tail.replace("\n    enabled: true\n",
+                                             "\n    enabled: false\n", 1),
+                   encoding="utf-8")
+    out = _check_output(capsys, off)
+    assert "gain schedule  : OFF" in out
+    assert "arrives late at any rate" in out
