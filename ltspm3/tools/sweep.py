@@ -66,7 +66,7 @@ has decided the stage is better cold than warm.
 is the wrong choice.  ``heaters_off`` means *every writable heater on this
 recorder*, deliberately -- a panic button that leaves one heater running is
 worse than none.  ``config-ltspm3-heater.yaml`` also opens the 336, whose
-heater 2 is railed at 100% holding THE CHONKE and is somebody else's, so that
+heater 2 is holding THE CHONKE and is somebody else's, so that
 flag would cut theirs as well as ours.  Leave it on ``hold``.
 
 Usage

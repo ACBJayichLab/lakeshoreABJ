@@ -170,8 +170,8 @@ what is already correct.
 ## The 336 is read-only, and that matters
 
 Loop 2 of the 336 independently holds **"THE CHONKE" near 290 K with heater 2
-railed** -- no headroom, and the exact percentage is whatever `status.json`
-says today. This software must not disturb it.
+around 90 %** (the live value is in `status.json`). This software must not
+disturb it.
 
 `allow_writes` defaults to `False` and every write raises `PermissionError`
 unless it is explicitly enabled. On this cryostat, leave it that way.

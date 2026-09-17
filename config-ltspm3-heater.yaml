@@ -86,7 +86,7 @@ instruments:
     read_status: true
     status_every_n_cycles: 15
 
-  # The 336: WRITABLE.  Loop 2 holds THE CHONKE with no headroom and is not
+  # The 336: WRITABLE.  Loop 2 holds THE CHONKE and is not
   # ours (docs/ltspm3/cryostat.md), so check which loop you are addressing
   # before sending anything.  status.json's loop table -- the box's own
   # OUTMODE? -- says which sensor each loop reads and what it is doing.

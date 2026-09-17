@@ -169,9 +169,9 @@ class LS33xConfig(InstrumentConfig):
 
     ``allow_writes`` gates every command that can change what the box does.  It
     is off by default because the common case on a shared cryostat is that some
-    other loop is already holding something important -- on the LTSPM3 cryostat, the
-    336's loop 2 holds THE CHONKE at 290.6 K, and disturbing it is a real
-    hazard.  Turn it on for a box this software is meant to drive.
+    other loop on the same box is already holding something that is not yours,
+    and disturbing it is a real hazard.  Turn it on for a box this software is
+    meant to drive.
     """
 
     model: str = "336"
