@@ -76,18 +76,48 @@ BANDS = ((10.0, 40.0), (40.0, 90.0), (90.0, 240.0))
 GRID_S = 10.0
 
 
+def when(text, flag):
+    """Parse a `--from`/`--to`, or say what is wrong and stop.
+
+    Bare `datetime.fromisoformat` raises `ValueError: Invalid isoformat string`
+    out of the middle of `load`, which reaches the operator as a traceback with
+    the offending flag nowhere in it.  This is a tool for a person at a console
+    at the end of a night, so a bad timestamp is an ordinary thing to type.
+    """
+    if text is None:
+        return None
+    try:
+        return dt.datetime.fromisoformat(text)
+    except ValueError:
+        raise SystemExit(
+            f"{flag}: {text!r} is not a timestamp.\n"
+            f"  Use 2026-09-16T18:00, or '2026-09-16 18:00', or a bare "
+            f"2026-09-16 for midnight.\n"
+            f"  Omit {flag} entirely to take the whole file."
+        ) from None
+
+
 def load(patterns, t_from=None, t_to=None, column="Sample"):
     """Timestamps and one column from one or more recorder CSVs.
 
     Globs are expanded here rather than left to the shell, because the shell on
     the cryostat is `cmd`, which does not expand them.
+
+    ``t_from``/``t_to`` are `datetime` or None -- already parsed by `when`, so
+    a bad one has been reported against the flag it came from rather than
+    surfacing here.
     """
     paths = []
     for p in patterns:
         hit = sorted(glob.glob(p))
         paths.extend(hit or [p])
-    lo = dt.datetime.fromisoformat(t_from).timestamp() if t_from else -np.inf
-    hi = dt.datetime.fromisoformat(t_to).timestamp() if t_to else np.inf
+    missing = [p for p in paths if not os.path.exists(p)]
+    if missing:
+        raise SystemExit("no such file(s): " + ", ".join(missing)
+                         + "\n  (a glob that matches nothing is passed through "
+                           "verbatim, which is what you are seeing)")
+    lo = t_from.timestamp() if t_from else -np.inf
+    hi = t_to.timestamp() if t_to else np.inf
     t, y = [], []
     for path in paths:
         with open(path, newline="", encoding="utf-8") as fh:
@@ -175,7 +205,8 @@ def main() -> int:
     ap.add_argument("--floor-tau", type=float, default=10.0)
     args = ap.parse_args()
 
-    t, y, paths = load(args.csv, args.t_from, args.t_to, args.column)
+    t, y, paths = load(args.csv, when(args.t_from, "--from"),
+                       when(args.t_to, "--to"), args.column)
     if len(t) < 100:
         print(f"only {len(t)} rows in that window -- nothing to grade",
               file=sys.stderr)
@@ -188,7 +219,8 @@ def main() -> int:
               "only\ncomparable to another window measured the same way.")
         return 0
 
-    rt, ry, rpaths = load(args.vs, args.vs_from, args.vs_to, args.column)
+    rt, ry, rpaths = load(args.vs, when(args.vs_from, "--vs-from"),
+                          when(args.vs_to, "--vs-to"), args.column)
     if len(rt) < 100:
         print(f"only {len(rt)} rows in the reference window", file=sys.stderr)
         return 1
