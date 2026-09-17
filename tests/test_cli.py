@@ -674,14 +674,34 @@ def _armed_like(tmp_path):
 
 
 def test_send_accepts_a_config_whose_control_section_it_cannot_read(tmp_path, capsys):
-    """It must reach the spool.  Refusing the status check is the NEXT gate."""
-    rc = cli.main(["-c", _armed_like(tmp_path), "send", "hold"])
+    """It must reach the spool, and `hold` must actually LAND in it.
+
+    This used to assert `rc != 0` and that "unknown key" was absent, which a
+    YAML error, a missing `ipc:` key or a traceback would all have satisfied
+    (AUDIT-2026-09-16 finding 8).  What it means is that the config parser is
+    not what stops an abort, so it asserts the abort arriving.
+    """
+    rc = cli.main(["-c", _armed_like(tmp_path), "send", "--timeout", "0", "hold"])
     out = capsys.readouterr()
     combined = out.out + out.err
     assert "unknown key" not in combined, combined
-    # No recorder is running here, so it stops at the staleness guard -- which
-    # is the check that is SUPPOSED to stop it, rather than the config parser.
+    assert _spooled_kinds(tmp_path / "commands") == ["hold"]
+    # Nothing is consuming the spool here, so there is no acknowledgement and
+    # the exit status says so.  That is the honest answer, and it is a
+    # different thing from having been refused.
     assert rc != 0
+    assert "no acknowledgement" in combined
+
+
+def test_send_says_what_is_wrong_when_a_setpoint_finds_no_recorder(tmp_path, capsys):
+    """The other half, and the message is the assertion: a non-panic command
+    IS stopped by the liveness guard, by name, and points at `set`."""
+    rc = cli.main(["-c", _armed_like(tmp_path), "send", "setpoint", "96.0"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "no recorder is running here" in err
+    assert "`set`" in err
+    assert _spooled_kinds(tmp_path / "commands") == []
 
 
 def test_status_accepts_the_same_config(tmp_path, capsys):
@@ -696,7 +716,12 @@ def test_run_still_refuses_it(tmp_path, capsys):
 
     Keyed on a section nothing registers: `control` is registered as soon as
     `ltspm3.config` is imported, so asserting on it would pass alone and fail
-    in the full suite.
+    in the full suite.  **The name therefore promises more than this can
+    check**; the proof that a recorder-only install refuses `control:` is
+    `tests/test_config.py::test_a_recorder_only_install_refuses_an_ltspm3_config`,
+    which spends a subprocess to get an interpreter that has never imported
+    `ltspm3`.  That is not redundant with this and cannot be written in
+    process.
     """
     with pytest.raises(config_mod.ConfigError, match="never_registered_by_anything"):
         config_mod.load(_armed_like(tmp_path))

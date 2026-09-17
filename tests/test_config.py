@@ -278,6 +278,12 @@ def test_the_recorder_still_refuses_the_very_same_file(tmp_path):
     and `tests_ltspm3` imports it.  Keying this on `control` made the test
     pass alone and fail in the full suite, which is a property of the import
     order and not of the code under test.
+
+    **So the name promises more than this test can check**, and what actually
+    proves a recorder-only install refuses `control:` is
+    `test_a_recorder_only_install_refuses_an_ltspm3_config` above, which runs
+    in a fresh interpreter for exactly that reason.  Do not delete that one as
+    redundant: in-process, it cannot be written at all.
     """
     with pytest.raises(ConfigError, match="never_registered_by_anything"):
         config_mod.load(write(tmp_path, VIEWER_YAML), validate=False)
