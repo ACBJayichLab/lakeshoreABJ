@@ -307,6 +307,7 @@ def cmd_probe(args) -> int:
                     print("  auxiliary:")
                     for k in sorted(aux):
                         print(f"    {k:<24} {aux[k]:10.4f}")
+                _print_input_filters(inst)
             except (OSError, ValueError) as exc:
                 print(f"  READ FAILED: {exc}")
                 failures += 1
@@ -320,6 +321,44 @@ def cmd_probe(args) -> int:
         return 1
     print("All instruments read successfully.  Nothing was written.")
     return 0
+
+
+def _print_input_filters(inst) -> None:
+    """The 218's own reading filter, per configured channel.
+
+    Printed in seconds as well as points, because points are readings and the
+    reading rate depends on how many inputs the *box* has enabled -- so the
+    same "10 points" is 1.25 s on a pruned box and 5 s on a factory-fresh one,
+    and only one of those is negligible against a control cadence.
+
+    Duck-typed rather than isinstance'd so a 33x simply has no filter section,
+    and wrapped because a diagnostic that cannot be read must not cost `probe`
+    the temperatures it was really run for.
+    """
+    query = getattr(inst, "input_filter", None)
+    if query is None:
+        return
+    try:
+        enabled = inst.enabled_inputs()
+    except (OSError, ValueError) as exc:
+        print(f"  input filter   : INPUT? failed: {exc}")
+        return
+    print(f"  inputs enabled : {len(enabled)} of {len(inst.ALL_INPUTS)} "
+          f"-- {', '.join(str(i) for i in enabled) or 'none'}")
+    print("  input filter:")
+    for inp, label in sorted(inst.channels.items()):
+        try:
+            filt = query(inp)
+        except (OSError, ValueError) as exc:
+            print(f"    {label:<24} FILTER? failed: {exc}")
+            continue
+        rate = inst.update_rate_hz(enabled, inp)
+        if not filt.enabled:
+            print(f"    {label:<24} off        {rate:6.2f} Hz")
+        else:
+            print(f"    {label:<24} ON  {filt.points:2d} pts "
+                  f"{rate:6.2f} Hz  tau {filt.tau_s(rate):6.2f} s  "
+                  f"window {filt.window_pct}%")
 
 
 def _one_controller(app, want: str | None):

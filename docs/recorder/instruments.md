@@ -225,13 +225,24 @@ thing nobody has to hand at the moment they need them.
 It also identifies the sensor by inspection, which is why there is no
 `INTYPE?` here: ~1 V is a diode, tens to thousands of ohms is an RTD.
 
-**Neither `FILTER` nor `INTYPE` is implemented in `ls218.py`, deliberately.**
-Both are per-input instrument settings that change about never, they are
-reachable from the front panel, and polling them costs transactions the 1 Hz
-budget does not have. The cost of leaving them out is real and worth naming:
-**a record taken with the filter on and one taken with it off do not describe
-the same instrument, and nothing in the CSV says which you have.** Write the
-setting down when you change it.
+**`FILTER?` and `INPUT?` are read, but only by `probe`, and there is no
+setter.** `LS218.input_filter()` and `enabled_inputs()` are queries, so they
+are legal in `probe`'s forced-read-only mode; `probe` prints each configured
+channel's filter beside the per-input rate it implies and the resulting time
+constant in seconds. They are *not* polled, for the reason they were left out
+in the first place: a per-input setting that changes about never is not worth a
+transaction the 1 Hz budget does not have.
+
+Nothing writes them. Turning a filter on is a front-panel action or a
+deliberate new feature, never a side effect — on this box `allow_writes` means
+*the heater*, and input configuration must not ride on that gate. `INTYPE`
+remains unimplemented in both directions; the sensor identifies itself in the
+`SRDG?` column above.
+
+The gap that remains is the one worth naming: **a record taken with the filter
+on and one taken with it off do not describe the same instrument, and nothing
+in the CSV says which you have.** `probe` can now tell you before a run, but
+the log still does not carry it. Write the setting down when you change it.
 
 `docs/ltspm3/noise.md` works through what all this meant on one cryostat.
 

@@ -235,6 +235,17 @@ class Sim218:
         #: The instrument's own DAC resolution.  0.01% here is ~75 mK on this
         #: response, which is exactly why the supervisor dithers.
         self.dac_step = 0.01
+        #: ``FILTER?`` per input: ``(off/on, points, window)``.  Off is the
+        #: only one of the three the manual's defaults table actually
+        #: documents (Table 4-4); the other two are its own worked example,
+        #: here so a test has something distinguishable to read back rather
+        #: than because the box ships that way.
+        self.input_filters = {i: (0, 10, 2) for i in range(1, 9)}
+        #: ``INPUT?`` per input.  All on, which is what sets the per-input
+        #: update rate to its slowest -- the state a box nobody has pruned is
+        #: in, and the one that makes a points count mean 8x what it looks
+        #: like.
+        self.inputs_on = {i: 1 for i in range(1, 9)}
 
     def handle_write(self, cmd: str) -> None:
         self.cryostat._guard_comms()
@@ -286,6 +297,11 @@ class Sim218:
             return f"{self.analog_pct:+07.2f}"
         if head == "ANALOG?":
             return ",".join(str(x) for x in self.analog_settings[:7]) + f",{self.analog_pct:.3f}"
+        if head == "FILTER?":
+            on, points, window = self.input_filters[int(arg)]
+            return f"{on},{points:02d},{window:02d}"
+        if head == "INPUT?":
+            return str(self.inputs_on[int(arg)])
         raise TransportError(f"Sim218 does not implement {cmd!r}")
 
 

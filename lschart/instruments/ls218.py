@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..model import Reading
@@ -94,11 +95,57 @@ class AnalogOutputConfig:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class InputFilter:
+    """What ``FILTER? <input>`` answers: the box's *own* reading filter.
+
+    It is an **exponential** smoother, not the running average the manual's
+    front-matter specification table calls it -- section 4.7.3 says
+    "applies exponential smoothing" in so many words, and the two disagree
+    about everything that matters downstream.
+
+    ``points`` is counted in *readings on that input*, so it is not a time
+    until the per-input update rate is known: see :meth:`tau_s` and
+    :meth:`LS218.update_rate_hz`.
+
+    ``window_pct`` is the part with no equivalent in software: a single
+    reading further than this percentage of full scale from the filter value
+    **restarts** the filter, on the assumption that the change was
+    intentional.  That makes the filter nonlinear -- a genuine step can shed
+    the smoothing entirely while small noise stays smoothed -- so an unknown
+    filter state is neither a clean single pole to design behind nor
+    reliably absent.
+    """
+
+    enabled: bool
+    points: int
+    window_pct: int
+
+    def tau_s(self, rate_hz: float) -> float:
+        """The smoothing time constant in seconds, at a given per-input rate.
+
+        One point is one new reading, and the manual quotes settling at about
+        six times the points -- six time constants -- so the points *are* the
+        time constant, measured in readings.  Zero when the filter is off,
+        which is the honest contribution to a dead-time budget.
+        """
+        if not self.enabled or rate_hz <= 0:
+            return 0.0
+        return self.points / rate_hz
+
+
 class LS218(Instrument):
     model = "218"
 
     #: Inputs the 218 can carry, regardless of how many are populated.
     ALL_INPUTS = tuple(range(1, 9))
+
+    #: One A/D converter per group -- which is why an even split is faster
+    #: than a lopsided one for the same number of sensors.
+    INPUT_GROUPS = ((1, 2, 3, 4), (5, 6, 7, 8))
+
+    #: Readings per second across the whole instrument, both converters.
+    TOTAL_RATE_HZ = 16.0
 
     def __init__(
         self,
@@ -203,6 +250,68 @@ class LS218(Instrument):
         quoted in units the instrument's own specification is written in.
         """
         return parse_float_list(self.transport.query("SRDG? 0"))
+
+    # -- the box's own reading filter -------------------------------------
+
+    def input_filter(self, inp: int) -> InputFilter:
+        """``FILTER? <input>`` -- ``<off/on>,<points>,<window>``.
+
+        A query, so it changes nothing and is safe wherever a temperature read
+        is safe, ``probe`` included.  There is deliberately no setter: on this
+        box ``allow_writes`` means *the heater* (one ``ANALOG`` command whose
+        percentage is the power), and input configuration is a different kind
+        of write that must not ride on that gate by accident.  Turning the
+        filter on or off is a front-panel or a deliberate-new-feature
+        decision, not a side effect of reading it.
+        """
+        on, points, window = parse_float_list(
+            self.transport.query(f"FILTER? {inp}"))[:3]
+        return InputFilter(enabled=bool(int(on)),
+                           points=int(points),
+                           window_pct=int(window))
+
+    def input_enabled(self, inp: int) -> bool:
+        """``INPUT? <input>`` -- whether the box reads this input at all.
+
+        Not the same question as whether *this software* logs it.  An input
+        left enabled on the box but absent from ``channels`` still costs
+        everybody else their share of the update rate, which is why
+        :meth:`update_rate_hz` asks the instrument rather than counting
+        configured channels.
+        """
+        return bool(int(parse_float(self.transport.query(f"INPUT? {inp}"))))
+
+    def enabled_inputs(self) -> list[int]:
+        """Every input the box is currently reading.  Eight queries."""
+        return [i for i in self.ALL_INPUTS if self.input_enabled(i)]
+
+    @classmethod
+    def update_rate_hz(cls, enabled: Iterable[int], inp: int) -> float:
+        """How often ``inp`` gets a new reading, given the enabled inputs.
+
+        This is what turns a filter's ``points`` into a time constant, and it
+        is not a property of the input on its own: two A/D converters split
+        16 readings a second, one converter per input group, so every input
+        enabled in the same group divides that group's half.  The odd case is
+        an *empty* other group, where the whole instrument's rate goes to the
+        active one -- which is how the manual's Table 4-2 gets 16 Hz for a
+        single input against 8 Hz for one-plus-one.
+
+        Only the four balanced rows of that table are the manual's own.  The
+        per-group division and the idle-group handover are the rule those rows
+        imply -- an asymmetric split is nowhere stated -- which is why
+        ``probe`` prints this rate beside the raw points instead of only the
+        product: a tau nobody can check is worse than two numbers.
+        Returns 0.0 for a disabled input, which has no rate at all.
+        """
+        on = {int(i) for i in enabled}
+        if inp not in on:
+            return 0.0
+        counts = [sum(1 for i in group if i in on) for group in cls.INPUT_GROUPS]
+        mine = 0 if inp in cls.INPUT_GROUPS[0] else 1
+        share = (cls.TOTAL_RATE_HZ if counts[1 - mine] == 0
+                 else cls.TOTAL_RATE_HZ / 2)
+        return share / counts[mine]
 
     # -- the heater actuator ----------------------------------------------
 

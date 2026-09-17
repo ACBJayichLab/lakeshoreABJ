@@ -13,7 +13,7 @@ import logging
 import pytest
 
 from lschart.instruments.base import InstrumentError
-from lschart.instruments.ls218 import LS218, AnalogOutputConfig
+from lschart.instruments.ls218 import LS218, AnalogOutputConfig, InputFilter
 from lschart.instruments.sim import Sim218, SimulatedCryostat
 from lschart.transport import LoopbackTransport, TransportError
 
@@ -335,3 +335,96 @@ def test_a_failed_srdg_does_not_discard_good_temperatures():
     assert set(readings) == {"Sample", "Cold Head", "Shield"}
     assert not [k for k in aux if ".sensor" in k]
     assert "ls218.aout1" in aux
+
+
+# -- the box's own reading filter -------------------------------------------
+#
+# Two questions, and the second is the one that bites: whether the filter is
+# on, and what its points are worth in seconds.  Points are readings, and the
+# reading rate is set by how many inputs the BOX has enabled -- not by how many
+# this software logs.
+
+def test_the_filter_is_read_back_as_the_box_reports_it():
+    inst, sim = build()
+    sim.input_filters[1] = (1, 16, 3)
+    filt = inst.input_filter(1)
+    assert filt.enabled
+    assert filt.points == 16
+    assert filt.window_pct == 3
+
+
+def test_a_filter_that_is_off_reports_no_time_constant_at_all():
+    """Off must be zero seconds, not "10 points worth of seconds, unused".
+
+    A dead-time budget adds this number up, and a disabled filter that still
+    claims a tau would inflate every derived gain behind it.
+    """
+    inst, sim = build()
+    sim.input_filters[1] = (0, 64, 2)
+    filt = inst.input_filter(1)
+    assert not filt.enabled
+    assert filt.tau_s(4.0) == 0.0
+
+
+def test_points_become_seconds_through_the_update_rate():
+    assert InputFilter(True, 10, 2).tau_s(4.0) == pytest.approx(2.5)
+    assert InputFilter(True, 10, 2).tau_s(2.0) == pytest.approx(5.0)
+
+
+def test_a_disabled_input_has_no_rate():
+    assert LS218.update_rate_hz([1, 2, 5], 3) == 0.0
+
+
+def test_the_manual_s_rate_table_is_reproduced():
+    """Table 4-2's four rows, which are the only ones the manual states."""
+    assert LS218.update_rate_hz([1], 1) == pytest.approx(16.0)
+    assert LS218.update_rate_hz([1, 5], 1) == pytest.approx(8.0)
+    assert LS218.update_rate_hz([1, 2, 5, 6], 1) == pytest.approx(4.0)
+    assert LS218.update_rate_hz([1, 2, 3, 4, 5, 6, 7, 8], 1) == pytest.approx(2.0)
+
+
+def test_a_lopsided_split_is_slower_than_an_even_one():
+    """Three sensors as 2+1, which is the LTSPM3 wiring: inputs 1, 2 and 5.
+
+    The group of two divides its converter; the lone input 5 keeps all of its
+    own.  This is what the manual means by splitting sensors evenly, and it is
+    why "three sensors" on its own does not determine a rate.
+    """
+    assert LS218.update_rate_hz([1, 2, 5], 1) == pytest.approx(4.0)
+    assert LS218.update_rate_hz([1, 2, 5], 2) == pytest.approx(4.0)
+    assert LS218.update_rate_hz([1, 2, 5], 5) == pytest.approx(8.0)
+
+
+def test_an_empty_group_hands_its_rate_to_the_active_one():
+    """INFERRED, not stated: the manual gives this only for a single input.
+
+    Table 4-2's first row is one input on and 16 Hz, which is twice what a
+    strict converter-per-group split would allow -- so an idle group's
+    capability goes to the busy one.  Three sensors on inputs 1-3 is therefore
+    16/3, not 8/3.  Nothing in the manual states an asymmetric split, which is
+    the reason `probe` reports the rate it computed next to the points rather
+    than folding them into a tau and leaving nobody able to check it.
+    """
+    assert LS218.update_rate_hz([1, 2, 3], 1) == pytest.approx(16.0 / 3)
+
+
+def test_enabled_inputs_asks_the_box_not_the_channel_map():
+    """An input nobody logs still costs everybody else their share.
+
+    The channel map here names three inputs; the box has all eight on, which
+    is the state that makes a points count mean four times what a reading of
+    the config alone would suggest.
+    """
+    inst, sim = build()
+    assert inst.enabled_inputs() == [1, 2, 3, 4, 5, 6, 7, 8]
+    for i in (3, 4, 6, 7, 8):
+        sim.inputs_on[i] = 0
+    assert inst.enabled_inputs() == [1, 2, 5]
+
+
+def test_reading_the_filter_writes_nothing():
+    """It is a query, which is what makes it legal inside `probe`."""
+    inst, sim = build()
+    inst.input_filter(1)
+    inst.enabled_inputs()
+    assert sim.write_log == []
