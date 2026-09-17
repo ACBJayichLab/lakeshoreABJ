@@ -136,27 +136,47 @@ def test_the_feedforward_stays_off_when_the_tuner_comes_on():
     If this fails, turning the tuner on has quietly re-enabled the positional
     feedforward against a stale level -- which is the 2026-09-16 walk-down.
     """
-    cfg = bench_control_config()
     h = harness(tuning=True)
     assert h.sup.tuner.enabled is True
     assert h.sup.feedforward.enabled is False
-    # ...and the band centre is therefore still the fixed operating point.
-    assert h.sup.band_centre_pct() == pytest.approx(
-        cfg.supervisor.operating_point_pct)
+    # The positional TERM is what the switch governs.  Off, the PID's
+    # feedforward contribution is zero however far the setpoint is from the
+    # model's answer for the present output.
+    assert h.sup.pid.feedforward is None or not h.sup.pid.feedforward.enabled
 
-    # **AND THE ASSERTION ABOVE CAN FAIL**, which at this temperature is not
-    # obvious: `operating_point_pct` is 63.960 and the file's comment says that
-    # is what holds 118.3 K, so a band centre that had started following the
-    # setpoint would land in the same place to three figures and the test would
-    # pass while the walk-down was back.  The shipped table actually reads
-    # 63.9837 there, and this is the control case that says so.
-    with_ff = FittedHarness(
-        kelvin=BENCH_K, stage=STAGE_FILE, settled=True,
-        delivered_frac=DELIVERED_FRAC,
-        tuning_cfg=dataclasses.replace(cfg.tuning, enabled=True),
-        ff_cfg=dataclasses.replace(cfg.feedforward, enabled=True))
-    assert with_ff.sup.band_centre_pct() != pytest.approx(
+
+def test_the_band_follows_the_setpoint_with_the_feedforward_off():
+    """**Rule 5 is not suspended by the feedforward switch** (2026-09-17).
+
+    Until 2026-09-17 the centre asked `feedforward.enabled`, and with it off
+    -- the armed configuration -- the band sat pinned at
+    `operating_point_pct`.  A setpoint more than about 3 K from where the loop
+    was armed then railed against a window that never moved: bench, a +2 K
+    move at 140 K faulted `authority exhausted`.  The centre now asks
+    `has_curve`, the same seam the ramp-down and the rate limiter use.
+
+    Asserted where the two answers DIFFER.  At 118.3 K `operating_point_pct`
+    is 63.960 and the shipped table reads 63.9837, so a test at the operating
+    point alone could pass either way; the move to 140 K is where a pinned
+    band and a following band come apart by two whole percent.
+    """
+    cfg = bench_control_config()
+    h = harness(tuning=True)
+    assert h.sup.feedforward.enabled is False
+    assert h.sup.band_centre_pct() == pytest.approx(
+        h.sup.feedforward.percent_for(h.sup.pid.cfg.setpoint), abs=1e-9)
+    assert h.sup.band_centre_pct() != pytest.approx(
         cfg.supervisor.operating_point_pct, abs=1e-3)
+
+    h.sup.arm(h.sup.status.filtered_k)
+    h.minutes(5)
+    before = h.sup.band_centre_pct()
+    h.sup.set_setpoint(140.0)
+    h.minutes(30)
+    after = h.sup.band_centre_pct()
+    assert after - before > 1.5
+    assert after == pytest.approx(h.sup.feedforward.percent_for(h.sup.pid.cfg.setpoint),
+                                  abs=1e-9)
 
 
 # -- does the setpoint arrive? --------------------------------------------

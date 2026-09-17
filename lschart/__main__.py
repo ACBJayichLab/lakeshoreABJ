@@ -220,22 +220,24 @@ def cmd_check(args) -> int:
         s = control.supervisor
         lo = max(s.hard_min_pct, s.operating_point_pct - s.authority_pct)
         hi = min(s.hard_max_pct, s.operating_point_pct + s.authority_pct)
-        # **SAY WHICH BAND THIS IS.**  The centre follows the setpoint when the
-        # feedforward is on and is the constant `operating_point_pct` when it
-        # is off, so one pair of numbers means two different things -- and this
-        # printed the second while calling it the band, which is right today
-        # and wrong from 4c on.  Duck-typed and defaulted, like everything
-        # `lschart` reads out of a section `ltspm3` registered (invariant 1).
-        follows = bool(getattr(getattr(control, "feedforward", None),
-                               "enabled", False))
+        # **SAY WHICH BAND THIS IS.**  The centre follows the setpoint
+        # whenever the model has a curve to ask -- which, since 2026-09-17, is
+        # independent of the feedforward switch (that switch governs only the
+        # drive TERM).  It is the constant `operating_point_pct` only for a
+        # loop with no `feedforward:` section at all, and one pair of numbers
+        # would otherwise mean two different things.  Duck-typed and
+        # defaulted, like everything `lschart` reads out of a section `ltspm3`
+        # registered (invariant 1).
+        follows = getattr(control, "feedforward", None) is not None
         if follows:
             print(f"  authority band : +/-{s.authority_pct:g}% AROUND THE "
-                  f"SETPOINT -- the model's output for whatever it is chasing. "
+                  f"SETPOINT -- the model's output for whatever it is chasing, "
+                  f"whether or not the feedforward term is on. "
                   f"{lo:.3f}%..{hi:.3f}% only while that is "
                   f"{s.operating_point_pct:g}%  (on_exit={s.on_exit})")
         else:
-            print(f"  authority band : {lo:.3f}% .. {hi:.3f}%, FIXED -- the "
-                  f"feedforward is off, so the centre is operating_point_pct "
+            print(f"  authority band : {lo:.3f}% .. {hi:.3f}%, FIXED -- no "
+                  f"model curve, so the centre is operating_point_pct "
                   f"and does not follow the setpoint  (on_exit={s.on_exit})")
         # **AND SAY WHETHER THE GAINS ARE SCHEDULED**, because THREE behaviours
         # hang off that one switch and until 2026-09-17 nothing printed any of

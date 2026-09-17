@@ -48,7 +48,8 @@ from ltspm3.model import fitted_response as _M
 DELIVERED_FRAC = 1.0 - 0.00336
 
 #: What the model says holds 118.3 K, which is `operating_point_pct` in the
-#: file and -- with the feedforward off -- the band's centre.
+#: file.  (Until 2026-09-17 that constant was also the band's centre while the
+#: feedforward was off; the centre is the model's answer for the setpoint now.)
 BENCH_K = 118.3
 
 
@@ -124,8 +125,9 @@ def test_feedforward_on_walks_the_heater_down_at_either_band_width(authority):
     `93c6f9c`: the term is referenced at arming against a model whose LEVEL is
     stale, so the loop commands the model's answer -- 63.93 % against the
     63.98 % the sample actually needs -- and walks the sample down with it.
-    The band's width does not save it at either 0.1 or 0.25, because the
-    centre is `operating_point_pct` and the walk is well inside both.
+    The band's width does not save it at either 0.1 or 0.25, because the walk
+    is towards the band's own centre -- the model's answer -- and well inside
+    both.
 
     Nothing faults and nothing rails: this is a loop doing exactly what it was
     configured to do, which is why it took a trace and not an alarm to find.
@@ -149,14 +151,20 @@ def test_feedforward_on_walks_the_heater_down_at_either_band_width(authority):
     assert forty.state is SupervisorState.TRACKING
 
 
-@pytest.mark.parametrize("authority", [0.1, 0.25])
+@pytest.mark.parametrize("authority", [0.25, 1.0])
 def test_the_armed_stage_holds_where_it_was_armed(authority):
-    """Feedforward OFF -- the file as committed -- and neither mechanism
-    exists: the centre is the constant `operating_point_pct`, nothing
-    references a stale level at arming, and the loop simply holds.
+    """Feedforward OFF -- the file as committed -- and the loop simply holds:
+    nothing references a stale level at arming.
 
     This is 4a's gate in miniature: an hour inside `warn_error_k`, `tracking`
     throughout.  On the cryostat it was 90 mK against 1 K.
+
+    **The band is centred on the MODEL's answer for the setpoint** (rule 5,
+    since 2026-09-17 whether or not the feedforward term is on), and the model
+    is 0.107 % of output away from where this cryostat actually holds.  So the
+    half-width has to cover that error or the ceiling cuts the heater at
+    arming -- which is the test below, and why the 0.1 this used to run at is
+    no longer in the list.
     """
     cfg = bench_control_config()
     h = armed(sup_cfg=dataclasses.replace(cfg.supervisor,
@@ -169,6 +177,32 @@ def test_the_armed_stage_holds_where_it_was_armed(authority):
         worst = max(worst, abs(st.filtered_k - at_arm))
     assert worst < cfg.supervisor.warn_error_k
     assert worst < 0.1
+
+
+def test_a_band_narrower_than_the_level_error_cuts_the_heater_at_arming():
+    """Why `authority_pct` is sized to the model's calibration envelope.
+
+    With the centre on the model's answer, a half-width of 0.1 % puts the
+    ceiling BELOW the output this settled cryostat is already at (the level is
+    0.107 % off), and the first cycle cuts the heater to the ceiling.  The
+    sample falls -- less heat is the safe direction, so nothing faults -- but
+    the loop has been made to leave a hold that was fine.  Rule 5's ceiling is
+    doing what it says; the number under it was wrong.
+
+    The shipped file carries 1.0, which covers the 0.8 % that handling the
+    heater wiring has been measured to move the level by, with room for the
+    overdrive a fast move needs on top.
+    """
+    cfg = bench_control_config()
+    h = armed(sup_cfg=dataclasses.replace(cfg.supervisor, authority_pct=0.1))
+    at_arm = h.sup.status.filtered_k
+    at_arm_pct = h.sup.output_pct
+    st = h.minutes(30)
+    lo, hi = h.sup.band
+    assert hi < at_arm_pct
+    assert st.output_pct <= hi + 1e-9
+    assert st.filtered_k - at_arm < -0.1
+    assert st.state is SupervisorState.TRACKING
 
 
 # -- finding 2: what the fault ramp-down costs at this stage ---------------

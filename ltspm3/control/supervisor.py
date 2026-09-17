@@ -565,8 +565,28 @@ class HeaterSupervisor:
 
         The centre is the MODEL's answer, not the loop's opinion of itself, so
         a loop that has wandered cannot drag its own window along behind it.
+
+        **Whenever a curve EXISTS -- `has_curve`, not `feedforward.enabled`.**
+        Until 2026-09-17 this asked the feedforward switch, which is the same
+        conflation AUDIT-2026-09-16 findings 2 and 3 removed from the fault
+        ramp-down and the output rate limiter: a question about whether the
+        model exists, asked of a flag that says whether a commissioning stage
+        trusts its LEVEL.  With the feedforward off -- the armed configuration
+        since 2026-09-16 -- the band sat pinned at `operating_point_pct`, and
+        a setpoint more than about 3 K from where the loop was armed railed
+        against a window that never moved.  Bench, 2026-09-17: a +2 K move
+        commanded at 140 K faulted `authority exhausted` and ramped the heater
+        down, and the same move at 180 K took the output to zero.  Jeff,
+        2026-09-17: the band follows the setpoint; a different setpoint
+        trivially needs a different power, and whether the POWER is wrong is
+        the watt residual's question, not the band's.
+
+        The stale level the switch was protecting against is the positional
+        feedforward TERM's problem (the 2026-09-16 walk-down), not the band's:
+        the band caps, it does not drive, and `authority_pct` is sized to
+        cover the level error the model is allowed to carry.
         """
-        if self.feedforward is not None and self.feedforward.enabled:
+        if self.has_curve:
             return self.feedforward.percent_for(self.pid.cfg.setpoint)
         return self.cfg.operating_point_pct
 
