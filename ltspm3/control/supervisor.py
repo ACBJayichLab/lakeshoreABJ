@@ -260,7 +260,7 @@ class SupervisorConfig:
     dac_step_pct: float = 0.01
     dither: bool = True
     verify_readback: bool = True
-    readback_tol_pct: float = 0.015
+    verify_tol_pct: float = 0.015
     comms_fault_after_s: float = 60.0
 
     #: What to do when the program exits.  "hold" leaves the heater exactly where
@@ -1021,7 +1021,7 @@ class HeaterSupervisor:
             try:
                 back = self.inst.get_analog_percent()
                 status.readback_pct = back
-                if abs(back - pct) > self.cfg.readback_tol_pct + self.cfg.dac_step_pct / 2:
+                if abs(back - pct) > self.cfg.verify_tol_pct + self.cfg.dac_step_pct / 2:
                     status.alarms.append(
                         f"readback {back:.3f}% disagrees with commanded {pct:.3f}%"
                     )

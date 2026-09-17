@@ -169,8 +169,9 @@ what is already correct.
 
 ## The 336 is read-only, and that matters
 
-Loop 2 of the 336 independently holds **"THE CHONKE" at 290.6 K with heater 2
-near 98%**. This software must not disturb it.
+Loop 2 of the 336 independently holds **"THE CHONKE" near 290 K with heater 2
+railed** -- no headroom, and the exact percentage is whatever `status.json`
+says today. This software must not disturb it.
 
 `allow_writes` defaults to `False` and every write raises `PermissionError`
 unless it is explicitly enabled. On this cryostat, leave it that way.
@@ -207,9 +208,10 @@ rather than in the output.
 
 **Nothing is done about it and nothing needs to be**, but know where it lands:
 
-- **Write verification is unaffected.** `readback_tol_pct` is 0.02 % in the
-  instrument config and 0.015 % in `SupervisorConfig`; both are far larger, so
-  `_confirm` accepts it.
+- **Write verification is unaffected.** Two tolerances exist and both are far
+  larger than one flickering code: the driver's `readback_tol_pct` (the 218's
+  own write check) and the supervisor's `verify_tol_pct` (the armed loop's
+  readback check, `verify_readback`). `_confirm` accepts it.
 - **`_where_the_heater_is()` sees it**, and that is the only live-loop exposure.
   It re-reads `AOUT?` after any cycle that wrote nothing — exactly the steady
   holding regime where the flicker occurs — and that value is the base for the

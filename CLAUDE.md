@@ -68,7 +68,8 @@ in the linked document.
 5. **Writes are applied asynchronously** — a query issued too soon answers with
    the previous value. Hence `write_settle_s` and readback verification. A
    stale readback returns the **old** value, so a step larger than
-   `readback_tol_pct` is caught; **below that tolerance the check is
+   the tolerance is caught (the driver's `readback_tol_pct`, or the armed
+   loop's own `verify_tol_pct`); **below it the check is
    undecidable at any settle time**, and knowing which of the two it is doing
    matters more than the settle number. The arithmetic for this cryostat is in
    → [running](docs/ltspm3/running.md);

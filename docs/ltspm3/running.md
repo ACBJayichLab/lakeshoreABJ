@@ -213,17 +213,22 @@ back inside one cycle. Nothing is issued at sub-cycle intervals.
 **A stale readback announces itself whenever the step is big enough.** The
 comparison is against the value *just commanded*, so a stale reply returns the
 old value, misses by the whole step and is caught. It is only when the step is
-smaller than `readback_tol_pct` that stale and fresh are indistinguishable —
+smaller than the tolerance that stale and fresh are indistinguishable —
 and no settle time fixes that, because the two values are the same number.
+
+Two tolerances exist and they are different knobs: the driver's
+`readback_tol_pct` (the 218's own write check, `verify_writes`, off in the
+armed file) and the supervisor's `verify_tol_pct` (the armed loop's readback
+check, `verify_readback`, on). The arithmetic below is the supervisor's.
 
 Which means, on this cryostat:
 
 - **at a hold the check is vacuous by design.** `dither: true` moves one 0.01 %
-  code at a time, deliberately below the 0.015 % tolerance. Worst case is one
+  code at a time, deliberately below `verify_tol_pct`. Worst case is one
   code;
 - **at 118 K it is vacuous while ramping too.** At the local gain there
   ([thermal-response.md](thermal-response.md)) a full 5 K/min ramp is
-  0.36 %/min, or **0.012 % per 2 s cycle — under the 0.015 % tolerance**;
+  0.36 %/min, or **0.012 % per 2 s cycle — under `verify_tol_pct`**;
 - **at the cold end it bites.** The gain falls by more than an order of
   magnitude, the same rate is ~0.48 % per cycle, and there the readback is
   doing real work.

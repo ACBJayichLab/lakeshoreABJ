@@ -64,7 +64,7 @@ Three steps on the real 218 over GPIB, at the default 100 ms:
 63.986% -> 64.007%  commanded 64.010, verified on readback 1
 ```
 
-Steps of 0.043, 0.057 and 0.021 % — every one above the 0.02 % tolerance, so a
+Steps of 0.043, 0.057 and 0.021 % — every one above either tolerance, so a
 stale reply would have been **rejected**, not believed. And every one agreed on
 the **first** readback, which is the one paced at `write_settle_s` and the only
 one the armed supervisor gets. `write_settle_s: 0.1` stands; no change needed
@@ -84,7 +84,7 @@ writes, and paying twice would put a second transaction in every cycle — so th
 readback is the whole verification.
 
 A stale readback returns the **old** value, so for any step larger than
-`readback_tol_pct` it fails the comparison and raises rather than passing
+`verify_tol_pct` it fails the comparison and raises rather than passing
 quietly. Send three steps comfortably above that tolerance, around wherever the
 heater is sitting, and read the WARNING lines:
 
@@ -134,7 +134,7 @@ traced three lines per query and made ~26 lines a cycle across the two boxes.
 `--bus-trace` is how you ask for that traffic when you want it.
 
 **Two cases this cannot cover, and neither needs it**: a dithered hold and a
-ramp at the warm end both move the output by less than `readback_tol_pct` per
+ramp at the warm end both move the output by less than `verify_tol_pct` per
 cycle, so the check is silent there by arithmetic rather than by passing. It
 only becomes discriminating at the cold end. **The arithmetic is in
 [docs/ltspm3/running.md](../docs/ltspm3/running.md)**, which is its one home;

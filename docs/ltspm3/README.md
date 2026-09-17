@@ -65,7 +65,7 @@ Two things are worth knowing before the next armed run:
   [thermal-response.md](thermal-response.md) for what the live data has
   measured, and what still comes from the reference logs.
 - **`verify_readback` on the 218 is unverified over GPIB, and it can only ever
-  see steps larger than `readback_tol_pct`** — which at a hold, and while
+  see steps larger than `verify_tol_pct`** — which at a hold, and while
   ramping at 118 K, no write is. See
   [running.md](running.md#before-the-first-armed-run) for which regimes it is
   doing real work in and which it is silent in by arithmetic.
