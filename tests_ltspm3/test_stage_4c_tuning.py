@@ -1,9 +1,15 @@
 """**Can this loop move a setpoint?**  At 4a it cannot, and the reason is one switch.
 
-`test_stage_4a.py` grades the stage the cryostat is armed at.  This grades the
-one question 4a leaves unanswered and which nothing else here asks: a hold is
-not the job, and *ramping to a setpoint had never been exercised on the bench
-or the cryostat* (2026-09-17).
+**This is the TUNING step of 4c** -- "widen to 1.0 %, then tuning, then
+feedforward, one per watched hour" in plans/pid-4-commissioning.md.  4b in that
+plan is the provoked fault at low temperature and is a different thing
+entirely.
+
+`test_stage_4a.py` already pins that a 3 K move is not delivered at 5 K/min and
+names the switch conflation behind it
+(`test_a_three_kelvin_setpoint_move_is_not_delivered_at_five_k_per_min`).  What
+is new here is the other half: what flipping that switch actually buys, at
+three rates, and that the two switches can be flipped independently.
 
 **Three things are gated on `tuner.enabled`, and only one of them is a gain:**
 
