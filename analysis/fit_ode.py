@@ -642,7 +642,7 @@ class Anchors:
     with level and drift and the level is quoted at the midpoint, because that
     is where a linear drift's error is smallest.  Anchoring the campaign ramp
     on the end of a 70 h window would put the anchor 35 h away from the
-    temperature it reports.  AUDIT-2026-09-10-REJOINDER.md asks for exactly
+    temperature it reports.  archive/AUDIT-2026-09-10-REJOINDER.md asks for exactly
     this convention to be honoured here.
 
     ``era`` is the label ``ANCHOR_SIGMA_K`` is keyed on and is carried for
@@ -713,7 +713,7 @@ def load_rows(path=ANCHORS):
     export modules used to open it with a bare ``open()`` relative to the
     working directory while this module resolved it against ``REPO_ROOT``, so
     run from anywhere but the repository root the fit loaded and the anchor
-    rows silently did not (AUDIT-2026-09-10.md, finding 5).
+    rows silently did not (archive/AUDIT-2026-09-10.md, finding 5).
     """
     with open_table(path) as fh:
         return list(csv.DictReader(fh))

@@ -1,6 +1,6 @@
 # Reply to [AUDIT-2026-09-10](AUDIT-2026-09-10.md), finding 2
 
-Written while applying that finding during Phase A of [REFIT_PLAN.md](REFIT_PLAN.md).
+Written while applying that finding during Phase A of [REFIT_PLAN.md](../REFIT_PLAN.md).
 The audit is right about the disease and right that these numbers were reaching
 the refit. Its remedy has four parts; **two are applied, two are not**, and
 this is the argument and the measurements for the two that are not, so that the
@@ -21,7 +21,7 @@ sweep tool is where the same failure costs data on the day, with no review
 pause protecting it**. That is now fixed — `PoleFit.long_enough` puts the guard
 on the plant's tau whenever the plan carries one — and §4's `analysis/` half
 remains deferred to the Phase A pause as
-[REFIT_PLAN.md §6.2](REFIT_PLAN.md) option 4.
+[REFIT_PLAN.md §6.2](../REFIT_PLAN.md) option 4.
 
 Everything below is reproducible from the archive at this commit.
 
@@ -97,7 +97,7 @@ relaxation." That reading is exactly right, and the conclusion drawn from it is
 one step too far. **The window is not the problem; the model fitted to it is.**
 Phase A fits these with level + drift instead of a pole and they come out as
 anchors at 142.808 K and 147.451 K, drifting −4 mK/h — see
-[REFIT_PLAN.md §6.1](REFIT_PLAN.md). Refusing them discards a 16.6-hour hold
+[REFIT_PLAN.md §6.1](../REFIT_PLAN.md). Refusing them discards a 16.6-hour hold
 because a two-parameter exponential could not describe a straight line.
 
 **And a slope bar cannot separate them.** The obvious repair — a ceiling pin is
@@ -193,7 +193,7 @@ Three things to be honest about before anyone builds it:
 The table above used `ltspm3.fitted_response.tau_s` to show the discriminator
 works, because it was to hand in a scratch script. That table's steady state is
 the superseded one this whole refit exists to replace — but its **τ** is
-validated to better than 10 % over 40–120 K ([REFIT_PLAN.md §2.4](REFIT_PLAN.md)),
+validated to better than 10 % over 40–120 K ([REFIT_PLAN.md §2.4](../REFIT_PLAN.md)),
 which is the only column used here, and the margins above are three orders of
 magnitude wide. A real implementation must read `measured.csv`, not that table,
 or invariant 1 falls.

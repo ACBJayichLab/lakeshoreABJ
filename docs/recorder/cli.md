@@ -220,7 +220,10 @@ python -m lschart -c config.yaml send setpoint 119 --software --rate 1.0
 ```
 
 It **ramps** there — the controller's own `max_rate_k_per_min` unless `--rate`
-says otherwise, so the one rate stays in one place. `--software` and `--loop`
+says otherwise, so the one rate stays in one place. On LTSPM3 that rate is a
+ceiling: a move that fits inside the band is governed by the closed loop's own
+speed (about five minutes for 2 K at 118 K), and `--rate` only matters for
+moves large enough to need it. `--software` and `--loop`
 are mutually exclusive, and the flag is explicit rather than inferred from
 which instrument was named, because the two are different acts with different
 gates: an instrument setpoint is inert until a range is raised, while the

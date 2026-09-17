@@ -120,7 +120,7 @@ POLE_FLAG_K = 0.1
 #:
 #: Reported and not refused: grading is ``steps.py``'s and reaches a fit through
 #: the manifest, where a verdict change is a diff somebody reads.  See
-#: AUDIT-2026-09-10.md finding 2, whose fix belongs there.
+#: archive/AUDIT-2026-09-10.md finding 2, whose fix belongs there.
 #:
 #: 5 %, which is far tighter than the factor of two between adjacent
 #: candidates and loose enough to survive the optimiser stopping just inside

@@ -288,8 +288,11 @@ on at 4c with the tuning, not before.
 **4d's 10 K sweep can now be given 5 K/min and get it** as far as the output
 limiter is concerned. It will not arrive in two minutes: with `tuning.enabled:
 false` the gains are the file's starting `kp = 0.02` / `ti = 900 s`, and a 3 K
-move measured on the bench is still 1 K short after half an hour. A rate is a
-ceiling, not a promise. Do 4c's tuning step before reading anything into 4d.
+move measured on the bench is still 1 K short after half an hour. Do 4c's
+tuning step before reading anything into 4d — and read 4d below for what the
+benchmark actually is now (five minutes for 2 K), because "a rate is a
+ceiling, not a promise" was a description of the loop as shipped, not of the
+requirement.
 
 ### The file ships what is ARMED, and the bench grades the envelope
 
@@ -306,8 +309,9 @@ away from restoring the feedforward that cost 350 mK.
 of the *cryostat* from the file. So:
 
 * **the file ships the commissioning stage the cryostat is armed at**, and it
-  is committed. Today that is `authority_pct: 0.25`, feedforward off, tuning
-  off.
+  is committed. On 2026-09-16 that was `authority_pct: 0.25`, feedforward off,
+  tuning off; since 2026-09-17 it is 1.0, off, on, with the retuned ratios of
+  [requirements.md](../docs/ltspm3/requirements.md).
 * **the bench grades the design envelope** — 1.0, on, on — which is where phase
   3 proved the loop and where 4c ends. Narrowing that would fail 26 scenarios
   by construction, because the 10–180 K sweeps rail against ±0.1 %.
@@ -339,6 +343,9 @@ throttle is tighter than the calibration offset.
 ### 4c's tuning step, taken out of order and before the widen — 2026-09-17
 
 `tuning.enabled: true`, `hold_speed: 3 -> 12`, feedforward still off.
+(**The 12 lasted one day**: see 4d below and
+[requirements.md](../docs/ltspm3/requirements.md) — Jeff chose the strong
+direction, and the file ships `hold_speed: 0.25`, `move_speed: 0.15`.)
 
 Out of order deliberately. The widen and the feedforward both change how much
 heater the loop may command; the tuner changes only how it is scheduled, and
@@ -359,30 +366,29 @@ the hold 5.6x worse than open loop, and the tuner's *default* 3 would be 0.74 �
 worse again. It costs a ramp nothing, because a ramp runs on `move_speed`. One
 night graded by `analysis/hold_quality.py` settles it.
 
-### 4d — "5 K/min" is a cold-end number, and this row asked for the impossible
+### 4d — the move benchmark is five minutes for 2 K at 118 K — 2026-09-17
 
-**Measured on the cryostat, 2026-09-17.** A 1 K/min sweep commanded at 118 K
-does not run at 1 K/min: the setpoint rate decays exponentially with
-`rate / remaining` constant at 0.23/min, i.e. **τ = 260 s**, which is exactly
-`move_speed * tau(118 K)` = 0.5 * 516 s — `_smooth_tau_s`. The ramp would finish
-in 117 s, well inside the 258 s corner, so what comes out is the smoother's step
-response and the commanded rate never takes effect.
+**Superseded the same day it was written.** This section said "5 K/min is a
+cold-end number" and restated the gate as "a 10 K sweep with lag < 2 K", taking
+half an hour, because a 1 K/min sweep at 118 K had been measured running as an
+exponential with τ = 260 s. That measurement was right and the conclusion was
+not Jeff's: asked, he set the benchmark at **a 2 K move arriving in 5 minutes
+at 118 K**, with 5 K/min a safety ceiling only
+([docs/ltspm3/requirements.md](../docs/ltspm3/requirements.md)).
 
-A commanded rate therefore only governs for moves much larger than
-`rate * 3*tau_cl`, which at 118 K is about **13 K at 1 K/min**. Every move that
-fits inside 4c's present band is smoother-dominated.
+The 260 s was `move_speed × tau` at 0.5, stacked twice — the trajectory corner
+and the closed loop are the same number by design — and `move_speed: 0.15`
+brings the same move to **4.6 min on the bench** with 7 mK of overshoot and
+nothing railed. The band had to widen to let it (0.56 % of overdrive against a
+0.25 % half-width), and the band had to follow the setpoint with the
+feedforward off, which it did not: a 2 K move at 140 K faulted on the bench
+until `target_band_centre_pct` asked `has_curve`.
 
-**This is not a config problem and no retune fixes it.** Building the drive a
-ramp needs, `rate*tau/K`, at the output rate limit of `rate/K` per minute takes
-one plant time constant, always. `_smooth_tau_s`'s own docstring has said "a
-rate is a ceiling, not a promise" from the start, and carries the measured
-table: 10 K at 118 K takes 11.3 min with a 12 s corner (and 8.46 K of lag) or
-30.4 min with a 180 s corner (and 0.3 % overshoot).
-
-So the gate is restated as **a 10 K sweep with lag < 2 K**, and the time it
-takes is an output of the plant rather than an input from the operator. The
-5 K/min of PID_PLAN §1 stands where tau is short — it is under a second at 10 K
-against 516 s at 118 — and the ladder to 300 K is where it gets tested.
+**Gate:** `tests_ltspm3/test_stage_4d_fast_move.py` green (2 K at 100–180 K
+inside 5–6 min, 10 K inside 20 min, hold noise ratio ≤ 1.05 at 10–300 s), then
+the same 2 K move on the cryostat inside 6 min from `send setpoint --software`,
+with the monitor typical throughout. Known open item: 60 K overshoots 0.39 K
+(rate-limiter windup), pinned by its own test.
 
 ### The "verdicts agreeing" clause needs rewording
 

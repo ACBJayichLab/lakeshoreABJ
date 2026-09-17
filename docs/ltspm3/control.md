@@ -107,10 +107,23 @@ configuration — the descent fell at `min_rate_pct_per_min` (five hours from
 usable shape. `ramp_lead_pct` is the one that stays on `tuner.enabled`,
 because it widens the authority band rather than slowing something down.
 
-**The closed-loop speed is a ratio, not a time** — `hold_speed: 3` and
-`move_speed: 0.5` against `tau(T)`, floored at four dead times. τ runs from
-0.1 s at 10 K to 611 s at 180 K, so the 1800 s / 300 s this replaced was three
-times the plant at the top and eighteen thousand times it at the bottom.
+**The closed-loop speed is a ratio, not a time** — `hold_speed` and
+`move_speed` against `tau(T)`, floored at four dead times. τ runs from 0.1 s at
+10 K to 611 s at 180 K, so the 1800 s / 300 s this replaced was three times the
+plant at the top and eighteen thousand times it at the bottom. **The shipped
+ratios are 0.15 for a move and 0.25 for a hold** (2026-09-17, from
+[requirements.md](requirements.md)): both *faster* than the plant. The 0.5 /
+3 they replaced made a 2 K move at 118 K take as long as a hand step, because
+the trajectory corner is the same number as the closed-loop time constant and
+the two stack; and the weak hold stirred at its own natural period rather than
+correcting. The tables are in the config's comments.
+
+**The trajectory corner is the closed-loop time constant.** A commanded move
+is smoothed over `move_speed × tau(T)` and the loop then follows with the same
+time constant, so a move that fits inside the band arrives in about five of
+those — 4.6 min for 2 K at 118 K on the bench — and the commanded rate only
+governs moves large enough to need it. The rate ceiling is a safety limit, not
+a target.
 
 **The premise check is in watts.** `δQ` against the model's own band, the same
 residual the monitor judges by — see [safety.md](safety.md) rule 4.
@@ -129,7 +142,12 @@ until 2026-09-15 and were unreachable in consequence, because any error over
 
 **The authority band follows the setpoint**, centred on the output the model
 says holds it, widened while a ramp runs by the lead that ramp needs — rule 5.
-Nothing needs re-centring by hand before arming.
+Nothing needs re-centring by hand before arming. **Whenever the model has a
+curve**, whether or not the feedforward term is on: until 2026-09-17 the
+centre asked the feedforward switch, and with the term off the band sat pinned
+where the loop was armed, so a 2 K move at 140 K faulted on the bench. The band
+is control room, not the check on whether the delivered power is right — that
+is the watt residual's job.
 
 ## Configuration
 

@@ -319,7 +319,7 @@ def read_table(file: str) -> Table:
     # raising, and `dwells()` would fit a pole to a time axis with a fold in
     # it.  Cooldown 10 began in July and is still running, and the third table
     # is appended to, so this is a dated defect rather than a hypothetical:
-    # AUDIT-2026-09-10.md finding 4.
+    # archive/AUDIT-2026-09-10.md finding 4.
     #
     # This assertion is the cheap half of the fix and it only makes the fold
     # loud.  Curing it means taking `t_s` from the recorder's own monotonic
@@ -333,7 +333,7 @@ def read_table(file: str) -> Table:
             f"naive local time, so a daylight-saving fall-back repeats an hour "
             f"and every `searchsorted` on this table silently selects the "
             f"wrong rows.  Rebuild it taking `t_s` from the recorder's `Time` "
-            f"column -- see AUDIT-2026-09-10.md finding 4.")
+            f"column -- see archive/AUDIT-2026-09-10.md finding 4.")
 
     table = Table(file=file, epoch=epoch, t=epoch - epoch[0],
                   segment=segment, chan=chan, note=note)

@@ -138,7 +138,7 @@ def test_check_calls_a_writable_analog_output_a_heater(tmp_path, capsys):
 def test_check_reports_an_empty_source_policy_as_open(tmp_path, capsys):
     """Empty `ipc.sources` means any client may ask, and `check` used to say
     nothing at all -- so the one interlock with no visible "off" state was also
-    the one the reader never saw.  Finding 5 of AUDIT-2026-09-09.md."""
+    the one the reader never saw.  Finding 5 of archive/AUDIT-2026-09-09.md."""
     p = tmp_path / "open.yaml"
     p.write_text('instruments:\n  - name: ls218\n    model: "218"\n'
                  "    driver: sim\n    allow_writes: true\n    max_output_pct: 70\n"

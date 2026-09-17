@@ -135,7 +135,7 @@ from dataclasses import dataclass, replace
 # refusing to believe a pinned pole's tau at all.  Two different answers to the
 # same question, each the best available where it sits; do not "fix" either
 # into the other.  See :meth:`PoleFit.long_enough` and
-# AUDIT-2026-09-10-REJOINDER.md.
+# archive/AUDIT-2026-09-10-REJOINDER.md.
 
 #: Sensor noise, from docs/ltspm3/thermal-response.md: quadratic in T, floored
 #: near 1.8 mK.
@@ -173,7 +173,7 @@ SETTLED_REMAINDER_K = 0.15
 #: the PLANT's time constants", and a duration cannot answer it: tau runs from
 #: under a tenth of a second at 5 K to 534 s at 114 K, a factor of five
 #: thousand, so one number is wrong at both ends.  Measured on the case
-#: AUDIT-2026-09-10.md names -- 145 K, tau 600 s, 0.76 K still to go, the
+#: archive/AUDIT-2026-09-10.md names -- 145 K, tau 600 s, 0.76 K still to go, the
 #: sensor's own noise -- a 60 s dwell was certified ``steady`` sixteen times in
 #: two hundred, 0.69 K short, and ``--min-dwell 60`` certified one run in ten.
 #: The bar and the failure sat at the same value.
@@ -198,7 +198,7 @@ MIN_N = 15
 #: `remainder_k` and `end_rate_k_per_h` are all computed from it and read as
 #: if it were.  See `PoleFit.tau_floor` / `tau_ceiling`, and
 #: ``analysis/steps.py``, which this mirrors and which carries the archive's
-#: 48 floor cases and 46 ceiling cases.  AUDIT-2026-09-10.md finding 2.
+#: 48 floor cases and 46 ceiling cases.  archive/AUDIT-2026-09-10.md finding 2.
 POLE_PIN_TOL = 0.05
 
 #: The tau search runs from this many samples of the live cadence...
@@ -413,7 +413,7 @@ class PoleFit:
         import one -- invariant 1 -- so it keeps the wall clock and instead
         refuses to believe a pinned pole at all.  This one already imports the
         plant model, so it can ask the better question.  See
-        AUDIT-2026-09-10-REJOINDER.md.
+        archive/AUDIT-2026-09-10-REJOINDER.md.
         """
         if tau_plant_s is not None and tau_plant_s > 0.0:
             return self.span_s >= min_reach * tau_plant_s

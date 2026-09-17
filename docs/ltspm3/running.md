@@ -110,8 +110,9 @@ viewer's button. `set_mode` no-ops when the mode is already `pid` but the
 setpoint change above it does not, so it was "step the setpoint now, no ramp"
 and a dumped trajectory. Rule 8 bounded the step, so it was a surprise rather
 than a hazard — and a surprise behind a word that says something else is its
-own kind of unsafe. **`hold` then `arm` is how an armed loop's setpoint moves**,
-and the pair is bumpless.
+own kind of unsafe. **`send setpoint <K> --software` is how an armed loop's
+setpoint moves** (since 2026-09-17); `hold` then `arm` is the pair for
+*resuming* a loop, and is bumpless.
 
 ### `heaters_off` also disarms, and differs only in what happens next
 
@@ -230,16 +231,20 @@ above the tolerance with the recorder running —
 [plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md) W1 — not a
 characterisation, and not a reason to stop.
 
-### 2. The closed loop has never run on this cryostat
+### 2. The first move on the retuned numbers is Jeff's to command
 
-The GPIB path and the write path both have, since 2026-08-24 — but by hand, with
-no controller in the way. Arming is the step nothing has rehearsed on this
-hardware. [plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md)
-is the staged way in; start with
-`probe`, which forces every transport read-only regardless of the config:
+The loop closed on 2026-09-16 and moved its first setpoint on 2026-09-17 —
+slowly, on the numbers it shipped with. The same day it was retuned to
+[requirements.md](requirements.md) (five minutes for 2 K at 118 K, a hold with
+real authority, a band that follows the setpoint) and graded on the bench. It
+has not run on the cryostat on those numbers. Arm with the viewer open, move
+2 K, and compare the recorder's CSV with the bench's 4.6 minutes before
+believing either.
 
 ```bash
-python -m lschart -c config.yaml probe
+python -m ltspm3 -c config-ltspm3-armed.yaml check      # read the band and the ratios
+python -m ltspm3 -c config-ltspm3-armed.yaml run --arm
+python -m lschart -c config-ltspm3-armed.yaml send setpoint 120 --software
 ```
 
 ### 3. A deliberate step test at two or three temperatures

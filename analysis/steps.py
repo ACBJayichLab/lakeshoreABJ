@@ -162,7 +162,7 @@ MIN_N = 15
 #: :func:`archive_dwells`.
 #:
 #: The two graders no longer diverge on this test.  They did between
-#: AUDIT-2026-09-10-REJOINDER.md step 1 and step 2, on purpose and for one
+#: archive/AUDIT-2026-09-10-REJOINDER.md step 1 and step 2, on purpose and for one
 #: reason -- ``ltspm3`` had a plant model and this module did not.  Phase A gave
 #: this module a measured one.  See REFIT_PLAN.md section 6.2 option 4.
 MIN_SPAN_S = 60.0
@@ -278,7 +278,7 @@ def pole_floor(r) -> bool:
 
     **It loses only its tau even when there was no resolvable transient
     either**, and that is a deliberate departure from
-    AUDIT-2026-09-10.md finding 2, which proposes refusing any grade there on
+    archive/AUDIT-2026-09-10.md finding 2, which proposes refusing any grade there on
     the grounds that such a pole was fitted to noise.  Sometimes it was.  But a
     dwell that is genuinely finished is ALSO flat and also has no transient,
     and it is the best kind of anchor there is --
@@ -307,7 +307,7 @@ def pole_ceiling(r) -> bool:
     nothing.  46 dwells in the archive are here and 6 of them are graded.
 
     **Not refused on its own**, which is the deliberate difference from the
-    floor case.  AUDIT-2026-09-10.md finding 2 proposes refusing every ceiling
+    floor case.  archive/AUDIT-2026-09-10.md finding 2 proposes refusing every ceiling
     pin.  Measured against the archive that would drop four windows that are
     settled -- two long holds drifting under 4 mK/h, and two dwells at 4.8 and
     5.1 K where the plant's tau is under a tenth of a second -- to catch two
@@ -422,7 +422,7 @@ def pole_bounds(t):
 
     Exposed, and not inlined where it is used, because **a tau AT one of these
     bounds is the search saying "outside what I can see" and neither grader
-    notices** (AUDIT-2026-09-10.md, finding 2).  Anything that wants to test
+    notices** (archive/AUDIT-2026-09-10.md, finding 2).  Anything that wants to test
     for that has to be able to ask what the bounds were, and a caller that
     recomputes them from its own copy of the two factors is one edit away from
     testing against the wrong number.

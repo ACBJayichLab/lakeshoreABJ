@@ -1,6 +1,6 @@
 """The shipped table says what is known wrong with it.
 
-Finding 2 of AUDIT-2026-09-09.md: the ladder measured the fitted steady state
+Finding 2 of archive/AUDIT-2026-09-09.md: the ladder measured the fitted steady state
 low by up to 4.5 K, five documents recorded that, and none of them was a file
 that ships the table.  ``analysis/export_response.py`` now emits the caveat into
 the generated header, and this pins the two together -- because the failure mode

@@ -70,6 +70,18 @@ correct aggressively.
    moves**: whatever the model, the setpoint or the arithmetic says, the output
    cannot go above it.
 
+   **It follows whenever the model has a curve** — `has_curve`, not
+   `feedforward.enabled` (2026-09-17). The centre asked the feedforward switch
+   until then, so at the stage the cryostat was armed at (term off) the band
+   sat pinned at `operating_point_pct` and a setpoint more than about 3 K from
+   the arming point railed against a window that never moved; on the bench a
+   2 K move at 140 K faulted `authority exhausted`. The stale level the switch
+   guards against is the feedforward *term's* hazard, not the band's: the band
+   caps, it does not drive. Its half-width is sized to the level error the
+   model may carry plus the overdrive a fast move needs, and it is **not** the
+   check on whether the delivered power is right — that is rule 4's residual
+   (Jeff, 2026-09-17).
+
    It was two config constants until 2026-09-14, and that could not span 4 to
    300 K — 10 K is 24 % of output and 180 K is 69 %, against a window one point
    wide. No sweep below 60 K was arithmetically possible, and a completed sweep

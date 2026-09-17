@@ -1589,7 +1589,7 @@ def test_the_state_is_what_the_row_shows_as_its_mode():
 #
 # The viewer used to draw a per-channel readouts table and a loop table beneath
 # it, which on a 33x-only cryostat is the same four lines twice. Merging them
-# is only safe if the merge cannot lose a thermometer -- `FEATURE_PLAN.md`
+# is only safe if the merge cannot lose a thermometer -- `archive/FEATURE_PLAN.md`
 # rejected a loop-centric table for exactly that reason, and these are the
 # tests that keep the merged one honest about it.
 

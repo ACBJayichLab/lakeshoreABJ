@@ -574,7 +574,7 @@ ceiling-pinned dwells in the archive:
   already `excluded` and stay so at any threshold between 0.5 and 0.8 K/h.
 
 So the discriminator is again the plant's τ. **Four ways out, and the argument
-between them is in [AUDIT-2026-09-10-REPLY.md](AUDIT-2026-09-10-REPLY.md):**
+between them is in [archive/AUDIT-2026-09-10-REPLY.md](archive/AUDIT-2026-09-10-REPLY.md):**
 
 1. Refuse a ceiling pin only for a window shorter than `curate.HOLD_MIN_S`,
    moving the test to where the hold/jump split already lives. Catches both
@@ -604,7 +604,7 @@ between them is in [AUDIT-2026-09-10-REPLY.md](AUDIT-2026-09-10-REPLY.md):**
 > the wall clock on the `amp_sigma` branch as well. One anchor is *recovered*.
 
 **Option 4 is now live in the sweep tool and still open in `analysis/`.**
-[AUDIT-2026-09-10-REJOINDER.md](AUDIT-2026-09-10-REJOINDER.md) makes the point
+[archive/AUDIT-2026-09-10-REJOINDER.md](archive/AUDIT-2026-09-10-REJOINDER.md) makes the point
 §6.2 and the reply both missed: the reasoning above is scoped to `analysis/`
 and its review pause, while `ltspm3/tools/sweep.py` runs against the cryostat
 on the day with no pause protecting it. So the guard went in there first —
@@ -651,7 +651,7 @@ moved. That is the non-circularity claim of §6.2 turned into an assertion.
 standing in for the plant clock on the amplitude branch too, and there it was
 letting through warm short dwells: all twelve are 128.8–180.5 K, 70 s to
 1641 s, under three of the plant's time constants with no transient of their
-own to argue otherwise. Two are AUDIT-2026-09-10-REPLY.md §1's own examples —
+own to argue otherwise. Two are archive/AUDIT-2026-09-10-REPLY.md §1's own examples —
 200 s at 147.1 K and 330 s at 170.4 K, which it called "a third of a τ" and
 "half a τ" while having no mechanism to refuse them.
 

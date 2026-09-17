@@ -244,7 +244,7 @@ other twelve come from the `amp_sigma` branch, which the plan did not score
 because the wall clock was standing in for the plant clock there too. Every one
 is a warm dwell — 128.8 to 180.5 K, spans 70 s to 1641 s — that ran under three
 of the plant's time constants with no transient of its own to prove otherwise.
-Two of them are `AUDIT-2026-09-10-REPLY.md` §1's own examples, 200 s at 147.1 K
+Two of them are `archive/AUDIT-2026-09-10-REPLY.md` §1's own examples, 200 s at 147.1 K
 and 330 s at 170.4 K, which that document called "a third of a τ" and "half a
 τ" while having no mechanism to refuse them.
 
@@ -514,7 +514,7 @@ dwell measures `Λ` directly. The transients then measure `C`, and
 .venv/Scripts/python.exe analysis/drift.py --knots 3      # would 3 knots earn it?
 
 # 1b2. the four review figures -> analysis/review-*.png            (~2 min)
-#      one per decision; REVIEW-2026-09-10.md says what each is for
+#      one per decision; archive/REVIEW-2026-09-10.md says what each is for
 .venv/Scripts/python.exe analysis/plot_review.py
 
 # 1c. Lambda and C read straight off the anchors, no fit at all    (~2 s)

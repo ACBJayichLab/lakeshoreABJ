@@ -39,26 +39,30 @@ campaign that follows, are in
 
 ## Status
 
-**The loop is built and has never closed on this cryostat.** Phases 0 to 3 of
-[PID_PLAN.md](../../PID_PLAN.md) are done — the record, the model and its band,
-the report-only monitor, and the loop rebuilt on the model with its ten review
-fixes. Phase 4, commissioning, is the next thing and is the first that needs
-the cryostat.
+**The loop has closed on this cryostat** — armed 2026-09-16, held overnight,
+and moved its first setpoint on 2026-09-17. Phases 0 to 3 of
+[PID_PLAN.md](../../PID_PLAN.md) are done; phase 4, commissioning, is under
+way on the cryostat.
+
+**What it is graded against is [requirements.md](requirements.md)** — Jeff's
+answers of 2026-09-17, in his words: a 2 K move at 118 K in five minutes, a
+hold whose noise is no worse than open loop at 15 s to 5 min and much better
+at long averaging, a band that follows the setpoint. The loop was retuned to
+those the same day and the retune has been graded on the bench, not yet on the
+cryostat. Read that document before touching a number in the config.
 
 `control/` is **open to change** under the eight rules of
 [safety.md](safety.md), one rule-scoped commit at a time, each reviewed against
-the rule it touches. (This section said "complete, tested and parked" and to
-resist improvements to `control/` until 2026-09-15; that instruction dated from
-when the viewer and the MATLAB interface came first, and both shipped.) The
-instinct it protected still holds: no "while I am in here" changes, and nothing
-lands in `control/` without a test on the virtual-clock harness.
+the rule it touches. No "while I am in here" changes, and nothing lands in
+`control/` without a test on the virtual-clock harness.
 
-Two things are worth knowing before it runs against the real cryostat:
+Two things are worth knowing before the next armed run:
 
-- **The GPIB path is exercised; the closed loop is not.** The recorder has run
-  against both boxes since 2026-08-24 and the 218's analog output has been moved
-  by hand, but the software loop has never driven this cryostat. See
-  [thermal-response.md](thermal-response.md) for what the live data has since
+- **The bench is not the cryostat.** Its plant has white sensor noise and no
+  slow disturbance, so it can grade a move and the short-tau half of a hold,
+  and cannot grade the slow wander that is the hold's whole point. That is
+  `analysis/hold_quality.py` against the 2026-09-15 open-loop night. See
+  [thermal-response.md](thermal-response.md) for what the live data has
   measured, and what still comes from the reference logs.
 - **`verify_readback` on the 218 is unverified over GPIB, and it can only ever
   see steps larger than `readback_tol_pct`** — which at a hold, and while

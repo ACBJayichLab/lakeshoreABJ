@@ -486,7 +486,7 @@ def test_the_journal_defaults_to_beside_the_recorders_own_log(tmp_path):
 
 # -- the admission thresholds, and the clock they are measured on -----------
 #
-# Both of these pin findings 1 and 3 of AUDIT-2026-09-09.md.
+# Both of these pin findings 1 and 3 of archive/AUDIT-2026-09-09.md.
 
 def test_the_mirrored_grader_constants_still_match_analysis_steps():
     """The duplication is deliberate; silent divergence is what it costs.
@@ -514,7 +514,7 @@ def test_the_mirrored_grader_constants_still_match_analysis_steps():
 def test_both_graders_put_the_guard_on_the_plants_clock():
     """The two used to differ on this one test, and no longer do.
 
-    Between AUDIT-2026-09-10-REJOINDER.md's step 1 and step 2 they diverged
+    Between archive/AUDIT-2026-09-10-REJOINDER.md's step 1 and step 2 they diverged
     deliberately: this module had ``Tread.tau_pred_s`` from the plan and
     ``analysis/steps.py`` had no plant model and was forbidden to import one.
     Phase A ended that -- the archive's own tau anchors ARE a plant model, and
@@ -704,7 +704,7 @@ def test_a_pole_pinned_at_the_top_of_the_search_is_not_believed_either():
 
     AUDIT-2026-09-10 finding 2's ceiling half, in the one place a plant model
     is available to decide it; ``analysis/steps.py`` cannot and only reports
-    the pin.  See AUDIT-2026-09-10-REJOINDER.md.
+    the pin.  See archive/AUDIT-2026-09-10-REJOINDER.md.
     """
     # A slow ramp at 170.6 K: 0.1 mK/s for ten minutes.  No exponential fits
     # inside the window, so the search runs tau to its ceiling and reports the

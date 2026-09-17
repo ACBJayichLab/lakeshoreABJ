@@ -1877,7 +1877,7 @@ def reading_rows(channels, links, control=None) -> list[dict]:
     table repeated the first with more columns.
 
     The reason there were two is still real and is what this function has to
-    respect. `FEATURE_PLAN.md` records it: a loop-centric table *replacing* the
+    respect. `archive/FEATURE_PLAN.md` records it: a loop-centric table *replacing* the
     channel list turns an eight-input monitor into however many loops it has,
     and recording every thermometer continuously is the recorder's whole job.
     The generalisation that gets one table without paying that price is to make

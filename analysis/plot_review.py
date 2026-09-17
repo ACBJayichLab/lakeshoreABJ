@@ -1,4 +1,4 @@
-"""The four figures behind REVIEW-2026-09-10.md, for eyeballing rather than reading.
+"""The four figures behind archive/REVIEW-2026-09-10.md, for eyeballing rather than reading.
 
 Each one is a decision that was made from numbers, drawn so the numbers can be
 checked by looking:

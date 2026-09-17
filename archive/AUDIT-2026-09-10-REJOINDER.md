@@ -43,7 +43,7 @@ failure actually costs data on the day, and which has no pause protecting it.
 
 - `ltspm3/tools/sweep.py`'s `settled()` still carries the 60 s wall clock
   (line 362 at `1f5943b`); `PoleFit.tau_ceiling` is reported in the journal
-  and never acted on; and [commissioning](docs/ltspm3/commissioning.md) still
+  and never acted on; and [commissioning](../docs/ltspm3/commissioning.md) still
   says "Use whatever `--min-dwell` the plan calls for". Measured in the audit:
   at `--min-dwell 60` a 145 K rung with 0.76 K still to go is certified
   `steady` one run in ten, 0.69 K short.

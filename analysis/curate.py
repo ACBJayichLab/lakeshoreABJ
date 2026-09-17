@@ -254,7 +254,7 @@ def summarise(rows: list) -> None:
 #:
 #: A factor of two either way, and it is chosen to catch a specific row rather
 #: than for roundness.  ``pp-20260808-155602`` -- 840 s at 99.42 K -- is decided
-#: at 0.63, which is AUDIT-2026-09-10-REJOINDER.md's "a margin of 1.6 in tau,
+#: at 0.63, which is archive/AUDIT-2026-09-10-REJOINDER.md's "a margin of 1.6 in tau,
 #: not the three orders of magnitude the other six enjoy", and it is the one
 #: verdict that document asks a reviewer to look at by name.  A bar at 1.5 puts
 #: it a hundredth outside the list it exists to be on.  Two also happens to be

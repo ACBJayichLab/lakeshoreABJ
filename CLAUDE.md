@@ -15,12 +15,12 @@ the code is, and it is the detail that goes stale — edit it there, not here.
 | | |
 |---|---|
 | [`docs/recorder/`](docs/recorder/) | **Generic, any cryostat.** [install](docs/recorder/install.md) · [quickstart](docs/recorder/quickstart.md) · [cli](docs/recorder/cli.md) · [configuration](docs/recorder/configuration.md) · [instruments](docs/recorder/instruments.md) · [file-interface](docs/recorder/file-interface.md) · [gui](docs/recorder/gui.md) · [windows](docs/recorder/windows.md) · [troubleshooting](docs/recorder/troubleshooting.md) |
-| [`docs/ltspm3/`](docs/ltspm3/) | **LTSPM3 only.** [cryostat](docs/ltspm3/cryostat.md) · [safety](docs/ltspm3/safety.md) · [thermal response](docs/ltspm3/thermal-response.md) · [control](docs/ltspm3/control.md) · [running](docs/ltspm3/running.md) · [noise](docs/ltspm3/noise.md) |
+| [`docs/ltspm3/`](docs/ltspm3/) | **LTSPM3 only.** [**requirements**](docs/ltspm3/requirements.md) (Jeff's, 2026-09-17 — what the loop is graded against; change it only by asking him) · [cryostat](docs/ltspm3/cryostat.md) · [safety](docs/ltspm3/safety.md) · [thermal response](docs/ltspm3/thermal-response.md) · [control](docs/ltspm3/control.md) · [running](docs/ltspm3/running.md) · [noise](docs/ltspm3/noise.md) |
 | [`matlab/README.md`](matlab/README.md) | MATLAB's half of the file protocol |
 | [`README.md`](README.md) | The front door, for a new user |
 | [`HANDOFF.md`](HANDOFF.md) | Point-in-time status. Goes stale by design; older ones are archived under their own date |
 | [`PID_PLAN.md`](PID_PLAN.md) | The route from here to a working software PID: Jeff's requirements, the software model (where `model/`, `control/` and the monitor live), the **typical band** in watts, and a phase index with one exit gate each. The phases with real work have their own documents under [`plans/`](plans/). [`REFIT_PLAN.md`](REFIT_PLAN.md) is the thermal model it stands on |
-| `AUDIT-*.md` | Point-in-time audits, findings with nothing fixed. `AUDIT-2026-09-10-REPLY.md` is the argument for the two parts of that one's finding 2 that were deliberately NOT applied; `AUDIT-2026-09-10-REJOINDER.md` concedes both, and says the live sweep tool is where the fix still has to land |
+| [`archive/`](archive/) | Every dated document: the older `HANDOFF-*.md`, the `AUDIT-*.md` (point-in-time audits, findings with nothing fixed — `AUDIT-2026-09-10-REPLY.md` argues for the two parts of that one's finding 2 that were deliberately NOT applied, and `AUDIT-2026-09-10-REJOINDER.md` concedes both), `REVIEW-2026-09-10.md`, and the finished `FEATURE_PLAN.md`. Nothing in it is current; git has the history if the folder ever gets in the way |
 
 **Keep the split when you write.** Anything true of any Lake Shore cryostat belongs
 in `docs/recorder/`; anything calibrated to LTSPM3 belongs in `docs/ltspm3/`. A
@@ -37,12 +37,15 @@ viewer and the MATLAB interface exist and are exercised end to end; the
 recorder has run on the cryostat's own Windows machine since 2026-08-24. The
 monitoring half is in service and stays in service.
 
-The software PID has never closed a loop on the cryostat, and the numbers it
-would run on have been contradicted by the September characterisation.
-[`PID_PLAN.md`](PID_PLAN.md) is the route from here to a working one, and it
-records Jeff's requirements of 2026-09-11: 4 to 300 K, 5 K/min, one rate
-limit, warn at a kelvin and fault at five, a 20 s filter, graceful failure,
-and the thermal model used to say whether the cryostat is behaving typically.
+The software PID closed on the cryostat on 2026-09-16 and moved its first
+setpoint on 2026-09-17. **Its requirements are
+[`docs/ltspm3/requirements.md`](docs/ltspm3/requirements.md)**, in Jeff's
+words: a 2 K move at 118 K in five minutes, a hold no noisier than open loop at
+15 s to 5 min and much steadier at long averaging, a band that follows the
+setpoint, 5 K/min as a ceiling only. The goal had drifted in the documents as
+measurements came in, until they said the loop had nothing to offer a hold;
+that is why the requirements now live in one file that only he changes.
+[`PID_PLAN.md`](PID_PLAN.md) is the route.
 
 **`ltspm3/control/` is therefore open to change — under the eight rules of
 [safety](docs/ltspm3/safety.md), one rule-scoped commit at a time, each
