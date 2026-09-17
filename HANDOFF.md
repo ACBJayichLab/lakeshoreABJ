@@ -172,6 +172,25 @@ Widening `authority_pct` instead would buy setpoint range by running a wide
 replaced. Wrong trade. For the hold itself 0.1 is generous: the loop used
 63.986–63.998, **6 % of its authority**, and never neared a rail.
 
+### 9. AUDIT-2026-09-16 worked, one finding per commit
+
+Read [AUDIT-2026-09-16.md](AUDIT-2026-09-16.md) for the reasoning; the header
+there says where each fix landed. In short, and in the order the audit asked
+for:
+
+| | |
+|---|---|
+| 1 | `FittedHarness(settled=True)` reproduces the 13:35 walk-down, and `stage="file"` + `tests_ltspm3/test_stage_4a.py` grade the switches the cryostat is armed on. **HANDOFF item D closed** |
+| 6 | `hold` and `heaters_off` queue through `send`'s liveness guard; the status rename retries. **Item F closed** |
+| 5 | the viewer's arm button answers ownership every refresh, so an external `hold` no longer leaves it grey |
+| 2, 3 | `has_curve` / `schedule`: the fault ramp-down is **24 minutes, not 320**, and the output limiter carries the one rate. `ramp_lead_pct` deliberately unchanged |
+| 4 | `arm` on an armed loop is refused at the supervisor, so the spool and the button agree |
+| 7 | the config header, the band's asymmetry, `check`'s band line, the logging backstop, and the pre-refit rate numbers |
+| 8 | four tests that could not have failed |
+
+**None of it has run on the cryostat** — see the restart note under
+"Picking this up next session".
+
 ## What needs fixing, in the order I would take it
 
 ### A. The gauge is stale — the only item that costs cryostat time
@@ -311,9 +330,12 @@ python -m lschart -c config-ltspm3-armed.yaml send hold
 hands the viewer's manual controls back. `heaters_off` is the harder stop and
 is exempt from every gate.
 
-**To pick up the 0.25 band**, the armed run has to be restarted — the config is
-read at construction. That is `Ctrl-C` (which leaves the heater where it is,
-`on_exit: hold`) then `run --arm` again, which re-arms at the present
+**The running loop is on the code of 2026-09-16 morning.** The whole
+`control:` section and every module in it are read and built at construction,
+so a restart is what picks up the 0.25 band *and* everything the audit fixed:
+the 24-minute fault ramp-down, the one rate reaching the output, and `arm`
+refusing on an armed loop. That is `Ctrl-C` (which leaves the heater where it
+is, `on_exit: hold`) then `run --arm` again, which re-arms at the present
 temperature. It costs the continuity of the tracking record, not the hold.
 
 **Do not run the ladder without asking** — Jeff declined it on 2026-09-16 and
