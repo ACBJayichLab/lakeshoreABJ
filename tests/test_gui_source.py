@@ -2034,6 +2034,23 @@ def test_not_writing_is_news_only_while_the_loop_should_be_driving():
     assert "NOT written" in detail_row(held, "readback")["text"]
 
 
+def test_a_recorder_that_says_nothing_about_writing_is_not_accused_of_not():
+    """Found on the live cryostat, not on the bench: against a recorder too
+    old to publish `wrote` the row read "NOT written this cycle" and lit the
+    warning on **every cycle**.
+
+    Absent is no opinion, exactly as it is for the residual and
+    `model_trusted` -- and a warning that is lit permanently is a warning
+    nobody reads, which is the whole reason the two marks on the table row
+    were kept apart in the first place."""
+    old = a_full_control()
+    del old["wrote"]
+    row = detail_row(old, "readback")
+    assert row["mark"] == ""
+    assert "written" not in row["text"]
+    assert detail_row(a_full_control(wrote=True), "readback")["mark"] == ""
+
+
 def test_the_rail_is_judged_on_the_demand_against_the_published_band():
     """The written value is quantised and the band re-applied by stepping
     down a code, so a saturated loop writes below its own rail -- and the band

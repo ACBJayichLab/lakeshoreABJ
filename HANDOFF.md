@@ -27,6 +27,9 @@ Previous: [archive/HANDOFF-2026-09-17c.md](archive/HANDOFF-2026-09-17c.md)
 > now. What that costs, and why it can wait, is
 > [§3](#3-one-thing-wants-a-restart-and-it-can-wait).
 >
+> **The monitor has never judged this cryostat** — four days of `no opinion`,
+> from a stopped clock. [§4](#4-the-monitor-has-never-judged-the-live-cryostat).
+>
 > Stopping is unchanged and always works:
 > ```bash
 > python -m lschart -c config-ltspm3-armed.yaml send hold
@@ -47,7 +50,7 @@ the last three handoffs were waiting for. From the recorder's own CSV,
 **The +5 K move, graded the way [requirements.md](docs/ltspm3/requirements.md)
 §2 grades one.** `t0` is the output step at 20:31:27 rather than a command time,
 because the recorder's CSV does not carry the software loop's setpoint — see
-[§4](#4-two-open-items-and-one-new-one):
+[§5](#5-the-other-open-items):
 
 | | measured | Jeff's bar |
 |---|---|---|
@@ -71,7 +74,7 @@ loop dithering: 0.18 % of authority is what holding 125 K to 20 mK cost.
 **What this does not yet say** is the thing the hold is *for*: slow wander at
 long averaging times. Two hours cannot answer it and neither can the bench, whose
 plant has white sensor noise and no slow disturbance. That is still
-`analysis/hold_quality.py` against the 2026-09-15 open-loop night — see §4.
+`analysis/hold_quality.py` against the 2026-09-15 open-loop night — see §5.
 
 These numbers have no durable home yet. If they are to become the cryostat's
 record rather than tonight's, they belong in `requirements.md` §3 beside the
@@ -124,7 +127,51 @@ the degrade the projection is built for and there is a test on it
 rather than a thing to fix. Pick the restart up whenever the cryostat is next
 free; nothing needs it tonight.
 
-## 4. Two open items, and one new one
+## 4. THE MONITOR HAS NEVER JUDGED THE LIVE CRYOSTAT
+
+**Found tonight by pointing the new viewer at the running recorder**, which is
+the first time anything displayed the verdict where somebody would see it.
+
+`python -m ltspm3.monitor` is running and writing `plant.json` every two
+seconds. It has produced **`no opinion` on every residual, on every sample,
+for four days** — 131,179 rows across `plant_2026-09-14` through `-17`.
+Not one `typical`, not one `warn`. The safety net has been blind since it was
+deployed.
+
+**Root cause, and it is not a tuning question.** The recorder was restarted
+**six times today**, and each restart resets the CSV's `Time` column to zero
+while the *same* daily file carries on:
+
+```
+09:04:33   Time 32660 -> 0      14:51:06   Time 13057 -> 0
+10:44:26   Time  5953 -> 0      15:44:03   Time  3003 -> 0
+11:13:20   Time  1721 -> 0      20:12:31   Time 16099 -> 0
+```
+
+`_Clock.at` in `ltspm3/monitor/source.py` builds its monotonic clock as
+`origin + relative_s` and then ratchets it with `max(t, self.last)`. That
+ratchet is right for the thing it was written for — AUDIT-2026-09-10 finding 4,
+a daylight-saving fold across a *file* boundary, which `open_file` handles. A
+`Time` reset **inside** one file is not a fold: it is a new origin, and the
+ratchet turns it into a permanent freeze. After 09:04 the column never climbed
+back above 32660, so `t_s` has been pinned at that value ever since —
+`1789661061.966`, while `epoch` and every reading advance normally.
+
+Everything the judge decides is in that timebase: `in_transient` compares
+`s.t_s - self._move_t`, `_Persist.update` needs `after_s` of it to elapse, and
+the baseline ages by it. With the clock stopped, **no gate ever expires**, so
+the reason reads `within 3 tau of a heater move` two hours into a settled hold.
+
+**What it is not:** not the armed loop's dither. One write is 0.009 % — 0.11 K
+of plant gain against a 1.0 K `move_k` — and during the settled hold nothing
+crosses that threshold at all.
+
+**Do not treat phase 2's gate as met on the cryostat.** It was met against the
+archive, where a file is read once and the column is monotonic; the live path
+has never been exercised past a restart. Fixing the clock is step one, and the
+soak has to start again after it, because none of the four days counts.
+
+## 5. The other open items
 
 * **the night armed, then `hold_quality.py`.** Tonight *is* the night, and it
   is 2 h in. The long-averaging half of Jeff's answer 2 needs it run against

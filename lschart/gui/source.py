@@ -2261,6 +2261,10 @@ def control_detail(control: dict | None) -> list[dict] | None:
     validity = _words(control.get("validity"))
     trusted = control.get("model_trusted")
     corroborated = control.get("corroborated")
+    # Tri-state for the same reason `model_trusted` is: a recorder that does
+    # not publish it is not claiming the loop failed to write.
+    wrote = control.get("wrote")
+    wrote = None if wrote is None else bool(wrote)
     residual = control.get("missing_power_w")
     threshold = control.get("threshold_k")
     error = control.get("error_k")
@@ -2369,13 +2373,18 @@ def control_detail(control: dict | None) -> list[dict] | None:
              "mark": "",
              "tip": "the ramp's lead -- why a sweeping loop rails legitimately"},
             {"label": "readback",
-             "text": _num_text(control.get("readback_pct"), "%", 2)
-                     + (", written this cycle" if control.get("wrote")
-                        else ", NOT written this cycle"),
-             # Only news while the loop is supposed to be driving: one that has
-             # been held is not failing to write.
-             "mark": "warn" if (not control.get("wrote")
-                                and state == "tracking") else "",
+             "text": _num_text(control.get("readback_pct"), "%", 2) + (
+                 "" if wrote is None
+                 else ", written this cycle" if wrote
+                 else ", NOT written this cycle"),
+             # **Absent is NOT "it did not write".**  A recorder too old to
+             # publish the field has no opinion about it, and reading that as
+             # a failure lights a warning on every such recorder -- which is
+             # the same null-is-not-false trap the residual and `model_trusted`
+             # are written to avoid.  Only a published False is news, and only
+             # while the loop is supposed to be driving: one that has been held
+             # is not failing to write.
+             "mark": "warn" if (wrote is False and state == "tracking") else "",
              "tip": "what the box says it is at, and whether this cycle wrote"},
             {"label": "gains",
              "text": "P " + _num_text(control.get("p"), "", 4)
