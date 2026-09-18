@@ -2795,3 +2795,22 @@ def test_a_live_viewer_still_follows_the_recorder(viewer):
     """The framing above must not leak into the live case: with no csv_path
     the viewer keeps riding the newest sample."""
     assert viewer._span is None
+
+
+def test_a_command_must_say_what_it_addresses():
+    """`_queue` has no default instrument, and that is a safety property
+    rather than a style one.
+
+    The recorder auto-picks the only controller when a command's instrument
+    field is empty (`IpcService._pick`), so a defaulted empty string on a
+    `setpoint`, `range` or `pid` lands on a box nobody named, with no error
+    anywhere.  The selector could never hold `""` when the default was
+    written; the software loop's target can.
+    """
+    import inspect
+
+    from lschart.gui.window import ViewerWindow
+
+    parameter = inspect.signature(ViewerWindow._queue).parameters["instrument"]
+    assert parameter.default is inspect.Parameter.empty
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY

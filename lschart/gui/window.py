@@ -3261,16 +3261,22 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """
         return 0.5 * 10.0 ** -spin.decimals()
 
-    def _queue(self, kind: str, *, instrument: str | None = None, **args) -> None:
+    def _queue(self, kind: str, *, instrument: str, **args) -> None:
         """Submit one command and start waiting for its acknowledgement.
 
         ``instrument=""`` addresses the recorder rather than one box, which is
-        what ``heaters_off`` wants; the default is whatever is selected.
+        what ``heaters_off``, ``hold``, ``arm`` and ``ack`` want.
+
+        **There is no default.**  It used to fall back to whatever the selector
+        held, which was safe only because that selector could never hold ``""``.
+        A command that does not say what it addresses is a command that can
+        address the wrong thing: the recorder auto-picks the only controller
+        when the field is empty (`IpcService._pick`), so a defaulted empty
+        string on a `setpoint`, `range` or `pid` lands on a box nobody named,
+        with no error anywhere.  Every caller states its target.
         """
         if self.spool is None:
             return
-        if instrument is None:
-            instrument = self.instrument_combo.currentText()
         try:
             cid = self.spool.submit(
                 kind, instrument=instrument, source=GUI_SOURCE, **args,
@@ -3305,7 +3311,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "heater range is 0.",
         ):
             return
-        self._queue("setpoint", loop=loop, kelvin=kelvin)
+        self._queue("setpoint", instrument=instrument, loop=loop, kelvin=kelvin)
         self._await_readback(f"{instrument}.setpoint{loop}", kelvin,
                              self._display_tolerance(self.setpoint_spin))
 
@@ -3325,7 +3331,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "rest of the run, including while it is already driving.",
         ):
             return
-        self._queue("pid", loop=loop, **gains)
+        self._queue("pid", instrument=instrument, loop=loop, **gains)
         self._await_readback(f"{instrument}.p{loop}", gains["p"],
                              self._display_tolerance(self.pid_spins["p"]))
 
@@ -3361,7 +3367,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             )
         if not self._confirm("Set heater range", text):
             return
-        self._queue("range", output=output, value=value)
+        self._queue("range", instrument=instrument, output=output, value=value)
         # A range is one of a handful of named steps, not a measured
         # quantity: it reads back as the integer it was set to or it did not
         # take, so half a step is all the slack it needs.
@@ -3482,7 +3488,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             )
         if not self._confirm("Set analog output", text):
             return
-        self._queue("analog", percent=percent)
+        self._queue("analog", instrument=instrument, percent=percent)
         self._await_readback(f"{instrument}.aout{caps['analog_output']}", percent,
                              self._display_tolerance(self.analog_spin))
 
