@@ -45,11 +45,13 @@ and moved its first setpoint on 2026-09-17. Phases 0 to 3 of
 way on the cryostat.
 
 **What it is graded against is [requirements.md](requirements.md)** — Jeff's
-answers of 2026-09-17, in his words: a 2 K move at 118 K in five minutes, a
-hold whose noise is no worse than open loop at 15 s to 5 min and much better
-at long averaging, a band that follows the setpoint. The loop was retuned to
-those the same day and the retune has been graded on the bench, not yet on the
-cryostat. Read that document before touching a number in the config.
+answers of 2026-09-17, in his words: a 2 K move at 120 K that is 95 % of the
+way there in about a minute and within 50 mK inside 2-5 min (§1b, which
+supersedes the five minutes he first agreed to), a hold whose noise is no worse
+than open loop at 15 s to 5 min and much better at long averaging, a band that
+follows the setpoint. The loop was retuned to those the same day and the retune
+has been graded on the bench, not yet on the cryostat. Read that document
+before touching a number in the config.
 
 `control/` is **open to change** under the eight rules of
 [safety.md](safety.md), one rule-scoped commit at a time, each reviewed against

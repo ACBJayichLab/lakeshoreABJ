@@ -314,6 +314,11 @@ recorder, contrast test green.
   asks whether a curve EXISTS, not whether the stage trusts it** — it asked
   `tuner.enabled` / `feedforward.enabled` until 2026-09-16, which made both the
   rate limiter and the fault ramp-down sit on `min_rate_pct_per_min` at 4a.
+  **Which is why the TRACKING limiter no longer converts at all** (4e): how
+  fast the heater may travel is about the heater, not the sample, and sharing
+  one number with the trajectory cost every move nine minutes of creep. Only
+  the fault ramp-down still converts, because a descent with no sensor is a
+  trajectory. → `supervisor.max_output_rate_pct_per_min`.
 - **The ramp-down must not need the sensor.** Rule 3: the fault may be the
   sensor. Hence the inverse curve, open loop.
 - **Nothing above 180.6 K is measured.** The 300 K numbers are extrapolations

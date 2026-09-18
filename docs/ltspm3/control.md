@@ -90,11 +90,28 @@ loop instead: the error it produced was read as a broken premise, so rule 8 was
 protecting the cryostat by breaking the loop, and it only worked because the
 premise check could not tell a commanded move from a fault.
 
-**There is one rate** — `ramp.max_rate_k_per_min`, 5 K/min — and a sweep, the
-post-fault approach and the fault ramp-down all use it. The heater's rate limit
-in percent is derived from it through the gain, `max_rate_k_per_min / K(T)`:
-0.40 %/min at 118 K and 14.9 %/min at 10 K, which is the same five kelvin a
-minute at both. A rate in percent cannot be, because the gain spans forty-fold.
+**There is one TRAJECTORY rate** — `ramp.max_rate_k_per_min`, 5 K/min — and a
+sweep, the post-fault approach and the fault ramp-down all use it. A kelvin
+rate is the right unit for all three, because they are statements about where
+the *sample* is going, and a rate in percent could not be: the gain spans
+forty-fold.
+
+**How fast the HEATER may travel is a different quantity and a different
+number** — `supervisor.max_output_rate_pct_per_min`, 20 %/min. It used to be
+the trajectory's rate divided by the gain, and that conflation is what made
+every move soft with a long tail: a ramp needs `rate * tau / K` of overdrive
+above the output it will finish on — 3.5 % at 120 K — and the converted
+ceiling delivered 0.40 %/min, so the heater spent nearly nine minutes creeping
+toward a drive the ramp had stopped asking for. Raising `max_rate_k_per_min`
+could not fix it, because that steepens the trajectory by exactly the factor it
+loosens the actuator; it measured *worse*
+([requirements.md](requirements.md) §3a). Percent is the honest unit here,
+because this bound is about the heater and its wiring rather than the sample.
+
+**The fault ramp-down is the one place the conversion survives**, and on
+purpose: a descent that has to work with no sensor at all (rule 3) is a
+commanded trajectory, so it keeps `max_rate_k_per_min / K(T)` with
+`min_rate_pct_per_min` as its floor.
 
 **Both conversions ask whether a curve EXISTS, not whether this commissioning
 stage trusts it** — `HeaterSupervisor.has_curve` and `.schedule`. They asked
@@ -112,17 +129,24 @@ because it widens the authority band rather than slowing something down.
 `move_speed` against `tau(T)`, floored at four dead times. τ runs from 0.1 s at
 10 K to 611 s at 180 K, so the 1800 s / 300 s this replaced was three times the
 plant at the top and eighteen thousand times it at the bottom. **The shipped
-ratios are 0.15 for a move and 0.25 for a hold** (2026-09-17, from
+ratios are 0.03 for a move and 0.25 for a hold** (2026-09-17, from
 [requirements.md](requirements.md)): both *faster* than the plant. The 0.5 /
 3 they replaced made a 2 K move at 118 K take as long as a hand step, because
 the trajectory corner is the same number as the closed-loop time constant and
 the two stack; and the weak hold stirred at its own natural period rather than
 correcting. The tables are in the config's comments.
 
+**At `move_speed: 0.03` it is the DEAD TIME that sets the speed of a move**,
+not this ratio: `0.03 × 527 s` is under the `delay_floor × delay_s` floor
+everywhere the cryostat is used, so `tau_cl` sits at 12 s and what decides how
+fast a move can be is the 2 s cadence, the median of three and `delay_floor`.
+That is deliberate — Jeff kept all three rather than buy the last 15-20 s with
+the stability margin ([requirements.md](requirements.md) §1b).
+
 **The trajectory corner is the closed-loop time constant.** A commanded move
-is smoothed over `move_speed × tau(T)` and the loop then follows with the same
-time constant, so a move that fits inside the band arrives in about five of
-those — the graded bench figure is in [requirements.md](requirements.md) §3 —
+is smoothed over `move_speed × tau(T)`, floored at `smooth_delays` dead times,
+and the loop then follows with the same time constant — the graded bench
+figures are in [requirements.md](requirements.md) §3b —
 and the commanded rate only governs moves large enough to need it. The rate ceiling is a safety limit, not
 a target.
 

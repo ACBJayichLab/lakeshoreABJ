@@ -332,14 +332,16 @@ tighter than the calibration offset.
 | 4a — arm on a narrow band, **no tuning, no feedforward** — all three, see below | **MET 2026-09-16** — one hour of `tracking`, monitor and supervisor both clean; the numbers are in "What 4a measured" below |
 | 4b — provoked fault at low temperature | ramps down at the one rate through the inverse curve, **does not resume when the sensor comes back**, latches, locks out, `ack` the only way out |
 | 4c — widen to 1.0 %, then tuning, then feedforward, one per watched hour | no `frozen` without a named cause. **TUNING STEP TAKEN 2026-09-17** — see below; the widen and the feedforward are still outstanding, and the feedforward waits on the gauge |
-| 4d — **the move benchmark**: a 2 K move at 118 K inside 5 min ([requirements.md](../docs/ltspm3/requirements.md)), and a sweep ≥ 10 K on top of it | arrives inside the benchmark, lag < 2 K on the long sweep, no warning at either end, `δQ` quiet — see below |
+| 4d — the move benchmark, **five minutes for 2 K at 118 K** | **bench gate met 2026-09-17, then SUPERSEDED by 4e the same evening** before it ran on the cryostat — see below |
+| 4e — **the move benchmark**: a 2 K move at 120 K, 95 % in ~60 s and within 50 mK inside 2-5 min ([requirements.md](../docs/ltspm3/requirements.md) §1b), and a sweep ≥ 10 K on top of it | **bench gate met 2026-09-17** (86 s / 114 s / 11 mK), cryostat pending: arrives inside the benchmark, lag < 2 K on the long sweep, no warning at either end, `δQ` quiet — see below |
 
 ### 4c's tuning step, taken out of order and before the widen — 2026-09-17
 
 `tuning.enabled: true`, `hold_speed: 3 -> 12`, feedforward still off.
 (**The 12 lasted one day**: see 4d below and
 [requirements.md](../docs/ltspm3/requirements.md) — Jeff chose the strong
-direction, and the file ships `hold_speed: 0.25`, `move_speed: 0.15`.)
+direction, and the file ships `hold_speed: 0.25`. `move_speed` went 0.5 -> 0.15
+at 4d and 0.15 -> 0.03 at 4e.)
 
 Out of order deliberately. The widen and the feedforward both change how much
 heater the loop may command; the tuner changes only how it is scheduled, and
