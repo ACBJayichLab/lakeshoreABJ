@@ -17,9 +17,10 @@ import time
 import pytest
 
 from lschart.gui.source import (
-    EMPTY_LOOP, SOFTWARE_LOOP_LABEL, CsvTail, Series, StatusSource, capabilities,
-    classify_column, connect_flags, control_row, loop_marks, loop_rows, nearest_series,
-    reading_rows, region_stats, value_at, write_region_csv,
+    EMPTY_LOOP, NO_TARGET, SOFTWARE_LOOP_LABEL, CsvTail, Series, StatusSource,
+    capabilities, classify_column, command_targets, connect_flags, control_row,
+    loop_marks, loop_rows, nearest_series, reading_rows, region_stats,
+    row_target_key, value_at, write_region_csv,
 )
 
 HEADER = "Timestamp,Time,Sample,ls336.setpoint1,ls336.heater1,Validity,State,Notes\n"
@@ -1769,3 +1770,130 @@ def test_no_status_at_all_is_not_an_owner():
     src = StatusSource.__new__(StatusSource)
     src.status = None
     assert src.software_loop_owns_output() is False
+
+
+# -- what the command panel can be pointed at ---------------------------------
+#
+# One selection, two routes.  The dropdown lists these and the reading table
+# selects them, so the rule that matters is that both arrive at the same key --
+# and that the one case with no row (an analog output) is honest about it
+# rather than silently unreachable.
+
+
+MONITOR = {"name": "ls218", "model": "218", "up": True, "writable": True,
+           "loop_numbers": [], "heater_outputs": [], "analog_output": 1,
+           "max_output_pct": 70.0, "loops": []}
+
+
+def a_software(**kw):
+    block = {"state": "tracking", "mode": "pid", "health": "ok",
+             "sensor": "Sample", "setpoint_k": 96.0}
+    block.update(kw)
+    return block
+
+
+def test_a_controller_offers_one_target_per_loop_and_no_analog():
+    targets = command_targets([link_with_loops(
+        a_loop(loop=1, sensor="Coldplate"), a_loop(loop=2, sensor="Stage 2"))])
+    assert [t.label for t in targets] == ["ls336 loop 1", "ls336 loop 2"]
+    assert {t.kind for t in targets} == {"loop"}
+    assert [t.sensor for t in targets] == ["Coldplate", "Stage 2"]
+
+
+def test_a_monitor_offers_its_analog_output_and_no_loops():
+    targets = command_targets([MONITOR])
+    assert [t.label for t in targets] == ["ls218 analog 1"]
+    assert targets[0].kind == "analog" and targets[0].analog_output == 1
+    assert targets[0].loop is None and targets[0].heater_output is None
+
+
+def test_a_loop_that_drives_an_analog_output_carries_no_heater():
+    """A 336's loops 3 and 4.  There is no range to raise on them, and a
+    heater number here would be a number pointing at the wrong output."""
+    link = link_with_loops(
+        a_loop(loop=1, heater_output=1), a_loop(loop=3, heater_output=None),
+        loop_numbers=[1, 3])
+    targets = command_targets([link])
+    assert [t.heater_output for t in targets] == [1, None]
+
+
+def test_a_recorder_too_old_to_publish_bindings_falls_back_to_the_protocol():
+    """Schema 1 published loop numbers and no loop objects.  On this family the
+    loop number *is* the output number, so the fallback is not a guess -- and
+    this is the rule that decides where power lands on such a recorder."""
+    old = {"name": "ls336", "writable": True, "loops": [1, 2, 3, 4],
+           "heater_outputs": [1, 2], "analog_output": None}
+    targets = command_targets([old])
+    assert [t.loop for t in targets] == [1, 2, 3, 4]
+    assert [t.heater_output for t in targets] == [1, 2, None, None]
+    assert all(t.sensor == "" for t in targets)      # nothing said which
+
+
+def test_a_box_that_can_be_asked_nothing_contributes_nothing():
+    """An entry that selects nothing is worse than an absence."""
+    mute = {"name": "ls218", "writable": True, "loop_numbers": [],
+            "heater_outputs": [], "analog_output": None}
+    assert command_targets([mute]) == []
+
+
+def test_the_software_loop_is_offered_last_and_only_when_there_is_one():
+    links = [link_with_loops(a_loop(), loop_numbers=[1]), MONITOR]
+    assert [t.kind for t in command_targets(links)] == ["loop", "analog"]
+    targets = command_targets(links, a_software())
+    assert targets[-1].kind == "software"
+    assert targets[-1].label == "software loop"
+    assert targets[-1].instrument == "" and targets[-1].sensor == "Sample"
+
+
+def test_an_empty_control_block_offers_no_software_target():
+    """Absent and empty mean the same thing, which is the degrade
+    `control_row` already makes: a block with nothing in it describes no loop."""
+    assert command_targets([MONITOR], {}) == command_targets([MONITOR])
+
+
+def test_every_loop_row_the_table_draws_can_be_selected():
+    """The two routes meet here.  Every row carrying a loop -- including the
+    software loop's -- maps to a target the dropdown offers, so clicking and
+    choosing cannot disagree about what is being commanded."""
+    links = [link_with_loops(a_loop(loop=1, sensor="Coldplate"),
+                             a_loop(loop=2, sensor="Stage 2")), MONITOR]
+    control = a_software()
+    offered = {t.key for t in command_targets(links, control)}
+    channels = [a_channel(n) for n in ("Coldplate", "Stage 2", "Sample", "Spare")]
+    rows = reading_rows(channels, links, control)
+    keys = {r["channel"]: row_target_key(r) for r in rows}
+    assert keys["Spare"] is None                      # nobody commands it
+    for name in ("Coldplate", "Stage 2", "Sample"):
+        assert keys[name] in offered, name
+
+
+def test_an_analog_output_has_no_row_to_be_clicked():
+    """Honest, not an oversight: an analog output drives a heater and reads no
+    thermometer, so no row represents it.  It is reachable from the dropdown
+    only, and the two routes are for loops."""
+    rows = reading_rows([a_channel("Sample")], [MONITOR])
+    assert not any(row_target_key(r) for r in rows)
+    assert [t.kind for t in command_targets([MONITOR])] == ["analog"]
+
+
+def test_the_key_survives_a_rebinding_but_not_a_different_loop():
+    """`sensor` and `heater_output` follow OUTMODE? and move under a live
+    selection.  A key that moved with them would silently re-aim the panel at
+    a different loop, which is the failure this value exists to prevent."""
+    before = command_targets([link_with_loops(
+        a_loop(loop=1, sensor="Coldplate", heater_output=1), loop_numbers=[1])])[0]
+    after = command_targets([link_with_loops(
+        a_loop(loop=1, sensor="Cold Head", heater_output=2), loop_numbers=[1])])[0]
+    assert before.key == after.key
+    assert before != after                     # the value did change
+    other = command_targets([link_with_loops(
+        a_loop(loop=2, sensor="Coldplate", heater_output=1), loop_numbers=[2])])[0]
+    assert other.key != before.key
+
+
+def test_nothing_selected_is_a_value_rather_than_a_hole():
+    """Every field present, so no caller guards each lookup -- the same promise
+    EMPTY_LOOP makes.  Callers branch on `kind`."""
+    assert NO_TARGET.kind == "none"
+    assert NO_TARGET.instrument == "" and NO_TARGET.loop is None
+    assert NO_TARGET.key not in {t.key for t in command_targets([MONITOR])}

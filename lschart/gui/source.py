@@ -2019,3 +2019,153 @@ def loop_marks(row: dict, kelvin: float | None, *, rails=None) -> dict:
         and abs(float(kelvin) - float(setpoint)) > float(threshold)
     )
     return {"trying": True, "saturated": saturated, "unsettled": unsettled}
+
+
+# -- what the command panel can be pointed at ---------------------------------
+
+
+@dataclass(frozen=True)
+class CommandTarget:
+    """One thing the command panel can be aimed at.
+
+    The panel used to be aimed by two half-states -- an instrument name living
+    inside a combo box, and a loop number beside it -- which the click handler
+    kept in step by hand.  This is the whole aim in one value, so the combo and
+    the reading table can both be *views* of it rather than two places a
+    selection is stored.
+
+    **Two output fields and not one.**  A single ``output`` discriminated by
+    ``kind`` would let the range control read an analog output number as a
+    heater output.  This panel puts power into a cryostat, and a field that can
+    be read as the wrong number is not worth the line it saves -- the aux names
+    ``{inst}.range{heater_output}`` and ``{inst}.aout{analog_output}`` then
+    cannot be crossed.
+
+    ``instrument`` is ``""`` for the software loop, which is the same ``""``
+    that addresses the recorder rather than one box in a command file.  That is
+    not a collision: the software loop *is* the recorder's loop, which is why
+    the service's software branch never looks at the instrument field.
+    """
+
+    kind: str                      # "loop" | "analog" | "software" | "none"
+    instrument: str
+    loop: int | None
+    heater_output: int | None
+    analog_output: int | None
+    sensor: str
+    label: str
+
+    @property
+    def key(self) -> tuple:
+        """What makes two targets the same target across a rebuild.
+
+        **`sensor`, `label` and `heater_output` are deliberately outside it.**
+        All three follow the instrument's own ``OUTMODE?`` answer and can change
+        under a live selection -- a rebinding, a sensor renamed in config.  A
+        key that moved when a loop was re-bound would silently re-aim the panel
+        at a different loop, which is the one failure this value exists to
+        prevent.  Equality of the dataclass is therefore *not* the identity
+        test; this is.
+        """
+        return (self.kind, self.instrument, self.loop, self.analog_output)
+
+
+#: Aimed at nothing.  A real value rather than ``None``, which is the same
+#: promise :data:`EMPTY_LOOP` makes: every field present, so no caller has to
+#: guard each lookup.  Callers branch on ``kind``, which is the question they
+#: actually have.
+NO_TARGET = CommandTarget("none", "", None, None, None, "", "")
+
+
+def _heater_for(loop: int, row: dict | None, caps: dict) -> int | None:
+    """Which heater output a loop drives, or None if it drives an analog one.
+
+    From the recorder's ``OUTMODE``-derived row where there is one, and from
+    the capability table otherwise -- on this family the loop number *is* the
+    output number by protocol, so the fallback is not a guess.  It is what
+    decides where power lands on a recorder too old to publish loop bindings,
+    which is why it belongs here, tested, rather than in the window.
+    """
+    if row:
+        heater = row.get("heater_output")
+        return None if heater is None else int(heater)
+    return loop if loop in caps["heater_outputs"] else None
+
+
+def command_targets(links, control=None) -> list[CommandTarget]:
+    """Everything this recorder can be asked to do, in the order to offer it.
+
+    Deliberately parallel to :func:`reading_rows`, minus the channels: a target
+    is a thing to *command* and a channel is a thing to *read*.  The caller
+    passes the links that may be written (``StatusSource.writable_links``);
+    this does not re-filter, because which links are writable is the status
+    file's answer and not a rule worth keeping in two places.
+
+    **Grouped by instrument rather than mirroring the reading table.**  The
+    table's order is a thermometer order and it contains rows that are not
+    targets at all, so the two lists can never be the same list.  This one
+    reads as "everything the first box can be asked to do, then everything the
+    second can", and the software loop last because it is not a box.
+
+    It adds no new knowledge about instruments: :func:`capabilities` gives the
+    loop numbers, the heater outputs and the analog number, :func:`loop_rows`
+    gives the sensor and the published heater binding, and :func:`control_row`
+    says whether there is a software loop at all.
+
+    A writable link with no loops and no analog output contributes **nothing**.
+    It is a box that cannot be asked for anything, and an entry that selects
+    nothing is worse than an absence.
+    """
+    targets: list[CommandTarget] = []
+    for link in links or ():
+        name = str(link.get("name", ""))
+        caps = capabilities(link)
+        by_loop = {int(r["loop"]): r for r in loop_rows(link)
+                   if r.get("loop") is not None}
+        for loop in caps["loops"]:
+            row = by_loop.get(loop)
+            sensor = str((row or {}).get("sensor") or "")
+            targets.append(CommandTarget(
+                kind="loop", instrument=name, loop=loop,
+                heater_output=_heater_for(loop, row, caps),
+                analog_output=None, sensor=sensor,
+                label=f"{name} loop {loop}",
+            ))
+        if caps["has_analog"]:
+            output = caps["analog_output"]
+            targets.append(CommandTarget(
+                kind="analog", instrument=name, loop=None,
+                heater_output=None, analog_output=output, sensor="",
+                label=f"{name} analog {output}",
+            ))
+
+    software = control_row(control)
+    if software is not None:
+        targets.append(CommandTarget(
+            kind="software", instrument="", loop=None,
+            heater_output=None, analog_output=None,
+            sensor=str(software.get("sensor") or ""),
+            label="software loop",
+        ))
+    return targets
+
+
+def row_target_key(row: dict) -> tuple | None:
+    """The target a reading row names, or ``None`` for a bare thermometer.
+
+    The **one** place the "an empty instrument means the software loop"
+    convention is decoded on the viewer's side.  It was previously spelled
+    ``not instrument`` in three separate places in the window, which is three
+    places to forget it.
+
+    Returns a key rather than a :class:`CommandTarget` because a row does not
+    carry everything a target does -- no heater binding for a schema-1
+    recorder, no label -- and the key is what a selection is matched by anyway.
+    """
+    if not row.get("has_loop"):
+        return None                  # recorded, but no loop commands it
+    instrument = str(row.get("instrument") or "")
+    if not instrument:
+        return ("software", "", None, None)
+    loop = row.get("loop")
+    return ("loop", instrument, None if loop is None else int(loop), None)
