@@ -21,7 +21,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 | **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **Live soak run 2026-09-15; the gate is one diurnal cycle, not 72 h** |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts, **a band that follows the setpoint** | **BUILT 2026-09-14** — 8 scenarios × 6 temperatures green, 8 rate fields → 2, hold at 2 DAC codes/min. **Review fixes all ten landed 2026-09-15** ([plans/pid-3-review.md](plans/pid-3-review.md)): the bench no longer depends on the date, `CRASHED` latches, the descent is bounded and cannot be finished by a failed read, and **both kelvin rows are reachable** — a heater delivering half its power at 30 K now faults instead of holding 14 K low in silence. §3.6's soak outstanding |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | **4a met 2026-09-16; 4e's bench gate met 2026-09-17** (`test_stage_4e_fast_move.py`), cryostat pending; then 7 days unattended, hold graded against the 09-15 open-loop night; ladder graded to 300 K |
-| **5** | §6 here | warnings and faults in the viewer | verdict row visible, contrast-tested |
+| **5** | §6 here | warnings and faults in the viewer | **BUILT** — verdict rows, the loop's detail panel and a software setpoint control; contrast test green. Live check and MATLAB `plant()` outstanding |
 
 ---
 
@@ -295,10 +295,28 @@ command spool earning its keep.
 
 ## 6. Phase 5 — the viewer
 
-A verdict row per residual in the loop table's style, coloured by
-`theme.py`'s exceptional pairs, the reason in the hover; MATLAB `plant()`.
-Reads `plant.json` — a file, not an import. **Exit gate:** visible on a live
-recorder, contrast test green.
+**BUILT.** Three things, all reading files and importing nothing:
+
+- **the verdict**, one row per residual with the reason in the hover, coloured
+  by `theme.py`'s exceptional pairs. Reads `plant.json` — a file, not an
+  import. Stale marks the header and not the rows, because the last verdict is
+  still evidence and what is news is that it is history.
+- **the loop's own account of itself**, which needed the status file to publish
+  what the supervisor knows: the filtered reading the error is computed from,
+  asked → allowed → written, and the watt residual with its band. The viewer
+  shows these and judges none of them — every mark on that panel is a field the
+  supervisor publishes.
+- **a setpoint control**, because `send setpoint --software` was reachable from
+  every client except the one that is open while somebody types temperatures.
+  Its gate is the opposite of the manual output's, which is written down in
+  [gui](../docs/recorder/gui.md) rather than left to be inferred.
+
+**Still outstanding:** MATLAB `plant()`.
+
+**Exit gate:** visible on a live recorder, contrast test green. The contrast
+half is met — `tests/test_gui_theme.py` drives its check off the panels' own
+output, so a severity that resolves to no colour fails the build rather than
+silently stopping warning. The live half wants a recorder and a judge running.
 
 ---
 

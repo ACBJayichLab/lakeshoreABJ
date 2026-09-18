@@ -27,6 +27,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-c", "--config", default=None, help="the recorder's config.yaml")
     ap.add_argument("--status", default=None,
                     help="status.json to read, overriding the config")
+    ap.add_argument("--plant", default=None,
+                    help="a verdict file to read, overriding the default of "
+                         "plant.json beside the status file. Written by a "
+                         "separate judging process, if one is running; absent "
+                         "is the normal case and the panel then says so")
     ap.add_argument("--csv", default=None,
                     help="open this log instead of following a recorder -- a "
                          "finished run, or a legacy log converted by "
@@ -117,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         max_percent=args.max_percent,
         config_label=cfg.source_path or "",
         csv_path=args.csv,
+        plant_path=args.plant,
     )
     window.show()
     log.info("viewing %s", args.csv or status_path)

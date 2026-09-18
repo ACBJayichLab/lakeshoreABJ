@@ -132,6 +132,7 @@ import logging
 import math
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -2406,3 +2407,176 @@ def control_detail(control: dict | None) -> list[dict] | None:
         groups[-1]["rows"].append({"label": "alarm", "text": str(alarm),
                                    "mark": "warn", "tip": ""})
     return groups
+
+
+# -- the verdict from outside --------------------------------------------------
+
+
+#: The name whose ``warn`` is not a warning.  The judge publishes one row per
+#: residual plus a separate fault-level row, and on that row `warn` means the
+#: residual has crossed the FAULT floor -- so it is the one state->severity
+#: mapping that is not the identity, and it belongs in a tested projection
+#: rather than in a paint routine.
+FAULT_ROW = "fault_level"
+
+#: What the judge calls its three answers.  `no opinion` is a third value and
+#: not a shade of typical: a green light outside the table is a lie.
+PLANT_STATES = ("typical", "no opinion", "warn")
+
+#: **The residuals are not all in the same unit**, and blanket-converting them
+#: would put milliwatts beside a temperature and a dimensionless ratio.  Two
+#: are watts, two are kelvin, one is a ratio of measured tau to expected --
+#: ``(unit, places, scale)`` per row, keyed by the judge's own name for it.
+#: Anything this table has not heard of is printed as it arrived, which is the
+#: only honest default: a residual added upstream would otherwise be silently
+#: relabelled as whatever this table guessed.
+PLANT_UNITS = {
+    "missing_power": ("mW", 2, 1000.0),
+    "fault_level": ("mW", 2, 1000.0),
+    "coldplate": ("K", 3, 1.0),
+    "cold_head": ("K", 3, 1.0),
+    "noise": ("mK", 1, 1000.0),
+    "tau": ("x expected", 2, 1.0),
+}
+
+#: Rows whose ``sigma`` is not a spread in the value's own unit, and so must
+#: not be printed beside it.  ``tau``'s value is a RATIO of measured to
+#: expected while its sigma is the expected time constant in seconds -- side
+#: by side those read as one quantity and its error bar, which they are not.
+PLANT_NO_SIGMA = frozenset({"tau"})
+
+
+class PlantSource:
+    """A verdict file, polled.
+
+    Deliberately **not** :class:`StatusSource` or a subclass of it.  Every
+    behaviour that distinguishes that class is about the recorder and would be
+    wrong here: its health sentence names `ipc.enabled`, its staleness limit is
+    derived from the recorder's cycle interval, and its poll tracks a cycle
+    counter to catch a stalled recorder.  This file has none of those keys and
+    **carries its own** ``stale_after_s``.  Bending one class to both would put
+    four "if this is the other file" branches inside the class whose whole job
+    is the recorder.
+
+    What it keeps from that class, because both are polled files: a torn read
+    retains the last good payload rather than blanking the panel, and the age
+    is recomputed from what is retained rather than frozen at the last
+    successful read.
+    """
+
+    def __init__(self, path) -> None:
+        self.path = path
+        self.report: dict | None = None
+        #: Has a verdict ever been seen this session?  "Not running" and
+        #: "stopped a while ago" are different things to say.
+        self.ever_seen = False
+
+    def poll(self) -> dict | None:
+        report = read_status(self.path)
+        if report is None:
+            return self.report
+        self.ever_seen = True
+        self.report = report
+        return report
+
+    @property
+    def age_s(self) -> float | None:
+        """Seconds since the verdict was computed, or None.
+
+        From ``epoch``, which is unix seconds.  **Not** from ``written``, which
+        is a local ISO string with no zone on it -- arithmetic on that would be
+        wrong by an offset nobody would notice.
+        """
+        epoch = (self.report or {}).get("epoch")
+        if epoch is None:
+            return None
+        return max(0.0, time.time() - float(epoch))
+
+    def stale(self) -> bool | None:
+        """Is the verdict too old to be current?  ``None`` for no opinion.
+
+        The limit is the file's **own** ``stale_after_s``.  A viewer inventing
+        one here would be the same mistake as a viewer inventing a rate
+        limiter: the process that computes the verdict is the one that knows
+        how long it stays true.
+        """
+        limit = (self.report or {}).get("stale_after_s")
+        age = self.age_s
+        if limit is None or age is None:
+            return None
+        return age > float(limit)
+
+
+def plant_rows(report: dict | None, *, stale: bool | None = None,
+               age_s: float | None = None) -> list[dict] | None:
+    """The judge's verdict, in the same shape :func:`control_detail` returns.
+
+    One shape for both panels so the window has one painting routine and both
+    projections are tested without Qt -- and so a verdict row looks like a loop
+    row, which is what makes the two readable side by side.
+
+    ``None`` when there is no report, which is the normal case: the judge is a
+    separate process and is usually not running.
+
+    **The header's verdict is the published one and is never recomputed.**  The
+    file's top-level verdict is the worst of four residuals and deliberately
+    excludes two of the six rows, so a panel that re-derived "the worst row"
+    would disagree with the file it is displaying.
+    """
+    if not isinstance(report, dict) or not report:
+        return None
+
+    verdict = str(report.get("verdict") or "")
+    header = _words(verdict) or "—"
+    if age_s is not None:
+        header += f", {_duration(age_s)} old"
+    # **Marked for either kind of news, and they are different kinds.**  A
+    # verdict of `warn` is the judge saying something; a stale one is the judge
+    # having stopped saying anything, and a green light from one that died an
+    # hour ago is the dangerous failure here.  Both belong on the header: the
+    # first because the header is what a reader scans, the second because
+    # nothing else on the panel can show it -- the rows keep their own marks,
+    # since the last verdict is still evidence.
+    rows = [{"label": "verdict", "text": header,
+             "mark": "warn" if (stale or verdict == "warn") else "",
+             "tip": ("this verdict is older than the judge's own "
+                     "stale_after_s: nothing is judging the cryostat right now"
+                     if stale else
+                     "the worst of the residuals the judge weighs, as it "
+                     "published it")}]
+
+    for entry in report.get("residuals") or ():
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "")
+        state = str(entry.get("state") or "")
+        unit, places, scale = PLANT_UNITS.get(name, ("", 4, 1.0))
+        parts = [_words(state) or "—"]
+        if entry.get("value") is not None:
+            spread = (entry.get("sigma") if name not in PLANT_NO_SIGMA
+                      else None)
+            parts.append(_num_text(entry["value"], unit, places, scale)
+                         + (f" (σ {_num_text(spread, '', places, scale)})"
+                            if spread is not None else ""))
+        if entry.get("out_of_band_s"):
+            parts.append("out of band " + _duration(entry["out_of_band_s"]))
+        rows.append({
+            "label": name.replace("_", " ") or "—",
+            "text" : " · ".join(parts),
+            # `warn` on the fault-level row IS fault level, which is the one
+            # place the mapping is not the identity.
+            "mark": ("bad" if (state == "warn" and name == FAULT_ROW)
+                     else "warn" if state == "warn" else ""),
+            "tip": str(entry.get("reason") or ""),
+        })
+    return [{"title": "Verdict from the monitor", "rows": rows}]
+
+
+def _duration(seconds) -> str:
+    """A span a person reads, not a number of seconds."""
+    value = float(seconds)
+    if value < 90:
+        return f"{value:.0f} s"
+    if value < 5400:
+        return f"{value / 60:.0f} min"
+    return f"{value / 3600:.1f} h"

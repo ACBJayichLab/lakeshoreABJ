@@ -3243,3 +3243,100 @@ def test_the_pending_release_re_asks_the_moves_gate_as_well_as_arms(
     assert not w.software_button.isEnabled()       # but not into an idle loop
     assert w.arm_button.isEnabled()                # and the way back is open
     w.close()
+
+
+def plant_text(window) -> dict:
+    return {name.text(): value.text() for name, value in window._plant_rows
+            if not name.isHidden()}
+
+
+def write_plant(window, **kw) -> None:
+    report = {"schema": 1, "epoch": time.time(), "stale_after_s": 600.0,
+              "verdict": "typical", "residuals": [
+                  {"name": "missing_power", "state": "typical",
+                   "value": -0.0005, "sigma": 0.0014, "reason": "",
+                   "out_of_band_s": 0.0},
+                  {"name": "fault_level", "state": "typical", "value": -0.0005,
+                   "sigma": 0.001, "reason": "", "out_of_band_s": 0.0}]}
+    report.update(kw)
+    with open(window.plant.path, "w") as fh:
+        json.dump(report, fh)
+    window.refresh()
+
+
+def test_a_plain_recorder_is_told_nothing_about_a_monitor(tmp_path, qt_app):
+    """No software loop means nothing a verdict would be about, so the panel
+    is silent rather than reporting an absence nobody asked about."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    assert not showing(w.plant_panel)
+    w.close()
+
+
+def test_a_loop_with_no_monitor_says_nothing_is_judging_it(tmp_path, qt_app):
+    """This panel not being here is a fact about the cryostat, not about the
+    viewer, so it is stated rather than left as a gap on the screen."""
+    w = software_viewer(tmp_path, qt_app)
+    assert showing(w.plant_panel)
+    assert "nothing is judging" in w.plant_note.text()
+    assert plant_text(w) == {}
+    w.close()
+
+
+def test_a_verdict_beside_the_status_file_is_found_without_being_asked_for(
+        tmp_path, qt_app):
+    """The same derivation the judge itself uses: plant.json beside the status
+    file, which is where every other client already looks."""
+    w = software_viewer(tmp_path, qt_app, name="found.csv")
+    assert str(w.plant.path).endswith("plant.json")
+    write_plant(w)
+    assert "missing power" in plant_text(w)
+    assert not w.plant_note.isVisible() or not w.plant_note.text()
+    w.close()
+
+
+def test_a_fresh_typical_verdict_paints_nothing(tmp_path, qt_app):
+    w = software_viewer(tmp_path, qt_app, name="clean.csv")
+    write_plant(w)
+    assert not any(value.styleSheet() for _, value in w._plant_rows
+                   if value.text())
+    w.close()
+
+
+def test_a_stale_verdict_marks_only_its_header(tmp_path, qt_app):
+    """A green light from a judge that died an hour ago is the dangerous
+    failure, and since a clean verdict paints nothing the marked header is the
+    only paint on the panel."""
+    w = software_viewer(tmp_path, qt_app, name="stale.csv")
+    write_plant(w, epoch=time.time() - 3600.0)
+    painted = {name.text() for name, value in w._plant_rows
+               if value.text() and value.styleSheet()}
+    assert painted == {"verdict"}
+    assert "old" in plant_text(w)["verdict"]
+    w.close()
+
+
+def test_a_warning_reaches_the_panel_with_its_reason_in_the_hover(
+        tmp_path, qt_app):
+    w = software_viewer(tmp_path, qt_app, name="warn.csv")
+    write_plant(w, verdict="warn", residuals=[
+        {"name": "missing_power", "state": "warn", "value": -0.00508,
+         "sigma": 0.0014, "reason": "dQ 3.6 sigma below baseline",
+         "out_of_band_s": 840.0}])
+    assert "-5.08 mW" in plant_text(w)["missing power"]
+    (value,) = [v for n, v in w._plant_rows if n.text() == "missing power"]
+    assert value.styleSheet()
+    assert value.toolTip() == "dQ 3.6 sigma below baseline"
+    w.close()
+
+
+def test_a_verdict_that_stops_being_written_goes_stale_visibly(
+        tmp_path, qt_app):
+    """Seen and then stopped is the case the age line exists for: the panel
+    stays, and what changes is that it is history."""
+    w = software_viewer(tmp_path, qt_app, name="stops.csv")
+    write_plant(w)
+    assert not any(v.styleSheet() for _, v in w._plant_rows if v.text())
+    write_plant(w, epoch=time.time() - 5400.0)
+    assert showing(w.plant_panel)
+    assert plant_text(w)["verdict"].endswith("old")
+    w.close()

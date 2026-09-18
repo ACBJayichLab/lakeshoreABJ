@@ -114,7 +114,10 @@ lschart/                    GENERIC -- any Lake Shore cryostat
     lock.py          OS-level single-instance lock.
     status.py        status.json, rewritten in full every cycle via os.replace.
                      Arrays, not objects -- MATLAB mangles JSON object *keys*.
-                     SCHEMA_VERSION 2 adds `links[].loops`, the loop table.
+                     SCHEMA_VERSION is 3; the `control` block GROWS
+                     without a bump, because the number moves when the
+                     MEANING of a field changes and additions do not -- a
+                     client defaults an absent key instead of testing it.
     commands.py      The maildir-style command spool. Ordering, expiry,
                      acknowledgement, and clock-skew refusal.
     service.py       Joins the two onto the acquisition cycle, on the
@@ -127,13 +130,21 @@ lschart/                    GENERIC -- any Lake Shore cryostat
                      the spool.  Nothing else in the recorder records what a
                      PERSON did.
   gui/               The strip chart. A SEPARATE PROCESS, not a thread.
-    source.py        CsvTail + StatusSource, plus the arithmetic the window is
-                     not allowed to hold: region statistics, hover lookup, the
-                     region export, and the table projections.  `reading_rows`
-                     is the join behind the ONE table -- every thermometer is a
-                     row and its loop is a set of columns on it, which is what
-                     keeps an 8-input 218 from collapsing to however many loops
-                     it has.  No Qt -- this is what the tests cover.
+    source.py        CsvTail + StatusSource + PlantSource, plus the arithmetic
+                     the window is not allowed to hold: region statistics,
+                     hover lookup, the region export, and the projections.
+                     `reading_rows` is the join behind the ONE table -- every
+                     thermometer is a row and its loop is a set of columns on
+                     it, which is what keeps an 8-input 218 from collapsing to
+                     however many loops it has.  `command_targets` is what the
+                     panel can be AIMED at -- every instrument loop, every
+                     analog output, and the software loop -- and
+                     `row_target_key` is the one place "an empty instrument
+                     means the software loop" is decoded, so the dropdown and
+                     a click on the table cannot disagree.  `control_detail`
+                     and `plant_rows` return the SAME shape, which is why one
+                     painting routine serves both panels.  No Qt -- this is
+                     what the tests cover.
     theme.py         Colours, resolved from the Qt PALETTE at call time.  Never
                      paint the normal case: ordinary text has no colour of its
                      own, and a hardcoded black is a bug on a dark desktop
@@ -145,6 +156,17 @@ lschart/                    GENERIC -- any Lake Shore cryostat
                      that is ZoomViewBox, and `_span` (time, shared) and
                      `_ylim` (per panel) are what it sets.  The X/Y buttons
                      take an axis out of the drag.
+                     `self._target` is what every command in the panel is
+                     aimed at -- ONE value, with the selector and the reading
+                     table as two VIEWS of it rather than two places a
+                     selection lives.  `_select_target_row` and the click
+                     handler are the two legs, both guarded so neither
+                     re-enters the other; `_reconcile_targets` runs BEFORE
+                     the table is redrawn and announces a target that has
+                     stopped being offered rather than re-aiming in silence.
+                     `_queue` has NO default instrument: the recorder
+                     auto-picks the only box when that field is empty, so a
+                     defaulted command can land somewhere nobody named.
     __main__.py      `python -m lschart.gui -c CONFIG` / `lschart-view`.
   app.py             Wires config -> transports -> instruments -> poller.
                      `controller_factory` / `response_factory` are the ltspm3 seams.
@@ -245,9 +267,11 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      `set_setpoint()`/`sweep_to()` are the only METHODS lschart
                      calls here -- the last two are what makes an armed loop's
                      setpoint movable from outside the process at all
-                     (`send setpoint --software`);
-                     `status.py` also READS `band` and `cfg.warn_error_k`
-                     for the status file's `control` block.  All of it
+                     (`send setpoint --software`, and the viewer's
+                     Software loop control);
+                     `lschart/ipc/status.py`'s `_control` -- there is no
+                     `control/status.py` -- also READS `band`, `cfg` and
+                     `ramp.cfg` for the status file's `control` block.  All of it
                      duck-typed by name and defaulted, so invariant 1 holds --
                      and pinned against a real supervisor by
                      tests_ltspm3/test_status_projection.py, because a rename

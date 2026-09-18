@@ -59,8 +59,8 @@ from . import theme
 from .source import (
     COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, NO_TARGET, CommandTarget, CsvTail,
     SATURATED_HIGH_PCT, SATURATED_LOW_PCT, StatusSource, capabilities, classify_column,
-    command_targets, connect_flags, control_detail, loop_marks, loop_rows,
-    nearest_series, reading_rows,
+    PlantSource, command_targets, connect_flags, control_detail, loop_marks,
+    loop_rows, nearest_series, plant_rows, reading_rows,
     region_stats, row_target_key, write_region_csv,
 )
 
@@ -592,9 +592,17 @@ class ViewerWindow(QtWidgets.QMainWindow):
         max_percent: float = COMFORT_STOP_PCT[1],
         config_label: str = "",
         csv_path: str | None = None,
+        plant_path: str | None = None,
     ) -> None:
         super().__init__()
         self.source = StatusSource(status_path)
+        #: The judge's verdict, if one is being written.  **Beside
+        #: `status.json` by default**, which is the same derivation the judge
+        #: itself uses -- the rule lives in the file-interface document and
+        #: both ends point at it rather than restating it.  A separate process
+        #: writes this; the viewer never talks to it and cannot command it.
+        self.plant = PlantSource(plant_path or os.path.join(
+            os.path.dirname(os.path.abspath(status_path)), "plant.json"))
         #: A log to read instead of whatever ``status.json`` names.  This is
         #: how a finished run is opened -- an archived cooldown, or a legacy
         #: log put through `lschart.tools.xls_to_csv` -- with no recorder
@@ -859,6 +867,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # Directly beneath the row that summarises it, which is where somebody
         # looks next.  It costs nothing on a plain recorder, where it is hidden.
         box.addWidget(self._software_panel(), 0)
+        # Under the loop's own account of itself, because it is a second
+        # opinion about the same cryostat and is read in that order.
+        box.addWidget(self._plant_panel(), 0)
 
         # Three rows of labelled buttons became two dense ones.  These are
         # small, frequently-hit controls and they were spending three rows of a
@@ -1019,27 +1030,40 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _update_software_panel(self) -> None:
         """Repaint the detail rows, or hide the panel when there is no loop."""
         groups = control_detail(self.source.control())
-        if groups is None:
-            self.software_panel.setVisible(False)
-            return
-        self.software_panel.setVisible(True)
+        self.software_panel.setVisible(groups is not None)
+        self._fill_detail_grid(self.software_grid, self._software_rows,
+                              groups or [])
 
+    def _fill_detail_grid(self, grid, made: list, groups: list) -> None:
+        """Paint one projection's groups into a grid of label pairs.
+
+        Shared by the software panel and the verdict panel, which is why both
+        projections return the same shape: one painting routine means the two
+        cannot drift apart in how they show a mark or a missing number, and
+        both can be tested without Qt on the other side of that shape.
+
+        Labels rather than a table: they wrap, they are cheap, and each takes
+        a stylesheet of its own, which a table item does not.  Rows are made
+        once and reused -- the shape only changes when the recorder starts or
+        stops publishing something, and rebuilding every second would fight
+        the palette.
+        """
         flat: list[tuple[str, dict]] = []
         for group in groups:
             flat.append(("title", {"label": group["title"], "text": "",
                                    "mark": "", "tip": ""}))
             flat.extend(("row", row) for row in group["rows"])
 
-        while len(self._software_rows) < len(flat):
-            index = len(self._software_rows)
+        while len(made) < len(flat):
+            index = len(made)
             name = QtWidgets.QLabel("")
             value = QtWidgets.QLabel("")
             value.setWordWrap(True)
-            self.software_grid.addWidget(name, index, 0)
-            self.software_grid.addWidget(value, index, 1)
-            self._software_rows.append((name, value))
+            grid.addWidget(name, index, 0)
+            grid.addWidget(value, index, 1)
+            made.append((name, value))
 
-        for index, (name, value) in enumerate(self._software_rows):
+        for index, (name, value) in enumerate(made):
             if index >= len(flat):
                 name.setVisible(False)
                 value.setVisible(False)
@@ -1049,7 +1073,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             kind, row = flat[index]
             if kind == "title":
                 # A heading, not a reading: the group titles are what make
-                # four short lists legible as four questions.
+                # several short lists legible as several questions.
                 name.setText(row["label"])
                 name.setStyleSheet("font-weight:600;")
                 value.setText("")
@@ -1067,6 +1091,62 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 theme.note_style(row["mark"], self) if row["mark"] else "")
             name.setToolTip(row["tip"])
             value.setToolTip(row["tip"])
+
+    def _plant_panel(self) -> QtWidgets.QWidget:
+        """The judge's verdict, where a judge is running.
+
+        A second file beside ``status.json``, written by a separate process
+        this viewer never talks to and cannot command.  Usually absent, which
+        is the normal case rather than a fault: the panel is then not there at
+        all, or -- where there is a loop it *would* be judging -- says in one
+        line that nothing is judging it.
+        """
+        self.plant_panel = QtWidgets.QGroupBox("Monitor")
+        box = QtWidgets.QVBoxLayout(self.plant_panel)
+        _tighten(box)
+        self.plant_grid = QtWidgets.QGridLayout()
+        self.plant_grid.setContentsMargins(0, 0, 0, 0)
+        self.plant_grid.setHorizontalSpacing(8)
+        self.plant_grid.setVerticalSpacing(1)
+        self.plant_grid.setColumnStretch(1, 1)
+        box.addLayout(self.plant_grid)
+        self._plant_rows: list[tuple] = []
+        self.plant_note = QtWidgets.QLabel("")
+        self.plant_note.setWordWrap(True)
+        self.plant_note.setVisible(False)
+        box.addWidget(self.plant_note)
+        self.plant_panel.setVisible(False)
+        self.plant_panel.setToolTip(
+            "A verdict from outside the loop, read from a file beside the "
+            "status file. Whatever writes it reports and never commands — "
+            "this viewer does not talk to it, and neither does the recorder.")
+        return self.plant_panel
+
+    def _update_plant_panel(self) -> None:
+        """Repaint the verdict, or say that nothing is judging."""
+        self.plant.poll()
+        groups = plant_rows(self.plant.report, stale=self.plant.stale(),
+                            age_s=self.plant.age_s)
+        if groups is None:
+            # Absent is the normal case.  With a software loop on screen the
+            # absence is worth one line -- this panel not being here is a fact
+            # about the cryostat, not about the viewer.  With no loop at all
+            # there is nothing it would be judging, so it stays silent.
+            has_loop = self.source.control() is not None
+            self.plant_panel.setVisible(has_loop)
+            self._fill_detail_grid(self.plant_grid, self._plant_rows, [])
+            if has_loop:
+                self._note(self.plant_note,
+                           "no verdict file beside this status file — nothing "
+                           "is judging the cryostat",
+                           theme.note_style("muted", self))
+                self.plant_note.setToolTip(
+                    "A separate process may write one; this viewer reads it "
+                    "if it appears and never asks for it.")
+            return
+        self.plant_panel.setVisible(True)
+        self.plant_note.setVisible(False)
+        self._fill_detail_grid(self.plant_grid, self._plant_rows, groups)
 
     def _command_box(self) -> QtWidgets.QWidget:
         """The control panel: one instrument selector, then whatever it can do.
@@ -1859,6 +1939,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.banner.setStyleSheet(theme.banner_style(state, self))
             self._update_readings()
             self._update_software_panel()
+            self._update_plant_panel()
             self._update_gate_notes()
             self._place_selector()
         except Exception:  # pragma: no cover - cosmetic, never fatal
@@ -1877,6 +1958,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._update_banner()
             self._update_readings()
             self._update_software_panel()
+            self._update_plant_panel()
             self._update_links()
             self._update_commands()
             self._sync_command_values()

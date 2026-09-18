@@ -141,8 +141,8 @@ def test_a_cleared_item_carries_no_colour_of_its_own(qt_app):
     assert item.data(QtGui.Qt.ItemDataRole.ForegroundRole) is None
 
 
-def test_every_severity_the_software_panel_can_emit_is_a_measured_pair():
-    """The detail panel names its severities and `theme.py` resolves them.
+def test_every_severity_the_detail_panels_can_emit_is_a_measured_pair():
+    """The two detail panels name their severities and `theme.py` resolves them.
 
     That indirection is what keeps the colours out of `source.py` -- but it
     also means a typo, or a fifth severity added later, would resolve to
@@ -150,10 +150,10 @@ def test_every_severity_the_software_panel_can_emit_is_a_measured_pair():
     silently stops warning.  So the names are checked against the tables the
     contrast sweep above already measures.
 
-    Deliberately driven off `control_detail` itself rather than a written-down
-    list, because a list here is a second place to forget.
+    Deliberately driven off the projections themselves rather than a
+    written-down list, because a list here is a second place to forget.
     """
-    from lschart.gui.source import control_detail
+    from lschart.gui.source import control_detail, plant_rows
 
     block = {
         "state": "crashed", "mode": "off", "health": "fault",
@@ -162,9 +162,16 @@ def test_every_severity_the_software_panel_can_emit_is_a_measured_pair():
         "demand_pct": 99.0, "rail_low_pct": 1.0, "rail_high_pct": 2.0,
         "reason": "a sentence", "alarms": ["another"],
     }
-    emitted = {row["mark"] for group in control_detail(block)
-               for row in group["rows"]}
-    assert emitted - {""}, "the faulted block painted nothing at all"
+    report = {"verdict": "warn", "residuals": [
+        {"name": "missing_power", "state": "warn", "value": -0.005,
+         "sigma": 0.001, "reason": "", "out_of_band_s": 60.0},
+        {"name": "fault_level", "state": "warn", "value": -0.005,
+         "sigma": 0.001, "reason": "", "out_of_band_s": 60.0}]}
+    emitted = {row["mark"]
+               for groups in (control_detail(block),
+                              plant_rows(report, stale=True, age_s=99.0))
+               for group in groups for row in group["rows"]}
+    assert emitted - {""}, "neither panel painted anything at all"
     for name in emitted - {""}:
         for dark in (False, True):
             assert name in (theme.DARK if dark else theme.LIGHT), (

@@ -17,10 +17,11 @@ import time
 import pytest
 
 from lschart.gui.source import (
-    EMPTY_LOOP, NO_TARGET, SOFTWARE_LOOP_LABEL, CsvTail, Series, StatusSource,
+    EMPTY_LOOP, NO_TARGET, SOFTWARE_LOOP_LABEL, CsvTail, PlantSource, Series,
+    StatusSource,
     capabilities, classify_column, command_targets, connect_flags, control_detail,
     control_row,
-    loop_marks, loop_rows, nearest_series, reading_rows, region_stats,
+    loop_marks, loop_rows, nearest_series, plant_rows, reading_rows, region_stats,
     row_target_key, value_at, write_region_csv,
 )
 
@@ -2103,3 +2104,207 @@ def test_a_block_from_an_older_recorder_still_draws():
     assert groups is not None
     assert detail_row(old, "premise")["text"] == "no opinion"
     assert detail_row(old, "slope")["text"] == "—"
+
+
+# -- the verdict from outside --------------------------------------------------
+#
+# A second file beside status.json, written by a separate process that reports
+# and never commands.  Absent is the normal case, and a green light from a
+# judge that died an hour ago is the dangerous failure here.
+
+
+def a_plant(**kw):
+    report = {
+        "schema": 1, "written": "2026-09-17T18:00:00.000",
+        "epoch": time.time(), "t_s": 1000.0, "segment": 1,
+        "stale_after_s": 600.0, "verdict": "typical", "sample_k": 118.0,
+        "coldplate_k": 40.0, "u_pct": 63.1, "dT_dt_k_per_s": 0.0,
+        "missing_power_abs_w": -0.0005, "baseline_frac": 0.003,
+        "baseline_age_s": 3600.0,
+        "residuals": [
+            {"name": "missing_power", "state": "typical", "value": -0.0005,
+             "sigma": 0.0014, "reason": "", "out_of_band_s": 0.0},
+            {"name": "coldplate", "state": "typical", "value": 0.02,
+             "sigma": 0.1, "reason": "", "out_of_band_s": 0.0},
+            {"name": "cold_head", "state": "typical", "value": 0.01,
+             "sigma": 0.1, "reason": "", "out_of_band_s": 0.0},
+            {"name": "tau", "state": "typical", "value": 1.07,
+             "sigma": 310.0, "reason": "", "out_of_band_s": 0.0},
+            {"name": "noise", "state": "typical", "value": 0.013,
+             "sigma": 0.004, "reason": "", "out_of_band_s": 0.0},
+            {"name": "fault_level", "state": "typical", "value": -0.0005,
+             "sigma": 0.001, "reason": "", "out_of_band_s": 0.0},
+        ],
+        "config": {"warn_sigma": 3.0, "fault_mw": 10.0},
+    }
+    report.update(kw)
+    return report
+
+
+def test_no_verdict_file_is_the_normal_case():
+    """The judge is a separate process and is usually not running."""
+    assert plant_rows(None) is None
+    assert plant_rows({}) is None
+    source = PlantSource("nowhere-at-all.json")
+    assert source.poll() is None
+    assert source.ever_seen is False
+    assert source.age_s is None and source.stale() is None
+
+
+def test_a_verdict_file_is_read_and_aged_from_its_own_clock(tmp_path):
+    path = tmp_path / "plant.json"
+    path.write_text(json.dumps(a_plant(epoch=time.time() - 120.0)))
+    source = PlantSource(path)
+    assert source.poll() is not None
+    assert source.ever_seen is True
+    assert source.age_s == pytest.approx(120.0, abs=5.0)
+    assert source.stale() is False
+
+
+def test_the_age_comes_from_epoch_and_not_from_the_written_string(tmp_path):
+    """`written` is a local ISO string with no zone on it, so arithmetic on it
+    would be wrong by an offset nobody would notice."""
+    path = tmp_path / "plant.json"
+    path.write_text(json.dumps(a_plant(
+        epoch=time.time() - 60.0, written="1999-01-01T00:00:00.000")))
+    source = PlantSource(path)
+    source.poll()
+    assert source.age_s == pytest.approx(60.0, abs=5.0)
+
+
+def test_staleness_is_the_files_own_limit_and_never_one_invented_here(tmp_path):
+    """The process that computes a verdict is the one that knows how long it
+    stays true.  A viewer inventing a limit here is the same mistake as a
+    viewer inventing a rate limiter."""
+    path = tmp_path / "plant.json"
+    path.write_text(json.dumps(a_plant(epoch=time.time() - 900.0)))
+    source = PlantSource(path)
+    source.poll()
+    assert source.stale() is True
+
+    path.write_text(json.dumps(a_plant(epoch=time.time() - 900.0,
+                                       stale_after_s=7200.0)))
+    source.poll()
+    assert source.stale() is False
+
+    report = a_plant(epoch=time.time() - 900.0)
+    del report["stale_after_s"]
+    path.write_text(json.dumps(report))
+    source.poll()
+    assert source.stale() is None            # no opinion, not "fine"
+
+
+def test_a_torn_read_keeps_the_last_good_verdict(tmp_path):
+    """Both files are polled on Windows, where a read can lose a race with a
+    replace.  Blanking the panel because one read was unlucky would make it
+    flicker."""
+    path = tmp_path / "plant.json"
+    path.write_text(json.dumps(a_plant()))
+    source = PlantSource(path)
+    source.poll()
+    path.write_text("{ this is not json")
+    assert source.poll() is not None
+    assert source.report["verdict"] == "typical"
+
+
+def test_one_row_per_residual_plus_the_verdict_itself(tmp_path):
+    rows = plant_rows(a_plant())[0]["rows"]
+    assert [r["label"] for r in rows] == [
+        "verdict", "missing power", "coldplate", "cold head", "tau", "noise",
+        "fault level"]
+
+
+def test_a_typical_verdict_is_painted_nowhere():
+    assert not any(r["mark"] for r in plant_rows(a_plant())[0]["rows"])
+
+
+def test_no_opinion_is_words_and_is_not_painted_as_typical():
+    """A green light outside the table is a lie, so the judge has a third
+    answer.  Since typical paints nothing, no opinion painting nothing is
+    honest -- what must not happen is it *reading* as typical."""
+    report = a_plant(residuals=[
+        {"name": "cold_head", "state": "no opinion", "value": None,
+         "sigma": None, "reason": "coldplate atypical", "out_of_band_s": 0.0}])
+    (row,) = [r for r in plant_rows(report)[0]["rows"] if r["label"] == "cold head"]
+    assert row["text"].startswith("no opinion")
+    assert row["mark"] == ""
+    assert row["tip"] == "coldplate atypical"
+
+
+def test_a_warning_on_the_fault_row_is_a_fault(tmp_path):
+    """The one place the state-to-severity mapping is not the identity: on that
+    row `warn` means the residual has crossed the FAULT floor."""
+    report = a_plant(verdict="warn", residuals=[
+        {"name": "missing_power", "state": "warn", "value": -0.005,
+         "sigma": 0.0014, "reason": "3.6 sigma below", "out_of_band_s": 840.0},
+        {"name": "fault_level", "state": "warn", "value": -0.005,
+         "sigma": 0.001, "reason": "past the floor", "out_of_band_s": 374.0}])
+    marks = {r["label"]: r["mark"] for r in plant_rows(report)[0]["rows"]}
+    assert marks["missing power"] == "warn"
+    assert marks["fault level"] == "bad"
+
+
+def test_the_residuals_are_not_all_in_the_same_unit():
+    """Two are watts, two kelvin, one a ratio.  Blanket-converting would put
+    milliwatts beside a temperature, which is a wrong number that looks
+    perfectly plausible."""
+    rows = {r["label"]: r["text"] for r in plant_rows(a_plant())[0]["rows"]}
+    assert "-0.50 mW" in rows["missing power"]
+    assert "0.020 K" in rows["coldplate"]
+    assert "13.0 mK" in rows["noise"]
+    assert "1.07 x expected" in rows["tau"]
+    # tau's sigma is the EXPECTED time constant in seconds, not a spread in
+    # the value's unit, so it must not be printed beside it.
+    assert "σ" not in rows["tau"]
+
+
+def test_a_residual_this_viewer_has_not_heard_of_is_printed_as_it_arrived():
+    """A row added upstream must not be silently relabelled as whatever the
+    unit table guessed."""
+    report = a_plant(residuals=[
+        {"name": "something_new", "state": "warn", "value": 1.5,
+         "sigma": 0.25, "reason": "", "out_of_band_s": 0.0}])
+    (row,) = [r for r in plant_rows(report)[0]["rows"]
+              if r["label"] == "something new"]
+    assert "1.5000" in row["text"] and "mW" not in row["text"]
+
+
+def test_the_header_verdict_is_the_published_one_and_not_a_recomputation():
+    """The file's verdict is the worst of FOUR residuals and deliberately
+    excludes two of the six rows, so re-deriving "the worst row" here would
+    disagree with the file being displayed."""
+    report = a_plant(verdict="typical", residuals=[
+        {"name": "stages", "state": "warn", "value": None, "sigma": None,
+         "reason": "not in the top-level verdict", "out_of_band_s": 0.0}])
+    (header,) = [r for r in plant_rows(report)[0]["rows"]
+                 if r["label"] == "verdict"]
+    assert header["text"].startswith("typical")
+
+
+def test_a_stale_verdict_marks_the_header_and_leaves_the_rows_alone():
+    """The last verdict is still evidence; what is news is that it is history.
+    On an otherwise clean panel the marked header is then the only paint,
+    which is the right thing to catch an eye."""
+    rows = plant_rows(a_plant(), stale=True, age_s=2400.0)[0]["rows"]
+    header, rest = rows[0], rows[1:]
+    assert header["mark"] == "warn"
+    assert "40 min old" in header["text"]
+    assert "nothing is judging" in header["tip"]
+    assert not any(r["mark"] for r in rest)
+
+
+def test_the_header_is_marked_for_either_kind_of_news():
+    """Two different kinds, and both belong on the line a reader scans: a
+    `warn` verdict is the judge saying something, and a stale one is the judge
+    having stopped saying anything."""
+    fresh = plant_rows(a_plant(verdict="warn"))[0]["rows"][0]
+    assert fresh["mark"] == "warn"
+    assert "stale" not in fresh["tip"] and "older" not in fresh["tip"]
+
+    quiet = plant_rows(a_plant(verdict="typical"))[0]["rows"][0]
+    assert quiet["mark"] == ""
+
+    dead = plant_rows(a_plant(verdict="typical"), stale=True,
+                      age_s=3600.0)[0]["rows"][0]
+    assert dead["mark"] == "warn"
+    assert "nothing is judging" in dead["tip"]

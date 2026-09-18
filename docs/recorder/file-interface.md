@@ -28,6 +28,7 @@ directory is the whole interface.
 | `status.json` | rewritten **in full** every cycle via `os.replace`, so a reader sees one cycle or the other and never a torn mixture |
 | `commands/` | the command spool, maildir-style. A client writes `<stem>.json.tmp` and renames it to `<stem>.json`; the recorder globs `*.json`, applies, deletes. No locking, no contention |
 | `sources.json` | optional, and the only one an **operator** writes: which clients are switched off right now. Absent by default. See [a sixth gate](#a-sixth-gate-on-a-different-axis) |
+| `plant.json` | optional, and **written by nothing in this package**: a verdict from a process that judges the cryostat and only reports. Absent unless one is running. See [below](#plantjson--a-verdict-from-outside) |
 
 ### `status.json`
 
@@ -491,3 +492,44 @@ braces, because the failure it prevents is a confident confirmation of
 something that never happened.
 
 **If you write your own client, do the same thing.**
+
+
+## `plant.json` — a verdict from outside
+
+**Nothing in `lschart` writes this.** It is a file a judging process drops
+beside `status.json`, saying whether the cryostat is behaving typically, and
+the recorder neither reads it nor is affected by it. A client that finds it may
+show it; a client that does not find it is looking at the normal case, because
+such a process is usually not running.
+
+It carries **its own `schema`, deliberately not negotiated with
+`status.json`'s.** Two files written by two programs for two purposes should
+not be forced to move in step, and a reader of one must not have to know the
+other's version.
+
+| Field | |
+|---|---|
+| `schema` | this file's own, not the status file's |
+| `written` | when, as a local ISO string. **Not for arithmetic** — it carries no timezone; use `epoch` |
+| `epoch` | unix seconds, which is what an age is computed from |
+| `t_s`, `segment` | where in the recording the verdict was computed |
+| `stale_after_s` | **how long this verdict stays true.** The writer knows and the reader does not, so a reader must take the limit from here rather than invent one |
+| `verdict` | the overall answer: `typical`, `no opinion` or `warn`. The worst of *some* of the rows below and not all of them, so **do not recompute it** — a client that re-derived "the worst row" would disagree with the file it is displaying |
+| `residuals[]` | one entry per thing judged: `name`, `state` (the same three values), `value`, `sigma`, `reason`, `out_of_band_s` |
+| `sample_k`, `coldplate_k`, `u_pct`, `dT_dt_k_per_s` | what it judged, so the verdict can be read without re-deriving it |
+| `missing_power_abs_w`, `baseline_frac`, `baseline_age_s` | the level, the baseline it is measured against, and how old that baseline is |
+| `config` | the thresholds in force, so a reader can say how far from one a value sits |
+
+**`no opinion` is a third answer, not a shade of typical.** A green light
+outside the table is a lie. A client must keep it distinct in *words*, whatever
+it does about colour.
+
+**The residuals are not all in the same unit.** Some are power, some
+temperature, at least one a dimensionless ratio, and `sigma` is not always a
+spread in the value's own unit. A client converting them all the same way
+produces wrong numbers that look perfectly plausible, so it must key on `name`
+— and print a name it does not recognise exactly as it arrived rather than
+relabel it.
+
+An arrays-not-objects file like the others: `residuals` is a list so MATLAB's
+`jsondecode` cannot mangle a name into a struct field.

@@ -15,6 +15,7 @@ pip install -e ".[gui]"      # pyqtgraph + PySide6
 |---|---|
 | `-c CONFIG` | the **recorder's** config — the viewer reads it only to find the data directory |
 | `--status PATH` | point at a `status.json` directly instead |
+| `--plant PATH` | point at a verdict file directly instead of the `plant.json` beside the status file |
 | `--csv PATH` | **open a finished log instead of following a recorder.** No recorder need be running; the banner will say the status file is absent, which it is. The chart opens framed on the data's own extent rather than on the live edge, and the thermometers are recognised from the header |
 | `--refresh S` | redraw cadence, default 1.0 |
 | `--max-points N` | default 200,000 |
@@ -313,6 +314,52 @@ number is an em dash.
 One consequence worth expecting: **`NOT written this cycle` is only marked
 while the loop is supposed to be driving.** A loop that has been held is not
 failing to write.
+
+## A verdict from outside
+
+Under the detail panel, where a second file sits **beside `status.json`** and
+says whether the cryostat is behaving typically. A separate process writes it;
+the viewer never talks to that process and cannot command it, and neither can
+the recorder. `--plant PATH` points somewhere else, the way `--status` does.
+
+It is a **different file with its own schema**, deliberately not negotiated
+with `status.json` — one row per residual, each with a state, a value, how long
+it has been out of band, and a reason. The
+[file interface](file-interface.md) has the field list.
+
+Four things about how it is shown:
+
+**Absent is the normal case.** That process is usually not running. With no
+software loop there is nothing a verdict would be about, so the panel is not
+there at all; with a loop but no file, the panel says in one line that nothing
+is judging the cryostat — its absence is a fact about the cryostat rather than
+about the viewer, and worth a sentence rather than a gap.
+
+**The header is marked for either kind of news**, and they are different
+kinds: a `warn` verdict is the judge saying something, and a *stale* verdict is
+the judge having stopped saying anything. The rows keep their own marks either
+way — the last verdict is still evidence; what is news is that it is history.
+
+**Staleness is the file's own limit**, because the process that computed a
+verdict is the one that knows how long it stays true. A green light from a
+judge that died an hour ago is the dangerous failure here, so the header names
+its age and takes the mark, and on an otherwise clean panel that is the only
+paint on it. The age comes from the file's epoch and not from its written-at
+string, which carries no timezone.
+
+**The header's verdict is the one published, never a recomputation.** That
+verdict is the worst of *some* of the rows, not all of them, so a panel that
+re-derived "the worst row" would disagree with the file it is displaying.
+
+**`no opinion` is a third answer and not a shade of typical.** A green light
+outside the table is a lie. Since typical paints nothing, no opinion painting
+nothing is honest — what must not happen is its *reading* as typical, so it
+says the words and carries the reason in the hover.
+
+**The residuals are not all in the same unit** — some are power, some
+temperature, one a ratio — so each is printed in its own, and a row this viewer
+has not heard of is printed exactly as it arrived rather than relabelled as
+whatever a lookup guessed.
 
 ## Themes
 
