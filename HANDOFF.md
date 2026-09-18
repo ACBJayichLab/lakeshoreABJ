@@ -20,9 +20,11 @@ Previous: [archive/HANDOFF-2026-09-17c.md](archive/HANDOFF-2026-09-17c.md)
 > python -m lschart -c config-ltspm3-armed.yaml status
 > ```
 >
-> **What is NOT running is the viewer work below.** It is eight commits on a
-> branch, and the recorder does not need restarting for most of it — the
-> viewer is a separate process reading files. One part does; see
+> **The viewer work below is on `main`, but not in the running process.**
+> The recorder has been up since 20:12 and Python does not re-read a module
+> any more than the recorder re-reads its config, so it still publishes the
+> old status block. The viewer itself is launched fresh and has all of it
+> now. What that costs, and why it can wait, is
 > [§3](#3-one-thing-wants-a-restart-and-it-can-wait).
 >
 > Stopping is unchanged and always works:
@@ -78,7 +80,7 @@ when they go in.
 
 ## 2. The viewer, which was blind to all of this
 
-Eight commits, not on `main` yet. The loop had been retuned twice and the
+Eight commits, on `main`. The loop had been retuned twice and the
 viewer reflected none of it: the software loop was one table row, and the one
 client that could not move its setpoint was the one open while somebody types
 temperatures.
@@ -112,9 +114,11 @@ because offscreen resolves no font and roughly doubles every measured width.
 commands, `ipc.allow_analog_output` is true, and the software branch of
 `setpoint` is in the tree the recorder started from.
 
-**The detail panel will be half dashes until the recorder restarts.** It
-publishes schema 3, which has none of the fields §2 added — so `phase`,
-`filtered_k`, the watt residual and the band's envelope read as `—`. That is
+**The detail panel will be half dashes until the recorder restarts.** The
+process that has been up since 20:12 imported the old `status.py` and keeps
+publishing schema 3's block, which has none of the fields §2 added — so
+`phase`, `filtered_k`, the watt residual and the band's envelope read as
+`—`. That is
 the degrade the projection is built for and there is a test on it
 (`test_a_block_from_an_older_recorder_still_draws`), so it is a thing to know
 rather than a thing to fix. Pick the restart up whenever the cryostat is next
