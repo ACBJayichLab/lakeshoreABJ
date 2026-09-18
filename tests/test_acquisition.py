@@ -74,6 +74,63 @@ def test_data_survives_without_a_clean_close(tmp_path):
     assert len(read_csv(rec.path)) == 6      # header + 5, without closing
 
 
+def test_a_restart_appends_to_the_same_day_and_restarts_the_time_column(tmp_path):
+    """The recorder's contract, and it is the one the monitor got wrong.
+
+    ``Time`` is seconds since the first frame of the PROCESS that wrote it --
+    `time.monotonic()` has an arbitrary per-process epoch, so nothing else is
+    available.  A restart on the same day appends to the same file with a
+    matching header, so one daily file can hold several ascending runs while
+    `Timestamp` carries on forward.
+
+    Left implicit, this froze the monitor's clock for 26,314 samples on
+    2026-09-17 -- it read the column as monotonic per FILE.  It is asserted
+    here so the next consumer reads it off a test rather than off a cooldown.
+    """
+    first = Recorder(str(tmp_path), channels=["Sample"], flush_every_sample=True)
+    for i in range(3):
+        first.write(frame(1000.0 + i, Sample=96.0))
+    first.close()
+    path = first.path
+
+    second = Recorder(str(tmp_path), channels=["Sample"], flush_every_sample=True)
+    for i in range(3):
+        second.write(frame(50_000.0 + i, Sample=96.0))
+    second.close()
+    assert second.path == path, "a matching header appends rather than rolling"
+
+    rows = read_csv(path)
+    col = rows[0].index("Time")
+    times = [float(r[col]) for r in rows[1:]]
+    assert times == [0.0, 1.0, 2.0, 0.0, 1.0, 2.0]
+
+
+def test_the_software_loops_own_columns_are_in_the_header(tmp_path):
+    """What the loop was chasing, beside what the heater did.
+
+    Without these a move has to be timed off the output's own step and cannot
+    be graded against the command that caused it -- which is how the +5.07 K
+    move of 2026-09-17 had to be measured.
+    """
+    from lschart.acquisition.poller import CONTROL_AUX_COLUMNS
+
+    keys = ["heater_pct"] + [c for c, _ in CONTROL_AUX_COLUMNS]
+    rec = Recorder(str(tmp_path), channels=["Sample"], aux_keys=keys)
+    f = frame(0.0, Sample=118.0)
+    f.aux.update({"heater_pct": 64.6, "control.setpoint_k": 124.99,
+                  "control.setpoint_target_k": 125.0,
+                  "control.filtered_k": 125.01})
+    rec.write(f)
+    rec.close()
+    rows = read_csv(rec.path)
+    assert rows[0].index("heater_pct") < rows[0].index("control.setpoint_k"), \
+        "heater_pct leads; analysis scripts expect it first"
+    got = dict(zip(rows[0], rows[1]))
+    assert float(got["control.setpoint_k"]) == pytest.approx(124.99)
+    assert float(got["control.setpoint_target_k"]) == pytest.approx(125.0)
+    assert float(got["control.filtered_k"]) == pytest.approx(125.01)
+
+
 def test_no_row_limit(tmp_path):
     """The 65,536-row cap is what forced the cadence changes in the old logs."""
     rec = Recorder(str(tmp_path), channels=["Sample"], flush_every_sample=False)
@@ -149,6 +206,35 @@ def test_a_lost_cycle_still_reaches_the_supervisor():
                control_channel="Sample", clock=lambda: 0.0)
     p.step()
     assert seen == [None]
+
+
+def test_the_loops_setpoint_reaches_the_frame_and_a_plain_recorder_is_unaffected():
+    """Duck-typed by name and defaulted, which is invariant 1 holding.
+
+    The supervisor below is a stand-in with only two of the three fields, the
+    way a `lschart` recorder driving somebody else's controller would be --
+    what it publishes lands in the frame and what it does not is simply
+    absent, rather than a column of `None` or an AttributeError in the
+    acquisition thread.
+    """
+    class Sup:
+        def step(self, t, reading, readings=None):
+            class S:
+                state = type("X", (), {"value": "tracking"})()
+                wrote = True
+                output_pct = 64.6
+                setpoint_k = 124.99
+                setpoint_target_k = 125.0
+                alarms = []
+            return S()
+
+    p = Poller([FakeInstrument()], supervisor=Sup(), control_channel="Sample",
+               clock=lambda: 0.0)
+    f = p.step()
+    assert f.aux["heater_pct"] == 64.6
+    assert f.aux["control.setpoint_k"] == 124.99
+    assert f.aux["control.setpoint_target_k"] == 125.0
+    assert "control.filtered_k" not in f.aux, "an absent field is absent"
 
 
 def test_a_supervisor_exception_does_not_stop_logging(tmp_path):

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from .acquisition.poller import Poller
+from .acquisition.poller import CONTROL_AUX_COLUMNS, Poller
 from .acquisition.recorder import Recorder
 from .acquisition.ringbuffer import RingBuffer
 from .config import AppConfig, InstrumentConfig
@@ -215,11 +215,15 @@ class Application:
         because the legacy logs put the commanded output first and analysis
         scripts expect it.
         """
-        # `heater_pct` is what a *software* loop commanded.  On a cryostat whose
-        # box runs its own PID there is no such number, and an always-empty
-        # column in a months-long CSV is just a question every reader has to
-        # ask once.
-        cols = ["heater_pct"] if self.supervisor is not None else []
+        # `heater_pct` is what a *software* loop commanded, and the columns
+        # after it are what it was chasing while it commanded that -- see
+        # `poller.CONTROL_AUX_COLUMNS`, which is their one home.  On a cryostat
+        # whose box runs its own PID there is no such number, and an
+        # always-empty column in a months-long CSV is just a question every
+        # reader has to ask once.  `heater_pct` keeps the lead: the legacy logs
+        # put the commanded output first and analysis scripts expect it.
+        cols = (["heater_pct"] + [c for c, _ in CONTROL_AUX_COLUMNS]
+                if self.supervisor is not None else [])
         for inst, c in zip(self.instruments, self.cfg.enabled_instruments):
             cols += inst.aux_keys()
         return cols

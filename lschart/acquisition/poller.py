@@ -28,6 +28,29 @@ from ..transport import TransportError
 
 log = logging.getLogger(__name__)
 
+#: The software loop's own columns, and the supervisor field each one carries.
+#:
+#: **One home.**  ``app._aux_columns`` builds the CSV header from this and the
+#: cycle below fills it from this, so a column cannot exist with nothing to put
+#: in it, nor a value with nowhere to go.
+#:
+#: Read by name with a default, which is what keeps ``lschart`` from importing
+#: ``ltspm3`` (invariant 1) -- the same duck typing ``ipc/status.py``'s
+#: ``_control`` uses, and a recorder with no software loop writes none of them.
+#:
+#: WHY THESE THREE.  Until 2026-09-17 the log carried what the heater did and
+#: nothing about what the loop was chasing, so a move had to be timed off the
+#: output's own step and could not be graded against the command that caused
+#: it.  These are the three a move or a hold cannot be reconstructed without:
+#: where it was told to go, where it was being led, and what the loop thought
+#: it was reading -- the error it acts on is against the FILTERED reading, not
+#: against the raw channel already in the row.
+CONTROL_AUX_COLUMNS = (
+    ("control.setpoint_k", "setpoint_k"),
+    ("control.setpoint_target_k", "setpoint_target_k"),
+    ("control.filtered_k", "filtered_k"),
+)
+
 
 class Poller:
     """Fixed-cadence acquisition loop.
@@ -143,6 +166,10 @@ class Poller:
                     frame.aux["heater_pct"] = status.output_pct
                 elif status.output_pct is not None:
                     frame.aux["heater_pct"] = status.output_pct
+                for column, field in CONTROL_AUX_COLUMNS:
+                    value = getattr(status, field, None)
+                    if value is not None:
+                        frame.aux[column] = value
                 if status.alarms:
                     note = "; ".join([note, *status.alarms]).strip("; ")
             except Exception:  # pragma: no cover - a control bug must not stop logging
