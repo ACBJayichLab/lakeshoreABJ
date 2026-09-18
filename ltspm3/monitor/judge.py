@@ -471,11 +471,49 @@ class Judge:
             "missing_power_abs_w": q_abs,
             "baseline_w": self.baseline,
             "baseline_age_s": self.baseline_age_s,
-            "verdict": max((v.state for v in (q, tc, tau, noise)),
-                           key=lambda x: _RANK[x]),
+            **self._headline(q, tc, stages, tau, noise, fault),
         }
         self._record_changes(record)
         return record
+
+    @staticmethod
+    def _headline(*verdicts) -> dict:
+        """The one word for the whole cryostat, and who it speaks for.
+
+        **The worst thing the judge actually knows** (Jeff, 2026-09-17), which
+        is not the same as the worst of everything it was asked.  This was
+        ``max`` by rank over four of the six residuals and it had two faults,
+        in opposite directions:
+
+        *It said nothing.*  ``tau`` answers ``no move to measure`` unless there
+        is a step to fit, and at a hold there never is -- so a silence that
+        carries no information about the cryostat outranked four residuals that
+        did.  Measured on 2026-09-17: the headline read ``no opinion`` on
+        **every one of 46,236 samples** while ``missing_power`` read
+        ``typical`` on 85 % of them.  Not a wrong answer, which is what made it
+        easy to miss; a permanently uninformative one.
+
+        *And it hid a warning.*  ``cold_head`` and the latched ``fault_level``
+        were in the published rows and not in this line at all, so a cold-head
+        warning reached nobody who read the summary -- the unsafe direction,
+        and PID_PLAN.md section 7's "a green light outside the table is a lie".
+
+        So: the worst of the residuals that **have an opinion**, and
+        ``verdict_for`` names them.  ``no opinion`` still wins when nothing can
+        speak, so a silence is never dressed up as green -- the honesty moved
+        into saying what the word covers rather than into refusing to say one.
+
+        A latched ``fault_level`` reads ``warn`` here because ``warn`` is the
+        most severe word this monitor has; the row itself is what distinguishes
+        a step from a level, and giving it a fourth word would change what
+        every residual row, the viewer's palette and MATLAB's reader all say.
+        """
+        speaking = [v for v in verdicts if v.state != NO_OPINION]
+        return {
+            "verdict": (max((v.state for v in speaking), key=lambda x: _RANK[x])
+                        if speaking else NO_OPINION),
+            "verdict_for": [v.name for v in speaking],
+        }
 
     def _reset_history(self) -> None:
         """A new recording.  Keep the calibration, drop everything measured.

@@ -2287,15 +2287,37 @@ def test_a_residual_this_viewer_has_not_heard_of_is_printed_as_it_arrived():
 
 
 def test_the_header_verdict_is_the_published_one_and_not_a_recomputation():
-    """The file's verdict is the worst of FOUR residuals and deliberately
-    excludes two of the six rows, so re-deriving "the worst row" here would
-    disagree with the file being displayed."""
+    """The file's verdict is the worst of the residuals that had an opinion
+    WHEN IT WAS WRITTEN, so re-deriving "the worst row" here would disagree
+    with the file being displayed, and would be guessing at which rows were
+    speaking at the time."""
     report = a_plant(verdict="typical", residuals=[
         {"name": "stages", "state": "warn", "value": None, "sigma": None,
          "reason": "not in the top-level verdict", "out_of_band_s": 0.0}])
     (header,) = [r for r in plant_rows(report)[0]["rows"]
                  if r["label"] == "verdict"]
     assert header["text"].startswith("typical")
+
+
+def test_the_header_says_which_residuals_the_verdict_speaks_for():
+    """A one-word summary that does not say what it covers is how the monitor
+    read `no opinion` for four days without anybody noticing (schema 2)."""
+    report = a_plant(schema=2, verdict="typical",
+                     verdict_for=["missing_power", "coldplate", "noise"])
+    (header,) = [r for r in plant_rows(report)[0]["rows"]
+                 if r["label"] == "verdict"]
+    assert "had an opinion" in header["tip"]
+    assert "missing_power, coldplate, noise" in header["tip"]
+
+
+def test_a_verdict_file_too_old_to_say_what_it_covers_claims_nothing():
+    """Schema 1 wrote no `verdict_for`, and neither does a schema-2 monitor on
+    a cycle where nothing could speak.  Naming a coverage it cannot know is
+    the one thing the tip must not do."""
+    (header,) = [r for r in plant_rows(a_plant())[0]["rows"]
+                 if r["label"] == "verdict"]
+    assert "had an opinion" not in header["tip"]
+    assert "the judge weighs" in header["tip"]
 
 
 def test_a_stale_verdict_marks_the_header_and_leaves_the_rows_alone():

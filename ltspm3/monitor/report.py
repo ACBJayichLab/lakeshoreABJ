@@ -34,7 +34,13 @@ from lschart.ipc.status import atomic_write_json
 #: Bumped when the meaning of a field changes.  Separate from the recorder's
 #: ``status.json`` version: the two files are written by different processes
 #: and a client may well be reading one and not the other.
-SCHEMA_VERSION = 1
+#:
+#: 2 (2026-09-17): ``verdict`` is the worst of the residuals that HAVE an
+#: opinion, over all six of them, rather than ``max`` over four including a
+#: structural silence -- so the same cryostat in the same state now reads
+#: ``typical`` where it read ``no opinion``.  ``verdict_for`` is additive and
+#: says which residuals the word covers.  See ``judge.Judge._headline``.
+SCHEMA_VERSION = 2
 
 #: One row per cycle, and the column order is the file's contract.
 CSV_COLUMNS = (
@@ -66,6 +72,12 @@ def payload(record: dict, *, cfg=None, stale_after_s: float | None = None) -> di
         "segment": record.get("segment"),
         "stale_after_s": stale_after_s,
         "verdict": record["verdict"],
+        # Which residuals the word above speaks for.  A list of names, so it
+        # survives `jsondecode` -- a name in a VALUE comes through verbatim
+        # where an object key does not.  Not in the daily CSV: every residual
+        # already has its own column there, so a reader derives this rather
+        # than parsing a list out of a cell.
+        "verdict_for": list(record.get("verdict_for") or ()),
         "sample_k": _finite(record.get("sample_k")),
         "coldplate_k": _finite(record.get("coldplate_k")),
         "u_pct": _finite(record.get("u_pct")),

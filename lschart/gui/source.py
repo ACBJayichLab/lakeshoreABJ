@@ -2527,10 +2527,14 @@ def plant_rows(report: dict | None, *, stale: bool | None = None,
     ``None`` when there is no report, which is the normal case: the judge is a
     separate process and is usually not running.
 
-    **The header's verdict is the published one and is never recomputed.**  The
-    file's top-level verdict is the worst of four residuals and deliberately
-    excludes two of the six rows, so a panel that re-derived "the worst row"
-    would disagree with the file it is displaying.
+    **The header's verdict is the published one and is never recomputed.**  It
+    is the worst of the residuals that had an opinion when it was written, and
+    ``verdict_for`` says which those were -- so a panel that re-derived "the
+    worst row" would disagree with the file it is displaying, and would be
+    guessing at which rows were speaking at the time.  Absent ``verdict_for``
+    is a monitor older than schema 2, whose headline was the worst of four of
+    the six rows; the tip says less rather than claiming a coverage it cannot
+    know.
     """
     if not isinstance(report, dict) or not report:
         return None
@@ -2546,13 +2550,19 @@ def plant_rows(report: dict | None, *, stale: bool | None = None,
     # first because the header is what a reader scans, the second because
     # nothing else on the panel can show it -- the rows keep their own marks,
     # since the last verdict is still evidence.
+    speaks_for = [str(x) for x in (report.get("verdict_for") or ()) if x]
+    if speaks_for:
+        covers = ("the worst of the residuals that had an opinion, as it "
+                  "published it: " + ", ".join(speaks_for))
+    else:
+        # Either nothing could speak, or a monitor too old to say.  Both are
+        # honestly served by not naming a coverage.
+        covers = "the worst of the residuals the judge weighs, as it published it"
     rows = [{"label": "verdict", "text": header,
              "mark": "warn" if (stale or verdict == "warn") else "",
              "tip": ("this verdict is older than the judge's own "
                      "stale_after_s: nothing is judging the cryostat right now"
-                     if stale else
-                     "the worst of the residuals the judge weighs, as it "
-                     "published it")}]
+                     if stale else covers)}]
 
     for entry in report.get("residuals") or ():
         if not isinstance(entry, dict):
