@@ -1,22 +1,19 @@
-# Handoff — 2026-09-17, afternoon (the goal was written down, and the loop retuned to it)
+# Handoff — 2026-09-17, evening (five minutes was too generous, and going fast found three bugs)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; **the
 loop's requirements are [docs/ltspm3/requirements.md](docs/ltspm3/requirements.md)**,
 the route is [PID_PLAN.md](PID_PLAN.md), and the commissioning step-by-step is
 [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md). This goes stale.
 
-Previous: [archive/HANDOFF-2026-09-17a.md](archive/HANDOFF-2026-09-17a.md)
-(the morning: the hold graded 5.6× worse than open loop, the first setpoint
-move, "a rate is a ceiling"). Every older dated document is under
-[archive/](archive/) now.
+Previous: [archive/HANDOFF-2026-09-17b.md](archive/HANDOFF-2026-09-17b.md)
+(the afternoon: the goal written down, the loop retuned to five minutes).
 
 > ## STATE: the cryostat is ARMED on the MORNING's numbers. This tree is not running on it.
 >
-> Recorder started 11:13, armed at 116.88 K, commanded to 119.0 K at ~11:15.
-> It runs `hold_speed: 12`, `move_speed: 0.5`, a band of ±0.25 % **pinned at
-> 63.96 %** — the file as it was this morning. Everything below is in `main`
-> and in this file, and reaches the cryostat only when the recorder is
-> restarted and re-armed. **Ask it, do not read it here:**
+> Unchanged from the afternoon handoff, and now two retunes behind: the
+> recorder still runs `hold_speed: 12`, `move_speed: 0.5` and a band of
+> ±0.25 % pinned at 63.96 %. **A running recorder never re-reads its config**,
+> so nothing in this tree reaches the cryostat until it is restarted.
 >
 > ```bash
 > python -m lschart -c config-ltspm3-armed.yaml status
@@ -35,143 +32,145 @@ move, "a rate is a ceiling"). Every older dated document is under
 > python -m ltspm3 -c config-ltspm3-armed.yaml run --arm
 > ```
 > ```bash
-> python -m lschart -c config-ltspm3-armed.yaml send setpoint 120 --software
+> python -m ltspm3 -c config-ltspm3-armed.yaml send setpoint 122 --software
 > ```
-> The bench says 4.6 minutes to within 100 mK. The recorder's CSV says what
-> the cryostat did.
+> The bench says 86 s to within 100 mK and 114 s to within 50. The recorder's
+> CSV says what the cryostat did.
 
 ## What this session established
 
-### 1. The goal had drifted, and the fix was to ask
+### 1. The oscillation in the viewer was the morning's tuning, not a new fault
 
-Jeff noticed the 2 K test ramp was taking 25 minutes and that this was the
-opposite of the point. Eight questions, eight answers, recorded verbatim in
-[requirements.md](docs/ltspm3/requirements.md). The two that changed the design:
+Jeff saw the sample approach 119 K and then wander ±0.1 K with a repeating
+shape, and asked whether the ramp-to-hold handover caused it. It did not. The
+running recorder was started at 11:33, before the 12:24 retune, so it was on
+`hold_speed: 12` — which the afternoon's own Allan table grades at **2.15×
+open loop at 900 s**. At 119 K that tuning gives `kp` = 0.0066 %/K, so a 0.1 K
+error commands 0.0007 % — a fifteenth of one DAC code. The loop could not have
+caused the wander and could not have corrected it, which is exactly what a flat
+output trace next to a moving temperature looks like.
 
-* **2 K at 118 K in 5 minutes.** The morning's "a rate is a ceiling, not a
-  promise" was a true statement about the loop as shipped, not a requirement.
-  `move_speed: 0.5` put a 260 s trajectory corner on a 260 s closed loop, and
-  the two stacked into a move as slow as a hand step.
-* **The band follows the setpoint, and is not the "is the power wrong" check.**
-  With the feedforward term off — the armed configuration — the band's centre
-  was pinned at `operating_point_pct`, and a 2 K move at 140 K **faulted on the
-  bench** (`authority exhausted`, heater ramped down; at 180 K the output went to
-  zero). `target_band_centre_pct` asks `has_curve` now, the same seam the
-  ramp-down and the rate limiter use since the 09-16 audit.
+### 2. Five minutes was excessively generous — §1b
 
-Also: strong hold, not weak; 5 K/min is a safety ceiling; filter unchanged;
-his day-to-day use is typed setpoints and programmed ladders with a measurement
-at each rung.
+Jeff's words, recorded verbatim in
+[requirements.md](docs/ltspm3/requirements.md) §1b, which **supersedes answer
+1**: 2 K at 120 K with a fast approach and a slight adjustment, overshoot up to
+250 mK, within 50 mK and staying inside 2–5 min. He also chose, asked:
 
-### 2. What the bench says about the retune
+* **the 2 s cadence stays**, and with it the 3.0 s dead time;
+* **`delay_floor` stays 4** — the stability margin is not traded for the last
+  15–20 s;
+* **5 K/min stays** as a *trajectory* ceiling, with the heater's own slew
+  configured separately.
 
-`tests_ltspm3/test_stage_4d_fast_move.py`, all on the fitted plant with the
-heater delivering 0.336 % less than the model claims:
+Those four choices are what set the 86 s the bench now measures. It is not a
+tuning number: arrival is `span / rate + corner + ~2 tau_cl`, and at 5 K/min,
+`delay_floor` 4 and a corner of 8 dead times that is 24 + 24 + ~38 s.
 
-| | morning's file | this file |
+### 3. One number was doing two jobs
+
+`max_rate_k_per_min`, divided by the gain, was **also** the heater's own slew
+limit: 0.40 %/min at 120 K, against the 3.5 % of overdrive a 5 K/min ramp
+needs. Every move spent 8.8 minutes creeping toward a drive the ramp had long
+finished asking for. That is the soft approach with the long tail, and it is
+why the afternoon measured moves getting *worse* when the ceiling was raised —
+raising it steepens the trajectory by the same factor it loosens the actuator.
+
+`supervisor.max_output_rate_pct_per_min` is now its own number. The fault
+ramp-down keeps the kelvin conversion, because a descent that has to work with
+no sensor is a trajectory and kelvin is its unit.
+
+### 4. Going fast found three defects, none of them about speed
+
+All three were live on the cryostat. Written up with what each cost in
+[requirements.md](docs/ltspm3/requirements.md) §3b.
+
+* **The spike test could not follow the file's own 5 K/min ceiling.**
+  `predict()` added back the low pass's lag but not the median's, biasing it by
+  `rate × 2 s`. Past ~3 K/min that passes the 8-sigma threshold, and a rejected
+  sample never refreshes the reference it was rejected against — so it ran
+  away. On a noise-free 5 K/min ramp, **38 of 40 honest samples were thrown
+  away** and the loop froze for 30 s until staleness forced a reseed.
+* **One rejection rejected everything after it.** The only escape was a 30 s
+  clock. It is now also a sample count, and reaching it *reseeds* — accepting
+  one sample is not enough, because the guard needs `recover_samples` good ones
+  in a row and a filter limping at one in three never supplies them.
+* **The write decision compared against memory, not against the heater.**
+  Whenever the rate limiter handed back the target unchanged — most cycles, now
+  that the heater may travel at its own rate — a loop whose output somebody
+  else had moved decided it was already there and wrote nothing, indefinitely.
+  This is the blindness `test_the_next_move_is_computed_from_where_the_heater_is`
+  was written for; the old creeping limiter hid it.
+
+### 5. The premise check was reading a measurement lag as a power fault
+
+A fast move swings `dQ` by 47 mW against a 10 mW fault threshold, and **none of
+it is delivered power**: `dQ` carries `C(T) dT/dt`, the slope arrives from a
+regression 15 s late, and mid-move the estimator read 0.021 K/s against a true
+0.055. Times 0.88 J/K that is 30 mW of a 32 mW excursion.
+
+Jeff chose to put it where the other known uncertainties live, so the band
+gained a `slope_lag` term: zero at a hold, zero during a constant sweep however
+fast, nonzero only while the rate is *changing*. Two consequences:
+
+* 3 sigma at a settled 118 K hold went **1.44 → 1.52 mW** — rectification bias
+  on an estimate whose true value is zero, not a real widening.
+* The step test now asks the band **at the two samples that make the step**
+  rather than the widest anywhere in the window. The old form let one transient
+  raise the threshold for a full half hour: a 3 % power loss at 100 K, an
+  unmistakable 20 mW fault, went undetected for 1976 s — exactly when the
+  window rolled past the transient the loss itself had caused. **374 s now.**
+
+### 6. What the bench says
+
+`tests_ltspm3/test_stage_4e_fast_move.py`, fitted plant, heater delivering
+0.336 % less than the model claims. Full table in
+[requirements.md](docs/ltspm3/requirements.md) §3b.
+
+| | afternoon's file | this file |
 |---|---|---|
-| 2 K at 118 K, to 95 % | > 30 min (cryostat: 86 % at 19 min) | **4.6 min**, 7 mK over |
-| 2 K at 100 / 140 / 180 K | 140 and 180 **faulted** | 3.8 / 5.0 / 4.9 min |
-| 10 K at 118 K | — | 16 min, never railed |
-| hold, Allan ratio to open loop, 15 s / 60 s / 300 s / 900 s | 0.98 / 0.97 / 1.10 / **2.15** | 1.00 / 0.97 / 0.81 / **0.71** |
+| 2 K at 120 K, to 95 % | 4.6 min | **86 s** |
+| …and to within 50 mK | — | **114 s** |
+| overshoot | 7 mK | 11 mK (budget 250) |
+| 10 K at 120 K | 15.9 min | **2.6 min** |
+| 2 K at 60 K | **387 mK over** | **2.8 mK** |
+| hold, Allan ratio at 15 / 60 / 300 / 900 s | 1.00 / 0.97 / 0.81 / 0.71 | unchanged — `hold_speed` untouched |
 
-Three config numbers: `authority_pct` 0.25 → **1.0**, `move_speed` 0.5 →
-**0.15**, `hold_speed` 12 → **0.25**. Raising the 5 K/min ceiling to 10 or 20
-was measured **worse** (tripped `anomaly_demand_pct` at 60 K, slower at 118 K),
-so it stays. The full tables are in the config's comments.
+**What the bench still cannot say** is the slow wander that is the hold's whole
+point: its plant has white sensor noise and no slow disturbance. That is
+`analysis/hold_quality.py` against the 2026-09-15 open-loop night, after a
+night armed on the new numbers.
 
-### 3. What the bench cannot say
-
-Its plant has white sensor noise and no slow disturbance, so it grades the move
-and the short-tau half of the hold, and **cannot grade the slow wander that is
-the hold's whole point**. That is `analysis/hold_quality.py` against the
-2026-09-15 open-loop night, after a night armed on the new numbers.
-
-## What is in the tree that was not this morning
+## What is in the tree that was not this afternoon
 
 | | |
 |---|---|
-| `docs/ltspm3/requirements.md` | **the requirements, in Jeff's words.** Change §1 only by asking him |
-| `ltspm3/control/supervisor.py` | `target_band_centre_pct` follows the setpoint whenever a curve exists (rule 5) |
-| `config-ltspm3-armed.yaml` | the three numbers above, comments rewritten to the measurements |
-| `tests_ltspm3/test_stage_4d_fast_move.py` | Jeff's benchmarks on the bench, the 60 K overshoot pinned as an open item |
-| `tests_ltspm3/test_stage_4a.py`, `test_stage_4c_tuning.py` | re-graded for a band that follows; a new test for the band that follows with the term off; a new test for a band narrower than the level error cutting the heater at arming |
-| `lschart/__main__.py` | `check` no longer calls the band FIXED when the feedforward term is off |
-| `archive/` | 13 handoffs, 5 audits and reviews, the finished feature plan. Links fixed |
-| `PID_PLAN.md` §1, `CLAUDE.md`, `docs/ltspm3/README.md`, `control.md`, `safety.md` rule 5, `running.md`, `plans/pid-4-commissioning.md` 4d, `docs/recorder/cli.md` | the sweep |
+| `docs/ltspm3/requirements.md` | **§1b, Jeff's revised move requirement**, and §3b, what the bench measured against it. Change §1 and §1b only by asking him |
+| `ltspm3/control/supervisor.py` | `max_output_rate_pct_per_min`, the heater's own slew; the step test asks the band at the step's own extremes; the write decision compares against the heater |
+| `ltspm3/control/filters.py` | `predict()` adds back the whole chain's lag; `max_consecutive_spikes` reseeds; `slope_delay_s`, `acceleration_excess` and a spike threshold that widens while the cryostat accelerates |
+| `ltspm3/model/fitted_response.py` | the `slope_lag` band term, in `FAST_TERMS` |
+| `ltspm3/control/tuning.py` | `max_kp_pct_per_k` 1.0 → 5.0, and a clamp that says so when it binds |
+| `config-ltspm3-armed.yaml` | `max_output_rate_pct_per_min: 20`, `move_speed: 0.03`, `move_error_k: 0.40`, `hold_error_k: 0.05`, `max_kp_pct_per_k: 5.0` |
+| `tests_ltspm3/test_stage_4e_fast_move.py` | was `4d`; Jeff's §1b benchmarks, 180 K's ceiling pinned, 60 K's old open item closed |
+| `PID_PLAN.md` §1, `plans/pid-4-commissioning.md` 4e | the route |
 
 ## What needs doing, in the order I would take it
 
 ### A. Arm on the new numbers and move 2 K — Jeff
 
-The block at the top. Compare the CSV with 4.6 min. If it is much slower, the
-first suspect is the band's lead not widening (`ramp_lead_pct` is gated on
-`tuner.enabled`, which is on) and the second is the output rate limiter —
-`check` prints both. Do not retune from one move.
+The box at the top. Nothing here has run on the cryostat; the bench is a
+rehearsal and the heater is real. Watch the viewer, then read the CSV: time to
+95 %, peak overshoot, and whether it is inside 50 mK by 5 minutes.
 
-### B. A night armed on the new hold, graded
+### B. A night armed, then `hold_quality.py`
 
-```bash
-python -m analysis.hold_quality --csv "data/ltspm3-armed_2026-09-17.csv" "data/ltspm3-armed_2026-09-18.csv" --from 2026-09-17T18:00 --to 2026-09-18T09:00 --vs "data/ltspm3-heater_2026-09-15.csv" "data/ltspm3-heater_2026-09-16.csv" --vs-from 2026-09-15T18:00 --vs-to 2026-09-16T09:00
-```
+`hold_speed` was not touched this session, so the afternoon's Allan table
+should still hold — but it has never been checked on the cryostat, and the
+long-averaging half needs a night against 2026-09-15.
 
-Target, from requirements §2: ratio ≤ 1 at 15 s, 1 min and 5 min, and well
-under 1 at 39 min. **Keep the 09-15 night as `--vs` forever.**
+### C. The two open items that did not move
 
-### C. The ladder tool — Jeff's use case 6
-
-A sequence of setpoints with a dwell at each, through the command spool the way
-`ltspm3/tools/sweep.py` drives heater percents. It is a move followed by a hold,
-repeated, and both halves are now graded. Belongs in `ltspm3/tools/`, with the
-table at the end; MATLAB gets the same via `setpoint --software` once
-`LakeShore.m` has a method for it (item E of the morning handoff, still open).
-
-### D. 60 K overshoots 0.39 K
-
-Rate-limiter windup: the 5 K/min output limit is 0.8 %/min there, the corner
-is 22 s, and the integral winds up behind the limiter. Back-calculation
-anti-windup against the rate-limited output is the fix — a `control/` change
-under rule 8, with the pinned test flipping from "overshoots" to "does not".
-
-### E. Give the bench plant the measured open-loop spectrum
-
-Unchanged from the morning. Until then no test can fail on slow wander.
-
-### F. The gauge sweep — now only for the feedforward TERM
-
-The band no longer waits on it. The positional feedforward (`feedforward.enabled`)
-still does, and stays off until somebody re-gauges. **Do not run the sweep
-without asking** — it ends the hold. And when the term does come on,
-`move_speed` has to be re-graded with it: on the bench the term stacked on the
-fast loop overshoots a 3 K move by 10.9 % at 118 K (3.1 % with it off), which
-is why the bench envelope pins `BENCH_MOVE_SPEED = 0.5` while the file ships
-0.15.
-
-## Traps
-
-* **The running recorder has the old file.** A `check` in this tree prints the
-  new band; the cryostat is on the old one until restarted.
-* **`hold_speed` under 1 is the STRONG regime.** The morning's arithmetic
-  (stirring ≈ 2.2 / hold_speed) described the weak regime and does not
-  extrapolate; the bench table in the config is where that regime ends. Do not
-  "fix" a quiet hour by weakening.
-* **±1 % is ±13 K of authority at 118 K.** A setpoint typo is bounded by rule 8
-  (ramped at the one rate), the output rate limiter, and `hard_max_pct: 70`,
-  none of which moved.
-* **The "missing power −2.4 mW past 3σ" warning** on every bench run is the
-  stale gauge, unchanged, and is not a fault.
-* **Do not grade the hold criterion on anything short.** 1.00× to 72 s and 5.6×
-  at 39 min was the morning's lesson, and it still applies to the new numbers.
-
-## Running it
-
-The venv is Windows and lives at the **repository root**, not in a worktree:
-
-```bash
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m pytest -q
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m ruff check .
-C:/Coding/Python/lakeshoreABJ/.venv/Scripts/python.exe -m lschart -c config-ltspm3-armed.yaml status
-```
-
-`python -m ltspm3 -c config-ltspm3-armed.yaml check` prints the band **and**
-the gain schedule; read both before arming.
+* the positional feedforward still waits on a delivered-power gauge, and when
+  it comes it needs `move_speed` re-graded against §3b rather than §3a;
+* 10 K still takes 16 min for a 2 K move, below `min_output_pct`, in a regime
+  nobody has looked at. Not on Jeff's path.

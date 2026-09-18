@@ -380,11 +380,42 @@ setpoint with the
 feedforward off, which it did not: a 2 K move at 140 K faulted on the bench
 until `target_band_centre_pct` asked `has_curve`.
 
-**Gate:** `tests_ltspm3/test_stage_4d_fast_move.py` green (2 K at 100–180 K
-inside 5–6 min, 10 K inside 20 min, hold noise ratio ≤ 1.05 at 10–300 s), then
-the same 2 K move on the cryostat inside 6 min from `send setpoint --software`,
-with the monitor typical throughout. Known open item: 60 K overshoots 0.39 K
-(rate-limiter windup), pinned by its own test.
+**Gate:** superseded by 4e below, the same evening, before it ever ran on the
+cryostat. Its bench gate was met (2 K at 100–180 K inside 5–6 min, 10 K inside
+20 min, hold noise ratio ≤ 1.05 at 10–300 s) and its known open item — 60 K
+overshooting 0.39 K — is closed by 4e rather than by the anti-windup it
+expected.
+
+### 4e — the move benchmark is ~60 s for 2 K at 120 K — 2026-09-17
+
+**Jeff armed 4d's numbers, watched a move, and said five minutes was
+excessively generous.** His revised requirement is
+[requirements.md](../docs/ltspm3/requirements.md) §1b: a fast approach and a
+slight adjustment — 95 % of a 2 K move at 120 K in about a minute, overshoot up
+to 250 mK, within 50 mK and staying inside 2–5 min. He kept the 2 s cadence,
+the median of three, `delay_floor: 4` and 5 K/min as a trajectory ceiling, and
+those four choices are what set the 86 s the bench measures.
+
+**One number was doing two jobs.** `max_rate_k_per_min`, divided by the gain,
+was also the heater's own slew limit — 0.40 %/min at 120 K, against the 3.5 %
+of overdrive a 5 K/min ramp needs. That is the soft approach with the long
+tail, and it is why 4d measured *worse* moves when the ceiling was raised: one
+number cannot be both a trajectory rate and an actuator slew rate. Splitting it
+(`supervisor.max_output_rate_pct_per_min`) is most of 4e, and it took the 10 K
+move from 15.9 min to 2.6.
+
+Going fast then found three defects that were never about speed — a spike
+predictor that could not follow the file's own rate ceiling, a rejection that
+rejected everything after it, and a write decision that compared against memory
+instead of against the heater. All three are written up in
+[requirements.md](../docs/ltspm3/requirements.md) §3b with what each one cost.
+
+**Gate:** `tests_ltspm3/test_stage_4e_fast_move.py` green (2 K at 30–180 K,
+±2 K, 10 K and 0.5 K at 120 K; every overshoot inside 250 mK; hold noise ratio
+unchanged), then the same 2 K move on the cryostat from
+`send setpoint --software` with the monitor typical throughout. 180 K is graded
+separately and loosely on purpose: there `hard_max_pct` itself is what limits
+the move.
 
 ### The "verdicts agreeing" clause needs rewording
 

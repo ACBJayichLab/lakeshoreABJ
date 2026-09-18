@@ -97,8 +97,11 @@ from __future__ import annotations
 
 import bisect
 import enum
+import logging
 import math
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 class ControlPhase(enum.Enum):
@@ -166,8 +169,15 @@ class TuningConfig:
     #: clamp is a guard and never the thing that sets a gain -- a limit that
     #: binds in normal operation binds silently, which is the worst way for one
     #: to act -- and still far below anything violent at this cryostat's gains.
+    #:
+    #: **1.0 stopped satisfying that the day the move got fast.** At a `tau_cl`
+    #: on the dead-time floor the schedule asks for 1.29 / 2.37 / 2.79 / 3.37
+    #: %/K at 60 / 100 / 120 / 180 K, so the old ceiling was silently setting
+    #: the gain everywhere above 60 K rather than guarding it.  5.0 is back
+    #: above every row.  And `Tuner.gains_for` now says so when either bound
+    #: binds, because a guard that fires is information.
     min_kp_pct_per_k: float = 0.002
-    max_kp_pct_per_k: float = 1.0
+    max_kp_pct_per_k: float = 5.0
     #: `Ti` is floored on the LOOP's own delay, `min_ti_delays * delay_s`, and
     #: not on an absolute time: at the cold end the plant is orders of
     #: magnitude faster than any fixed floor, so a fixed one is not a floor but
@@ -330,6 +340,10 @@ class Tuner:
         #: gets and is why section 3.2's floor is written `max(..., 4 * delay)`
         #: rather than assuming a delay exists.
         self.delay_s = 0.0
+        #: Whether `min_kp_pct_per_k` / `max_kp_pct_per_k` is what last set the
+        #: gain.  True means the loop is running a guard rather than the
+        #: tuning -- see `gains_for`.
+        self.kp_clamped = False
 
     @property
     def enabled(self) -> bool:
@@ -380,6 +394,12 @@ class Tuner:
 
         Above the delay floor ``kp`` reduces to ``1 / (speed * K(T))`` -- one
         number, and the reason a ratio was the right thing to configure.
+
+        **A bound that binds says so.**  These are guards against a bad
+        schedule row, not knobs; if one of them is what sets the gain then the
+        loop is not running the tuning anybody configured, and that is worth a
+        line in the log rather than a silently gentle loop.  `kp_clamped` is
+        the same fact for anything that wants to read it rather than grep it.
         """
         c = self.cfg
         phase = phase or self.phase
@@ -387,9 +407,27 @@ class Tuner:
         tau = self.schedule.tau_at(kelvin)
         kp, ti = simc_pi(gain, tau, self.tau_cl_for(phase, kelvin), self.delay_s,
                          min_ti_s=c.min_ti_delays * self.delay_s)
+        wanted = kp
         kp = max(c.min_kp_pct_per_k, min(c.max_kp_pct_per_k, kp))
         ti = min(c.max_ti_s, ti)
+        self._note_clamp(kelvin, phase, wanted, kp)
         return kp, ti
+
+    def _note_clamp(self, kelvin: float, phase: ControlPhase,
+                    wanted: float, applied: float) -> None:
+        """Log the EDGES only.  At a 2 s cadence a per-cycle warning is noise,
+        and noise is how a real one gets missed."""
+        clamped = applied != wanted
+        if clamped and not self.kp_clamped:
+            log.warning(
+                "scheduled kp clamped: %s at %.1f K wants %.3f %%/K, bounded "
+                "to %.3f -- the loop is running the bound, not the tuning "
+                "(tuning.min_kp_pct_per_k / max_kp_pct_per_k)",
+                phase.value, kelvin, wanted, applied)
+        elif self.kp_clamped and not clamped:
+            log.info("scheduled kp no longer clamped: %s at %.1f K, kp %.3f %%/K",
+                     phase.value, kelvin, applied)
+        self.kp_clamped = clamped
 
 
 def identify_first_order(samples, *, settle_fraction: float = 0.1

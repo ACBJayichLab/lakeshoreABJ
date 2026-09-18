@@ -61,13 +61,22 @@ def test_the_band_a_level_is_judged_by_is_pinned_to_the_gauge_day():
 
     118 K rather than a bench temperature, because that is where the numbers in
     the review's table were measured and where this cryostat has spent its
-    life.  1.44 mW is 3 sigma on the gauge day; ten days later the same hold
+    life.  1.52 mW is 3 sigma on the gauge day; ten days later the same hold
     allows 8.7 mW and sixty days later 52.
+
+    **It was 1.44 before the `slope_lag` term.**  That term is zero for a
+    cryostat that is not accelerating, and a settled hold is not accelerating
+    -- but the ESTIMATE of the acceleration still rattles around zero, and
+    `acceleration_excess` rectifies at zero, so what is left is the 0.19 mW of
+    rectification bias on a quantity whose true value is nothing.  It is
+    carried rather than tuned away because a longer average would buy it back
+    at the cost of widening the band later than a move needs it, and because
+    at 3 sigma = 1.5 mW against a 10 mW fault floor it changes no verdict.
     """
     h = armed(118.0)
     s = h.history[-1]
     assert s.missing_power_w is not None, s.residual_reason
-    assert 3e3 * s.sigma_q_w == pytest.approx(1.44, abs=0.005)
+    assert 3e3 * s.sigma_q_w == pytest.approx(1.52, abs=0.02)
 
     # And the pin is what holds it there: the same hold, two months on.
     old = armed(118.0, wall_t0=DRIFT_T0_UNIX + TWO_MONTHS)
@@ -509,18 +518,49 @@ def test_a_rising_sink_warns_however_far_it_goes(kelvin, per_hour, minutes, stag
     h = armed(kelvin, stage=stage)
     h.history.clear()
     worst_error_k = 0.0
+    held, longest_hold = 0, 0
     for i in range(int(minutes * 60 / h.DT)):
         h.sink_offset(per_hour * (i * h.DT / 3600.0))
         st = h.step(1)
-        assert h.sup.state is SupervisorState.TRACKING, (
+        # **NEVER A FAULT AND NEVER A LOCKOUT** -- that is the claim, and it is
+        # the whole claim.  A brief HOLD is the envelope working: at 30 K and
+        # 20 K/h the sample moves fast enough to be ambiguous for a moment, and
+        # rule 6 says an ambiguous case holds.  What must not happen is that it
+        # escalates, or that it never comes back.
+        assert st.state not in (SupervisorState.RAMPING_DOWN,
+                                SupervisorState.LOCKED_OUT,
+                                SupervisorState.CRASHED), (
             f"scenario 1 must never stop the loop: {h.history[-1].alarms}")
+        if st.state is SupervisorState.TRACKING:
+            held = 0
+        else:
+            held += 1
+            longest_hold = max(longest_hold, held)
         if st.error_k is not None:
             worst_error_k = max(worst_error_k, abs(st.error_k))
 
+    # And it came back, and the hold was short: the guard's own recovery count
+    # bounds it, not a number chosen here.
+    assert h.sup.state is SupervisorState.TRACKING
+    assert longest_hold <= h.sup.guard.cfg.recover_samples_from_fault, (
+        f"held for {longest_hold} cycles, which is not a moment")
+
     outs = [x.output_pct for x in h.history if x.output_pct is not None]
     assert outs[-1] < outs[0], "the loop should need LESS heat, not more"
-    for a, b in zip(outs, outs[1:]):
-        assert b <= a + 2 * h.sup.cfg.dac_step_pct + 1e-9, "the output rose"
+    # **A TREND, not a per-cycle step.**  This used to assert that no single
+    # write ever rose by more than two codes, which was true only because the
+    # output rate limiter was the trajectory's kelvin rate through the gain and
+    # made the heater creep; a loop with real authority answers the
+    # measurement's own noise cycle by cycle and rises by a few codes often.
+    # What scenario 1 actually claims is that the loop needs steadily LESS
+    # heat, so that is what is measured -- on block means, over a block long
+    # enough that the noise averages out and far shorter than the disturbance.
+    block = max(1, int(300.0 / h.DT))
+    means = [sum(outs[i:i + block]) / len(outs[i:i + block])
+             for i in range(0, len(outs) - block + 1, block)]
+    for a, b in zip(means, means[1:]):
+        assert b <= a + 2 * h.sup.cfg.dac_step_pct + 1e-9, (
+            f"the output trend rose: {a:.3f} -> {b:.3f} %")
     if keeps_up:
         # The strong loop's whole point: a slow bath drift is corrected, not
         # reported.  If this starts failing the hold has been weakened again.

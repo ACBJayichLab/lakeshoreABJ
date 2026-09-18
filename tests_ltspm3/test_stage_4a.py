@@ -243,31 +243,42 @@ def test_the_fault_ramp_down_walks_the_curve_down_at_the_one_rate():
 # -- finding 3: the output rate limiter, and what it is told ---------------
 
 @pytest.mark.parametrize("stage", ["4a", "file"])
-def test_the_output_rate_limiter_converts_the_one_rate_at_either_stage(stage):
-    """The conversion needs the SCHEDULE; `tuning.enabled` says whether to
-    reschedule the GAINS.  Two questions, and they were one switch.
+def test_the_output_rate_limiter_is_the_heaters_own_rate_at_either_stage(stage):
+    """**The tracking limiter no longer converts anything**, and the descent
+    still does.  Two limiters, two units, and they used to be one number.
 
-    On the floor it was 0.20 %/min -- **2.6 K/min at 118 K**, against the 5 the
-    file's `ramp.max_rate_k_per_min` names, and 0.6 K/min at 30 K.
-    AUDIT-2026-09-16 finding 3.
+    The tracking limiter says how fast the HEATER may travel and is read
+    straight out of config, so it means the same thing at every temperature and
+    at either stage.  Converted through the gain it read 0.40 %/min at 118 K
+    against 3.5 % of overdrive a 5 K/min ramp asks for -- nine minutes of creep
+    under every move (docs/ltspm3/requirements.md section 1b).
 
-    **Asserted at BOTH stages**, which is what the finding actually claims:
-    the limiter asks `has_curve` -- is there a curve to convert
-    with -- and NOT whether this stage's tuner is switched on.  Running it only
-    at whatever the file happens to say would have let the tuner's arrival hide
-    a regression back to the floor, and the floor is a five-hour fault
+    AUDIT-2026-09-16 finding 3 survives where the conversion does: the fault
+    descent is a trajectory in kelvin, it asks `has_curve` rather than whether
+    this stage's tuner is switched on, and the floor under it is a five-hour
     ramp-down.
     """
     h = at_4a() if stage == "4a" else armed()
     assert h.sup.tuner.enabled is (stage != "4a")
+
+    # The heater's own rate: one number, no schedule lookup, no temperature.
+    assert h.sup._rate_pct_per_min() == pytest.approx(
+        h.sup.cfg.max_output_rate_pct_per_min)
+    # And it is what a move actually gets, which the conversion was not.
     gain = h.sup.schedule.gain_at(BENCH_K)
-    one_rate = h.sup.ramp.cfg.max_rate_k_per_min / gain
-    assert one_rate == pytest.approx(0.40, abs=0.02)
-    assert h.sup._rate_pct_per_min(BENCH_K) == pytest.approx(one_rate)
-    assert h.sup._rate_pct_per_min(BENCH_K) > h.sup.cfg.min_rate_pct_per_min
-    # The floor still governs where the model has nothing to say.
-    assert h.sup._rate_pct_per_min(None) == pytest.approx(
-        h.sup.cfg.min_rate_pct_per_min)
+    converted = h.sup.ramp.cfg.max_rate_k_per_min / gain
+    assert converted == pytest.approx(0.40, abs=0.02)
+    assert h.sup._rate_pct_per_min() > 10 * converted
+
+    # The DESCENT still converts the one rate through the gain where it is.
+    here = h.sup.output_pct or 64.0
+    dt = 60.0
+    assert h.sup.has_curve
+    step = h.sup._rampdown_step_pct(here, dt)
+    ff_gain = h.sup.feedforward.gain_at(here)
+    assert step == pytest.approx(
+        max(h.sup.cfg.min_rate_pct_per_min,
+            h.sup.ramp.cfg.max_rate_k_per_min / ff_gain) * dt / 60.0)
 
 
 def test_the_band_still_does_not_widen_during_a_ramp_at_this_stage():

@@ -327,12 +327,18 @@ def days_since_gauge(t: float) -> float:
 
 
 def sigma_q_terms(sample_k: float, pct: float, t: float,
-                  dt_dt_k_per_s: float = 0.0) -> dict:
+                  dt_dt_k_per_s: float = 0.0,
+                  d2t_dt2_k_per_s2: float = 0.0,
+                  slope_delay_s: float = 0.0) -> dict:
     """Every term of the band separately, in W.  One sigma each.
 
     The monitor reports which term dominates when it warns, because "3.2 mW out
     of band" is not a sentence anybody can act on and "3.2 mW, and the band is
     nine days of undisturbed drift" is.
+
+    ``d2t_dt2_k_per_s2`` and ``slope_delay_s`` are the measurement's, not the
+    cryostat's: see the ``slope_lag`` term.  Both default to zero, which is
+    exactly right for a caller that is looking at a settled hold.
     """
     slope = lambda_slope_w_per_k(sample_k)
     sink = lambda_slope_w_per_k(coldplate_k(sample_k))
@@ -352,6 +358,24 @@ def sigma_q_terms(sample_k: float, pct: float, t: float,
         # Without it every sweep warns, which is PID_PLAN.md section 3's point.
         "dynamic": SIGMA_C_FRAC * heat_capacity_j_per_k(sample_k)
         * abs(dt_dt_k_per_s),
+        # **THE SLOPE THE RESIDUAL IS GIVEN IS NOT THE SLOPE THE SAMPLE HAS.**
+        # `dynamic` above covers not knowing C; this covers not knowing dT/dt,
+        # which is a different and much larger thing while the cryostat is
+        # ACCELERATING.  The slope arrives from a regression with a delay of
+        # its own, so what the residual is handed is the slope of ~15 s ago,
+        # and C times that error lands in dQ as missing power that is not
+        # missing.  Measured on the bench, a fast 2 K move at 120 K: the
+        # estimator read 0.021 K/s against a true 0.055, and 0.88 J/K times the
+        # difference is 30 mW of the 32 mW excursion -- against a 10 mW fault.
+        #
+        # Zero at a hold, and zero during a CONSTANT sweep however fast, which
+        # is what makes it honest: it is not an allowance for going quickly, it
+        # is an allowance for changing how quickly, and it collapses the moment
+        # the rate settles.  Both inputs are properties of the measurement
+        # chain (`MeasurementFilter.slope_delay_s`), supplied by the caller for
+        # the same reason `Tuner.delay_s` is.
+        "slope_lag": heat_capacity_j_per_k(sample_k)
+        * abs(d2t_dt2_k_per_s2) * slope_delay_s,
     }
 
 
@@ -369,11 +393,13 @@ def sigma_q_terms(sample_k: float, pct: float, t: float,
 #: The same instruction says why that is enough: **real faults are
 #: unmistakable.**  The 2026-09-10 event moved the sample 3 K.  Nothing here is
 #: trying to resolve a milliwatt.
-FAST_TERMS = ("sink", "thermometry", "model", "dynamic")
+FAST_TERMS = ("sink", "thermometry", "model", "dynamic", "slope_lag")
 
 
 def sigma_q_fast_w(sample_k: float, pct: float,
-                   dt_dt_k_per_s: float = 0.0) -> float:
+                   dt_dt_k_per_s: float = 0.0,
+                   d2t_dt2_k_per_s2: float = 0.0,
+                   slope_delay_s: float = 0.0) -> float:
     """One sigma on a CHANGE in :func:`missing_power_w`, in W.
 
     The band for a judge that watches the residual move rather than the
@@ -388,12 +414,15 @@ def sigma_q_fast_w(sample_k: float, pct: float,
     against the drift (hours, not minutes and not days), and it must FREEZE
     while the verdict is not typical or it learns the fault it is judging.
     """
-    terms = sigma_q_terms(sample_k, pct, DRIFT_T0_UNIX, dt_dt_k_per_s)
+    terms = sigma_q_terms(sample_k, pct, DRIFT_T0_UNIX, dt_dt_k_per_s,
+                          d2t_dt2_k_per_s2, slope_delay_s)
     return math.sqrt(sum(terms[k] ** 2 for k in FAST_TERMS))
 
 
 def sigma_q_w(sample_k: float, pct: float, t: float,
-              dt_dt_k_per_s: float = 0.0) -> float:
+              dt_dt_k_per_s: float = 0.0,
+              d2t_dt2_k_per_s2: float = 0.0,
+              slope_delay_s: float = 0.0) -> float:
     """One sigma on :func:`missing_power_w`, in W.  Quadrature of the terms.
 
     Settled, on the day it was gauged, 3 sigma of this is **1.4 mW at 118 K**
@@ -411,7 +440,8 @@ def sigma_q_w(sample_k: float, pct: float, t: float,
     it: the two are different quantities and quadrature is the wrong operation
     on them.
     """
-    terms = sigma_q_terms(sample_k, pct, t, dt_dt_k_per_s)
+    terms = sigma_q_terms(sample_k, pct, t, dt_dt_k_per_s,
+                          d2t_dt2_k_per_s2, slope_delay_s)
     return math.sqrt(sum(v * v for v in terms.values()))
 
 

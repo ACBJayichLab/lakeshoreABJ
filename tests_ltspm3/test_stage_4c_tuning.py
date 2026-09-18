@@ -180,7 +180,7 @@ def test_the_band_follows_the_setpoint_with_the_feedforward_off():
 # -- does the setpoint arrive? --------------------------------------------
 
 #: A 2 K move, and "arrived" is 5 % of it -- the same criterion as
-#: `test_stage_4d_fast_move.py`'s.
+#: `test_stage_4e_fast_move.py`'s.
 MOVE_K = 2.0
 ARRIVE_K = 0.05 * MOVE_K
 

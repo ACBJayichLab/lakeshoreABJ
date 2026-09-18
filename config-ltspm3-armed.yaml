@@ -149,11 +149,21 @@ control:
     # extrapolation and nobody has measured what happens.
     hard_max_pct: 70.0
 
-    # THE OUTPUT RATE FLOOR.  The heater's percent rate is
-    # `ramp.max_rate_k_per_min / K(T)` -- the one rate through the gain, so a
-    # kelvin rate means the same thing everywhere -- and this is the floor
-    # under it where there is no curve to ask.  The conversion asks whether a
-    # CURVE exists, not whether a commissioning switch is on.
+    # HOW FAST THE HEATER ITSELF MAY TRAVEL, in output percent per minute.
+    # NOT the trajectory's kelvin rate divided by the gain, which is what it
+    # used to be and what made every move soft with a long tail: a ramp needs
+    # `rate * tau / K` of overdrive above where it will finish, and the
+    # converted ceiling delivered 0.40 %/min against 3.5 % to travel.  The two
+    # are different quantities -- one is about the sample, one is about the
+    # heater -- and they are configured apart.
+    # docs/ltspm3/requirements.md section 1b, the `slew` row of section 2.
+    max_output_rate_pct_per_min: 20.0
+
+    # THE FLOOR UNDER THE FAULT RAMP-DOWN ONLY.  The descent stays in kelvin --
+    # it is a trajectory and it has to work with no sensor at all (rule 3) --
+    # so it keeps the `ramp.max_rate_k_per_min / K(T)` conversion, asking
+    # whether a CURVE exists and not whether a commissioning switch is on.
+    # This is what that falls back to where there is no curve.
     # docs/ltspm3/thermal-response.md for K(T).
     min_rate_pct_per_min: 0.20
 
@@ -297,20 +307,32 @@ control:
     #
     #   tau_cl = max(speed * tau(T), delay_floor * delay_s)
     #
-    # and above the floor kp is simply 1 / (speed * K(T)).  The floor binds in
-    # `move` at the cold end, where the cryostat settles faster than this loop
-    # can see it.  Both ratios are Jeff's requirements graded on the bench:
-    # docs/ltspm3/requirements.md section 3, `test_stage_4d_fast_move.py`.
-    # A known cost is recorded there: a 2 K move near 60 K overshoots, because
-    # the output rate limit is slow relative to the corner and the integral
-    # winds up behind it.  The rate ceiling is not the lever -- raising it was
-    # measured and made moves worse.
+    # and above the floor kp is simply 1 / (speed * K(T)).  Both ratios are
+    # Jeff's requirements graded on the bench: docs/ltspm3/requirements.md
+    # sections 1b and 3, `test_stage_4e_fast_move.py`.
+    #
+    # `move_speed` NOW PARKS tau_cl ON THE DEAD-TIME FLOOR at every temperature
+    # the cryostat is used at, which is where Jeff's fast approach lands it: at
+    # 120 K the floor is 4 x 3.0 s = 12 s against 0.02 * 527 s = 10.5 s.  So
+    # `delay_floor` -- and under it the 2 s cadence and the median of three --
+    # is what sets the speed of a move now, and not this number.  That is a
+    # deliberate choice and not a coincidence: Jeff kept the stability margin
+    # rather than buying the last 15-20 s with it (section 1b, question 9).
     hold_speed: 0.25              # below 1 = real authority at a hold
-    move_speed: 0.15              # a 2 K move at 118 K in ~5 min
-    delay_floor: 4.0              # x the DERIVED dead time
-    move_error_k: 0.25
-    hold_error_k: 0.10
+    move_speed: 0.03              # tau_cl on the dead-time floor above ~60 K
+    delay_floor: 4.0              # x the DERIVED dead time.  THE speed limit now
+    # The hysteresis, and it has to straddle the overshoot the move is allowed.
+    # A 250 mK overshoot against a 250 mK MOVE threshold is a loop that bounces
+    # back into MOVE off its own permitted overshoot and re-drives; 0.40 leaves
+    # the settle to the hold gains, which is what "slight adjustment" meant.
+    move_error_k: 0.40
+    hold_error_k: 0.05            # JEFF'S SETTLE GATE: within 50 mK and staying
     hold_settle_s: 120.0
+    # A GUARD, never the thing that sets a gain.  At tau_cl on the floor the
+    # schedule asks up to 3.37 %/K at the warm end, and the 1.0 default was
+    # quietly setting the gain everywhere above 60 K instead of guarding it.
+    # `Tuner.gains_for` logs it if it ever binds again.
+    max_kp_pct_per_k: 5.0
     # The gain and time-constant schedule is NOT here and is not a table
     # anywhere: `FittedSchedule` reads K(T) and tau(T) from
     # ltspm3/model/fitted_response.py, so a refit moves the controller and the

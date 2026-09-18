@@ -211,7 +211,7 @@ def test_the_terms_are_the_band():
         held = holding(kelvin)
         terms = M.sigma_q_terms(kelvin, held, T0 + 5 * 86400, 1.0 / 60.0)
         assert set(terms) == {"sink", "thermometry", "diurnal", "model",
-                              "drift", "dynamic"}
+                              "drift", "dynamic", "slope_lag"}
         assert math.sqrt(sum(v * v for v in terms.values())) == pytest.approx(
             M.sigma_q_w(kelvin, held, T0 + 5 * 86400, 1.0 / 60.0))
 

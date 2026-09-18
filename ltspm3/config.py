@@ -75,6 +75,12 @@ def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) ->
             "the floor under the rate where the model has no opinion, and at "
             "zero the output cannot move there at all"
         )
+    if s.max_output_rate_pct_per_min <= 0:
+        problems.append(
+            "control.supervisor.max_output_rate_pct_per_min must be positive "
+            "-- it is how fast the heater itself may travel, and at zero the "
+            "output is frozen wherever it happens to be"
+        )
     if s.on_exit not in ("hold", "zero"):
         problems.append(
             f"control.supervisor.on_exit must be 'hold' or 'zero', got {s.on_exit!r}"

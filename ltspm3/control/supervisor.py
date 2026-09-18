@@ -142,10 +142,35 @@ class SupervisorConfig:
     #: arithmetic says, the output cannot exceed this.
     hard_max_pct: float = 70.0
 
-    #: **THE OUTPUT RATE FLOOR.**  The heater's percent rate is
-    #: `max_rate_k_per_min / K(T)` -- the one rate converted through the gain,
-    #: so 5 K/min means 5 K/min everywhere -- and this is what it falls back to
-    #: where there is no model to ask.
+    #: **HOW FAST THE HEATER ITSELF MAY MOVE**, in output percent per minute.
+    #:
+    #: This used to be `max_rate_k_per_min / K(T)` -- the trajectory's kelvin
+    #: rate converted through the gain -- and that was a category error that
+    #: cost the loop its speed.  A ramp needs `rate * tau / K` of OVERDRIVE
+    #: above the output it will finish on, and the heater has to get there
+    #: within about one closed-loop time constant or the ramp is over before
+    #: the drive arrives.  Converted, the ceiling was 0.40 %/min at 120 K
+    #: against 3.5 % of overdrive to deliver: nine minutes of creep under every
+    #: move, which is exactly the soft approach with a long tail that was
+    #: measured on the cryostat.  Raising `max_rate_k_per_min` could not fix it,
+    #: because that steepens the trajectory by the same factor it loosens the
+    #: actuator -- and it measured worse.
+    #:
+    #: They are different quantities.  A kelvin rate is about the sample; a
+    #: percent rate is about the heater and its wiring, and percent is the
+    #: honest unit for that.  So it is configured on its own.
+    #:
+    #: **What this does NOT bound, and what still does.**  This limiter is not
+    #: the safety envelope: `hard_max_pct`, the authority band and
+    #: `anomaly_demand_pct` are, and none of them moved.  This only says how
+    #: quickly the output may travel to a destination those three already
+    #: agreed to.  docs/ltspm3/requirements.md section 2, the `slew` row.
+    max_output_rate_pct_per_min: float = 20.0
+
+    #: **THE OUTPUT RATE FLOOR, for the fault ramp-down only.**  The descent
+    #: stays in kelvin -- it is a trajectory and it has to work with no sensor
+    #: (rule 3) -- so it keeps the `max_rate_k_per_min / K(T)` conversion, and
+    #: this is what that falls back to where there is no model to ask.
     min_rate_pct_per_min: float = 0.20
 
     # -- premise checks: THE WATTS ADD UP -----------------------------------
@@ -1257,7 +1282,19 @@ class HeaterSupervisor:
                 code -= self.cfg.dac_step_pct
             code = max(code, self.cfg.hard_min_pct)
 
-        if self.output_pct is None or abs(code - self.output_pct) >= self.cfg.dac_step_pct / 2:
+        # **AGAINST WHERE THE HEATER IS, NOT AGAINST WHAT WAS LAST COMMANDED.**
+        # `current` came from :meth:`_where_the_heater_is` a few lines up, which
+        # re-reads whenever the belief could have gone stale; `self.output_pct`
+        # is only what this supervisor last sent, and this loop is not the only
+        # thing that writes to the analog output.  Comparing against the
+        # memory means that whenever the rate limiter happens to hand back the
+        # target unchanged -- which is most cycles now that the heater may
+        # travel at its own rate rather than creeping -- a loop whose output
+        # somebody else has just moved decides it is already there and writes
+        # nothing, for ever.  That is the exact blindness
+        # `test_the_next_move_is_computed_from_where_the_heater_is` exists for;
+        # the old converted rate limit hid it by never returning the target.
+        if abs(code - current) >= self.cfg.dac_step_pct / 2:
             s.wrote = self._write_output(code, s)
         else:
             self.output_pct = code
@@ -1621,20 +1658,32 @@ class HeaterSupervisor:
         floor_t = t - cfg.fault_window_s
         while len(self._dq_hist) > 1 and self._dq_hist[0][0] < floor_t:
             self._dq_hist.popleft()
-        recent = [x[1] for x in self._dq_hist]
-        step = max(recent) - min(recent)
+        hi = max(self._dq_hist, key=lambda x: x[1])
+        lo = min(self._dq_hist, key=lambda x: x[1])
+        step = hi[1] - lo[1]
         s.dq_step_w = step
         # A FLOOR UNDER THE BAND, not a replacement for it: at a settled hold
         # the floor binds and during a sweep at the warm end the band does, and
         # a flat floor there would fault every sweep.
         #
-        # **The band is the WIDEST it was anywhere in the window**, and it is
-        # the FAST band -- no drift, no calibration -- because the range is a
-        # statement about a change over the whole window, not about this
-        # instant.  Evaluated at the instant, a window that contains a sweep
-        # gets judged against the settled band and faults on motion that was
-        # inside the band the whole time it was moving.
-        widest = max(x[2] for x in self._dq_hist)
+        # It is the FAST band -- no drift, no calibration -- because the range
+        # is a statement about a change rather than about a level.  And it is
+        # the band **AT THE TWO SAMPLES THAT MAKE THE STEP**, added in
+        # quadrature the way the uncertainty on a difference is, rather than
+        # the widest band anywhere in the window.
+        #
+        # The widest-anywhere form had the right instinct -- evaluated at this
+        # instant, a window containing a sweep gets judged against the settled
+        # band and faults on motion that was inside the band the whole time it
+        # was moving -- and the wrong reach.  It let ONE transient anywhere in
+        # half an hour raise the threshold for the whole half hour, including
+        # for samples taken long after the cryostat went quiet.  With
+        # `slope_lag` in the band that stopped being theoretical: a 3 % power
+        # loss at 100 K, an unmistakable 20 mW fault, went undetected for
+        # 1976 s -- the exact moment the window rolled past the transient the
+        # loss itself had caused.  Asking at the extremes keeps the sweep
+        # protection, because during a sweep the extremes ARE in the sweep.
+        widest = math.hypot(hi[2], lo[2])
         fault_at = max(cfg.fault_mw * 1e-3, cfg.warn_sigma * widest)
         if step >= fault_at:
             faults.append(
@@ -1708,10 +1757,24 @@ class HeaterSupervisor:
             return None, 0.0, 0.0, "coldplate stale"
         dq = _M.missing_power_w(s.filtered_k, s.slope_k_per_s, sink,
                                 self.output_pct)
+        # **THE SLOPE THE RESIDUAL IS GIVEN IS 15 s OLD**, and while the
+        # cryostat is accelerating that is worth far more than any of the other
+        # terms: `C * (slope error)` reached 30 mW of a 32 mW excursion on a
+        # fast 2 K move, against a 10 mW fault.  Both numbers come from the
+        # filter chain rather than from anywhere anybody types, for the same
+        # reason `Tuner.delay_s` does.  Zero at a hold and zero at a constant
+        # sweep, so nothing this widens was ever narrow when it mattered.
+        cadence = self._cadence_s or 0.0
+        accel = self.filter.acceleration_excess(cadence)
+        slope_delay = self.filter.slope_delay_s(cadence)
         sigma = _M.sigma_q_w(s.filtered_k, self.output_pct, self.wall_clock(),
-                             dt_dt_k_per_s=s.slope_k_per_s)
+                             dt_dt_k_per_s=s.slope_k_per_s,
+                             d2t_dt2_k_per_s2=accel,
+                             slope_delay_s=slope_delay)
         fast = _M.sigma_q_fast_w(s.filtered_k, self.output_pct,
-                                 dt_dt_k_per_s=s.slope_k_per_s)
+                                 dt_dt_k_per_s=s.slope_k_per_s,
+                                 d2t_dt2_k_per_s2=accel,
+                                 slope_delay_s=slope_delay)
         return dq, sigma, fast, ""
 
     def _check_model(self, s: SupervisorStatus) -> None:
@@ -1844,7 +1907,7 @@ class HeaterSupervisor:
             # to be measured in hours, which is why the gate above is
             # `has_curve`: whether there is a curve, not whether the present
             # stage drives to its level (AUDIT-2026-09-16 finding 2).
-            proposed = current - self._rate_pct_per_min(None) * (dt / 60.0)
+            proposed = current - self.cfg.min_rate_pct_per_min * (dt / 60.0)
 
         # Never upward.  Rule 1, and the one line that makes a wrong model
         # harmless here.
@@ -1890,10 +1953,14 @@ class HeaterSupervisor:
           otherwise be throttled by one curve while following another and
           arrive late by the difference between them.
 
-        Falls back to :meth:`_rate_pct_per_min` where there is no curve to ask,
-        which is the same conversion the tracking rate limiter uses and carries
-        the same `min_rate_pct_per_min` floor.  **`has_curve`, not
-        `feedforward.enabled`** -- see the seam above.
+        Falls back to `min_rate_pct_per_min` where there is no curve to ask.
+        **`has_curve`, not `feedforward.enabled`** -- see the seam above.
+
+        **The descent is the one place the kelvin conversion survives**, and it
+        survives on purpose: the tracking limiter is about how fast the heater
+        may travel (`max_output_rate_pct_per_min`), while this is a commanded
+        trajectory in kelvin that has to run with no sensor at all.  The two
+        used to share one number and the sharing was the bug.
         """
         if self.has_curve:
             gain = self.feedforward.gain_at(current)
@@ -1901,31 +1968,22 @@ class HeaterSupervisor:
                 rate = max(self.cfg.min_rate_pct_per_min,
                            self.ramp.cfg.max_rate_k_per_min / gain)
                 return rate * (dt / 60.0)
-        return self._rate_pct_per_min(None) * (dt / 60.0)
+        return self.cfg.min_rate_pct_per_min * (dt / 60.0)
 
-    def _rate_pct_per_min(self, kelvin: float | None) -> float:
-        """**The one rate, converted through the gain.**
+    def _rate_pct_per_min(self) -> float:
+        """**How fast the heater itself may move**, in percent per minute.
 
-        ``max_rate_k_per_min / K(T)``, floored at ``min_rate_pct_per_min``
-        where there is no schedule to ask.  The same kelvin per minute at every
-        temperature, which is what a rate limit in percent can never be -- the
-        gain spans forty-fold across this cryostat.
+        One number, read straight out of config, and deliberately NOT the
+        trajectory's kelvin rate divided by the gain -- see
+        `SupervisorConfig.max_output_rate_pct_per_min` for why that conversion
+        was wrong and what it cost.  There is no schedule lookup here any more,
+        and therefore no temperature at which this limiter means something
+        different from what the config file says.
 
-        **The conversion needs the SCHEDULE, not the scheduler.**  Gated on
-        `tuner.enabled` instead, a stage with the tuning switched off runs the
-        output limiter on its floor while `set_setpoint` goes on ramping in
-        kelvin at the rate the config file names, and a loop told one rate and
-        delivering another is one somebody will "tune" without knowing why
-        (AUDIT-2026-09-16 finding 3).
+        The fault ramp-down does still convert (`_rampdown_step_pct`), because a
+        descent with no sensor is a trajectory and kelvin is its unit.
         """
-        floor = self.cfg.min_rate_pct_per_min
-        schedule = self.schedule
-        if kelvin is None or schedule is None:
-            return floor
-        gain = schedule.gain_at(kelvin)
-        if gain <= 0:
-            return floor
-        return max(floor, self.ramp.cfg.max_rate_k_per_min / gain)
+        return self.cfg.max_output_rate_pct_per_min
 
     def _rate_limit_step(self, dt: float) -> float:
         """The most the output may move this cycle.  Also what the band's
@@ -1936,8 +1994,7 @@ class HeaterSupervisor:
             # There used to be a `max_step_pct` fallback here, and it made the
             # limiter loosest exactly when dt was smallest, which is backwards.
             return 0.0
-        here = self.filter.value if self.filter.primed else None
-        return self._rate_pct_per_min(here) * (dt / 60.0)
+        return self._rate_pct_per_min() * (dt / 60.0)
 
     def _rate_limit(self, current: float, target: float, dt: float) -> float:
         step = self._rate_limit_step(dt)

@@ -243,13 +243,25 @@ def test_the_next_move_is_computed_from_where_the_heater_is(armed_service):
     assert asked_for > 62.9, "the manual setpoint is not where this test assumes"
 
     h.inst.set_analog_percent(62.5)          # somebody else moves it, mid-band
-    h.step(5)
+    was = h.inst.get_analog_percent()
+    steps = []
+    for _ in range(5):
+        h.step(1)
+        now = h.inst.get_analog_percent()
+        steps.append(abs(now - was))
+        was = now
 
     moved = h.inst.get_analog_percent()
     assert moved > 62.5, "the loop never noticed the output had moved"
-    # And it walked, rather than jumping straight back to the remembered value:
-    # five cycles of the one rate through the gain is well under the 0.58% gap.
-    assert moved < asked_for - 0.2
+    # And every write was a RATE-LIMITED step from where the heater actually
+    # was.  This used to assert the loop was still short of `asked_for` after
+    # five cycles, which only held because the limiter was the trajectory's
+    # kelvin rate through the gain and crept at 0.0133 % a cycle; the heater's
+    # own rate covers a 0.58 % gap in one.  Arriving in one bounded step is not
+    # the defect -- jumping without regard to the limit is, and that is what is
+    # measured.
+    assert max(steps) <= h.sup._rate_limit_step(h.DT) + h.sup.cfg.dac_step_pct
+    assert moved <= asked_for + h.sup.cfg.dac_step_pct
 
 
 def test_a_hold_freezes_where_the_heater_is_not_where_it_was(armed_service):

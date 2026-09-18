@@ -211,9 +211,9 @@ def test_nothing_moves_the_output_down_except_a_ramp_down(armed):
 
 
 def test_per_step_rate_limit_is_respected_while_tracking(armed):
-    """The limit is DERIVED now -- `max_rate_k_per_min / K(T)` -- so the test
-    asks the loop what it is rather than quoting a constant that no longer
-    exists."""
+    """The limit is `max_output_rate_pct_per_min` -- the HEATER's own rate,
+    not the trajectory's converted through the gain -- so the test asks the
+    loop what it is rather than quoting a constant that no longer exists."""
     cfg = SupervisorConfig(warn_error_k=1000, anomaly_demand_pct=1000)
     h = armed(sup_cfg=cfg, pid_cfg=PIDConfig(setpoint=200.0, kp=5.0, ti=50.0))
     h.sup.set_setpoint(200.0, ramp=False)
@@ -227,8 +227,10 @@ def test_per_step_rate_limit_is_respected_while_tracking(armed):
     # jumps to the band ceiling in one cycle and then sits there, so every step
     # recorded here is exactly zero and the ceiling below passes trivially.
     assert max(steps) > 0, "the output never moved: the limiter was not exercised"
-    # one dither code of slack on top of the DERIVED per-cycle step
-    allowed = h.sup._rate_limit_step(h.DT) + cfg.dac_step_pct / 2
+    # One dither code of slack on top of the CONFIGURED per-cycle step: the
+    # limiter bounds the target, and the sigma-delta then carries a rounding
+    # error of up to a code into the value actually written.
+    allowed = h.sup._rate_limit_step(h.DT) + cfg.dac_step_pct
     assert max(steps) <= allowed + 1e-9, f"largest step {max(steps):.4f}%"
 
 

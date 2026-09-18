@@ -240,23 +240,38 @@ def test_the_band_caps_heat_without_compelling_it(armed):
     # through a lockout.  After step 6 the kelvin row is a warning and the
     # traverse is a rate-limited climb, which is what the band existing at all
     # is for.
+    floor_pct = 63.076
     biggest, prev = 0.0, h.inst.get_analog_percent()
-    for _ in range(300):
+    cycles_to_floor = None
+    for i in range(300):
         was = h.sup.state
         h.step(1)
         now = h.inst.get_analog_percent()
         if SupervisorState.RAMPING_DOWN not in (was, h.sup.state):
             biggest = max(biggest, abs(now - prev))
+        if cycles_to_floor is None and now >= floor_pct:
+            cycles_to_floor = i + 1
         prev = now
 
-    assert biggest <= h.sup._rate_limit_step(h.DT) + 2 * h.sup.cfg.dac_step_pct
+    step = h.sup._rate_limit_step(h.DT)
+    assert biggest <= step + 2 * h.sup.cfg.dac_step_pct
 
-    # It went UP, from zero, at the rate limit and not in one write -- the
+    # It went UP, from zero, at the rate limit and NOT IN ONE WRITE -- the
     # original defect here was `clamp` running after the rate limiter and
     # raising anything below the floor straight to it, so arming at 0 % wrote
     # 62.076 % in a single cycle.
+    #
+    # The bound is the traverse the limiter implies rather than a percentage
+    # the loop must still be below after 300 cycles: that form was reading the
+    # old converted rate, which was slow enough that 300 cycles did not get
+    # there, and it failed the day the heater was allowed to travel at its own
+    # speed instead of the trajectory's.  What it was defending is the number
+    # of writes, so that is what is asserted.
     now = h.inst.get_analog_percent()
-    assert 0.0 < now < 63.076, f"did not climb, or jumped the band: {now:.3f}"
+    assert now > 0.0, "did not climb"
+    assert cycles_to_floor is not None, f"never reached the band floor: {now:.3f}"
+    assert cycles_to_floor >= floor_pct / (step + h.sup.cfg.dac_step_pct), (
+        f"jumped the band: reached {floor_pct} % in {cycles_to_floor} writes")
     assert h.sup.state is SupervisorState.TRACKING
 
 

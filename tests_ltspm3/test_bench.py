@@ -391,8 +391,20 @@ def test_a_rising_coldplate_is_tracked_and_warns_and_never_faults(kelvin, bench)
     outs = [x.output_pct for x in h.history if x.output_pct is not None]
     assert max(outs) <= h.sup.cfg.hard_max_pct + 1e-9
     assert outs[-1] < outs[0], "the loop should need LESS heat, not more"
-    for a, b in zip(outs, outs[1:]):
-        assert b <= a + 2 * h.sup.cfg.dac_step_pct + 1e-9, "the output rose"
+    # **A TREND, not a per-cycle step.**  This used to assert that no single
+    # write ever rose by more than two codes, which was true only because the
+    # output rate limiter was the trajectory's kelvin rate through the gain and
+    # made the heater creep; a loop with real authority answers the
+    # measurement's own noise cycle by cycle and rises by a few codes often.
+    # What scenario 1 actually claims is that the loop needs steadily LESS
+    # heat, so that is what is measured -- on block means, over a block long
+    # enough that the noise averages out and far shorter than the disturbance.
+    block = max(1, int(60.0 / h.DT))
+    means = [sum(outs[i:i + block]) / len(outs[i:i + block])
+             for i in range(0, len(outs) - block + 1, block)]
+    for a, b in zip(means, means[1:]):
+        assert b <= a + 2 * h.sup.cfg.dac_step_pct + 1e-9, (
+            f"the output trend rose: {a:.3f} -> {b:.3f} %")
 
     worst = max(abs(x.error_k) for x in h.history if x.error_k is not None)
     warned = [a for x in h.history for a in x.alarms if "warn_error_k" in a]
