@@ -2014,10 +2014,42 @@ def test_corroboration_has_three_answers_and_says_which():
     assert detail_row(a_full_control(), "reading")["mark"] == ""
     doubted = a_full_control(corroborated=False)
     assert "NOT corroborated" in detail_row(doubted, "reading")["text"]
-    assert detail_row(doubted, "reading")["mark"] == "warn"
     unknown = a_full_control(corroborated=None)
     assert "no opinion" in detail_row(unknown, "reading")["text"]
     assert detail_row(unknown, "reading")["mark"] == ""
+
+
+def test_failing_to_corroborate_is_not_by_itself_a_warning():
+    """Measured on the cryostat, 2026-09-18: red on a healthy settled hold.
+
+    The guard escalates on corroboration only when the reading is also
+    SLEWING (`health.corroborate_slew_k_per_s`).  At a hold nothing moves, so
+    nothing corroborates, and marking it warned the panel permanently while
+    `health` read `ok` -- which teaches a reader to ignore the one panel that
+    has to be believed.  The viewer cannot re-derive the guard's condition
+    without judging, so the mark is left to the fields that ARE verdicts.
+    """
+    doubted = a_full_control(corroborated=False, validity="good")
+    assert detail_row(doubted, "reading")["mark"] == ""
+    assert detail_row(doubted, "health")["mark"] == ""
+    # A rejected reading still paints, because validity IS a verdict.
+    rejected = a_full_control(corroborated=False, validity="incoherent")
+    assert detail_row(rejected, "reading")["mark"] == "warn"
+
+
+def test_a_temperature_column_is_plotted_whatever_it_is_called():
+    """`control.filtered_k` fell through `classify_column` on the day it was
+    added and vanished from the chart in silence, while `control.setpoint_k`
+    beside it was drawn -- because that one happens to contain `.setpoint`.
+    Units are in the name (docs/style.md); this is where that earns its keep."""
+    channels = {"Sample"}
+    assert classify_column("control.filtered_k", channels) == "kelvin"
+    assert classify_column("control.setpoint_k", channels) == "kelvin"
+    assert classify_column("control.setpoint_target_k", channels) == "kelvin"
+    assert classify_column("some.future_pct", channels) == "percent"
+    # A suffix, not a substring: an enumeration must still not be plotted.
+    assert classify_column("ls336.range1", channels) == "other"
+    assert classify_column("block_kind", channels) == "other"
 
 
 def test_a_rejected_reading_names_the_test_that_rejected_it():

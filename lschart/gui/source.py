@@ -162,6 +162,11 @@ def _parse_time(text: str) -> float | None:
 KELVIN_AUX_MARKERS = (".setpoint",)
 PERCENT_AUX_MARKERS = (".heater", ".aout", "heater_pct")
 
+#: The house convention, made load-bearing: units are in the name (`docs/style.md`).
+#: Checked as a SUFFIX rather than a substring, so a column called
+#: `block_kind` is not read as kelvin.
+UNIT_SUFFIXES = (("_k", "kelvin"), ("_pct", "percent"))
+
 
 def classify_column(name: str, channel_names) -> str:
     """Which axis a CSV column belongs on: ``kelvin``, ``percent`` or ``other``.
@@ -170,6 +175,13 @@ def classify_column(name: str, channel_names) -> str:
     puts a 63 that means "63% of full scale" next to a 96 that means 96 K, and
     invites reading a trend across the two.  So the viewer separates them, and
     this is the one place that decides which is which.
+
+    **A column that matches nothing is not plotted at all**, which is why the
+    unit suffix is checked and not only the instrument-shaped markers above.
+    `control.filtered_k` fell through on the day it was added (2026-09-18) and
+    vanished from the chart in silence, while `control.setpoint_k` beside it
+    was drawn -- because that one happens to contain `.setpoint`.  Two columns
+    written by the same code, one plotted, and nothing said so.
     """
     if name in channel_names:
         return "kelvin"
@@ -178,6 +190,9 @@ def classify_column(name: str, channel_names) -> str:
         return "kelvin"
     if any(m in lowered for m in PERCENT_AUX_MARKERS):
         return "percent"
+    for suffix, axis in UNIT_SUFFIXES:
+        if lowered.endswith(suffix):
+            return axis
     return "other"
 
 
@@ -2346,10 +2361,19 @@ def control_detail(control: dict | None) -> list[dict] | None:
              "mark": "",
              "tip": "the trailing rms the settle criterion is judged against"},
             {"label": "reading", "text": reading,
-             "mark": "warn" if (corroborated is False
-                                or validity not in ("good", "—")) else "",
+             # **Corroboration alone does not paint this red.**  The guard only
+             # escalates on it when the reading is also SLEWING
+             # (`health.corroborate_slew_k_per_s`); at a settled hold nothing
+             # moves, so nothing corroborates, and marking that warned
+             # permanently on a healthy cryostat -- which teaches a reader to
+             # ignore the one panel that has to be believed.  The viewer cannot
+             # re-derive the guard's condition without judging, which it does
+             # not do, so it leaves the verdict to the two fields that ARE
+             # verdicts: `validity` here and `health` below.
+             "mark": "warn" if validity not in ("good", "—") else "",
              "tip": "which test rejected it, and whether the other "
-                    "thermometers agree"},
+                    "thermometers agree -- corroboration is a fact and not a "
+                    "complaint; `health` is the supervisor's verdict"},
             {"label": "health", "text": _words(health),
              "mark": "" if health in ("ok", "") else "warn",
              "tip": "the supervisor's verdict on its own measurement"},
