@@ -489,9 +489,18 @@ should leave no standing error behind it.
 
 Seven days at the operating point, viewer open on another machine.
 
-**Gate:** the hold criterion `σ_y(τ) ≤ σ_y(10 s)` over the run; every warning in
-`plant.json` explained; no fault; no `frozen` longer than `warn_after_s` without
-a cause. Indefinite is the design; seven days is the proof.
+**Gate:** the hold rule — **within 1.1× of a matched open-loop window, or below
+10 mK, at every averaging time** ([requirements.md §1c](../docs/ltspm3/requirements.md));
+every warning in `plant.json` explained; no fault; no `frozen` longer than
+`warn_after_s` without a cause. Indefinite is the design; seven days is the
+proof.
+
+**The hold rule was met over 10.5 h on 2026-09-18** (requirements.md §3c), so
+what seven days adds here is not the pass but the *confidence*: the 09-18 night
+ran out of `edf` at about an hour, which is exactly where the interesting part
+of the comparison starts. Seven days is the first run that can say whether the
+loop beats open loop past an hour or only looks as though it does — and that
+question is no longer a requirement, so it is evidence rather than a gate.
 
 **Abort and drop back a stage if any of these happen:** a readback disagreement
 not explained by `write_settle_s`; a ramp-down nobody can account for; the loop
@@ -557,12 +566,18 @@ loop at 118 K, 26.3 h at 64.0155 % (`pc-20260908-154814`):
 | edf | 23666 | 9466 | 1577 | 727 | 157 | 25 | 3 |
 
 **Averaging stops helping at about two minutes.** The floor is 7.38 mK at
-τ = 130 s and everything past it is drift. So PID_PLAN §1's criterion —
-`σ_y(τ) ≤ σ_y(10 s)` out to L/4 — is **not met open loop, by 2.9×**, and
-flattening that rise from 130 s outward is precisely what C6 measures. A
-closed-loop run that merely matches the table above has not done anything yet.
-If the real figure is much better, suspect the measurement; if much worse, go
-back to C5.
+τ = 130 s and everything past it is drift. The old self-referential criterion —
+`σ_y(τ) ≤ σ_y(10 s)` out to L/4 — is **not met open loop, by 2.9×**, which is
+one of the two reasons it was retired on 2026-09-18: a bar that the *undriven
+cryostat* fails is not measuring the loop. **Grade against a matched open-loop
+window instead** ([requirements.md §1c](../docs/ltspm3/requirements.md)), which
+is what `analysis/hold_quality.py` does and what C6 should now report.
+
+**And the answer, measured 2026-09-18, is that flattening that rise is not what
+the loop does.** It suppresses the drift past an hour and *adds* wander near its
+own natural period, 27.5 min — requirements.md §3c. A closed-loop run that
+merely matches the table above has not done anything yet; one that is worse
+between 2 and 40 minutes is the expected shape, not a fault.
 
 **C7 — feedforward regime validity.** At each settled point, compare the
 measurement against `kelvin_for(output)`. The steady-state curve was measured

@@ -1,4 +1,4 @@
-# Requirements — Jeff, 2026-09-17
+# Requirements — Jeff, 2026-09-17, and the hold rule of 2026-09-18
 
 **This is the document the loop is graded against.** It replaces the
 requirements table in `PID_PLAN.md` §1, which had been rewritten several times
@@ -8,9 +8,14 @@ reinterpreted as "a rate is a ceiling, not a promise" and "for a static hold the
 software PID has nothing to offer". Neither of those was Jeff's.
 
 The first section is his answers, verbatim, to eight questions asked once the
-drift was noticed. The second is what was taken from them. The third is what the
-bench measured against them the same day. Change the first section only by
-asking him.
+drift was noticed, plus the two follow-ups that superseded parts of them —
+[§1b](#1b-the-follow-up-once-five-minutes-had-been-measured) on the move and
+[§1c](#1c-the-hold-once-a-night-of-it-had-been-measured) on the hold. The
+second is what was taken from them. The third is what was measured against
+them: **3a and 3b on the bench, [3c](#3c-what-the-cryostat-measured-2026-09-17-to-09-18)
+on the cryostat**, and where the two disagree the cryostat wins.
+
+**Change the first section only by asking him.**
 
 ## 1. The answers
 
@@ -99,14 +104,44 @@ them too:
   the first term scales with the move. At 5 K/min that is about 12 s per
   kelvin on top of a constant ~40 s.
 
+## 1c. The hold, once a night of it had been measured
+
+Asked on 2026-09-18, with the first graded closed-loop night in front of him:
+10.5 h armed at 118 K against a matched open-loop night, **1.4–2.0× worse than
+open loop between 2 and 40 minutes of averaging**, better only beyond about an
+hour and with too few independent samples there to be sure. **This supersedes
+answer 2.**
+
+> Relaxing the noise requirement is okay. We can change it to '1.1x or below
+> 10 mK'
+
+and, asked whether that covers the whole Allan curve or whether "vastly
+improving from the open loop long term stability" stands as its own target:
+
+> One rule for the whole curve
+
+**So there is now exactly one hold requirement**, and it retires both halves of
+answer 2 along with `PID_PLAN.md`'s old self-referential figure of merit
+(`σ_y(τ) ≤ σ_y(10 s)`). That one compared a window to itself, so a loop that
+doubled the wander at every timescale could pass it and a cryostat sitting
+under its own thermometer noise could fail it — which is exactly what happened:
+the 09-18 night fails it at 1.05× while never exceeding 9 mK anywhere.
+
+**One thing he was told before deciding**, because it is what the rule costs:
+the open-loop night never exceeds 8.98 mK either, so the 10 mK clause alone is
+satisfied by the cryostat with the heater parked at a constant 64.007 %. The
+rule does not distinguish a loop that is helping the hold from no loop at all.
+That is a deliberate acceptance, not an oversight — 10 mK is at the
+thermometer's own noise, the loop is bought for the *move*, and the hold only
+has to not matter.
+
 ## 2. What was taken from them
 
 | | requirement | how it is graded |
 |---|---|---|
 | **move** | a 2 K move at 120 K is **95 % of the way there in 60 s**, overshooting by no more than **250 mK**, no rail, no fault. A fast approach, not a gentle one | `tests_ltspm3/test_stage_4e_fast_move.py` on the bench; on the cryostat, the recorder's CSV after a `send setpoint --software` |
 | **settle** | and is then **within 50 mK and staying, inside 2-5 minutes** — the slight adjustment after the approach | the same test; `tuning.hold_error_k` is the same 50 mK, so the gate and the loop's own hysteresis cannot disagree |
-| **hold, noise** | Allan deviation at **15 s, 1 min and 5 min no worse than open loop** | the same test, armed against open loop on the same plant |
-| **hold, wander** | **much better than open loop** at long averaging times | `analysis/hold_quality.py` against the 2026-09-15 open-loop night, on the cryostat. The bench cannot grade this: its plant has no slow disturbance |
+| **hold** | **ONE rule, over the whole Allan curve** (§1c, 2026-09-18): at every averaging time the armed hold is within **1.1×** of open loop **or** below **10 mK**, whichever it satisfies. Either clause passes | `analysis/hold_quality.py`, armed against a matched open-loop window on the **cryostat** — matched in length *and* in clock hours, since a diurnal term lives in these bands. The bench cannot grade it: its plant has no slow disturbance, and it predicted 0.71× where the cryostat measured 1.60× |
 | **hold, direction** | the loop has **real authority** at a hold — faster than the plant, not slower | `hold_speed` below 1 |
 | **rate** | 5 K/min is a **safety ceiling on the trajectory**, not a target, and it stays | `ramp.max_rate_k_per_min`. Measured 2026-09-17: raising it made moves worse, because it was also setting the next row |
 | **slew** | how fast the **heater output itself** may move is a **separate number**. It was derived from the rate ceiling through the gain, and that coupling is what made a move soft with a long tail | `supervisor.max_output_rate_pct_per_min`. The two are different quantities and are configured apart |
@@ -118,8 +153,14 @@ Two of the old requirements are **retired** by these. "A rate is a ceiling, not
 a promise" was true of the loop as shipped and is not a requirement; the loop
 is now shaped so that small moves are governed by the closed-loop speed, and
 the rate ceiling only bounds large ones. "For a static hold the software PID has
-nothing to offer" was a conclusion from one night on a deliberately weak hold
-and is contradicted by answer 2.
+nothing to offer" was a conclusion from one night on a deliberately weak hold,
+and answer 2 contradicted it — **but the measurement of 2026-09-18 came down
+nearer to the retired sentence than to the answer that retired it.** On a
+strong hold, properly graded against a matched open-loop night, the loop is
+1.4–2.0× *worse* between 2 and 40 minutes and wins only past an hour where
+there is not enough data to say. §1c is Jeff accepting that: the hold is held
+to a floor rather than to an improvement, and what the loop is bought for is
+the move.
 
 What is kept from before, because Jeff said it and it still stands: 4 to 300 K
 eventually; warn at a kelvin and fault at five (in watts where the residual has
@@ -313,10 +354,79 @@ knowing:
   and lives in `HANDOFF.md`, not here; when there is enough of it to be the
   cryostat's record rather than one evening's, it belongs in a §3c beside
   this.
-- **The long-term half of the hold benchmark** waits for a night armed on the
-  new numbers, graded by `hold_quality.py` against 2026-09-15.
+- ~~**The long-term half of the hold benchmark** waits for a night armed on the
+  new numbers.~~ **DONE 2026-09-18 — §3c.**
 
 **Closed by 3b:** 60 K's 387 mK of rate-limiter windup. The cause was the
 converted output rate limit rather than the missing anti-windup — giving the
 heater its own rate removed it, and 60 K now overshoots 2.8 mK. No
 back-calculation against the rate limiter was needed, and none was written.
+
+### 3c. What the CRYOSTAT measured, 2026-09-17 to 09-18
+
+**This section is §3b's counterpart and the same rule applies: it is the single
+home for these numbers.** 3a and 3b are the bench; this is the machine. Where
+the two disagree the cryostat wins, and on the hold they disagree badly.
+
+**Two moves, both on the shipped numbers, graded from the recorder's CSV.**
+`t0` is the heater's own output step in both, because the log did not carry the
+loop's setpoint until 2026-09-18 — see `file-interface.md`:
+
+| | +5.07 K at 125 K | −7.01 K at 118 K | Jeff's bar |
+|---|---|---|---|
+| 95 % of the move | 127 s | **126 s** | — |
+| within 100 mK | 173 s | 194 s | — |
+| within 50 mK and staying | 193 s (3.2 min) | **242 s (4.0 min)** | inside 2–5 min |
+| overshoot | +70 mK | 50 mK, undershooting | up to 250 mK |
+
+**Both bars, on both moves.** §3b's arithmetic — about 40 s fixed plus 12 s per
+kelvin — predicts 101 s and 124 s. The first move came in **26 s slow** and the
+second **2 s fast**, so two points now bracket that formula rather than confirm
+it, and the larger move is the one that fits. It wants a third before anybody
+trusts it. Note also that the faster approach settled *slower* (242 s against
+193 s); nobody has looked at why.
+
+**The hold: 10.5 h armed at 118.00 K**, 2026-09-18 00:00–10:30, `tracking` on
+all 19,320 samples with no alarm and no note, mean 117.9985 K, sd 18.0 mK.
+Graded by `analysis/hold_quality.py` against a **matched** open-loop window —
+same length, and in the second table the same clock hours, because a diurnal
+term lives in exactly these bands. The reference is a clean control:
+`ls218.aout1` held one value, 64.0070 %, for the whole of it.
+
+| | armed | open loop | ratio |
+|---|---|---|---|
+| 10–40 min band | 6.90 mK | 4.40 mK | **1.57×** |
+| 40–90 min band | 6.27 mK | 3.17 mK | **1.97×** |
+| 90–240 min band | 3.54 mK | 2.27 mK | **1.56×** |
+| σ_y at 15 s | 8.94 mK | 8.98 mK | 1.00× |
+| σ_y at 1 min | 7.45 mK | 6.94 mK | 1.07× |
+| σ_y at 5 min | 6.16 mK | 4.54 mK | 1.36× |
+| σ_y at 22 min | 6.09 mK | 3.66 mK | **1.67×**, the worst |
+| σ_y at 2.1 h | 1.41 mK | 3.96 mK | 0.36×, but `edf` 3 |
+
+**Matching the clock hours made it worse, not better**, which is how the
+diurnal explanation was ruled out: the first cut (00:00–10:30 against
+22:00–08:30) read 1.39 / 1.44 / 1.85×.
+
+**The mechanism is the loop's own natural period and it is not a defect.**
+With `tuning.enabled` the scheduler sets Ti = τ = 519.4 s exactly and
+Kp·K = 3.91, so `2π√(τ·Ti/(Kp·K))` is **1651 s = 27.5 min**, and an Allan
+deviation is most sensitive to that at τ ≈ 825 s. The measured excess peaks at
+τ = 1338 s and spans 418–2392 s. That is the sensitivity function's resonant
+peak: integral action buys drift rejection at long times — the armed curve
+falls to 1.4 mK at 2.1 h while open loop turns up to 4.0 mK — and pays for it
+near the natural period. Lowering the peak means a slower integral or a smaller
+Kp, bought with weaker drift rejection.
+
+**Against §2's rule it PASSES at every averaging time**, because the armed
+curve never exceeds **8.97 mK** anywhere (9.01 mK over the longer window). The
+1.1× clause carries it out to 74 s and the 10 mK clause carries it from 130 s
+to 40 min, which is the region that fails on ratio alone.
+
+**The retune was a large improvement and the bench was wrong about it.** The
+2026-09-16 night on `hold_speed: 12` read 1.63 / 3.34 / **7.59×** by band; this
+one reads 1.57 / 1.97 / 1.56×. But §3a's bench table predicted a ratio of
+**0.71 at 900 s** and the cryostat measured **1.60 at 748 s** — the bench plant
+has white sensor noise and no slow disturbance, so it cannot see the one effect
+this measurement exists to find. The caveat §2 has always carried is now a
+measured fact rather than a precaution.

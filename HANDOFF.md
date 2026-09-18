@@ -1,4 +1,4 @@
-# Handoff — 2026-09-18, small hours (the judge can judge again, and the log can grade a move)
+# Handoff — 2026-09-18 (the judge judges, the hold is graded, and the hold rule changed)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; **the
 loop's requirements are [docs/ltspm3/requirements.md](docs/ltspm3/requirements.md)**,
@@ -8,21 +8,25 @@ the route is [PID_PLAN.md](PID_PLAN.md), and the commissioning step-by-step is
 Previous: [archive/HANDOFF-2026-09-17d.md](archive/HANDOFF-2026-09-17d.md)
 (the night: holding 125 K, and the viewer could finally see it).
 
-> ## STATE: ARMED, tracking, holding 118 K. **The restart has NOT been done.**
+> ## STATE: ARMED, tracking, holding 118 K on the restarted stack.
 >
-> Jeff moved the setpoint 125 → 118 K at 23:52 and it settled at 23:56. The
-> recorder has been up since 20:12 and is **still running the code it started
-> from** — so none of tonight's four commits are in the running process, and
-> the monitor's clock is still frozen.
+> Recorder, monitor and viewer were all restarted by Jeff at about 10:40 on
+> 09-18, so **all of yesterday's commits are now in the running processes**.
+> The recorder rolled to `ltspm3-armed_2026-09-18_part2.csv` because the header
+> grew three columns, which is what a header change is supposed to do.
 >
 > ```bash
 > python -m lschart -c config-ltspm3-armed.yaml status
 > ```
 >
-> **[§4](#4-what-is-waiting-for-a-restart) is the two commands that finish
-> this**, and it is the whole of what is left. Everything below §4 is on
-> `main` and on the main checkout's disk; nothing below §4 has reached the
-> cryostat.
+> Verified live: `plant.json` is `"schema": 2`, `verdict: typical`,
+> `verdict_for` naming five residuals, and `t_s` level with `epoch` **after a
+> restart** — which is the thing that was broken. The CSV carries all four
+> software-loop columns, populated.
+>
+> **The viewer wants one more restart** for the two fixes in
+> [§4](#4-two-viewer-defects-the-screenshot-found). It costs nothing; it holds
+> no port.
 >
 > Stopping is unchanged and always works:
 > ```bash
@@ -146,104 +150,119 @@ command. The `Time` column's contract is written down at last, in
 in `docs/recorder/`, and reading it as monotonic-per-file is what cost 26,314
 samples.
 
-**1400 tests and `ruff` clean**; the Qt half also under
+**1402 tests and `ruff` clean**; the Qt half also under
 `QT_QPA_PLATFORM=windows`. The archive replay is unmoved — 41 warn
 transitions, 3 fault-level, the 09-10 event still at 11:46 and −5.08 mW. The
 two clock tests and two of the headline tests were each run against the old
 code and **fail there**, which is the only evidence that a regression test
 regresses anything.
 
-## 4. What is waiting for a restart
+## 4. Two viewer defects the screenshot found
 
-**The header changed, so the recorder will roll to a `_part2` file rather than
-append** — which is the right thing here: a new file, a new header, a `Time`
-column that restarts for a reason every consumer now handles.
+Jeff restarted the stack and sent a screenshot of the viewer against it, which
+is the only way either of these was going to turn up. Both fixed, `5d8c13c`.
+**The viewer needs restarting to pick them up; nothing else does.**
 
-Do it from `C:\Coding\Python\lakeshoreABJ`, which is already fast-forwarded to
-`main` and has all four commits on disk. Ctrl-C the recorder's window rather
-than killing it, so it logs its row count on the way out; `on_exit: hold`
-leaves the heater exactly where it is either way.
+- **`control.filtered_k` was in the CSV and not on the chart** — a gap in §3's
+  own change. `classify_column` routes a column to the kelvin axis, the percent
+  axis, or *nowhere*; `control.setpoint_k` was drawn because it happens to
+  contain `.setpoint`, and `control.filtered_k`, written by the same three
+  lines, fell through to `other` and vanished in silence. Units-in-the-name now
+  decides the axis when nothing else does — as a **suffix**, so `ls336.range1`
+  is still not plotted.
+- **`reading` was painted red on a healthy hold** — pre-existing, from the
+  viewer work of 09-17. The panel marked `corroborated is False`
+  unconditionally, but the guard only escalates on corroboration when the
+  reading is also *slewing*. At a hold nothing moves, so nothing corroborates,
+  and the mark was permanent while `health` read `ok`. A panel that is always
+  red is one nobody reads, and this is the one that has to be believed. The
+  mark now goes to the two fields that *are* verdicts, `validity` and `health`.
 
-```
-python -m ltspm3 -c config-ltspm3-armed.yaml check
-```
-```
-python -m ltspm3 -c config-ltspm3-armed.yaml run --arm --setpoint 118.0
-```
+**One thing that looks alarming and is not.** The panel's slope read
+**−95.3 mK/min**, which over the night would be 61 K. It is a short-window
+regression on 14.9 mK of noise; the actual trend over those 14 minutes is
+**+0.91 mK/min**. It puts about 1.4 mW into the premise residual (−3.86 mW
+against σ 4.47, comfortably inside), so it is not a fault — but read it as
+noise, not as a drift.
 
-`--setpoint 118.0` on purpose: with no setpoint it arms to whatever the sample
-reads at that instant, and a chosen round number is what the night's
-`control.setpoint_target_k` column should say.
+## 5. The hold, graded — and the rule it changed
 
-Then the monitor, in its own window — **restart it after the recorder**, so it
-opens the new file rather than following the old one across the roll:
+**The measurement the last five handoffs were waiting for.** 10.5 h armed at
+118.00 K, `tracking` on all 19,320 samples, no alarm and no note, mean
+117.9985 K, sd 18.0 mK. Graded by `analysis/hold_quality.py` against a matched
+open-loop window — same length *and* same clock hours, on a reference where
+`ls218.aout1` held one value, 64.0070 %, for the whole of it.
 
-```
-python -m ltspm3.monitor -c config-ltspm3-armed.yaml
-```
+**The loop does not improve the hold.** 1.57 / 1.97 / 1.56× worse by band,
+worst 1.67× at τ = 1338 s, better only past an hour where `edf` is 3. The first
+cut used mismatched clock hours and read 1.39 / 1.44 / 1.85×; **matching them
+made it worse, which is how the diurnal explanation was ruled out.**
 
-**What to check once both are up**, and each of these is a thing that has been
-wrong before:
+**The mechanism is the loop's own natural period, and it is not a defect.**
+Ti = τ = 519.4 s exactly and Kp·K = 3.91, so `2π√(τ·Ti/(Kp·K))` is
+**1651 s = 27.5 min** and an Allan deviation is most sensitive to it at
+τ ≈ 825 s. The excess peaks at 1338 s. Integral action buys drift rejection at
+long times — the armed curve falls to 1.4 mK at 2.1 h while open loop turns up
+to 4.0 mK — and pays for it near the natural period.
 
-| | |
-|---|---|
-| `plant.json`'s `t_s` within a cycle of its `epoch`, **checked after the recorder restart and not before** | the midnight roll healed it, so this passes on the old code right now and would have failed the moment the recorder restarted |
-| `plant.json` carrying `"schema": 2` | the plainest proof the new process is the one writing it |
-| `verdict` reading `typical`, with `verdict_for` naming five residuals | it read `no opinion` with five of six typical at 00:30 |
-| the CSV's header carrying three `control.*` columns, non-empty | §3 |
-| the viewer's detail panel showing numbers rather than `—` | the running process publishes schema 3's old block; a fresh one publishes 39 fields |
-| `check`'s printed band bracketing the output the heater is holding | it was 64.08 % inside 62.96–64.96 at 00:24 |
+**The bench could not have told us.** §3a predicted a ratio of 0.71 at 900 s;
+the cryostat measured 1.60 at 748 s. The bench plant has white sensor noise and
+no slow disturbance, which is the caveat `requirements.md` §2 has always
+carried and which is now a measured fact.
 
-**The monitor's baseline is young for six hours after any restart** — that is
-what a restart costs now, instead of costing everything. Read the first six
-hours of `plant_2026-09-18.csv` knowing it.
+**Shown the result, Jeff changed the requirement** —
+[requirements.md §1c](docs/ltspm3/requirements.md), his words: *"Relaxing the
+noise requirement is okay. We can change it to '1.1x or below 10 mK'"*, and
+*"One rule for the whole curve"*.
 
-## 5. The night, and what it settles
+**Against that rule the night PASSES at every averaging time**, because the
+armed curve never exceeds **8.97 mK** anywhere. The 1.1× clause carries it to
+74 s; the 10 mK clause carries it from 130 s to 40 min. `hold_quality.py`
+grades this directly now and **says which clause carried it where**, because a
+curve that passes only on the floor is a different animal from one that passes
+on the ratio.
 
-**This is the measurement the last four handoffs have been waiting for**, and
-it needs nothing but leaving the cryostat alone until morning.
+**He was told the cost before deciding**, and it is written into §1c: the
+open-loop night never exceeds 8.98 mK either, so the 10 mK clause alone is met
+by the cryostat with the heater parked. The rule does not distinguish a loop
+that helps the hold from no loop at all. That is deliberate — 10 mK is at the
+thermometer's own noise, and the loop is bought for the **move**.
 
-```bash
-python -m analysis.hold_quality --csv "data/ltspm3-armed_2026-09-1[78]*.csv" \
-    --from 2026-09-18T00:30 --to 2026-09-18T12:00 \
-    --vs "data/ltspm3-heater_2026-09-1[56].csv" \
-    --vs-from 2026-09-15T18:00 --vs-to 2026-09-16T09:00
-```
+**One rule now, and the old ones are gone.** `σ_y(τ) ≤ σ_y(10 s)` is retired
+from `PID_PLAN.md` §3, `pid-4-commissioning` §4.3, `pid-3-loop` and
+`analysis/allan.py`'s docstring: it compared a window to itself, so the
+open-loop night failed it by 2.9× and the armed night by 1.05× while never
+exceeding 9 mK. A bar the undriven cryostat fails is not measuring the loop.
 
-Matched length, and now matched temperature, which is the whole reason the
-setpoint moved. **The bar to beat is the 2026-09-16 night on the weak hold:
-5.6× worse than open loop at 39 min of averaging, bands 1.63 / 3.34 / 7.59.**
-That night ran `hold_speed: 12`; this one runs 0.25, and
-[requirements.md](docs/ltspm3/requirements.md) §3a's Allan table says the ratio
-should be about 0.71 at 900 s. If it is not, the bench plant's white sensor
-noise and absent slow disturbance is the first suspect and the tuning is the
-second.
+## 6. Where this leaves the phases
 
-This is the **one ungraded row** in
-[requirements.md](docs/ltspm3/requirements.md) §2 — Jeff's answer 2, the long
-wander. Everything else in that table has a number against it.
+**Phase 4's hold gate is met and stage 5 is the next thing.** What seven days
+adds is not the pass — that is done — but the `edf`: the 09-18 night runs out
+of independent samples at about an hour, which is exactly where the interesting
+part of the comparison begins. That is now evidence rather than a gate.
 
-**And 118 → 120 K in the morning is stage 4e's cryostat gate exactly**: a 2 K
-move at 120 K, 95 % in about 60 s, within 50 mK inside 2–5 min. With §3's
-columns in the log it will be gradeable against the command rather than off
-the output step — the first move in this project that is.
+**Stage 4e's cryostat gate is still open**: a 2 K move at 120 K, which from
+118 K is one command, and it is the first move that will be gradeable from the
+log against the command that caused it rather than off the output step.
 
-## 6. The other open items
+## 7. The other open items
 
-* **the diurnal cycle for phase 2's gate** starts when the fixed monitor does.
-  It wants a day, not 72 h, and the reasoning is in
-  [plans/pid-2-monitor.md](plans/pid-2-monitor.md)'s exit gate.
-* **`cold_head` takes 616 s to recover at a daily file roll** and nobody knows
-  why — two candidates, neither checked. A test that rolls a file under the
-  judge is still unwritten; seven unattended days is seven midnights.
-  pid-2-monitor §2.5.
+* **the diurnal cycle for phase 2's gate** is running from the 10:40 restart.
+  Read the first six hours knowing the monitor's baseline is young — that is
+  what a restart costs now, instead of costing everything.
+* **`cold_head` takes ~10 min to recover at a file roll**, seen twice now:
+  616 s on 09-15 and again after the 10:40 roll on 09-18, both lining up with
+  `stage_baseline_tau_s: 600`. Still undiagnosed, and seven unattended days is
+  seven midnights. pid-2-monitor §2.5.
 * **a fourth word for a latched fault** — §2. Jeff's call.
-* **the positional feedforward** still waits on a delivered-power gauge, and
-  when it comes it needs `move_speed` re-graded against §3b rather than §3a.
-* **10 K still takes 16 min for a 2 K move**, below `min_output_pct`, in a
-  regime nobody has looked at. Not on Jeff's path.
-* **requirements.md wants a §3c** once there is enough cryostat data to be the
-  cryostat's record rather than one night's. Two graded moves now (§1 and
-  09-17's +5.07 K) and a hold coming.
+* **the 27.5 min resonance** is understood but untouched. Lowering it means a
+  slower integral or a smaller Kp, bought with weaker drift rejection. Not
+  required any more; worth knowing if the hold ever needs to be better rather
+  than merely good enough.
+* **a third move** before anybody trusts §3b's 40 s + 12 s/K arithmetic — two
+  points bracket it (26 s slow, 2 s fast) rather than confirm it.
+* **the positional feedforward** still waits on a delivered-power gauge.
+* **10 K still takes 16 min for a 2 K move**, below `min_output_pct`. Not on
+  Jeff's path.
 * **MATLAB `plant()`** is phase 5's last outstanding item, and it now has a
   `verdict_for` to read.

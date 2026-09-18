@@ -37,6 +37,19 @@ It reports three things, and the middle one is the one that localises a fault:
 A ratio near 1 is a loop that is not making things worse.  Under 1 is a loop
 that is earning its place.  The 2026-09-16 bands are 1.63 / 3.34 / 7.59.
 
+**The rule it grades against** (Jeff, 2026-09-18 --
+`docs/ltspm3/requirements.md` section 1c): at every averaging time, within
+`RATIO_BAR` of open loop **or** below `ABSOLUTE_BAR_K`.  Either clause passes.
+The verdict says which clause carried it where, because a curve that passes
+only on the floor is a different animal from one that passes on the ratio, and
+the difference is the whole reason the 09-18 night needed a decision from Jeff
+rather than a pass mark from a script.
+
+**Match the CLOCK HOURS, not just the window length.**  A diurnal term lives
+in these bands: grading 2026-09-18 00:00-10:30 against 09-15 22:00-08:30 read
+1.39 / 1.44 / 1.85, and moving both to 00:00-08:30 read 1.57 / 1.97 / 1.56.
+Two hours of the building waking up is worth a fifth of the answer.
+
 Run it::
 
     python -m analysis.hold_quality --csv data/ltspm3-armed_2026-09-1[67].csv \\
@@ -74,6 +87,18 @@ BANDS = ((10.0, 40.0), (40.0, 90.0), (90.0, 240.0))
 #: an FFT over a 15 h window cheap.  It also makes two windows recorded at
 #: different cadences directly comparable, which they otherwise are not.
 GRID_S = 10.0
+
+#: THE HOLD RULE -- Jeff, 2026-09-18, `docs/ltspm3/requirements.md` section 1c,
+#: which is its one home and the only place to change it.  ONE rule over the
+#: whole Allan curve, and EITHER clause passes: a hold within `RATIO_BAR` of a
+#: matched open-loop window is not making anything worse, and one under
+#: `ABSOLUTE_BAR_K` is under the thermometer's own noise whatever the ratio
+#: says.
+#:
+#: Deliberately NOT command-line arguments.  A bar somebody typed at the prompt
+#: is a bar nobody agreed to, and this is the number the loop is graded against.
+RATIO_BAR = 1.1
+ABSOLUTE_BAR_K = 10e-3
 
 
 def when(text, flag):
@@ -253,15 +278,40 @@ def main() -> int:
 
     print(f"\n  worst band ratio {worst_band:.2f}x; "
           f"worst tau ratio {worst_ratio:.2f}x at tau = {worst_tau:.0f} s")
-    if worst_ratio <= 1.0:
-        print("  VERDICT: the loop is not making the hold worse.")
-    elif worst_ratio <= 1.5:
-        print("  VERDICT: marginal -- within the confidence of a single pair "
-              "of nights.")
+
+    # THE RULE, applied.  Either clause passes, at every averaging time.
+    failed, carried_by_floor = [], []
+    for a_tau, a_sig in zip(tau, sig):
+        k = int(np.argmin(np.abs(rtau - a_tau)))
+        if not (0.5 <= rtau[k] / a_tau <= 2.0):
+            continue
+        ratio = a_sig / rsig[k] if rsig[k] else float("nan")
+        if np.isfinite(ratio) and ratio <= RATIO_BAR:
+            continue
+        if a_sig <= ABSOLUTE_BAR_K:
+            carried_by_floor.append((a_tau, a_sig, ratio))
+        else:
+            failed.append((a_tau, a_sig, ratio))
+
+    print(f"\n  RULE: within {RATIO_BAR}x of open loop, OR below "
+          f"{ABSOLUTE_BAR_K * 1e3:.0f} mK -- at every averaging time.")
+    if carried_by_floor:
+        lo = min(t for t, _, _ in carried_by_floor)
+        hi = max(t for t, _, _ in carried_by_floor)
+        print(f"    {len(carried_by_floor)} tau from {lo:.0f} to {hi:.0f} s are "
+              f"over {RATIO_BAR}x and pass on the {ABSOLUTE_BAR_K * 1e3:.0f} mK "
+              "clause alone")
+    if failed:
+        print(f"  VERDICT: FAILS at {len(failed)} averaging times -- "
+              "over the ratio AND over the floor:")
+        for a_tau, a_sig, ratio in failed:
+            print(f"    tau {a_tau:8.0f} s   {a_sig * 1e3:7.2f} mK   {ratio:5.2f}x")
+        print("           Look at the band table above for the period, and "
+              "compare it to\n           2*pi*sqrt(tau*Ti/(Kp*K)) -- the loop's "
+              "own natural period is where\n           integral action has to "
+              "pay for the drift rejection it buys.")
     else:
-        print("  VERDICT: the loop IS making the hold worse.  Look at the band "
-              "table\n           above for the period, and compare it to "
-              "2*pi*sqrt(tau*Ti/(Kp*K)).")
+        print("  VERDICT: MEETS the hold rule at every averaging time.")
     return 0
 
 

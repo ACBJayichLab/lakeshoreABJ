@@ -31,10 +31,11 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 requirements document**, in Jeff's words, dated 2026-09-17. It supersedes the
 table that stood here, which had been rewritten by measurement until it said
 the opposite of the goal: a 2 K move at 118 K arrives in **five minutes**; a
-hold's noise is **no worse than open loop at 15 s to 5 min and much better at
-long averaging**; the band **follows the setpoint**; 5 K/min is a **safety
-ceiling**, not a target. The lines below are what carries over from
-2026-09-11 unchanged.
+hold is **within 1.1× of open loop or below 10 mK, at every averaging time**
+(§1c, 2026-09-18 — one rule, replacing both halves of the older "no worse at
+15 s to 5 min and much better at long averaging"); the band **follows the
+setpoint**; 5 K/min is a **safety ceiling**, not a target. The lines below are
+what carries over from 2026-09-11 unchanged.
 
 | | requirement | resolution |
 |---|---|---|
@@ -179,9 +180,17 @@ window.
 `max(3τ, the judge's own slope window)` of a heater move, or while `δT_c` is
 atypical.
 
-**Hold figure of merit**: `σ_y(τ) ≤ σ_y(10 s)` for `τ` ∈ [10 s, L/4] over any
-settled closed-loop run of length `L`. `analysis/allan.py` grades archive and
-live runs alike.
+**Hold figure of merit**: **within 1.1× of open loop, or below 10 mK**, at every
+averaging time — Jeff, 2026-09-18,
+[requirements.md §1c](docs/ltspm3/requirements.md). `analysis/hold_quality.py`
+grades it against a **matched** open-loop window; `analysis/allan.py` is the
+ladder underneath it.
+
+~~`σ_y(τ) ≤ σ_y(10 s)` for `τ` ∈ [10 s, L/4]~~ is **retired**, and the reason is
+worth keeping: it compared a window to *itself*, so a loop that doubled the
+wander at every timescale could pass it while a cryostat sitting under its own
+thermometer noise failed it. Both happened. The 2026-09-18 night fails it at
+1.05× and never exceeds 9 mK anywhere. **One rule, and it needs two windows.**
 
 ---
 

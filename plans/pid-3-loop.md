@@ -260,7 +260,9 @@ rule-scoped commit each — [pid-3-review.md](pid-3-review.md).
   state the ratios, the one rate, the moving band and the state names ✔.
 
 **What is NOT done**: the hour-long quiet hold is measured over one simulated
-hour at each temperature rather than as a soak, and §3.6's Allan criterion
-(`σ_y(τ) ≤ σ_y(10 s)`) is not yet run against a closed-loop record —
-`analysis/allan.py` grades archive and live runs alike and there is no
-closed-loop run to grade. That is phase 4's first hour.
+hour at each temperature rather than as a soak. ~~§3.6's Allan criterion
+(`σ_y(τ) ≤ σ_y(10 s)`) is not yet run against a closed-loop record.~~
+**Superseded 2026-09-18**: that criterion is retired, and the hold rule is now
+within 1.1× of a matched open-loop window or below 10 mK
+([requirements.md §1c](../docs/ltspm3/requirements.md)). It has been run
+against a real closed-loop record and **passes** — requirements.md §3c.

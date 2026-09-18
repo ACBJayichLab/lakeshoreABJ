@@ -7,17 +7,25 @@ longer *helps*.  Those come apart exactly when it matters: a stretch can be
 quiet at ten seconds and wander at an hour, and the rms over the whole window
 is the same number for both.
 
-PID_PLAN.md section 1 states the criterion Jeff asked for::
+This module reports the ladder.  **It does not hold the hold criterion any
+more**: that is `analysis/hold_quality.py`, because as of 2026-09-18 the rule
+needs TWO windows -- within 1.1x of a matched open-loop run, or below 10 mK
+(Jeff; docs/ltspm3/requirements.md section 1c).
+
+The retired criterion was::
 
     sigma_y(tau) <= sigma_y(10 s)   for all tau in [10 s, L/4]
 
--- "slow wander below the ten-second noise floor".  It is **relative to the
-window's own short-tau floor** rather than an absolute millikelvin bar, and the
-reason is in PID_PLAN.md's traps: above 195 K the thermometer itself is the
-floor at 109 mK, so an absolute bar would be a statement about the sensor
-rather than about the loop.  A closed-loop run and an open-loop one are graded
-by the same function, which is the point -- the question "did the loop make it
-quieter" has to be asked of both on one scale.
+-- "slow wander below the ten-second noise floor", relative to the window's own
+short-tau floor rather than to an absolute bar.  The reason it was relative is
+still true and still worth knowing: above 195 K the thermometer itself is the
+floor at 109 mK, so an absolute bar there would be a statement about the sensor
+rather than about the loop.  What it could not do is compare, and a criterion a
+window applies to ITSELF cannot tell a quiet loop from a quiet cryostat -- the
+open-loop night at 118 K fails it by 2.9x and the armed night fails it by 1.05x
+while never exceeding 9 mK anywhere.  The question "did the loop make it
+quieter" has to be asked of two runs on one scale, which is what the tool
+downstream of this one does.
 
 Overlapping Allan deviation, not the non-overlapping one: at the long taus that
 decide this criterion a 33 h hold has only a handful of independent bins, and
