@@ -113,18 +113,32 @@ def test_4a_grants_a_ramp_no_drive_and_no_authority():
 
 
 def test_the_tuner_widens_the_band_and_supplies_the_drive():
-    """The same instant, with the one switch flipped."""
+    """The same instant, with the one switch flipped.
+
+    **Sampled DURING the ramp**, which is when a velocity feedforward is
+    supposed to exist.  It used to wait five minutes after a 24 s ramp and
+    still find drive, and that was the smoother's exponential tail rather than
+    the behaviour: `settled` was an underflow test until 2026-09-18, so this
+    passed on a term that had decayed to nothing but not to zero.
+    """
     h = harness(tuning=True)
     h.sup.arm(h.sup.status.filtered_k)
     h.minutes(5)
     quiet_lo, quiet_hi = h.sup.band
     h.sup.set_setpoint(h.sup.status.filtered_k + 2.0, rate_k_per_min=5.0)
-    h.minutes(5)
+    for _ in range(6):                  # 12 s into a 24 s ramp
+        h.step(1)
 
     assert h.sup.ramp_lead_pct() > 0.0
     assert h.sup.status.velocity_ff_pct > 0.0
     lo, hi = h.sup.band
     assert (hi - lo) > (quiet_hi - quiet_lo)
+
+    # And it goes back to NOTHING once the trajectory has arrived.  A velocity
+    # feedforward that outlives the velocity is a level feedforward, which is
+    # the term 4a has switched off for a reason.
+    h.minutes(10)
+    assert h.sup.status.velocity_ff_pct == 0.0
 
 
 def test_the_feedforward_stays_off_when_the_tuner_comes_on():
@@ -315,3 +329,39 @@ def test_check_says_the_gains_are_scheduled(capsys, tmp_path):
     out = _check_output(capsys, off)
     assert "gain schedule  : OFF" in out
     assert "arrives late at any rate" in out
+
+
+def test_the_gains_do_not_relax_the_moment_the_trajectory_arrives():
+    """The quarantine in `update_phase`, pinned so it is not tidied away.
+
+    `SetpointSmoother.settled` became an honest kelvin test on 2026-09-18 and
+    three of its four readers are better for it.  The HOLD/MOVE switch is the
+    fourth, and it was leaning on the delay rather than on the question:
+    relaxing `kp` by 7.1x while the plant is still converging costs tens of
+    millikelvin, and a 0.5 K move that settles in 54 s takes 772 s if the gains
+    drop mid-convergence.
+
+    So that one call site still reads `rate_underflowed`.  It is an accident
+    being used as a delay and it is labelled as one -- but removing it without
+    first making the gain change GRADUAL silently regresses every small move,
+    which is the failure this test exists to catch.  The bench sweep behind
+    that claim is in `SetpointSmoother.rate_underflowed`.
+    """
+    h = harness(tuning=True)
+    h.sup.arm(h.sup.status.filtered_k)
+    h.minutes(5)
+    h.sup.set_setpoint(h.sup.status.filtered_k + 0.5)
+
+    arrived_at = None
+    for _ in range(400):
+        st = h.step(1)
+        if arrived_at is None and h.sup.smoother.settled:
+            arrived_at = h.clock.t
+            assert st.phase == ControlPhase.MOVE.value, (
+                "the gains relaxed as soon as the trajectory arrived -- the "
+                "plant is still converging there")
+        if arrived_at is not None and st.phase == ControlPhase.HOLD.value:
+            assert h.clock.t - arrived_at > 120.0, (
+                "the gain switch followed arrival too closely")
+            return
+    raise AssertionError("never returned to the hold gains")

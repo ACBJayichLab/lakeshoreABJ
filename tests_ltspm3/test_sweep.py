@@ -362,3 +362,68 @@ def test_hold_then_arm_is_still_the_way_to_move_an_armed_setpoint(armed):
     assert h.sup.mode is LoopMode.PID
     assert h.sup.pid.cfg.setpoint == pytest.approx(h.sup.filter.value - 0.5,
                                                    abs=0.05)
+
+
+# -- the smoother: has the trajectory ARRIVED --------------------------------
+
+def test_the_smoother_reports_arrival_in_kelvin_not_in_underflow():
+    """`settled` asks how far there is left to go, not how fast it is going.
+
+    It was ``abs(rate) < 1e-9`` until 2026-09-18 -- an absolute epsilon on an
+    exponentially decaying rate, so it was reached about 18 time constants
+    after a move instead of the 6 the tolerance itself implies.  On the
+    cryostat that left rule 4's kelvin premise rows switched off, and the
+    status file reporting `ramping`, for seven minutes after the setpoint had
+    stopped anywhere a person could measure.
+    """
+    from ltspm3.control.ramp import SetpointSmoother
+
+    tau = 24.0
+    sm = SetpointSmoother(tau, value=118.0, settled_k=0.005)
+    assert sm.settled, "a smoother that has been handed no target holds nothing"
+
+    # The FIRST update only seeds the clock -- it snaps, by design, which is
+    # what makes `reset` + `update` the way a trim bypasses the smoother.
+    t = 0.0
+    sm.update(t, 118.0)
+    assert sm.settled
+    t += 2.0
+    sm.update(t, 120.0)
+    assert not sm.settled
+
+    while not sm.settled and t < 4000.0:
+        t += 2.0
+        sm.update(t, 120.0)
+    assert abs(120.0 - sm.value) <= 0.005, "it said arrived before it had"
+    arrived_at = t
+    assert arrived_at == pytest.approx(6.0 * tau, abs=2.5 * tau)
+
+    # And the old test is three times further out, on the same trajectory.
+    while not sm.rate_underflowed and t < 4000.0:
+        t += 2.0
+        sm.update(t, 120.0)
+    assert t > 2.5 * arrived_at
+
+
+def test_a_reset_smoother_is_holding_nothing_and_says_so():
+    """`set_setpoint` resets it for a trim, and a reset one must not read as
+    mid-trajectory -- that would put the loop in `move` gains over a step it
+    deliberately did not smooth."""
+    from ltspm3.control.ramp import SetpointSmoother
+
+    sm = SetpointSmoother(24.0, value=118.0)
+    sm.update(0.0, 118.0)
+    sm.update(2.0, 120.0)
+    assert not sm.settled
+    sm.reset(119.0)
+    assert sm.settled and sm.target is None
+
+
+def test_the_arrival_tolerance_comes_from_config_and_is_not_hardcoded():
+    from ltspm3.control.ramp import RampConfig, SetpointSmoother
+
+    assert SetpointSmoother(24.0).settled_k == RampConfig.settled_k
+    sm = SetpointSmoother(24.0, value=118.0, settled_k=0.5)
+    sm.update(0.0, 118.0)
+    sm.update(2.0, 118.4)
+    assert sm.settled, "a coarse tolerance must be honoured, not overridden"

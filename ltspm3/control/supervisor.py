@@ -402,7 +402,8 @@ class HeaterSupervisor:
         # against any sweep worth commanding.  `delay_s` needs the filter and
         # the cadence, both of which exist by now.
         self.smoother = SetpointSmoother(self._smooth_tau_s(),
-                                         value=self.pid.cfg.setpoint)
+                                         value=self.pid.cfg.setpoint,
+                                         settled_k=self.ramp.cfg.settled_k)
         #: Set BEFORE the first `_apply_band_to_pid`, because the band's floor
         #: now asks where the heater is.
         self.output_pct: float | None = None   # last value we commanded
@@ -1394,7 +1395,18 @@ class HeaterSupervisor:
             phase = self.tuner.update_phase(
                 t,
                 error_k=self.pid.cfg.setpoint - s.filtered_k,
-                ramping=self.ramp.ramping or not self.smoother.settled,
+                # **`rate_underflowed`, NOT `settled`, and deliberately.**  The
+                # other three readers of the smoother ask "has the trajectory
+                # arrived", which is `settled` and is answered in kelvin.  This
+                # one is really asking "is the plant at rest enough to survive
+                # a 7.1x drop in kp", and it has been getting a yes only
+                # because the old test took ~18 time constants.  Give it the
+                # honest 5 mK answer and a 0.5 K move relaxes its gains
+                # mid-convergence and takes 772 s to settle instead of 54.
+                # The delay is load-bearing and the threshold behind it is an
+                # accident; both stay until the gain change is ramped rather
+                # than stepped.  -> `SetpointSmoother.rate_underflowed`.
+                ramping=self.ramp.ramping or not self.smoother.rate_underflowed,
             )
             kp, ti = self.tuner.gains_for(s.filtered_k, phase)
             self.pid.set_gains(kp, ti)

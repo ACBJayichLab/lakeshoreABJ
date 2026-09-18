@@ -287,6 +287,15 @@ control:
     # under it, in dead times, for the cold end where tau is shorter than the
     # measurement; graded on the bench (docs/ltspm3/requirements.md).
     smooth_delays: 8.0
+    # WHEN THE SMOOTHED SETPOINT COUNTS AS ARRIVED.  A first-order smoother
+    # never reaches its target, so this has to be a tolerance -- and it has to
+    # be in kelvin, because the thing being asked is "has it got there".  It
+    # was an underflow test on the RATE until 2026-09-18, which is ~18 time
+    # constants and cost 9.3 min of `move` gains after a 2 K move that had
+    # been inside 50 mK for seven of them.  A tenth of tuning.hold_error_k,
+    # under the thermometer noise, and a sixth of a DAC step through the hold
+    # gains.
+    settled_k: 0.005
 
   tuning:
     # Gain scheduling.  It is the one commissioning switch that does NOT wait

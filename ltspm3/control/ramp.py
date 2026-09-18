@@ -67,6 +67,24 @@ class RampConfig:
     #: at the warm end the closed-loop term binds and nothing notices.
     smooth_delays: float = 8.0
 
+    #: **When the smoothed setpoint counts as ARRIVED**, in kelvin.
+    #:
+    #: A first-order smoother approaches its target exponentially and never
+    #: reaches it, so "has it stopped" has to be asked with a tolerance, and
+    #: the tolerance has to be in the units of the thing being asked about.
+    #: Until 2026-09-18 it was ``abs(rate) < 1e-9`` -- an epsilon meaning "the
+    #: arithmetic has underflowed", used as a settle criterion.  That is
+    #: ~18 time constants from a 2 K move, and because it is absolute it took
+    #: LONGER for a bigger move (16.9 tau for 0.5 K, 19.8 for 10 K) for no
+    #: physical reason.  Measured on the cryostat: 9.3 minutes of `move` gains
+    #: after a 2 K move that had been inside 50 mK for seven of them.
+    #:
+    #: 5 mK is a tenth of ``tuning.hold_error_k``, the tolerance the move is
+    #: graded against; it is under the thermometer's own noise; and through the
+    #: hold gains it is a sixth of one DAC step, so the setpoint motion still
+    #: to come when this declares arrival cannot move the heater at all.
+    settled_k: float = 0.005
+
 
 class SetpointRamp:
     """A setpoint that walks from where it is to where it was told to go.
@@ -192,22 +210,71 @@ class SetpointSmoother:
     feedforward does the same instead of stepping at each end of the ramp.
     """
 
-    def __init__(self, tau_s: float = 150.0, *, value: float | None = None) -> None:
+    def __init__(self, tau_s: float = 150.0, *, value: float | None = None,
+                 settled_k: float = RampConfig.settled_k) -> None:
         self.tau_s = tau_s
         self.value = value
+        #: The last target handed to :meth:`update`.  Kept so `settled` can ask
+        #: how far there is still to go, which is the question, rather than how
+        #: fast it is going, which was only ever a proxy for it.
+        self.target: float | None = None
+        self.settled_k = settled_k
         self.rate_k_per_s = 0.0
         self._last_t: float | None = None
 
     def reset(self, value: float | None = None) -> None:
         self.value = value
+        self.target = None
         self.rate_k_per_s = 0.0
         self._last_t = None
 
     @property
     def settled(self) -> bool:
+        """Has the smoothed setpoint ARRIVED?  `RampConfig.settled_k`.
+
+        **In kelvin, not in kelvin per second.**  This was
+        ``abs(self.rate_k_per_s) < 1e-9`` until 2026-09-18: an absolute epsilon
+        on a rate that decays exponentially, so it was reached only after
+        ~18 time constants and took longer for a larger move.  Four things read
+        it, and the delay reached all of them -- the phase the gains are chosen
+        from, the `ramping` flag the status publishes, the velocity
+        feedforward, and rule 4's kelvin premise rows, which stay switched off
+        while the setpoint is moving.  Measured on the cryostat, that was
+        9.3 minutes of `move` gains after a 2 K move which had settled inside
+        50 mK after two.
+
+        A smoother that has been `reset` and not yet updated is holding
+        nothing, and says so.
+        """
+        if self.target is None or self.value is None:
+            return True
+        return abs(self.target - self.value) <= self.settled_k
+
+    @property
+    def rate_underflowed(self) -> bool:
+        """The OLD `settled`, kept for one caller, and it is not a settle test.
+
+        ``abs(rate) < 1e-9`` is reached about 18 time constants after a move --
+        longer for a bigger one, because the threshold is absolute and the
+        decay is exponential.  Three of the four things that used to read it
+        wanted :attr:`settled` and are better for the change.  The fourth is
+        the HOLD/MOVE gain switch, and that one turned out to be leaning on the
+        delay rather than on the question: relaxing `kp` by 7.1x while the
+        plant is still converging costs tens of millikelvin, and WHEN it costs
+        them depends on where in the residual transient the switch lands.
+        Swept on the bench 2026-09-18 over 380-480 s, the 0.5 / 2 / 10 K moves
+        pass and fail in no order at all -- 420 s fixes the small move and
+        breaks the large one, 440 s breaks the small one again.
+
+        So this stays, quarantined to that one call site and named for what it
+        actually is, until the gain change is made gradual instead of stepped.
+        Picking a number out of that sweep would be tuning it into passing.
+        -> PID_PLAN.md, phase 4.
+        """
         return abs(self.rate_k_per_s) < 1e-9
 
     def update(self, t: float, target: float) -> float:
+        self.target = target
         if self.tau_s <= 0 or self.value is None or self._last_t is None:
             self.value = target
             self.rate_k_per_s = 0.0
