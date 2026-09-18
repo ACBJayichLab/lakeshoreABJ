@@ -859,13 +859,32 @@ def queued(window) -> list[dict]:
     return [json.loads(p.read_text()) for p in sorted(window.spool.pending())]
 
 
+def choose(window, label: str) -> None:
+    """Pick a target from the selector, by the label a person would read.
+
+    By label rather than by index, because the list is now loops and outputs
+    rather than boxes: an index means a different thing on every cryostat, and
+    a test that says `setCurrentIndex(1)` stops saying what it meant the
+    moment a loop is added.
+    """
+    labels = [window.target_combo.itemText(i)
+              for i in range(window.target_combo.count())]
+    assert label in labels, f"{label!r} not offered; have {labels}"
+    window.target_combo.setCurrentIndex(labels.index(label))
+
+
+def offered(window) -> list[str]:
+    return [window.target_combo.itemText(i)
+            for i in range(window.target_combo.count())]
+
+
 def test_a_controller_gets_a_setpoint_and_a_range_but_no_analog_control(
         tmp_path, qt_app):
     w = cryostat(tmp_path, qt_app, [CTRL])
     assert showing(w.setpoint_group) and showing(w.range_group)
     assert not showing(w.analog_group)
     # The loop table is the selector; the range follows the loop it selects.
-    assert w._loop == 1
+    assert w._target.loop == 1
     assert w.heater_label.text() == "1"
     assert "output 1" in w.range_group.title()
     w.close()
@@ -877,7 +896,7 @@ def test_the_range_control_follows_the_loop_the_table_selected(tmp_path, qt_app)
     power somewhere nobody meant it to go."""
     w = cryostat(tmp_path, qt_app, [CTRL])
     w.readings.selectRow(1)                        # loop 2
-    assert w._loop == 2
+    assert w._target.loop == 2
     assert w.heater_label.text() == "2"
     assert "output 2" in w.range_group.title()
     w.close()
@@ -888,7 +907,7 @@ def test_a_loop_with_no_heater_range_is_offered_none(tmp_path, qt_app):
     control that sets one is not shown."""
     w = cryostat(tmp_path, qt_app, [CTRL])
     w.readings.selectRow(2)                        # loop 3
-    assert w._loop == 3
+    assert w._target.loop == 3
     assert showing(w.setpoint_group)
     assert not showing(w.range_group)
     assert not showing(w.analog_group)          # a 336 takes no `analog`
@@ -939,21 +958,40 @@ def test_the_recorders_ceiling_caps_the_spin_box(tmp_path, qt_app):
     w.close()
 
 
-def test_switching_instrument_switches_the_controls(tmp_path, qt_app):
+def test_choosing_an_output_switches_the_controls(tmp_path, qt_app):
     """The LTSPM3 shape, if both boxes were writable: one panel, two shapes."""
     w = cryostat(tmp_path, qt_app, [CTRL, MON])
-    w.instrument_combo.setCurrentIndex(0)
+    choose(w, "ls336 loop 1")
     assert showing(w.setpoint_group) and not showing(w.analog_group)
-    w.instrument_combo.setCurrentIndex(1)
+    choose(w, "ls218 analog 1")
     assert showing(w.analog_group) and not showing(w.setpoint_group)
+    w.close()
+
+
+def test_every_loop_and_output_is_offered_not_every_box(tmp_path, qt_app):
+    """The selector lists what can be commanded, not what is plugged in.
+    Choosing a box and then hunting its loop was two steps for one question."""
+    w = cryostat(tmp_path, qt_app, [CTRL, MON])
+    assert offered(w) == ["ls336 loop 1", "ls336 loop 2", "ls336 loop 3",
+                          "ls336 loop 4", "ls218 analog 1"]
+    w.close()
+
+
+def test_choosing_another_loop_on_the_same_box_keeps_its_controls(
+        tmp_path, qt_app):
+    """The case the old selector could not express at all: the box did not
+    change, so nothing about the panel's shape should."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    choose(w, "ls336 loop 2")
+    assert showing(w.setpoint_group) and showing(w.range_group)
+    assert w._target.loop == 2 and w.heater_label.text() == "2"
     w.close()
 
 
 def test_a_read_only_box_is_not_offered_as_a_target(tmp_path, qt_app):
     theirs = dict(CTRL, writable=False)
     w = cryostat(tmp_path, qt_app, [theirs, MON])
-    assert [w.instrument_combo.itemText(i)
-            for i in range(w.instrument_combo.count())] == ["ls218"]
+    assert offered(w) == ["ls218 analog 1"]
     w.close()
 
 
@@ -1104,7 +1142,7 @@ def test_the_panic_button_is_not_aimed_at_the_selected_instrument(
     """It means stop heating, which on a two-box cryostat is not one box."""
     w = cryostat(tmp_path, qt_app, [CTRL, MON])
     monkeypatch.setattr(w, "_confirm", lambda *a: True)
-    w.instrument_combo.setCurrentIndex(0)
+    choose(w, "ls336 loop 1")
     # The action, not the button: the button opens the menu, and clicking it
     # here would block on a modal popup rather than send anything.
     w.off_action.trigger()
@@ -1197,7 +1235,7 @@ def test_swapping_to_a_218_finds_its_current_output(tmp_path, qt_app):
         "ls218.aout1": 12.5, "ls218.range1": 0,
     })
     w = ViewerWindow(str(path), refresh_ms=10_000_000)
-    w.instrument_combo.setCurrentIndex(1)
+    choose(w, "ls218 analog 1")
     assert w.analog_spin.value() == pytest.approx(12.5)
     w.close()
 
@@ -1769,8 +1807,7 @@ def test_the_gains_follow_the_selected_loop(tmp_path, qt_app):
     w = with_gains(tmp_path, qt_app,
                    aux={"ls336.p1": 60.0, "ls336.i1": 25.0, "ls336.d1": 3.0,
                         "ls336.p2": 10.0, "ls336.i2": 5.0, "ls336.d2": 0.0})
-    w._loop = 2
-    w._sync_command_values()
+    choose(w, "ls336 loop 2")
     assert w.pid_spins["p"].value() == pytest.approx(10.0)
 
 
@@ -2090,9 +2127,9 @@ def test_the_software_row_cannot_be_selected_into_the_command_panel(
     honour would be a row that lies."""
     w = cryostat(tmp_path, qt_app, [CTRL], control=dict(SOFTWARE))
     w.readings.selectRow(1)                       # loop 2, a real one
-    assert w._loop == 2
+    assert w._target.loop == 2
     w.readings.selectRow(4)                       # the software row
-    assert w._loop == 2                        # unmoved
+    assert w._target.loop == 2                 # unmoved
     assert not w.readings.item(row_for(w, 'Sample'), 2).flags() & QtCore.Qt.ItemIsSelectable
     assert w.readings.item(0, 2).flags() & QtCore.Qt.ItemIsSelectable
     w.close()
@@ -2615,7 +2652,7 @@ def test_the_instrument_selector_sits_flush_on_the_first_group(
         qt_app.processEvents()
     # Flush on the group's DRAWN frame -- not on its widget rectangle, which
     # includes a title band the group would otherwise leave visibly empty.
-    gap = frame_gap(w, w.instrument_combo, w.setpoint_group)
+    gap = frame_gap(w, w.target_combo, w.setpoint_group)
     # 6, not 0: the exact figure is the style's (0 on macOS, 3 offscreen).
     # What this rules out is the 18px title band it replaced, and any overlap.
     assert 0 <= gap <= 6, f"{gap}px between the selector and the drawn box"
@@ -2623,8 +2660,8 @@ def test_the_instrument_selector_sits_flush_on_the_first_group(
     assert w.group_title.text() == "Setpoint"
     assert w.setpoint_group.title() == ""
     # And at the right-hand end of the panel rather than the middle.
-    combo_right = w.instrument_combo.mapTo(
-        w, w.instrument_combo.rect().topRight()).x()
+    combo_right = w.target_combo.mapTo(
+        w, w.target_combo.rect().topRight()).x()
     group_right = w.setpoint_group.mapTo(
         w, w.setpoint_group.rect().topRight()).x()
     assert group_right - combo_right < 40
@@ -2643,8 +2680,8 @@ def test_the_selector_is_anchored_to_the_group_stack_not_to_one_group(
         w.refresh()
         qt_app.processEvents()
     assert w.setpoint_group.isHidden() and not w.analog_group.isHidden()
-    assert not w.instrument_combo.isHidden()
-    gap = frame_gap(w, w.instrument_combo, w.analog_group)
+    assert not w.target_combo.isHidden()
+    gap = frame_gap(w, w.target_combo, w.analog_group)
     # 6, not 0: the exact figure is the style's (0 on macOS, 3 offscreen).
     # What this rules out is the 18px title band it replaced, and any overlap.
     assert 0 <= gap <= 6, f"{gap}px between the selector and the drawn box"

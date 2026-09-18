@@ -57,9 +57,10 @@ from ..instruments.ls33x import HEATER_RANGE_NAMES
 from ..ipc.commands import CommandSpool
 from . import theme
 from .source import (
-    COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, CsvTail, StatusSource, capabilities,
-    SATURATED_HIGH_PCT, SATURATED_LOW_PCT, classify_column, connect_flags,
-    loop_marks, loop_rows, nearest_series, reading_rows, region_stats, write_region_csv,
+    COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, NO_TARGET, CommandTarget, CsvTail,
+    SATURATED_HIGH_PCT, SATURATED_LOW_PCT, StatusSource, capabilities, classify_column,
+    command_targets, connect_flags, loop_marks, loop_rows, nearest_series, reading_rows,
+    region_stats, row_target_key, write_region_csv,
 )
 
 log = logging.getLogger(__name__)
@@ -671,9 +672,15 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: What the last redraw actually put on screen, for the status bar.
         self._drawn_points: int = 0
         self._drawn_spacing: float | None = None
-        #: The loop every command in the panel is about, chosen by clicking a
-        #: row of the loop table.  There is no second selector.
-        self._loop: int = 1
+        #: **What every command in the panel is aimed at.**  One value, and
+        #: two ways to set it: the selector above the groups, and a click on
+        #: the reading table.  Those are two *views* of this, not two places a
+        #: selection lives -- which is what the instrument name and the loop
+        #: number were, kept in step by hand.
+        self._target: CommandTarget = NO_TARGET
+        #: Everything this recorder can be asked to do, rebuilt when the list
+        #: itself changes.  The selector's items carry these.
+        self._targets: list[CommandTarget] = []
 
         self.setWindowTitle("lschart — strip chart")
         self.resize(1280, 800)
@@ -778,11 +785,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # opened against a recorder with nothing writable shows every control,
         # greyed out -- which reads as "this cryostat has all of these" rather than
         # "this cryostat has none of them".
-        self._instrument_changed()
+        self._target_changed()
 
     #: The command groups' own layout, whose top margin is what drops the
-    #: instrument selector onto the first group's title line.  Set in
-    #: `_command_box`; None until then, because `_place_instrument_selector`
+    #: selector onto the first group's title line.  Set in
+    #: `_command_box`; None until then, because `_place_selector`
     #: can be reached from a palette change before the panel is built.
     _group_stack = None
     _group_titles: dict = {}
@@ -836,9 +843,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "Click a row with a loop to point the command panel at it. A "
             "software loop is read rather than clicked — it takes Arm and the "
             "panic Hold, not a setpoint, a range or gains.")
-        #: Row index -> (instrument name, joined row), so a click can say which
-        #: loop was picked without parsing the cells back out again.
-        self._loop_index: list[tuple[str, dict]] = []
+        #: Row index -> the joined row, so a click can say which target was
+        #: picked without parsing the cells back out again.  The instrument is
+        #: already in the row; `row_target_key` is what reads it.
+        self._loop_index: list[dict] = []
         box.addWidget(self.readings, 0)
 
         # Three rows of labelled buttons became two dense ones.  These are
@@ -989,9 +997,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         box.setContentsMargins(margins.left(), 0, margins.right(),
                                margins.bottom())
 
-        # The instrument selector shares a line with the first group's title:
-        # the title text on the left, "Instrument [combo]" on the right, and
-        # the group's frame directly beneath with nothing between them.
+        # The selector shares a line with the first group's title: the title
+        # text on the left, "Loop / output [combo]" on the right, and the
+        # group's frame directly beneath with nothing between them.
         #
         # It works by taking the title *off* the first visible group and
         # drawing it here instead. A QGroupBox with no title has no title band,
@@ -1001,19 +1009,30 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # it returned 25), a spacer gets squeezed the same way, and overlaying
         # the selector on the group draws it straight through the frame.
         #
-        # `_place_instrument_selector` is what moves the title, because which
-        # group is first depends on the box: a 218 has no loops, so it shows
-        # the analog group where a 33x shows Setpoint.
+        # `_place_selector` is what moves the title, because which group is
+        # first depends on what is selected: a 218's analog output shows the
+        # analog group where a 33x loop shows Setpoint.
         selector = QtWidgets.QHBoxLayout()
         selector.setContentsMargins(8, 0, 0, 2)
         selector.setSpacing(6)
         self.group_title = QtWidgets.QLabel("")
         selector.addWidget(self.group_title)
         selector.addStretch(1)
-        selector.addWidget(QtWidgets.QLabel("Instrument"))
-        self.instrument_combo = QtWidgets.QComboBox()
-        self.instrument_combo.currentIndexChanged.connect(self._instrument_changed)
-        selector.addWidget(self.instrument_combo)
+        # NOT "Target": the Setpoint group labels its own spin box "Target",
+        # one group below this line.  Two meanings of one word a few pixels
+        # apart, in the panel that sends power, is the reading nobody should
+        # have to disambiguate.
+        selector.addWidget(QtWidgets.QLabel("Loop / output"))
+        self.target_combo = QtWidgets.QComboBox()
+        # The label carries the instrument, so these are longer than a box
+        # name and they grow with the cryostat.  Bound what the combo can ask
+        # of the panel's width -- the panel is inside a scroll area that
+        # grants `minimumSizeHint`, so an unbounded combo widens the window.
+        self.target_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.target_combo.setMinimumContentsLength(14)
+        self.target_combo.currentIndexChanged.connect(self._target_changed)
+        selector.addWidget(self.target_combo)
 
         groups = QtWidgets.QWidget()
         stack = QtWidgets.QVBoxLayout(groups)
@@ -1600,7 +1619,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.banner.setStyleSheet(theme.banner_style(state, self))
             self._update_readings()
             self._update_gate_notes()
-            self._place_instrument_selector()
+            self._place_selector()
         except Exception:  # pragma: no cover - cosmetic, never fatal
             log.debug("could not re-apply the theme", exc_info=True)
 
@@ -1736,10 +1755,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         rules about not losing a thermometer are written down and tested. This
         method is only the painting.
         """
-        entries: list[tuple[str, dict]] = []
-        for row in reading_rows(self.source.channels(), self.source.links(),
-                               self.source.control()):
-            entries.append((str(row.get("instrument") or ""), row))
+        entries = list(reading_rows(self.source.channels(), self.source.links(),
+                                    self.source.control()))
         self._loop_index = entries
 
         self.readings.setVisible(bool(entries))
@@ -1748,11 +1765,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.readings.setRowCount(len(entries))
 
         selected = -1
-        for index, (instrument, row) in enumerate(entries):
+        for index, row in enumerate(entries):
             self._fill_reading_row(index, row)
-            if (row.get("has_loop") and instrument
-                    and instrument == self.instrument_combo.currentText()
-                    and int(row.get("loop") or 0) == self._loop):
+            if row_target_key(row) == self._target.key:
                 selected = index
 
         # Every refresh, not only the ones that add rows: the fit needs a laid
@@ -2076,25 +2091,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _update_commands(self) -> None:
         """Keep the command panel honest about what it can actually do."""
-        names = [str(link.get("name", ""))
-                 for link in self.source.writable_links()]
-        if [self.instrument_combo.itemText(i)
-                for i in range(self.instrument_combo.count())] != names:
-            # Rebuilding drops the selection, so put it back: this runs on a
-            # one-second timer, and a combo that reset itself every tick would
-            # be unusable.  Only the *list* changing gets here at all.
-            chosen = self.instrument_combo.currentText()
-            self.instrument_combo.blockSignals(True)
-            self.instrument_combo.clear()
-            self.instrument_combo.addItems(names)
-            if chosen in names:
-                self.instrument_combo.setCurrentIndex(names.index(chosen))
-            self.instrument_combo.blockSignals(False)
-            self._instrument_changed()
+        self._reconcile_targets()
 
         accepted = self.source.accepts_commands()
         allowed = self.source.source_allowed(GUI_SOURCE)
-        enabled = bool(self.spool) and accepted and allowed and bool(names)
+        enabled = (bool(self.spool) and accepted and allowed
+                   and bool(self._targets))
         self.command_group.setEnabled(enabled)
         # Neither of these is in that group -- see `_panic_box` and
         # `_source_box` -- so they are unaffected here, which is the point.
@@ -2107,7 +2109,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
                    "ipc.accept_commands: true in its config and restart it")
         elif not allowed:
             why = self.source.source_note(GUI_SOURCE)
-        elif not names:
+        elif not self._targets:
             why = ("no instrument on this recorder allows writes — set "
                    "allow_writes: true on the box you mean to drive")
         else:
@@ -2115,21 +2117,82 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.command_group.setToolTip(why)
         self._update_gate_notes()
 
-    def _instrument_changed(self, *_ignored) -> None:
-        """Show the controls the selected box has, and only those.
+    def _offered_targets(self) -> list[CommandTarget]:
+        """What this recorder can be asked to do, right now.
+
+        The software loop is not among them yet -- it joins when the panel has
+        a control that can honour it.
+        """
+        return command_targets(self.source.writable_links())
+
+    def _reconcile_targets(self) -> None:
+        """Keep the selector's list, and the selection, honest.
+
+        Rebuilding drops the selection, so it is put back by **key** rather
+        than by position or label: the label carries the sensor and the sensor
+        follows `OUTMODE?`, so a rebinding would otherwise move the panel's
+        aim.  This runs on a one-second timer and only a change to the *list*
+        gets past the first comparison.
+
+        When the selected target is gone -- a link dropped, a loop unbound --
+        the panel is re-aimed and **says so**.  Silently re-aiming a panel that
+        applies power is the sharpest hazard in having one list of targets, and
+        a sentence is the whole cost of removing it.  The re-aim also drops
+        whatever was half-typed, because that number belonged to the loop that
+        just went away.
+        """
+        targets = self._offered_targets()
+        shown = [(self.target_combo.itemData(i), self.target_combo.itemText(i))
+                 for i in range(self.target_combo.count())]
+        if shown == [(t, t.label) for t in targets]:
+            return
+
+        self._targets = targets
+        by_key = {t.key: i for i, t in enumerate(targets)}
+        was = self._target
+        self.target_combo.blockSignals(True)
+        self.target_combo.clear()
+        for target in targets:
+            self.target_combo.addItem(target.label, target)
+        index = by_key.get(was.key, -1)
+        if index >= 0:
+            self.target_combo.setCurrentIndex(index)
+        self.target_combo.blockSignals(False)
+
+        if index < 0 and was.kind != "none":
+            # Same box first, then anything: a link that lost one loop should
+            # not throw the panel onto a different instrument.
+            same = next((i for i, t in enumerate(targets)
+                         if t.instrument == was.instrument), 0 if targets else -1)
+            self.target_combo.setCurrentIndex(same)       # fires _target_changed
+            if targets:
+                self._note(
+                    self.loop_note,
+                    f"{was.label} is no longer offered — "
+                    f"commanding {targets[same].label}",
+                    theme.note_style("warn", self))
+            else:
+                self._target = NO_TARGET
+                self._show_target_controls(capabilities({}))
+        else:
+            self._target_changed()
+
+    def _target_changed(self, *_ignored) -> None:
+        """Aim the whole panel at whatever the selector now holds.
 
         Called when the selection changes rather than every tick, because the
-        heater-output combo and the analog ceiling are things the operator may
-        be part-way through using.
-        """
-        link = self.source.link_named(self.instrument_combo.currentText())
-        caps = capabilities(link)
+        range combo and the analog ceiling are things the operator may be
+        part-way through using.
 
-        if caps["loops"] and self._loop not in caps["loops"]:
-            # A different box: the loop number the last one was on may not
-            # exist here, and a setpoint sent to a loop that does not exist is
-            # a refusal at best.
-            self._loop = caps["loops"][0]
+        There is no clamping to do any more.  This used to check that the loop
+        number carried over from the previous box existed on the new one; a
+        target *is* a loop that exists, by construction, so the case is gone
+        rather than handled.
+        """
+        target = self.target_combo.currentData()
+        self._target = target if isinstance(target, CommandTarget) else NO_TARGET
+        link = self.source.link_named(self._target.instrument)
+        caps = capabilities(link)
 
         if caps["has_analog"]:
             ceiling = caps["max_output_pct"]
@@ -2137,8 +2200,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._set_group_title(
                 self.analog_group,
                 f"Analog output {caps['analog_output']} (max {ceiling:g}%)")
-        self._show_loop_controls(caps)
-        # A different box, loop or output is a different "now": whatever the
+        self._show_target_controls(caps)
+        # A different loop or output is a different "now": whatever the
         # operator had half-typed belonged to the previous selection.
         self._setpoint_dirty = False
         self._range_dirty = False
@@ -2148,34 +2211,24 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._sync_command_values()
         self._update_gate_notes()
 
-    def _selected_loop_row(self) -> dict:
+    def _row_for_target(self) -> dict:
         """The status entry for the loop the panel is pointed at, or ``{}``.
 
-        ``{}`` for a recorder too old to publish one, which is the same
-        degrade `capabilities` makes -- the panel then falls back to what it
-        can work out from the capability block alone.
+        ``{}`` for anything that is not an instrument loop, and for a recorder
+        too old to publish loop bindings -- which is the same degrade
+        `capabilities` makes.  The panel then falls back to what the target
+        itself carries, which is why the heater binding lives on the target
+        rather than being re-derived here.
         """
-        link = self.source.link_named(self.instrument_combo.currentText())
+        if self._target.kind != "loop":
+            return {}
+        link = self.source.link_named(self._target.instrument)
         for row in loop_rows(link):
-            if int(row.get("loop") or 0) == self._loop:
+            if int(row.get("loop") or 0) == self._target.loop:
                 return row
         return {}
 
-    def _heater_for_selected_loop(self, caps: dict) -> int | None:
-        """Which heater output the selected loop drives, or None if it drives
-        an analog one.
-
-        From the recorder's `OUTMODE`-derived row where there is one, and from
-        the capability table otherwise -- on this family the loop number *is*
-        the output number by protocol, so the fallback is not a guess.
-        """
-        row = self._selected_loop_row()
-        if row:
-            heater = row.get("heater_output")
-            return None if heater is None else int(heater)
-        return self._loop if self._loop in caps["heater_outputs"] else None
-
-    def _place_instrument_selector(self) -> None:
+    def _place_selector(self) -> None:
         """Lend the first visible group's title to the selector's row.
 
         A QGroupBox draws its title *above* its frame, so a row placed against
@@ -2186,6 +2239,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
         Every group keeps its own title while it is not first, which is why
         the originals are held in `_group_titles` rather than recomputed.
+
+        A selection with no visible group at all is already handled: `first`
+        is None, every group keeps its own title and the lent line is blank.
         """
         if not self._group_titles:
             return
@@ -2208,61 +2264,67 @@ class ViewerWindow(QtWidgets.QMainWindow):
         Two of these are dynamic -- "Heater range (output 2)", "Analog output
         1 (max 70%)" -- and the group that is currently first is showing a
         blank one on the selector's behalf. So the intended title is stored
-        here and applied by `_place_instrument_selector`; writing it straight
+        here and applied by `_place_selector`; writing it straight
         onto the widget would either clobber the blank or be clobbered by the
         next re-place, depending on the order the two happened to run in.
         """
         self._group_titles[group] = title
-        self._place_instrument_selector()
+        self._place_selector()
 
-    def _show_loop_controls(self, caps: dict) -> None:
-        """Show the grouping the selected loop can actually be commanded with.
+    def _show_target_controls(self, caps: dict) -> None:
+        """Show the grouping the selected target can actually be commanded with.
 
         Only the relevant one is ever on screen.  A loop that drives a heater
         gets the range control; one whose output is analog-only -- a 336's 3
         and 4 -- has no range to set, and offering the control would be
-        offering a refusal.  A box with no loops at all (a 218) gets the
-        analog control and nothing else, because on that box the percentage
-        *is* the power.
+        offering a refusal.  An analog output gets the analog control and
+        nothing else, because there the percentage *is* the power.
+
+        The **kind** decides which family of groups is on screen at all; the
+        capability table still decides what a loop target offers within that.
         """
-        self.setpoint_group.setVisible(caps["has_loops"])
+        is_loop = self._target.kind == "loop"
+        heater = self._target.heater_output if is_loop else None
+
+        self.setpoint_group.setVisible(is_loop)
         # Gains belong to a loop, so they appear exactly where a setpoint does
         # -- including on a 336's loops 3 and 4, which have gains and no range.
-        self.pid_group.setVisible(caps["has_loops"])
-        heater = self._heater_for_selected_loop(caps) if caps["has_loops"] else None
+        self.pid_group.setVisible(is_loop)
 
-        self.range_group.setVisible(caps["has_heater_range"] and heater is not None)
+        self.range_group.setVisible(
+            is_loop and caps["has_heater_range"] and heater is not None)
         self._set_group_title(
             self.range_group,
             "Heater range" if heater is None else f"Heater range (output {heater})")
         self.heater_label.setText("—" if heater is None else str(heater))
 
-        # The analog grouping belongs to a box that will accept an `analog`
-        # command.  A 336 loop 3 has an analog output and no way to command it
-        # from here, which is a sentence to say rather than a control to offer.
-        self.analog_group.setVisible(
-            caps["has_analog"] and (not caps["has_loops"] or heater is None))
+        # The analog grouping belongs to an analog target, which exists only
+        # where the recorder said the box has a settable analog output.  A 336
+        # loop 3 has an analog output and no way to command it from here,
+        # which is a sentence to say rather than a control to offer.
+        self.analog_group.setVisible(self._target.kind == "analog")
 
         # The loop AND the sensor it reads, on the row that was already there.
-        row = self._selected_loop_row()
-        if not caps["has_loops"]:
+        row = self._row_for_target()
+        if not is_loop:
             self.loop_label.setText("—")
         else:
-            sensor = str(row.get("sensor") or "") if row else ""
+            sensor = str(row.get("sensor") or "") if row else self._target.sensor
             self.loop_label.setText(
-                f"{self._loop} → {sensor}" if sensor else str(self._loop))
+                f"{self._target.loop} → {sensor}" if sensor
+                else str(self._target.loop))
             self.loop_label.setToolTip(str(row.get("mode") or "") if row else "")
-        if caps["has_loops"] and not row:
+        if is_loop and not row:
             note = ("this recorder does not publish loop bindings (schema 1); "
                     "the sensor and mode are unknown")
-        elif caps["has_loops"] and heater is None:
+        elif is_loop and heater is None:
             note = "drives an analog output, which this recorder cannot command"
         else:
             note = ""
         self._note(self.loop_note, note, theme.note_style("muted", self))
         # Which group is first can have just changed, and the selector rides
         # on it.
-        self._place_instrument_selector()
+        self._place_selector()
 
     # -- filling the command widgets with what the cryostat is at -----------------
 
@@ -2294,12 +2356,17 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._pid_dirty = True
 
     def _loop_row_selected(self) -> None:
-        """A row of the loop table clicked: point the whole panel at that loop.
+        """A row of the reading table clicked: aim the panel at what it names.
 
-        Instrument and loop together, because a row names both -- and because
-        selecting a loop on one box while the command panel is still addressed
-        to another is exactly the mistake having one selector is meant to
-        remove.
+        **The second route to the one selection.**  The row names a target and
+        the selector holds targets, so this is a lookup by key and then a
+        change of index -- `_target_changed` does everything after that.  Two
+        views of one value, which is what stops the two from disagreeing about
+        where a setpoint is going.
+
+        Rows that name nothing commandable are non-selectable at the item
+        level, so the early return is belt and braces rather than the usual
+        path.
         """
         rows = self.readings.selectionModel().selectedRows()
         if not rows:
@@ -2307,29 +2374,18 @@ class ViewerWindow(QtWidgets.QMainWindow):
         index = rows[0].row()
         if not 0 <= index < len(self._loop_index):
             return
-        instrument, row = self._loop_index[index]
-        if not row.get("has_loop") or not instrument:
-            # A bare thermometer, or the software loop: neither points the
-            # command panel anywhere. Both are non-selectable at the item
-            # level, so this is belt and braces rather than the usual path.
+        key = row_target_key(self._loop_index[index])
+        if key is None:
             return
-        self._loop = int(row.get("loop") or 1)
-        names = [self.instrument_combo.itemText(i)
-                 for i in range(self.instrument_combo.count())]
-        if instrument in names:
-            if self.instrument_combo.currentText() != instrument:
-                # _instrument_changed does the rest, including this loop.
-                self.instrument_combo.setCurrentIndex(names.index(instrument))
+        for i in range(self.target_combo.count()):
+            target = self.target_combo.itemData(i)
+            if isinstance(target, CommandTarget) and target.key == key:
+                if i != self.target_combo.currentIndex():
+                    # Guarded so Qt does not emit at all when the click landed
+                    # on the row already selected -- which is every time the
+                    # selector was what moved the highlight in the first place.
+                    self.target_combo.setCurrentIndex(i)
                 return
-        elif instrument:
-            self._note(self.loop_note,
-                       f"{instrument} is read-only here: watched, not commanded",
-                       theme.note_style("muted", self))
-        # A different loop is a different "now" for every field in the panel.
-        self._setpoint_dirty = False
-        self._range_dirty = False
-        self._awaiting = None
-        self._instrument_changed()
 
     def _sync_command_values(self) -> None:
         """Fill each command widget with its control's current value.
@@ -2355,9 +2411,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         would confirm it, and until that readback agrees the field is left at
         what was asked for.
         """
-        instrument = self.instrument_combo.currentText()
-        if not instrument:
-            return
+        instrument = self._target.instrument
         awaiting = self._awaiting
         if awaiting is not None:
             actual = self._aux_value(awaiting.aux)
@@ -2378,37 +2432,36 @@ class ViewerWindow(QtWidgets.QMainWindow):
             """True while this control's readback is still owed."""
             return awaiting is not None and awaiting.aux == aux_name
 
-        if not self._setpoint_dirty:
-            name = f"{instrument}.setpoint{self._loop}"
-            value = self._aux_value(name)
-            if value is not None and not held(name):
-                with _quiet(self.setpoint_spin):
-                    self.setpoint_spin.setValue(value)
-        if not self._analog_dirty:
-            caps = capabilities(self.source.link_named(instrument))
-            if caps["has_analog"]:
-                name = f"{instrument}.aout{caps['analog_output']}"
+        if self._target.kind == "loop":
+            loop = self._target.loop
+            if not self._setpoint_dirty:
+                name = f"{instrument}.setpoint{loop}"
                 value = self._aux_value(name)
                 if value is not None and not held(name):
-                    with _quiet(self.analog_spin):
-                        self.analog_spin.setValue(value)
-        if not self._pid_dirty:
-            for key, spin in self.pid_spins.items():
-                name = f"{instrument}.{key}{self._loop}"
+                    with _quiet(self.setpoint_spin):
+                        self.setpoint_spin.setValue(value)
+            if not self._pid_dirty:
+                for key, spin in self.pid_spins.items():
+                    name = f"{instrument}.{key}{loop}"
+                    value = self._aux_value(name)
+                    if value is not None and not held(name):
+                        with _quiet(spin):
+                            spin.setValue(value)
+            heater = self._target.heater_output
+            if not self._range_dirty and heater is not None:
+                name = f"{instrument}.range{heater}"
                 value = self._aux_value(name)
                 if value is not None and not held(name):
-                    with _quiet(spin):
-                        spin.setValue(value)
-        heater = self._heater_for_selected_loop(
-            capabilities(self.source.link_named(instrument)))
-        if not self._range_dirty and heater is not None:
-            name = f"{instrument}.range{heater}"
+                    index = self.range_combo.findData(int(value))
+                    if index >= 0:
+                        with _quiet(self.range_combo):
+                            self.range_combo.setCurrentIndex(index)
+        elif self._target.kind == "analog" and not self._analog_dirty:
+            name = f"{instrument}.aout{self._target.analog_output}"
             value = self._aux_value(name)
             if value is not None and not held(name):
-                index = self.range_combo.findData(int(value))
-                if index >= 0:
-                    with _quiet(self.range_combo):
-                        self.range_combo.setCurrentIndex(index)
+                with _quiet(self.analog_spin):
+                    self.analog_spin.setValue(value)
 
     def _update_gate_notes(self) -> None:
         """Say which of the power gates is open, and disable what is shut.
@@ -2421,7 +2474,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         take away the one thing that always worked. Both halves of that are
         gone. The gates now apply to 0 as well -- cutting a heater is not
         automatically the safe direction -- so a live control here could only
-        ever produce a refusal, which is the shape `_show_loop_controls`
+        ever produce a refusal, which is the shape `_show_target_controls`
         already refuses to offer. And the button for "make the cryostat safe
         now" is the Panic menu, which is exempt from these gates and is never
         disabled at all. The note points at it, so nothing is taken away
@@ -2520,9 +2573,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # polling the gains is not the same as a recorder that will not accept
         # new ones, and an operator who cannot see the difference will conclude
         # the wrong thing about both.
-        polled = any(self._aux_value(f"{self.instrument_combo.currentText()}."
-                                     f"{key}{self._loop}") is not None
-                     for key in self.pid_spins)
+        polled = self._target.kind == "loop" and any(
+            self._aux_value(f"{self._target.instrument}.{key}{self._target.loop}")
+            is not None for key in self.pid_spins)
         if not polled:
             self._note(self.pid_note, "read_pid: false — not the instrument's",
                        theme.note_style("warn", self))
@@ -3298,10 +3351,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _send_setpoint(self) -> None:
         """Queue a setpoint, after saying out loud what is about to happen."""
-        if self.spool is None:
+        if self.spool is None or self._target.kind != "loop":
             return
-        instrument = self.instrument_combo.currentText()
-        loop = self._loop
+        instrument = self._target.instrument
+        loop = self._target.loop
         kelvin = self.setpoint_spin.value()
         if not self._confirm(
             "Send setpoint",
@@ -3317,10 +3370,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _send_pid(self) -> None:
         """Queue all three gains for the selected loop."""
-        if self.spool is None:
+        if self.spool is None or self._target.kind != "loop":
             return
-        instrument = self.instrument_combo.currentText()
-        loop = self._loop
+        instrument = self._target.instrument
+        loop = self._target.loop
         gains = {k: spin.value() for k, spin in self.pid_spins.items()}
         if not self._confirm(
             "Send PID gains",
@@ -3337,14 +3390,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _send_range(self) -> None:
         """Queue a heater range.  Above 0 this is the command that applies power."""
-        if self.spool is None:
+        if self.spool is None or self._target.kind != "loop":
             return
-        instrument = self.instrument_combo.currentText()
-        output = self._heater_for_selected_loop(
-            capabilities(self.source.link_named(instrument)))
+        instrument = self._target.instrument
+        output = self._target.heater_output
         if output is None:
             self.ack_label.setText(
-                f"loop {self._loop} of {instrument} drives no heater range")
+                f"loop {self._target.loop} of {instrument} drives no heater range")
             self.ack_label.setStyleSheet(theme.note_style("warn", self))
             return
         value = int(self.range_combo.currentData())
@@ -3457,7 +3509,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         "unknown" rather than a guess when the recorder does not carry it.
         """
         self.source.poll()
-        loop = self._loop
+        loop = self._target.loop
         value = self._aux_value(f"{instrument}.setpoint{loop}")
         if value is not None:
             return (f"{value:.3f} K on loop {loop}, as the "
@@ -3466,9 +3518,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _send_analog(self) -> None:
         """Queue an analog output percentage.  Above 0 this IS the heater."""
-        if self.spool is None:
+        if self.spool is None or self._target.kind != "analog":
             return
-        instrument = self.instrument_combo.currentText()
+        instrument = self._target.instrument
         percent = self.analog_spin.value()
         caps = capabilities(self.source.link_named(instrument))
         if percent == 0:
