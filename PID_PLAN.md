@@ -18,7 +18,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 |---|---|---|---|
 | **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | **DONE 2026-09-14** — REFIT §1 green; in-epoch prediction 0.135 K rms; `missing_power_w` 0.58 mW worst in-epoch over 40 K; `sigma_q_w` exported. The 300 K half is a PIPELINE, run as a dry run; the ladder itself is stage 6 |
-| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **The gate is NOT met live**: a recorder restart stops the judge's clock and it never judges again, and the overall verdict is pinned by `tau` — see [§2.6](plans/pid-2-monitor.md#26-two-defects-the-live-path-has-and-the-archive-cannot-show) |
+| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **The three live defects are fixed 2026-09-17** — the frozen clock, the headline `tau` pinned, and the cold-head warning that reached no headline at all ([§2.6](plans/pid-2-monitor.md#26-two-defects-the-live-path-had-and-the-archive-cannot-show), [§2.7](plans/pid-2-monitor.md#27-and-a-third-in-the-same-line-a-warning-that-reached-nobody)). **The live diurnal cycle is what is left**, and it is now worth running |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts, **a band that follows the setpoint** | **BUILT 2026-09-14** — 8 scenarios × 6 temperatures green, 8 rate fields → 2, hold at 2 DAC codes/min. **Review fixes all ten landed 2026-09-15** ([plans/pid-3-review.md](plans/pid-3-review.md)): the bench no longer depends on the date, `CRASHED` latches, the descent is bounded and cannot be finished by a failed read, and **both kelvin rows are reachable** — a heater delivering half its power at 30 K now faults instead of holding 14 K low in silence. §3.6's soak outstanding |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | **4a met 2026-09-16; 4e's bench gate met 2026-09-17** (`test_stage_4e_fast_move.py`), cryostat pending; then 7 days unattended, hold graded against the 09-15 open-loop night; ladder graded to 300 K |
 | **5** | §6 here | warnings and faults in the viewer | **BUILT** — verdict rows, the loop's detail panel and a software setpoint control; contrast test green. Live check and MATLAB `plant()` outstanding |
@@ -327,6 +327,15 @@ silently stopping warning. The live half wants a recorder and a judge running.
   sample follows the physics; `δT_c` warns; authority exhausted faults.
 - **"Typical" drifts** 0.28 mW/day. Every export carries `DRIFT_T0`.
 - **No opinion is not typical.** A green light outside the table is a lie.
+  **And a summary that leaves a residual out is the same lie**: the monitor's
+  headline was the worst of four of its six rows until 2026-09-17, so a
+  cold-head warning reached nobody who read the line. A silence that carries no
+  information about the cryostat — `tau` at a hold — must not vote either, or
+  the headline says nothing for four days running. → pid-2-monitor §2.6, §2.7
+- **A relative time column is relative to a PROCESS, not to a file.** The
+  recorder restarts `Time` at zero on every restart and appends to the same
+  daily file. Read as monotonic-per-file it froze the judge's clock for
+  26,314 samples. → docs/recorder/file-interface.md
 - **A percent rate limit is a function of temperature.** 5 K/min is 0.40 %/min
   at 118 K and 14.9 %/min at 10 K on the 2026-09-13 fit. **And the conversion
   asks whether a curve EXISTS, not whether the stage trusts it** — it asked

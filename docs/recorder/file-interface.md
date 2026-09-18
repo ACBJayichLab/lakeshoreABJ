@@ -494,6 +494,50 @@ something that never happened.
 **If you write your own client, do the same thing.**
 
 
+## The CSV, and what `Time` means
+
+The log is part of this interface too: it is what a judging process or an
+analysis script reads, and two of its columns have contracts that are not
+obvious from looking at one.
+
+**`Time` is relative to the PROCESS that wrote the row, not to the file.** It
+is seconds since the first frame that process recorded, from
+`time.monotonic()`, whose epoch is arbitrary per process and cannot be carried
+across a restart. A restart on the same day appends to the **same** daily file
+whenever the header still matches — so **one daily file can hold several
+ascending runs**, each starting at `0.000`, while `Timestamp` carries on
+forward.
+
+A consumer therefore has three facts to hold:
+
+- `Time` is monotonic **within a run**, not within a file. A backwards step is
+  a restart, and the row's own `Timestamp` is where the new origin comes from.
+- `Timestamp` is naive local time. It goes *backwards* by an hour once a year,
+  which is why nothing measures an interval with it.
+- so an interval across a restart needs both columns, and neither alone.
+
+Read as monotonic-per-file this froze the LTSPM3 monitor's clock through
+26,314 samples on 2026-09-17 — every gate downstream of it stopped expiring,
+and it reported `no opinion` rather than anything that looked like a failure.
+It is asserted in `tests/test_acquisition.py` so the next consumer reads it off
+a test.
+
+**The software loop's columns are present only when there is one.** A recorder
+driving an instrument's own PID has no such numbers and writes no such columns,
+because an always-empty column in a months-long CSV is a question every reader
+has to ask once:
+
+| | |
+|---|---|
+| `heater_pct` | what the software loop commanded. First, because the legacy logs put it there and analysis scripts expect it |
+| `control.setpoint_k` | what it was chasing at that instant — a ramp's present value, not its destination |
+| `control.setpoint_target_k` | where it was told to go |
+| `control.filtered_k` | the reading the loop's error is computed against, which is **not** the raw channel in the same row |
+
+They are read off the controller by name and defaulted, so a controller that
+publishes only some of them yields only those columns, and `lschart` still
+imports nothing from any particular cryostat's package.
+
 ## `plant.json` — a verdict from outside
 
 **Nothing in `lschart` writes this.** It is a file a judging process drops
@@ -514,7 +558,8 @@ other's version.
 | `epoch` | unix seconds, which is what an age is computed from |
 | `t_s`, `segment` | where in the recording the verdict was computed |
 | `stale_after_s` | **how long this verdict stays true.** The writer knows and the reader does not, so a reader must take the limit from here rather than invent one |
-| `verdict` | the overall answer: `typical`, `no opinion` or `warn`. The worst of *some* of the rows below and not all of them, so **do not recompute it** — a client that re-derived "the worst row" would disagree with the file it is displaying |
+| `verdict` | the overall answer: `typical`, `no opinion` or `warn`. The worst of the rows below **that had an opinion when it was written**, so **do not recompute it** — a client that re-derived "the worst row" would disagree with the file it is displaying, and could not know which rows were speaking at the time |
+| `verdict_for[]` | which residuals that word speaks for, by `name`. Absent on a writer older than its own schema 2, and empty when nothing could speak; in both cases a client should say less rather than claim a coverage |
 | `residuals[]` | one entry per thing judged: `name`, `state` (the same three values), `value`, `sigma`, `reason`, `out_of_band_s` |
 | `sample_k`, `coldplate_k`, `u_pct`, `dT_dt_k_per_s` | what it judged, so the verdict can be read without re-deriving it |
 | `missing_power_abs_w`, `baseline_frac`, `baseline_age_s` | the level, the baseline it is measured against, and how old that baseline is |

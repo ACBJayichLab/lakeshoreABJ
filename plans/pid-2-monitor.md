@@ -326,14 +326,18 @@ file underneath the judge and asserts what each residual says on the far side.
 Do it before stage 5, not before arming: nothing here bears on whether the loop
 may close.
 
-## 2.6 Two defects the live path has, and the archive cannot show
+## 2.6 Two defects the live path had, and the archive cannot show
 
-Both were found by displaying the verdict in the viewer, which is the first
-time anything put it where a person would see it. **Neither is reachable from
-the replay**: the archive is read once, front to back, from a file whose
-relative-time column only ever increases.
+**Both FIXED 2026-09-17**, and fixing the second turned up a third in the same
+line of code — §2.7. Both were found by displaying the verdict in the viewer,
+which is the first time anything put it where a person would see it. **Neither
+is reachable from the replay**: the archive is read once, front to back, from a
+file whose relative-time column only ever increases — so each fix arrives with
+a test that feeds the tail a file the replay could never have been, and the
+replay itself is unmoved by either (41 warn transitions, 3 fault-level, the
+09-10 event still at 11:46 and −5.08 mW).
 
-### 1. A recorder restart stops the clock, and it never starts again
+### 1. A recorder restart stopped the clock, and it never started again
 
 The recorder resets its CSV's `Time` column to zero when it restarts, while the
 *same* daily file carries on — so one day's file can contain several ascending
@@ -353,26 +357,82 @@ ages by it — so once it stops, **no gate ever expires**. The visible symptom i
 every residual stuck at `no opinion` reading `within 3 tau of a heater move`,
 through a hold that has been settled for hours.
 
-What a fix has to keep: the fold protection. The two cases are distinguishable
-— a fold arrives with a *new file* and a backward **epoch**, an in-file restart
-arrives with a backward **relative** column and a forward epoch — so the
-in-file case wants its own origin rather than the ratchet. It wants a test that
-feeds one file containing a `Time` reset and asserts the clock advances across
-it, which is the test the replay's single-pass archive could never have been.
+**Measured, before it was fixed.** From `data/plant_2026-09-17.csv`: the clock
+froze at **09:04:33**, the day's first restart, and **26,314 of that day's
+46,236 samples** carry the frozen stamp. It went on judging for eleven hours
+after that, because a freeze is silent until something moves the heater — the
+20:12 arming move then latched the gate against a clock that could not advance,
+and `plant.json` was writing `t_s` **14.7 h behind `epoch`** every two seconds.
+So the symptom and the cause are eleven hours apart, which is what made this
+one hard to see and is worth remembering about any frozen clock.
 
-### 2. `tau` pins the overall verdict to `no opinion`
+**The fix keeps the fold protection, because the two cases are
+distinguishable** — a fold arrives with a *new file* and a backward **epoch**,
+an in-file restart arrives with a backward **relative** column and a forward
+epoch. `_Clock` remembers the previous `Time` cell and, when it goes backwards
+inside one file, takes a new origin from that row's own stamp; `restarts`
+counts those beside `rewinds`, so which one happened is on the record. The
+`max(t, self.last)` ratchet stays as the last word, for a fold and a restart
+landing together. A restart also **bumps `segment`**, which is the only channel
+into `Judge._reset_history` — and it is the right event to drop measured
+history on, since the loop was re-armed and the heater moved. The cost is that
+the six-hour baseline restarts too, which is what a new daily file has always
+done.
 
-The top-level `verdict` is `max` by rank over `q, tc, tau, noise`, and `tau`
+Two tests, and **both were checked against the old code and fail there**:
+`test_a_restart_inside_one_file_is_a_new_origin_and_not_a_fold` (the clock
+advances 120 s across the seam where it advanced 0) and
+`test_the_judge_goes_on_judging_after_the_recorder_restarts` (the transient
+gate expires). The second needs a **long first run**: the freeze only lasts
+until the new run's relative column overtakes the old one's high-water mark,
+and the real reset was 9 h in. A short first run passes against the bug, which
+is the trap for whoever edits these next.
+
+### 2. `tau` pinned the overall verdict to `no opinion`
+
+The top-level `verdict` was `max` by rank over `q, tc, tau, noise`, and `tau`
 answers `no move to measure` unless there is a step to fit. At a hold there
-never is — so the headline reads `no opinion` on every sample even where every
-other residual says `typical`.
+never is — so the headline read `no opinion` on **every one of 2026-09-17's
+46,236 samples** while `missing_power` read `typical` on 85 % of them.
 
 This is not a wrong answer, which is what makes it easy to miss: §7's rule is
-that no opinion must never read as green, and it does not. It is an
+that no opinion must never read as green, and it did not. It is an
 *uninformative* one, permanently, and a reader who checks only the headline
-learns nothing from it. Either `tau` comes out of the worst-of — it is the one
-residual whose silence carries no information about the cryostat's health — or
-the headline has to say which residuals it is speaking for.
+learns nothing from it.
+
+**Fixed as Jeff chose it (2026-09-17): the worst thing the judge actually
+knows, and it says who it speaks for.** The headline is the worst of the
+residuals that *have* an opinion, `verdict_for` names them, and `no opinion`
+still wins when nothing can speak — so silence is never dressed up as green,
+and the honesty moved into saying what the word covers rather than into
+refusing to say one. `Judge._headline` is the whole rule, five tests on it, and
+`plant.json`'s `SCHEMA_VERSION` goes to **2**: `verdict_for` is additive but
+the same cryostat in the same state now reads `typical` where it read
+`no opinion`, and that is a meaning moving.
+
+## 2.7 And a third, in the same line: a warning that reached nobody
+
+Found by reading that line in order to fix §2.6's second defect, not by a test.
+
+`max` was taken over `(q, tc, tau, noise)` — **four of the six residuals.**
+`cold_head` and the latched `fault_level` were published as rows and were not
+in the headline at all. So a compressor going off moved the cold head by
+kelvins, `cold_head` warned in its own row, and the summary line went on
+reading whatever the other four happened to say. That is §7's *a green light
+outside the table is a lie*, and it is the opposite direction from §2.6's
+defect: not uninformative but wrong, and wrong the unsafe way.
+
+Both are gone with one rule, since the headline now aggregates all six.
+`test_a_cold_head_warning_reaches_the_headline` is the assertion, and against
+the old line it reads `no opinion` where it should read `warn`.
+
+**One thing deliberately NOT changed.** A latched `fault_level` reads `warn` in
+the headline, because `warn` is the most severe word this monitor has —
+`TYPICAL, NO_OPINION, WARN` is the whole vocabulary and the fault residual has
+always reported `WARN`. Giving it a fourth word would change what every
+residual row says, what the viewer's palette must resolve, and what MATLAB's
+reader will expect, which is a separate commit and a question for Jeff. The
+`fault_level` row is what distinguishes a step from a level meanwhile.
 
 ## Exit gate
 
@@ -385,10 +445,13 @@ the headline has to say which residuals it is speaking for.
   `fault_window_s`** rather than a level -- §2.5.
 - **One diurnal cycle** beside the live recorder, `plant.json` current, the
   post-repair residual inside the band throughout, every warning explained.
-  **NOT MET.** A cycle was run on 2026-09-15, but §2.6's first defect means a
-  soak is only judging until the recorder next restarts, and the second means
-  the headline verdict carries no information at any point in it. Both want
-  fixing before a soak counts, and the cycle wants rerunning after.
+  **NOT MET, and now unblocked.** A cycle was run on 2026-09-15, but §2.6's
+  first defect meant a soak was only judging until the recorder next restarted,
+  and the second meant the headline carried no information at any point in it.
+  **Both fixed 2026-09-17**, so the cycle is worth running and is what starts
+  when the fixed monitor is next started. Read it knowing the baseline is
+  young for the first six hours after any restart, which is now what a restart
+  costs instead of everything.
 
   **The length was 72 h and nothing justified it.** What establishes the
   false-alarm rate is the replay across 63 days of archive, already green in

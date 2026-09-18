@@ -321,13 +321,17 @@ about step size and doublets.
 **Built 2026-09-14, soaked 2026-09-15** beside the live recorder. Run it when
 you want it; it can do nothing.
 
-> **Two things to know before you trust a verdict**, both in
-> [plans/pid-2-monitor.md §2.6](../../plans/pid-2-monitor.md#26-two-defects-the-live-path-has-and-the-archive-cannot-show):
-> the judge's clock **stops when the recorder restarts**, after which every
-> residual sits at `no opinion` for ever; and the **overall `verdict` is pinned
-> to `no opinion`** by `tau`, which has nothing to say at a hold. Read the
-> per-residual rows, not the headline, and restart the monitor after you
-> restart the recorder until the first of those is fixed.
+> **The headline is the worst of the residuals that had an opinion**, and
+> `verdict_for` says which those were — so `typical` at a hold is `typical`
+> about the four residuals that can speak there, and `tau`'s silence is not
+> mistaken for one. A monitor written before 2026-09-17 said `no opinion`
+> instead, always, and left a cold-head warning out of the line entirely.
+> `plant.json` carries `"schema": 2` once it is the fixed one.
+>
+> A **recorder restart no longer stops the judge's clock**; it reads as a new
+> recording, so the judge drops its measured history and its six-hour baseline
+> and starts again a few hours young. Both were
+> [plans/pid-2-monitor.md §2.6](../../plans/pid-2-monitor.md#26-two-defects-the-live-path-has-and-the-archive-cannot-show).
 
 ```bash
 python -m ltspm3.monitor -c config-ltspm3-heater.yaml     # follow the live log
