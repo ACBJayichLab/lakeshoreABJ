@@ -309,9 +309,10 @@ knowing:
   (3a's table). It has not been graded against 3b's numbers either.
 - **10 K takes 16 min for 2 K.** Below `min_output_pct` the loop is in a regime
   nobody has looked at since the retune. Not on Jeff's path today.
-- **Nothing here has run on the cryostat yet.** The loop that was armed when
-  this was written ran the pre-retune numbers. The first move on the new ones
-  is Jeff's to command, with the viewer open.
+- **These are bench numbers.** What the cryostat did on them is a dated fact
+  and lives in `HANDOFF.md`, not here; when there is enough of it to be the
+  cryostat's record rather than one evening's, it belongs in a §3c beside
+  this.
 - **The long-term half of the hold benchmark** waits for a night armed on the
   new numbers, graded by `hold_quality.py` against 2026-09-15.
 
