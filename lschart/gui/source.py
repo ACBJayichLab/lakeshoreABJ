@@ -2401,14 +2401,25 @@ def control_detail(control: dict | None) -> list[dict] | None:
                  "" if wrote is None
                  else ", written this cycle" if wrote
                  else ", NOT written this cycle"),
-             # **Absent is NOT "it did not write".**  A recorder too old to
-             # publish the field has no opinion about it, and reading that as
-             # a failure lights a warning on every such recorder -- which is
-             # the same null-is-not-false trap the residual and `model_trusted`
-             # are written to avoid.  Only a published False is news, and only
-             # while the loop is supposed to be driving: one that has been held
-             # is not failing to write.
-             "mark": "warn" if (wrote is False and state == "tracking") else "",
+             # **Absent is NOT "it did not write"** -- a recorder too old to
+             # publish the field has no opinion, the same null-is-not-false
+             # trap the residual and `model_trusted` are written to avoid.
+             #
+             # **And a published False is not news either.**  Narrowing this to
+             # `state == "tracking"` was not enough: a SETTLED tracking loop
+             # legitimately writes only when the demand has moved a DAC step,
+             # and measured on the cryostat 2026-09-18 it wrote on 52 % of
+             # tracking cycles and not on 48 %.  So this lit red every other
+             # two-second cycle on a loop holding 118 K to the millikelvin,
+             # and a mark that flickers at half duty is worse than one that is
+             # stuck on -- it reads as activity.
+             #
+             # Not writing is a FACT about the deadband.  A loop that has
+             # genuinely stopped driving shows up as a growing `error`, as an
+             # alarm, or as `comms_fault_after_s` -- all of which the
+             # supervisor publishes and all of which are marked already.  The
+             # words stay; the paint goes.
+             "mark": "",
              "tip": "what the box says it is at, and whether this cycle wrote"},
             {"label": "gains",
              "text": "P " + _num_text(control.get("p"), "", 4)

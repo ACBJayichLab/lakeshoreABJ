@@ -2058,12 +2058,26 @@ def test_a_rejected_reading_names_the_test_that_rejected_it():
     assert row["mark"] == "warn"
 
 
-def test_not_writing_is_news_only_while_the_loop_should_be_driving():
-    """A loop that has been held is not failing to write."""
-    assert detail_row(a_full_control(wrote=False), "readback")["mark"] == "warn"
-    held = a_full_control(wrote=False, state="idle", mode="off")
-    assert detail_row(held, "readback")["mark"] == ""
-    assert "NOT written" in detail_row(held, "readback")["text"]
+def test_not_writing_is_a_fact_about_the_deadband_and_never_a_mark():
+    """Measured on the cryostat 2026-09-18, and the number is the argument.
+
+    A SETTLED tracking loop writes only when the demand has moved a DAC step:
+    over 2275 tracking cycles at 118 K it wrote on 52 % and not on 48 %.
+    Marking the published False -- even narrowed to `tracking`, which was the
+    first attempt -- lit this red every other two-second cycle on a loop
+    holding to the millikelvin.  A mark that flickers at half duty is worse
+    than one stuck on, because it reads as activity.
+
+    A loop that has genuinely stopped driving shows as a growing `error`, an
+    alarm, or `comms_fault_after_s`, and those are marked already.
+    """
+    for control in (a_full_control(wrote=False),
+                    a_full_control(wrote=False, state="idle", mode="off"),
+                    a_full_control(wrote=True)):
+        assert detail_row(control, "readback")["mark"] == ""
+    # The words stay -- it is the paint that goes.
+    assert "NOT written" in detail_row(a_full_control(wrote=False),
+                                       "readback")["text"]
 
 
 def test_a_recorder_that_says_nothing_about_writing_is_not_accused_of_not():
