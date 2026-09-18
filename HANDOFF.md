@@ -162,23 +162,12 @@ The box at the top. Nothing here has run on the cryostat; the bench is a
 rehearsal and the heater is real. Watch the viewer, then read the CSV: time to
 95 %, peak overshoot, and whether it is inside 50 mK by 5 minutes.
 
-**Probe the box's own filter while the port is free** — between stopping the
-recorder and re-arming, because the recorder owns the port exclusively
-(invariant 2) and `probe` cannot run alongside it:
-
-```bash
-python -m lschart -c config-ltspm3-read-only.yaml probe
-```
-
-`17341e4` landed on main during this session and makes `probe` print the 218's
-*own* reading filter and the per-input reading rate. It matters here:
-everything in this handoff is tuned against a dead time of **3.0 s derived from
-the SOFTWARE chain alone** — the median of three and the 2 s cadence — and the
-loop knows nothing about a filter running inside the box. If one is on, the
-real dead time is larger, and `delay_floor × delay_s` is an underestimate —
-which would move `tau_cl`, the 86 s, the trajectory corner and the `slope_lag`
-band term together. That is precisely the stability margin Jeff chose to keep,
-so it is worth the one command.
+**The 218's own reading filter: Jeff checked it, 2026-09-17, and it is not a
+concern.** Raised because `17341e4` landed on main during this session and
+makes `probe` print it — everything here is tuned against a dead time of 3.0 s
+derived from the SOFTWARE chain alone, so a filter inside the box would make
+`delay_floor × delay_s` an underestimate. Asked and answered; no need to probe
+again before arming.
 
 ### B. A night armed, then `hold_quality.py`
 
