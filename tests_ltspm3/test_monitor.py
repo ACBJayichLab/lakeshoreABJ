@@ -274,6 +274,90 @@ def test_the_monitor_holds_no_port_and_writes_no_command():
             assert forbidden not in text, f"{mod.__name__} mentions {forbidden}"
 
 
+# -- the headline ----------------------------------------------------------
+#
+# The one word for the whole cryostat.  Nothing asserted this line until
+# 2026-09-17, which is how it managed to be uninformative for four days and
+# to leave a warning out altogether -- every other test here reads
+# `record["verdicts"]` through `state()` and never looks at the summary.
+
+def _v(name: str, st: str):
+    from ltspm3.monitor import Verdict
+    return Verdict(name=name, state=st)
+
+
+def test_the_headline_is_the_worst_of_what_has_an_opinion():
+    """The rule, one case per line.  Jeff, 2026-09-17."""
+    head = Judge._headline
+    # A silence carries no information about the cryostat and does not vote.
+    out = head(_v("missing_power", TYPICAL), _v("tau", NO_OPINION))
+    assert out["verdict"] == TYPICAL
+    assert out["verdict_for"] == ["missing_power"]
+    # A warning outranks a typical, whoever raises it.
+    out = head(_v("missing_power", TYPICAL), _v("cold_head", WARN))
+    assert out["verdict"] == WARN
+    assert out["verdict_for"] == ["missing_power", "cold_head"]
+    # And silence is never dressed up as green.
+    out = head(_v("missing_power", NO_OPINION), _v("tau", NO_OPINION))
+    assert out["verdict"] == NO_OPINION
+    assert out["verdict_for"] == []
+
+
+def test_the_headline_reads_typical_at_a_hold_where_tau_is_silent():
+    """The defect as it was measured, not as it was reasoned about.
+
+    `tau` needs a step to fit and at a hold there is never one, so it answered
+    `no move to measure` for ever -- and outranked four residuals that had
+    something to say.  On 2026-09-17 the headline read `no opinion` on all
+    46,236 of the day's samples while `missing_power` read `typical` on 85 %.
+    """
+    j = Judge()
+    r = run(j, kelvin=118.0, seconds=8000.0)
+    assert state(r, "tau") == NO_OPINION, "tau is expected to be silent here"
+    assert r["verdict"] == TYPICAL
+    assert "missing_power" in r["verdict_for"]
+    assert "tau" not in r["verdict_for"], "a silence must not be spoken for"
+
+
+def test_a_cold_head_warning_reaches_the_headline():
+    """The other half, and the unsafe direction of the same line.
+
+    `cold_head` and `fault_level` were in the published rows and not in the
+    summary at all, so a compressor going off left the headline reading
+    whatever the other residuals happened to say.  PID_PLAN.md section 7: a
+    green light outside the table is a lie.
+    """
+    j = Judge()
+    stage_run(j, seconds=8000.0, t0=0.0, first=28.6)
+    r = stage_run(j, seconds=4000.0, t0=8000.0, first=30.6)
+    assert state(r, "cold_head") == WARN
+    assert r["verdict"] == WARN
+    assert "cold_head" in r["verdict_for"]
+
+
+def test_the_headline_says_no_opinion_when_nothing_can_speak():
+    """A judge with no history yet has nothing to summarise, and says so."""
+    j = Judge()
+    r = j.step(Sample(t_s=0.0, epoch_s=1.788e9, sample_k=118.0,
+                      coldplate_k=M.coldplate_k(118.0), u_pct=at(118.0)))
+    assert r["verdict"] == NO_OPINION
+    assert r["verdict_for"] == []
+
+
+def test_the_plant_file_carries_the_headline_and_who_it_speaks_for():
+    from ltspm3.monitor.report import SCHEMA_VERSION, payload
+    j = Judge()
+    r = run(j, kelvin=118.0, seconds=8000.0)
+    out = payload(r, cfg=MonitorConfig())
+    assert SCHEMA_VERSION >= 2, "the headline changed meaning; the number moves"
+    assert out["schema"] == SCHEMA_VERSION
+    assert out["verdict"] == r["verdict"]
+    assert out["verdict_for"] == r["verdict_for"]
+    # A list of names, not object keys: MATLAB's `jsondecode` puts keys
+    # through `makeValidName` and a name in a value survives verbatim.
+    assert isinstance(out["verdict_for"], list)
+
+
 # -- the replay ------------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -411,6 +495,26 @@ def write_log(path: Path, *, rows: int, kelvin: float, pct: float,
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def append_run(path: Path, *, rows: int, kelvin: float, pct: float,
+               t0: float, rel0: float = 0.0, dt: float = 2.0) -> None:
+    """More rows on the end of a file that already has some.
+
+    ``rel0`` is where the ``Time`` column picks up.  At zero this is a
+    RECORDER RESTART: `Time` is relative to the process that wrote it, so a
+    restart appending to the same daily file puts the column back to zero
+    while the stamps carry on.  Continuing an existing ``rel0`` is the same
+    process writing more rows.
+    """
+    lines = []
+    for i in range(rows):
+        when = _dt.datetime.fromtimestamp(t0 + i * dt)
+        lines.append(
+            f"{when.isoformat(timespec='milliseconds')},{rel0 + i * dt:.3f},"
+            f"{kelvin:.4f},{M.coldplate_k(kelvin):.4f},6.80,{pct:.4f},ok,idle,")
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
 def test_the_tail_reads_the_recorder_s_own_format(tmp_path):
     from ltspm3.monitor.source import RecorderTail
     log = tmp_path / "ltspm3-heater_2026-09-14.csv"
@@ -445,7 +549,77 @@ def test_the_tail_keeps_the_clock_monotonic_across_a_rollover(tmp_path):
     times = [s.t_s for s in tail.samples]
     assert times == sorted(times), "the monitor's clock folded"
     assert tail._clock.rewinds == 1
+    assert tail._clock.restarts == 0, "a fold is not a restart"
     assert tail.samples[-1].segment == 1
+
+
+def test_a_restart_inside_one_file_is_a_new_origin_and_not_a_fold(tmp_path):
+    """The other way the relative column goes backwards, and it is not a fold.
+
+    A fold arrives as a NEW FILE with a backward stamp.  A recorder restart
+    appends to the SAME daily file with ``Time`` back at zero and the stamps
+    still going forward, and the ratchet that pays the fold turns that into a
+    permanent freeze: ``t_s`` pins at the highest value the file ever reached
+    and nothing later can exceed it.  On 2026-09-17 the recorder restarted six
+    times in one day.
+    """
+    from ltspm3.monitor.source import RecorderTail
+    log = tmp_path / "ltspm3-armed_2026-09-17.csv"
+    t0 = 1.7886e9
+    write_log(log, rows=30, kelvin=118.0, pct=64.0, t0=t0)     # Time 0 -> 58
+    append_run(log, rows=30, kelvin=118.0, pct=64.0,           # Time 0 -> 58
+               t0=t0 + 120.0)                                  # ...stamps go on
+    tail = RecorderTail(str(tmp_path))
+    assert tail.poll() == 60
+    times = [s.t_s for s in tail.samples]
+    assert times == sorted(times)
+    # THE ASSERTION THE OLD RATCHET FAILS: the clock ADVANCES across the seam.
+    # 62 s of restart plus the 58 s the second run lasts.
+    assert times[-1] - times[29] == pytest.approx(120.0, abs=1e-3)
+    last = tail.samples[-1]
+    assert last.t_s == pytest.approx(last.epoch_s, abs=1.0)
+    assert tail._clock.restarts == 1
+    assert tail._clock.rewinds == 0, "a restart is not a fold"
+    assert last.segment == 1, "a restart is a new recording"
+
+
+def test_the_judge_goes_on_judging_after_the_recorder_restarts(tmp_path):
+    """The live failure of 2026-09-17, end to end.
+
+    The clock froze at the day's first restart, 09:04:33.  The next heater move
+    then latched the transient gate against a clock that could not advance, and
+    every residual read ``no opinion / within 3 tau of a heater move`` for the
+    rest of the day -- through an armed hold that had been settled for hours.
+    26,314 of that day's 46,236 samples carry the frozen stamp.
+
+    The order is the point: the freeze is silent until something moves the
+    heater, which is why the monitor looked healthy for eleven hours after it
+    had already stopped being able to judge.
+
+    The first run runs 2.4 h, because the freeze lasts only until the new run's
+    relative column overtakes the old one's high-water mark.  The real reset
+    was 9 h into the day and nothing was ever going to overtake it; a short
+    first run would make this test pass against the bug.
+    """
+    from ltspm3.monitor.source import RecorderTail
+    log = tmp_path / "ltspm3-armed_2026-09-17.csv"
+    t0 = 1.7886e9
+    hold = at(118.0)
+    write_log(log, rows=4300, kelvin=118.0, pct=hold, t0=t0)   # Time 0 -> 8598
+    # The restart...
+    append_run(log, rows=100, kelvin=118.0, pct=hold, t0=t0 + 8700.0)
+    # ...and then, inside the same run, the heater move that latched the gate.
+    append_run(log, rows=1400, kelvin=118.0, pct=hold + 0.5,
+               t0=t0 + 8900.0, rel0=200.0)
+    tail = RecorderTail(str(tmp_path), window_s=1e9)
+    assert tail.poll() == 5800
+    judge = Judge(MonitorConfig())
+    record = None
+    for s in tail.samples:
+        record = judge.step(s)
+    assert judge._move_t is not None, "the move must register, or this proves nothing"
+    assert not judge.in_transient(tail.samples[-1]), "the transient gate never expired"
+    assert state(record, "missing_power") != NO_OPINION
 
 
 def test_a_partial_row_is_held_back_until_its_newline_arrives(tmp_path):

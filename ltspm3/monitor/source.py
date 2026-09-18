@@ -71,10 +71,12 @@ class Sample:
     u_pct: float | None = None
     aux: dict = field(default_factory=dict)
     note: str = ""
-    #: Which recording this came from.  Increments at a rollover and at every
-    #: gap the archive's own `segment` column marks, and the judge drops its
-    #: history when it changes -- an ODE integrated across a 65 h hole
-    #: converges on a number anyway, and so does a baseline.
+    #: Which recording this came from.  Increments at a rollover, at a
+    #: recorder restart inside one file, and at every gap the archive's own
+    #: `segment` column marks, and the judge drops its history when it changes
+    #: -- an ODE integrated across a 65 h hole converges on a number anyway,
+    #: and so does a baseline.  A restart is the same event: the loop was
+    #: re-armed and the heater moved while nothing was watching.
     segment: int = 0
 
 
@@ -95,20 +97,39 @@ def _num(text: str) -> float | None:
 class _Clock:
     """Monotonic seconds from a per-file relative column and a file origin.
 
-    The one place AUDIT-2026-09-10 finding 4 is paid.  ``rewinds`` counts the
-    times a new file's origin would have stepped the clock backwards, which is
-    what a daylight-saving fold looks like from here.
+    TWO THINGS MOVE THE COLUMN BACKWARDS AND THEY ARE DIFFERENT EVENTS.  Both
+    counters below are the evidence for which one happened.
+
+    ``rewinds`` is AUDIT-2026-09-10 finding 4: a daylight-saving fold, where a
+    NEW FILE opens at a stamp earlier than the last sample.  The origin is
+    placed just after that sample and the clock carries on.
+
+    ``restarts`` is a recorder restart, which appends to the SAME daily file
+    with ``Time`` back at zero -- so the backward column arrives with a
+    FORWARD epoch, and one day's file holds several ascending runs.  That is a
+    new origin, not a fold.  Ratcheting it instead -- which is what
+    ``max(t, self.last)`` did on its own until 2026-09-17 -- pinned ``t_s`` at
+    the highest value the file had ever reached and no gate downstream ever
+    expired again: every residual read ``no opinion / within 3 tau of a heater
+    move`` through a hold settled for hours.
     """
 
     def __init__(self) -> None:
         self.origin: float | None = None
         self.last: float = float("-inf")
+        self.last_rel: float | None = None
         self.rewinds = 0
+        self.restarts = 0
         self.segment = 0
 
     def open_file(self, first_epoch: float | None) -> None:
         if first_epoch is None:
+            # No stamp to take an origin from, so the origin stays where it is
+            # and the new file's relative column carries on against it.  That
+            # makes its restart at zero look exactly like a restart INSIDE a
+            # file -- so leave `last_rel` alone and let `at` handle it.
             return
+        self.last_rel = None
         if self.origin is not None:
             self.segment += 1
         # Place the new file just after the last sample if its own stamp would
@@ -127,7 +148,18 @@ class _Clock:
             # keep it monotonic by hand.
             t = epoch_s if epoch_s is not None else self.last
         else:
+            if self.last_rel is not None and relative_s < self.last_rel:
+                # The recorder restarted and kept writing the same file.  Take
+                # the new origin from this row's own stamp, which keeps the
+                # real elapsed time across the gap the restart took; without a
+                # stamp, carry on from the last sample instead.
+                self.restarts += 1
+                self.segment += 1
+                self.origin = (self.last if epoch_s is None else epoch_s) - relative_s
+            self.last_rel = relative_s
             t = self.origin + relative_s
+        # Still the last word, so a fold and a restart landing together cannot
+        # walk the clock backwards.  In the ordinary case it does nothing.
         self.last = t = max(t, self.last)
         return t
 
