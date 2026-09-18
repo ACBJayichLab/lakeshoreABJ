@@ -139,3 +139,34 @@ def test_a_cleared_item_carries_no_colour_of_its_own(qt_app):
     assert item.data(QtGui.Qt.ItemDataRole.ForegroundRole) is not None
     theme.clear_foreground(item)
     assert item.data(QtGui.Qt.ItemDataRole.ForegroundRole) is None
+
+
+def test_every_severity_the_software_panel_can_emit_is_a_measured_pair():
+    """The detail panel names its severities and `theme.py` resolves them.
+
+    That indirection is what keeps the colours out of `source.py` -- but it
+    also means a typo, or a fifth severity added later, would resolve to
+    nothing and paint the row in the ordinary foreground: a warning that
+    silently stops warning.  So the names are checked against the tables the
+    contrast sweep above already measures.
+
+    Deliberately driven off `control_detail` itself rather than a written-down
+    list, because a list here is a second place to forget.
+    """
+    from lschart.gui.source import control_detail
+
+    block = {
+        "state": "crashed", "mode": "off", "health": "fault",
+        "validity": "spike_reject", "corroborated": False, "wrote": False,
+        "model_trusted": False, "error_k": 9.0, "threshold_k": 1.0,
+        "demand_pct": 99.0, "rail_low_pct": 1.0, "rail_high_pct": 2.0,
+        "reason": "a sentence", "alarms": ["another"],
+    }
+    emitted = {row["mark"] for group in control_detail(block)
+               for row in group["rows"]}
+    assert emitted - {""}, "the faulted block painted nothing at all"
+    for name in emitted - {""}:
+        for dark in (False, True):
+            assert name in (theme.DARK if dark else theme.LIGHT), (
+                f"severity {name!r} resolves to no colour on "
+                f"{'dark' if dark else 'light'}")

@@ -2169,3 +2169,212 @@ def row_target_key(row: dict) -> tuple | None:
         return ("software", "", None, None)
     loop = row.get("loop")
     return ("loop", instrument, None if loop is None else int(loop), None)
+
+
+# -- what the software loop is doing, in words --------------------------------
+
+
+#: The states that mean the loop stopped itself and nobody has looked yet.
+LATCHED_STATES = ("locked_out", "crashed")
+
+
+def _num_text(value, unit: str = "", places: int = 3, scale: float = 1.0) -> str:
+    """One number, or an em dash.
+
+    Never a plausible zero for a missing one: the whole point of the tri-state
+    fields is that "no value" and "the value is 0" are different answers.
+    """
+    if value is None:
+        return "—"
+    text = f"{float(value) * scale:.{places}f}"
+    return f"{text} {unit}" if unit else text
+
+
+def _words(text) -> str:
+    """``ramping_down`` as a person reads it.
+
+    Never shortened past the underscore: "ramping down" is a fault backing the
+    heater off, and clipping it to "ramping" would read as an ordinary setpoint
+    traversal.
+    """
+    return str(text or "").replace("_", " ").strip() or "—"
+
+
+def control_detail(control: dict | None) -> list[dict] | None:
+    """The software loop's own account of itself, as groups a panel can paint.
+
+    ``None`` for absent *or* empty, which is the degrade :func:`control_row`
+    already makes: a block with nothing in it describes no loop, and a panel of
+    dashes for it would be inventing one.
+
+    **The severity is a semantic name, never a colour.**  ``theme.py`` resolves
+    it against the live palette at paint time and every name here is
+    contrast-checked there; a colour chosen in this module would freeze the
+    theme and could not be measured against the 4.5:1 floor.  ``""`` means *do
+    not paint it* -- ordinary text has no colour of its own, so a healthy
+    loop's panel is entirely unpainted.
+
+    **Every mark comes from something the supervisor decided**, never from
+    arithmetic done here.  ``model_trusted`` is its verdict on the residual and
+    ``health`` its verdict on the reading; a second opinion computed in the
+    viewer would be a second set of limits able to disagree with the first.
+
+    The text is finished here, units and all, for the same reason the marks
+    are: what a ``null`` reads as is the part worth pinning, and "no opinion"
+    rather than a plausible ``0`` is exactly what must not be got wrong.
+    """
+    if not isinstance(control, dict) or not control:
+        return None
+
+    state = str(control.get("state") or "")
+    mode = str(control.get("mode") or "")
+    health = str(control.get("health") or "")
+    validity = _words(control.get("validity"))
+    trusted = control.get("model_trusted")
+    corroborated = control.get("corroborated")
+    residual = control.get("missing_power_w")
+    threshold = control.get("threshold_k")
+    error = control.get("error_k")
+    demand, target = control.get("demand_pct"), control.get("target_pct")
+    low, high = control.get("rail_low_pct"), control.get("rail_high_pct")
+
+    if state in LATCHED_STATES:
+        state_mark = "bad"
+    elif state and state != "tracking":
+        state_mark = "warn"
+    else:
+        state_mark = ""
+
+    off_setpoint = (error is not None and threshold is not None
+                    and abs(float(error)) > float(threshold))
+    railed = (demand is not None and low is not None and high is not None
+              and not float(low) <= float(demand) <= float(high))
+
+    setpoint = _num_text(control.get("setpoint_k"), "K")
+    if control.get("ramping"):
+        setpoint += " → " + _num_text(control.get("setpoint_target_k"), "K")
+
+    reading = validity + (
+        ", corroborated" if corroborated is True
+        else ", NOT corroborated" if corroborated is False
+        else ", corroboration: no opinion")
+
+    if residual is None:
+        premise = "no opinion"
+        why = str(control.get("residual_reason") or "")
+        premise_tip = (f"the watt residual is not judging right now: {why}"
+                       if why else "the watt residual has nothing to say")
+        floor = control.get("min_output_pct")
+        if floor is not None:
+            premise_tip += f" (it has none below {float(floor):g} % output)"
+    else:
+        premise = (_num_text(residual, "mW", 2, 1000.0)
+                   + " (σ " + _num_text(control.get("sigma_q_w"), "", 2, 1000.0)
+                   + ", step " + _num_text(control.get("dq_step_w"), "mW", 2, 1000.0)
+                   + ")")
+        premise_tip = ("measured minus model, in watts -- the premise the "
+                       "supervisor judges the cryostat by. A fault is a STEP; "
+                       "the level carries the calibration.")
+
+    model = ("trusted" if trusted is True
+             else "NOT trusted" if trusted is False else "no opinion")
+
+    groups = [
+        {"title": "What it is doing", "rows": [
+            {"label": "state", "text": f"{_words(state)} ({_words(mode)})",
+             "mark": state_mark,
+             "tip": str(control.get("reason") or "")
+                    or "the supervisor's state, and the loop mode beneath it"},
+            {"label": "setpoint", "text": setpoint, "mark": "",
+             "tip": "what the PID is chasing now, and where a ramp is heading"},
+            {"label": "error", "text": _num_text(error, "K"),
+             "mark": "warn" if off_setpoint else "",
+             "tip": "warn past " + _num_text(threshold, "K", 2) + ", fault past "
+                    + _num_text(control.get("fault_error_k"), "K", 2)},
+            {"label": "gain schedule", "text": _words(control.get("phase")),
+             "mark": "",
+             "tip": "which tuning is in force. A tuning, and not a statement "
+                    "that the setpoint is still"},
+        ]},
+        {"title": "What it is reading", "rows": [
+            {"label": "raw / filtered",
+             "text": _num_text(control.get("raw_k")) + " / "
+                     + _num_text(control.get("filtered_k"), "K"),
+             "mark": "",
+             "tip": "the reading as it arrived, and what the loop acts on. The "
+                    "error is computed from the second"},
+            {"label": "slope",
+             "text": _num_text(control.get("slope_k_per_s"), "mK/min", 1, 60000.0),
+             "mark": "",
+             "tip": "this controller takes its derivative from a regressed "
+                    "slope rather than from a gain"},
+            {"label": "noise",
+             "text": _num_text(control.get("noise_k"), "mK", 1, 1000.0),
+             "mark": "",
+             "tip": "the trailing rms the settle criterion is judged against"},
+            {"label": "reading", "text": reading,
+             "mark": "warn" if (corroborated is False
+                                or validity not in ("good", "—")) else "",
+             "tip": "which test rejected it, and whether the other "
+                    "thermometers agree"},
+            {"label": "health", "text": _words(health),
+             "mark": "" if health in ("ok", "") else "warn",
+             "tip": "the supervisor's verdict on its own measurement"},
+        ]},
+        {"title": "What it is driving", "rows": [
+            {"label": "asked / allowed / written",
+             "text": _num_text(demand, "", 2) + " → " + _num_text(target, "", 2)
+                     + " → " + _num_text(control.get("output_pct"), "%", 2),
+             "mark": "warn" if railed else "",
+             "tip": "the demand before the band clamped it, the value after "
+                    "every limit, and the code actually written"},
+            {"label": "band",
+             "text": _num_text(low, "", 2) + " – " + _num_text(high, "%", 2)
+                     + " inside " + _num_text(control.get("hard_min_pct"), "", 2)
+                     + " – " + _num_text(control.get("hard_max_pct"), "%", 2),
+             "mark": "",
+             "tip": "the authority band follows the setpoint; the envelope "
+                    "around it does not, and its ceiling is what nothing moves"},
+            {"label": "feedforward",
+             "text": _num_text(control.get("velocity_ff_pct"), "%", 3),
+             "mark": "",
+             "tip": "the ramp's lead -- why a sweeping loop rails legitimately"},
+            {"label": "readback",
+             "text": _num_text(control.get("readback_pct"), "%", 2)
+                     + (", written this cycle" if control.get("wrote")
+                        else ", NOT written this cycle"),
+             # Only news while the loop is supposed to be driving: one that has
+             # been held is not failing to write.
+             "mark": "warn" if (not control.get("wrote")
+                                and state == "tracking") else "",
+             "tip": "what the box says it is at, and whether this cycle wrote"},
+            {"label": "gains",
+             "text": "P " + _num_text(control.get("p"), "", 4)
+                     + "   I " + _num_text(control.get("i"), "", 1),
+             "mark": "",
+             "tip": "scheduled, not set: re-solved from the measured gain and "
+                    "time constant at the present temperature. There is no D"},
+        ]},
+        {"title": "What it believes", "rows": [
+            # NOT marked from the number.  Whether the residual is acceptable
+            # is the supervisor's judgement and it publishes it as
+            # `model_trusted`; a threshold applied here would be a second one.
+            {"label": "premise", "text": premise, "mark": "", "tip": premise_tip},
+            {"label": "model",
+             "text": _num_text(control.get("model_error_k"), "K") + ", " + model,
+             "mark": "warn" if trusted is False else "",
+             "tip": "measured minus model at a settled hold, and the "
+                    "supervisor's verdict. No opinion is not a clean bill"},
+        ]},
+    ]
+
+    # Sentences, which have nowhere else to go: they do not fit a cell and a
+    # panel wide enough for them is a panel that scrolls sideways.
+    if control.get("reason"):
+        groups[-1]["rows"].append({"label": "reason",
+                                   "text": str(control["reason"]),
+                                   "mark": "warn", "tip": ""})
+    for alarm in control.get("alarms") or []:
+        groups[-1]["rows"].append({"label": "alarm", "text": str(alarm),
+                                   "mark": "warn", "tip": ""})
+    return groups

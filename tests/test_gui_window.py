@@ -2120,18 +2120,42 @@ def test_a_recorder_that_is_only_a_software_loop_still_gets_a_table(
     w.close()
 
 
-def test_the_software_row_cannot_be_selected_into_the_command_panel(
+def test_the_software_row_points_the_panel_at_the_software_loop(
         tmp_path, qt_app):
-    """It takes no setpoint, range or PID command -- only Arm and the panic
-    Hold.  A row that could be clicked into a selection the panel cannot
-    honour would be a row that lies."""
+    """It used to be the one row that would not select, because the panel was
+    per-instrument and the software loop is not on an instrument.  The panel
+    is per-target now and has a control that honours it, so the rule that
+    kept the row unclickable is the rule that changed."""
     w = cryostat(tmp_path, qt_app, [CTRL], control=dict(SOFTWARE))
     w.readings.selectRow(1)                       # loop 2, a real one
     assert w._target.loop == 2
-    w.readings.selectRow(4)                       # the software row
-    assert w._target.loop == 2                 # unmoved
-    assert not w.readings.item(row_for(w, 'Sample'), 2).flags() & QtCore.Qt.ItemIsSelectable
-    assert w.readings.item(0, 2).flags() & QtCore.Qt.ItemIsSelectable
+    w.readings.selectRow(row_for(w, "Sample"))    # the software row
+    assert w._target.kind == "software"
+    assert w.target_combo.currentText() == "software loop"
+    # Nothing an instrument loop takes is offered for it: no range to raise,
+    # no gains of its own to send.
+    assert not showing(w.range_group) and not showing(w.pid_group)
+    assert not showing(w.analog_group)
+    w.close()
+
+
+def test_a_thermometer_no_loop_reads_is_still_not_selectable(tmp_path, qt_app):
+    """The other half of the rule: a row is clickable exactly when it names
+    something this panel can be aimed at, and a watched thermometer does not."""
+    w = cryostat(tmp_path, qt_app, [MON], control=dict(SOFTWARE))
+    spare = w.readings.rowCount()
+    with open(w.source.path) as fh:
+        status = json.load(fh)
+    status["t_wall"] = time.time()
+    status["channels"].append({"name": "Rad Shield", "kelvin": 40.0,
+                               "usable": True})
+    with open(w.source.path, "w") as fh:
+        json.dump(status, fh)
+    w.refresh()
+    assert w.readings.rowCount() == spare + 1
+    row = row_for(w, "Rad Shield")
+    assert not w.readings.item(row, 0).flags() & QtCore.Qt.ItemIsSelectable
+    assert w.readings.item(row_for(w, "Sample"), 0).flags() & QtCore.Qt.ItemIsSelectable
     w.close()
 
 

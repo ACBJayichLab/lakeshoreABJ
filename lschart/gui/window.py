@@ -59,7 +59,8 @@ from . import theme
 from .source import (
     COMFORT_STOP_K, COMFORT_STOP_PCT, GAP_FACTOR, NO_TARGET, CommandTarget, CsvTail,
     SATURATED_HIGH_PCT, SATURATED_LOW_PCT, StatusSource, capabilities, classify_column,
-    command_targets, connect_flags, loop_marks, loop_rows, nearest_series, reading_rows,
+    command_targets, connect_flags, control_detail, loop_marks, loop_rows,
+    nearest_series, reading_rows,
     region_stats, row_target_key, write_region_csv,
 )
 
@@ -853,6 +854,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._offered_keys: set = set()
         box.addWidget(self.readings, 0)
 
+        # Directly beneath the row that summarises it, which is where somebody
+        # looks next.  It costs nothing on a plain recorder, where it is hidden.
+        box.addWidget(self._software_panel(), 0)
+
         # Three rows of labelled buttons became two dense ones.  These are
         # small, frequently-hit controls and they were spending three rows of a
         # panel that has none to spare; compact buttons and a shared row lose
@@ -975,6 +980,91 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # in a narrow column is the worst shape for them, and this panel is the
         # thing that is short of height.
         return panel
+
+    def _software_panel(self) -> QtWidgets.QWidget:
+        """What the software loop is doing, beneath the row that summarises it.
+
+        The reasoning is in `control_detail`, which has no Qt in it; this is
+        the painting.  Labels rather than a table: they wrap, they are cheap,
+        and each takes a stylesheet of its own, which a table item does not.
+
+        **Hidden on a plain recorder**, which is most installs -- and the
+        height is available exactly where it is wanted, because the cryostat
+        that has a software loop is the one whose table is a row or two rather
+        than a 336's four.
+        """
+        self.software_panel = QtWidgets.QGroupBox("Software loop")
+        box = QtWidgets.QVBoxLayout(self.software_panel)
+        _tighten(box)
+        self.software_grid = QtWidgets.QGridLayout()
+        self.software_grid.setContentsMargins(0, 0, 0, 0)
+        self.software_grid.setHorizontalSpacing(8)
+        self.software_grid.setVerticalSpacing(1)
+        self.software_grid.setColumnStretch(1, 1)
+        box.addLayout(self.software_grid)
+        #: (label, value) label pairs by row, built on demand and reused: the
+        #: shape only changes when the recorder starts or stops publishing a
+        #: field, and rebuilding every second would fight the palette.
+        self._software_rows: list[tuple] = []
+        self.software_panel.setVisible(False)
+        self.software_panel.setToolTip(
+            "What the software loop is doing, from the recorder's status file. "
+            "Read here, commanded in the panel below — this viewer holds no "
+            "port and judges nothing: every verdict on this panel is the "
+            "supervisor's own.")
+        return self.software_panel
+
+    def _update_software_panel(self) -> None:
+        """Repaint the detail rows, or hide the panel when there is no loop."""
+        groups = control_detail(self.source.control())
+        if groups is None:
+            self.software_panel.setVisible(False)
+            return
+        self.software_panel.setVisible(True)
+
+        flat: list[tuple[str, dict]] = []
+        for group in groups:
+            flat.append(("title", {"label": group["title"], "text": "",
+                                   "mark": "", "tip": ""}))
+            flat.extend(("row", row) for row in group["rows"])
+
+        while len(self._software_rows) < len(flat):
+            index = len(self._software_rows)
+            name = QtWidgets.QLabel("")
+            value = QtWidgets.QLabel("")
+            value.setWordWrap(True)
+            self.software_grid.addWidget(name, index, 0)
+            self.software_grid.addWidget(value, index, 1)
+            self._software_rows.append((name, value))
+
+        for index, (name, value) in enumerate(self._software_rows):
+            if index >= len(flat):
+                name.setVisible(False)
+                value.setVisible(False)
+                continue
+            name.setVisible(True)
+            value.setVisible(True)
+            kind, row = flat[index]
+            if kind == "title":
+                # A heading, not a reading: the group titles are what make
+                # four short lists legible as four questions.
+                name.setText(row["label"])
+                name.setStyleSheet("font-weight:600;")
+                value.setText("")
+                value.setStyleSheet("")
+                name.setToolTip("")
+                value.setToolTip("")
+                continue
+            name.setText(row["label"])
+            name.setStyleSheet(theme.note_style("muted", self))
+            value.setText(row["text"])
+            # **Never paint the normal case.**  An unmarked row has no colour
+            # of its own -- a hardcoded foreground is a bug on a dark desktop
+            # exactly as it is on a light one.
+            value.setStyleSheet(
+                theme.note_style(row["mark"], self) if row["mark"] else "")
+            name.setToolTip(row["tip"])
+            value.setToolTip(row["tip"])
 
     def _command_box(self) -> QtWidgets.QWidget:
         """The control panel: one instrument selector, then whatever it can do.
@@ -1622,6 +1712,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             state, _ = self.source.health()
             self.banner.setStyleSheet(theme.banner_style(state, self))
             self._update_readings()
+            self._update_software_panel()
             self._update_gate_notes()
             self._place_selector()
         except Exception:  # pragma: no cover - cosmetic, never fatal
@@ -1639,6 +1730,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._reconcile_targets()
             self._update_banner()
             self._update_readings()
+            self._update_software_panel()
             self._update_links()
             self._update_commands()
             self._sync_command_values()
@@ -2142,10 +2234,13 @@ class ViewerWindow(QtWidgets.QMainWindow):
     def _offered_targets(self) -> list[CommandTarget]:
         """What this recorder can be asked to do, right now.
 
-        The software loop is not among them yet -- it joins when the panel has
-        a control that can honour it.
+        The software loop is among them: it takes a setpoint, and the panel has
+        a control for it.  It is not on a box, so it has no instrument name --
+        which is the same empty string that addresses the recorder rather than
+        one box in a command file, and not a coincidence.
         """
-        return command_targets(self.source.writable_links())
+        return command_targets(self.source.writable_links(),
+                               self.source.control())
 
     def _reconcile_targets(self) -> None:
         """Keep the selector's list, and the selection, honest.

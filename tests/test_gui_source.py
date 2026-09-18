@@ -18,7 +18,8 @@ import pytest
 
 from lschart.gui.source import (
     EMPTY_LOOP, NO_TARGET, SOFTWARE_LOOP_LABEL, CsvTail, Series, StatusSource,
-    capabilities, classify_column, command_targets, connect_flags, control_row,
+    capabilities, classify_column, command_targets, connect_flags, control_detail,
+    control_row,
     loop_marks, loop_rows, nearest_series, reading_rows, region_stats,
     row_target_key, value_at, write_region_csv,
 )
@@ -1897,3 +1898,208 @@ def test_nothing_selected_is_a_value_rather_than_a_hole():
     assert NO_TARGET.kind == "none"
     assert NO_TARGET.instrument == "" and NO_TARGET.loop is None
     assert NO_TARGET.key not in {t.key for t in command_targets([MONITOR])}
+
+
+# -- the software loop's own account of itself --------------------------------
+#
+# The loop that most needs watching had one table row and a hover.  What these
+# pin is the wording, because the wording IS the deliverable: "no opinion"
+# rather than a plausible zero is exactly what must not be got wrong, and a
+# mark that came from arithmetic done here rather than from the supervisor's
+# own verdict would be a second set of limits able to disagree with the first.
+
+
+def a_full_control(**kw):
+    """`a_control` plus everything the status file grew after schema 3.
+
+    Built on the same helper rather than beside it, so the two cannot drift
+    about what a healthy loop looks like -- the detail panel and the table row
+    are two readings of one block.
+    """
+    block = a_control(
+        setpoint_k=99.6, setpoint_target_k=99.6, error_k=-0.003,
+        output_pct=63.08, demand_pct=63.0799, target_pct=63.0799,
+        fault_error_k=5.0, p=0.0267, i=439.19, phase="hold", raw_k=99.603,
+        filtered_k=99.603, slope_k_per_s=0.00021, noise_k=0.0136,
+        validity="good", corroborated=True, readback_pct=63.08, wrote=True,
+        missing_power_w=-0.00058, sigma_q_w=0.00152, dq_step_w=0.0009,
+        residual_reason="", model_error_k=-0.0469, model_trusted=True,
+        velocity_ff_pct=0.0, hard_min_pct=0.0, hard_max_pct=70.0,
+        min_output_pct=28.0,
+    )
+    block.update(kw)
+    return block
+
+
+def detail_rows(control):
+    return [r for g in (control_detail(control) or []) for r in g["rows"]]
+
+
+def detail_row(control, label):
+    (row,) = [r for r in detail_rows(control) if r["label"] == label]
+    return row
+
+
+def test_a_recorder_with_no_software_loop_gets_no_panel():
+    """Absent and empty mean the same thing, which is the degrade
+    `control_row` already makes: a panel of dashes would invent a loop."""
+    assert control_detail(None) is None
+    assert control_detail({}) is None
+
+
+def test_every_row_carries_a_label_a_value_and_a_severity():
+    for row in detail_rows(a_full_control()):
+        assert row["label"] and row["text"]
+        assert set(row) == {"label", "text", "mark", "tip"}
+
+
+def test_a_severity_is_only_ever_one_of_three_names():
+    """Never a colour.  `theme.py` resolves these against the live palette and
+    measures the contrast; a colour picked here would freeze the theme."""
+    for control in (a_full_control(), a_full_control(state="crashed", health="fault",
+                                           corroborated=False, wrote=False,
+                                           model_trusted=False, error_k=9.0,
+                                           reason="why", alarms=["a"])):
+        for row in detail_rows(control):
+            assert row["mark"] in ("", "warn", "bad"), row
+
+
+def test_a_healthy_loop_is_painted_nowhere():
+    """theme.py's first rule: ordinary text has no colour of its own."""
+    assert not any(r["mark"] for r in detail_rows(a_full_control()))
+
+
+def test_a_latched_loop_is_the_one_that_reads_as_bad():
+    """`locked_out` and `crashed` both mean the loop stopped itself and nobody
+    has looked yet.  Everything else that is not tracking is a warning."""
+    assert detail_row(a_full_control(state="locked_out"), "state")["mark"] == "bad"
+    assert detail_row(a_full_control(state="crashed"), "state")["mark"] == "bad"
+    assert detail_row(a_full_control(state="frozen"), "state")["mark"] == "warn"
+    assert detail_row(a_full_control(state="ramping_down"), "state")["mark"] == "warn"
+
+
+def test_a_state_is_never_shortened_past_its_underscore():
+    """"ramping down" is a fault backing the heater off; clipping it to
+    "ramping" would read as an ordinary setpoint traversal."""
+    assert detail_row(a_full_control(state="ramping_down"), "state")["text"] == \
+        "ramping down (pid)"
+    assert "locked out" in detail_row(a_full_control(state="locked_out"), "state")["text"]
+
+
+def test_no_opinion_is_words_and_never_a_plausible_zero():
+    """A residual of 0 mW and a residual with nothing to say are different
+    answers, and the second is not a clean bill."""
+    quiet = a_full_control(missing_power_w=None,
+                      residual_reason="output below min_output_pct")
+    assert detail_row(quiet, "premise")["text"] == "no opinion"
+    assert "min_output_pct" in detail_row(quiet, "premise")["tip"]
+    assert "28" in detail_row(quiet, "premise")["tip"]      # explains the blank
+    zero = a_full_control(missing_power_w=0.0)
+    assert detail_row(zero, "premise")["text"].startswith("0.00 mW")
+
+
+def test_the_premise_is_not_marked_from_its_own_number():
+    """Whether the residual is acceptable is the supervisor's judgement, which
+    it publishes as `model_trusted`.  A threshold applied here would be a
+    second one, able to disagree with the first."""
+    assert detail_row(a_full_control(missing_power_w=-0.5), "premise")["mark"] == ""
+    assert detail_row(a_full_control(model_trusted=False), "model")["mark"] == "warn"
+    assert detail_row(a_full_control(model_trusted=None), "model")["mark"] == ""
+    assert "no opinion" in detail_row(a_full_control(model_trusted=None), "model")["text"]
+
+
+def test_corroboration_has_three_answers_and_says_which():
+    assert ", corroborated" in detail_row(a_full_control(), "reading")["text"]
+    assert detail_row(a_full_control(), "reading")["mark"] == ""
+    doubted = a_full_control(corroborated=False)
+    assert "NOT corroborated" in detail_row(doubted, "reading")["text"]
+    assert detail_row(doubted, "reading")["mark"] == "warn"
+    unknown = a_full_control(corroborated=None)
+    assert "no opinion" in detail_row(unknown, "reading")["text"]
+    assert detail_row(unknown, "reading")["mark"] == ""
+
+
+def test_a_rejected_reading_names_the_test_that_rejected_it():
+    row = detail_row(a_full_control(validity="spike_reject"), "reading")
+    assert row["text"].startswith("spike reject")
+    assert row["mark"] == "warn"
+
+
+def test_not_writing_is_news_only_while_the_loop_should_be_driving():
+    """A loop that has been held is not failing to write."""
+    assert detail_row(a_full_control(wrote=False), "readback")["mark"] == "warn"
+    held = a_full_control(wrote=False, state="idle", mode="off")
+    assert detail_row(held, "readback")["mark"] == ""
+    assert "NOT written" in detail_row(held, "readback")["text"]
+
+
+def test_the_rail_is_judged_on_the_demand_against_the_published_band():
+    """The written value is quantised and the band re-applied by stepping
+    down a code, so a saturated loop writes below its own rail -- and the band
+    is a percent wide here, nowhere near the fixed rails a heater uses."""
+    row = detail_row(a_full_control(demand_pct=65.0), "asked / allowed / written")
+    assert row["mark"] == "warn"
+    assert detail_row(a_full_control(), "asked / allowed / written")["mark"] == ""
+
+
+def test_the_band_is_drawn_inside_the_envelope_it_sits_in():
+    """The band follows the setpoint and the envelope does not, so the band
+    alone cannot be drawn honestly."""
+    text = detail_row(a_full_control(), "band")["text"]
+    assert "62.08" in text and "64.08" in text          # the band
+    assert "70.00" in text                              # what nothing moves
+
+
+def test_a_ramping_setpoint_shows_where_it_is_heading():
+    steady = detail_row(a_full_control(), "setpoint")["text"]
+    assert steady == "99.600 K" and "→" not in steady
+    moving = detail_row(a_full_control(ramping=True, setpoint_target_k=101.0),
+                        "setpoint")["text"]
+    assert "99.600 K" in moving and "101.000 K" in moving
+
+
+def test_the_error_row_quotes_both_thresholds():
+    """Warn at one, fault at the other: the margin is the useful reading."""
+    tip = detail_row(a_full_control(), "error")["tip"]
+    assert "1.00 K" in tip and "5.00 K" in tip
+    assert detail_row(a_full_control(error_k=2.0), "error")["mark"] == "warn"
+    assert detail_row(a_full_control(error_k=2.0, threshold_k=None), "error")["mark"] == ""
+
+
+def test_a_slope_in_kelvin_per_second_is_read_as_millikelvin_per_minute():
+    """A wrong factor here is invisible on screen, which is why it is pinned."""
+    assert detail_row(a_full_control(slope_k_per_s=0.001), "slope")["text"] == \
+        "60.0 mK/min"
+    assert detail_row(a_full_control(noise_k=0.0136), "noise")["text"] == "13.6 mK"
+
+
+def test_a_missing_number_is_a_dash_rather_than_a_zero():
+    blank = a_full_control(filtered_k=None, readback_pct=None, noise_k=None,
+                      model_error_k=None)
+    assert "—" in detail_row(blank, "raw / filtered")["text"]
+    assert detail_row(blank, "noise")["text"] == "—"
+    assert detail_row(blank, "readback")["text"].startswith("—")
+
+
+def test_the_sentences_land_where_they_have_room():
+    """`reason` and `alarms` do not fit a cell, and a panel wide enough for
+    them is a panel that scrolls sideways."""
+    plain = a_full_control()
+    assert not [r for r in detail_rows(plain) if r["label"] in ("reason", "alarm")]
+    noisy = a_full_control(reason="premise broken for 14 min",
+                      alarms=["dQ -5.08 mW", "coldplate drifting"])
+    said = [r for r in detail_rows(noisy) if r["label"] in ("reason", "alarm")]
+    assert [r["text"] for r in said] == [
+        "premise broken for 14 min", "dQ -5.08 mW", "coldplate drifting"]
+    assert all(r["mark"] == "warn" for r in said)
+
+
+def test_a_block_from_an_older_recorder_still_draws():
+    """Everything new is defaulted, so a recorder that publishes only what
+    schema 3 did gets a panel of dashes rather than a traceback."""
+    old = {"state": "tracking", "mode": "pid", "health": "ok",
+           "sensor": "Sample", "setpoint_k": 96.0, "output_pct": 63.0}
+    groups = control_detail(old)
+    assert groups is not None
+    assert detail_row(old, "premise")["text"] == "no opinion"
+    assert detail_row(old, "slope")["text"] == "—"
