@@ -27,8 +27,9 @@ Previous: [archive/HANDOFF-2026-09-17c.md](archive/HANDOFF-2026-09-17c.md)
 > now. What that costs, and why it can wait, is
 > [§3](#3-one-thing-wants-a-restart-and-it-can-wait).
 >
-> **The monitor has never judged this cryostat** — four days of `no opinion`,
-> from a stopped clock. [§4](#4-the-monitor-has-never-judged-the-live-cryostat).
+> **The monitor stopped judging when the recorder restarted** and has been
+> blind for the whole of this hold — a stopped clock.
+> [§4](#4-the-monitor-stops-judging-after-a-recorder-restart).
 >
 > Stopping is unchanged and always works:
 > ```bash
@@ -127,20 +128,24 @@ the degrade the projection is built for and there is a test on it
 rather than a thing to fix. Pick the restart up whenever the cryostat is next
 free; nothing needs it tonight.
 
-## 4. THE MONITOR HAS NEVER JUDGED THE LIVE CRYOSTAT
+## 4. The monitor stops judging after a recorder restart
 
-**Found tonight by pointing the new viewer at the running recorder**, which is
-the first time anything displayed the verdict where somebody would see it.
+**Found by pointing the new viewer at the running recorder**, which is the
+first time anything put the verdict where somebody would see it.
 
 `python -m ltspm3.monitor` is running and writing `plant.json` every two
-seconds. It has produced **`no opinion` on every residual, on every sample,
-for four days** — 131,179 rows across `plant_2026-09-14` through `-17`.
-Not one `typical`, not one `warn`. The safety net has been blind since it was
-deployed.
+seconds. It judged normally for most of four days — `missing_power` reads
+`typical` on 87–99 % of samples in `plant_2026-09-14` through `-17`. Then, at
+**20:12:47, sixteen seconds after the recorder was restarted**, every residual
+went to `no opinion` and has stayed there since. The reason reads `within 3 tau
+of a heater move` through a hold that has been settled for hours.
 
-**Root cause, and it is not a tuning question.** The recorder was restarted
-**six times today**, and each restart resets the CSV's `Time` column to zero
-while the *same* daily file carries on:
+So the judge has been blind for the whole of the armed hold in §1 — the one
+stretch it most needed to be watching.
+
+**Root cause: a stopped clock, not a threshold.** The recorder resets the CSV's
+`Time` column to zero on restart while the *same* daily file carries on. That
+happened six times today:
 
 ```
 09:04:33   Time 32660 -> 0      14:51:06   Time 13057 -> 0
@@ -148,28 +153,44 @@ while the *same* daily file carries on:
 11:13:20   Time  1721 -> 0      20:12:31   Time 16099 -> 0
 ```
 
-`_Clock.at` in `ltspm3/monitor/source.py` builds its monotonic clock as
-`origin + relative_s` and then ratchets it with `max(t, self.last)`. That
-ratchet is right for the thing it was written for — AUDIT-2026-09-10 finding 4,
-a daylight-saving fold across a *file* boundary, which `open_file` handles. A
-`Time` reset **inside** one file is not a fold: it is a new origin, and the
-ratchet turns it into a permanent freeze. After 09:04 the column never climbed
-back above 32660, so `t_s` has been pinned at that value ever since —
-`1789661061.966`, while `epoch` and every reading advance normally.
+`_Clock.at` in `ltspm3/monitor/source.py` builds `origin + relative_s` and then
+ratchets with `max(t, self.last)`. That ratchet is right for what it was
+written for — AUDIT-2026-09-10 finding 4, a daylight-saving fold across a
+*file* boundary, which `open_file` handles. A `Time` reset **inside** one file
+is not a fold: it is a new origin, and the ratchet turns it into a permanent
+freeze. `t_s` is now pinned at the value of the day's first reset and does not
+advance at all, while `epoch` and every reading do.
 
-Everything the judge decides is in that timebase: `in_transient` compares
-`s.t_s - self._move_t`, `_Persist.update` needs `after_s` of it to elapse, and
-the baseline ages by it. With the clock stopped, **no gate ever expires**, so
-the reason reads `within 3 tau of a heater move` two hours into a settled hold.
+Everything the judge decides lives in that timebase — `in_transient` compares
+`s.t_s - self._move_t`, `_Persist.update` needs `after_s` of it to elapse, the
+baseline ages by it — so once it stops, **no gate ever expires again**.
 
-**What it is not:** not the armed loop's dither. One write is 0.009 % — 0.11 K
-of plant gain against a 1.0 K `move_k` — and during the settled hold nothing
-crosses that threshold at all.
+**It is a fresh read of a file containing a reset that does it**, which is why
+the monitor judged fine earlier in the same day: the clock freezes at the
+highest `Time` the file ever reached, and nothing after that can exceed it.
 
-**Do not treat phase 2's gate as met on the cryostat.** It was met against the
-archive, where a file is read once and the column is monotonic; the live path
-has never been exercised past a restart. Fixing the clock is step one, and the
-soak has to start again after it, because none of the four days counts.
+**Not the armed loop's dither.** One write is 0.009 % — 0.11 K of plant gain
+against a 1.0 K `move_k` — and nothing during the settled hold crosses it.
+
+### And a second, separate defect: `tau` pins the overall verdict
+
+The top-level `verdict` is `no opinion` on **every sample of all four days**,
+including the ones where every other residual says `typical`. It is
+`max(state for q, tc, tau, noise)` by rank, and `tau` answers `no move to
+measure` unless there is a step to fit — which, at a hold, there never is. So
+one residual that is *correctly* silent makes the headline permanently silent
+too, and a reader who looks only at the headline learns nothing.
+
+That is a design question rather than a bug, and PID_PLAN §7's own rule — no
+opinion is not typical, and a green light outside the table is a lie — is what
+makes it subtle: the headline is not *wrong*, it is just never informative.
+Either `tau` comes out of the worst-of, or the headline needs to say which
+residuals it is speaking for.
+
+**Phase 2's gate should not be read as met on the cryostat.** It was met
+against the archive, where a file is read once and the column is monotonic. The
+live path has never been exercised past a restart, and the soak wants rerunning
+once the clock is right.
 
 ## 5. The other open items
 

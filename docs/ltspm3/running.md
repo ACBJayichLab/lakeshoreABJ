@@ -321,6 +321,14 @@ about step size and doublets.
 **Built 2026-09-14, soaked 2026-09-15** beside the live recorder. Run it when
 you want it; it can do nothing.
 
+> **Two things to know before you trust a verdict**, both in
+> [plans/pid-2-monitor.md §2.6](../../plans/pid-2-monitor.md#26-two-defects-the-live-path-has-and-the-archive-cannot-show):
+> the judge's clock **stops when the recorder restarts**, after which every
+> residual sits at `no opinion` for ever; and the **overall `verdict` is pinned
+> to `no opinion`** by `tau`, which has nothing to say at a hold. Read the
+> per-residual rows, not the headline, and restart the monitor after you
+> restart the recorder until the first of those is fixed.
+
 ```bash
 python -m ltspm3.monitor -c config-ltspm3-heater.yaml     # follow the live log
 python -m ltspm3.monitor --replay reference/cooldown-10/  # 57 days of archive

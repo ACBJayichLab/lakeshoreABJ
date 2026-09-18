@@ -13,7 +13,8 @@ in-loop check (plan 3 §3.4) is tested against.
 an archive replay, one `Sample` shape), `judge.py` (the residuals and the
 verdicts), `report.py` (`plant.json` and the daily CSV), `__main__.py`.
 37 tests, of which 11 are the replay on genuine data. **The live soak is what
-is left, and it is one diurnal cycle rather than 72 h** — see the exit gate;
+is left, and two defects in §2.6 have to be fixed before one counts** — see the
+exit gate;
 §2.4 has the replay row by row and §2.5 the two thresholds.
 
 **And the soak WAS blocked on code, which this plan twice said it was not.**
@@ -325,6 +326,54 @@ file underneath the judge and asserts what each residual says on the far side.
 Do it before stage 5, not before arming: nothing here bears on whether the loop
 may close.
 
+## 2.6 Two defects the live path has, and the archive cannot show
+
+Both were found by displaying the verdict in the viewer, which is the first
+time anything put it where a person would see it. **Neither is reachable from
+the replay**: the archive is read once, front to back, from a file whose
+relative-time column only ever increases.
+
+### 1. A recorder restart stops the clock, and it never starts again
+
+The recorder resets its CSV's `Time` column to zero when it restarts, while the
+*same* daily file carries on — so one day's file can contain several ascending
+runs rather than one.
+
+`_Clock.at` builds `origin + relative_s` and ratchets the result with
+`max(t, self.last)`. That ratchet pays AUDIT-2026-09-10 finding 4: a
+daylight-saving fold, where a *new file* opens at a stamp earlier than the last
+sample, and `open_file` is what handles it. **A reset inside one file is not a
+fold.** It is a new origin, and the ratchet turns it into a permanent freeze:
+`t_s` pins at the highest value the file ever reached and nothing later can
+exceed it.
+
+Every judgement is in that timebase — `in_transient` compares
+`s.t_s - self._move_t`, `_Persist.update` waits `after_s` of it, the baseline
+ages by it — so once it stops, **no gate ever expires**. The visible symptom is
+every residual stuck at `no opinion` reading `within 3 tau of a heater move`,
+through a hold that has been settled for hours.
+
+What a fix has to keep: the fold protection. The two cases are distinguishable
+— a fold arrives with a *new file* and a backward **epoch**, an in-file restart
+arrives with a backward **relative** column and a forward epoch — so the
+in-file case wants its own origin rather than the ratchet. It wants a test that
+feeds one file containing a `Time` reset and asserts the clock advances across
+it, which is the test the replay's single-pass archive could never have been.
+
+### 2. `tau` pins the overall verdict to `no opinion`
+
+The top-level `verdict` is `max` by rank over `q, tc, tau, noise`, and `tau`
+answers `no move to measure` unless there is a step to fit. At a hold there
+never is — so the headline reads `no opinion` on every sample even where every
+other residual says `typical`.
+
+This is not a wrong answer, which is what makes it easy to miss: §7's rule is
+that no opinion must never read as green, and it does not. It is an
+*uninformative* one, permanently, and a reader who checks only the headline
+learns nothing from it. Either `tau` comes out of the worst-of — it is the one
+residual whose silence carries no information about the cryostat's health — or
+the headline has to say which residuals it is speaking for.
+
 ## Exit gate
 
 - The replay table green in `pytest`; `fault_mw` and `warn_after_s` written
@@ -336,7 +385,10 @@ may close.
   `fault_window_s`** rather than a level -- §2.5.
 - **One diurnal cycle** beside the live recorder, `plant.json` current, the
   post-repair residual inside the band throughout, every warning explained.
-  **RUN 2026-09-15.**
+  **NOT MET.** A cycle was run on 2026-09-15, but §2.6's first defect means a
+  soak is only judging until the recorder next restarts, and the second means
+  the headline verdict carries no information at any point in it. Both want
+  fixing before a soak counts, and the cycle wants rerunning after.
 
   **The length was 72 h and nothing justified it.** What establishes the
   false-alarm rate is the replay across 63 days of archive, already green in

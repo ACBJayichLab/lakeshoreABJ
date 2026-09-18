@@ -18,7 +18,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 |---|---|---|---|
 | **0** | §5 here | the record is straight | **DONE 2026-09-12** — `curate --propose` clean, `send note` proved on the live recorder, four documents corrected |
 | **1** | [plans/pid-1-model.md](plans/pid-1-model.md) | a model that is right from 4 to 300 K, with its error band exported | **DONE 2026-09-14** — REFIT §1 green; in-epoch prediction 0.135 K rms; `missing_power_w` 0.58 mW worst in-epoch over 40 K; `sigma_q_w` exported. The 300 K half is a PIPELINE, run as a dry run; the ladder itself is stage 6 |
-| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **Live soak run 2026-09-15; the gate is one diurnal cycle, not 72 h** |
+| **2** | [plans/pid-2-monitor.md](plans/pid-2-monitor.md) | a judge outside the loop that catches both archive events and nothing else | **BUILT 2026-09-14** — 09-10 warns in 14 min at −5.08 mW and never faults; < 1 warning/week met; two rows argued in §2.4 rather than met. **The gate is NOT met live**: a recorder restart stops the judge's clock and it never judges again, and the overall verdict is pinned by `tau` — see [§2.6](plans/pid-2-monitor.md#26-two-defects-the-live-path-has-and-the-archive-cannot-show) |
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts, **a band that follows the setpoint** | **BUILT 2026-09-14** — 8 scenarios × 6 temperatures green, 8 rate fields → 2, hold at 2 DAC codes/min. **Review fixes all ten landed 2026-09-15** ([plans/pid-3-review.md](plans/pid-3-review.md)): the bench no longer depends on the date, `CRASHED` latches, the descent is bounded and cannot be finished by a failed read, and **both kelvin rows are reachable** — a heater delivering half its power at 30 K now faults instead of holding 14 K low in silence. §3.6's soak outstanding |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | **4a met 2026-09-16; 4e's bench gate met 2026-09-17** (`test_stage_4e_fast_move.py`), cryostat pending; then 7 days unattended, hold graded against the 09-15 open-loop night; ladder graded to 300 K |
 | **5** | §6 here | warnings and faults in the viewer | **BUILT** — verdict rows, the loop's detail panel and a software setpoint control; contrast test green. Live check and MATLAB `plant()` outstanding |
@@ -309,7 +309,7 @@ command spool earning its keep.
 - **a setpoint control**, because `send setpoint --software` was reachable from
   every client except the one that is open while somebody types temperatures.
   Its gate is the opposite of the manual output's, which is written down in
-  [gui](../docs/recorder/gui.md) rather than left to be inferred.
+  [gui](docs/recorder/gui.md) rather than left to be inferred.
 
 **Still outstanding:** MATLAB `plant()`.
 
