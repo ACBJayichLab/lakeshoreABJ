@@ -1,209 +1,226 @@
-# Handoff — 2026-09-17, night (the loop is holding 125 K, and the viewer can finally see it)
+# Handoff — 2026-09-18, small hours (the judge can judge again, and the log can grade a move)
 
 Point-in-time status. Durable context lives in `CLAUDE.md` and `docs/`; **the
 loop's requirements are [docs/ltspm3/requirements.md](docs/ltspm3/requirements.md)**,
 the route is [PID_PLAN.md](PID_PLAN.md), and the commissioning step-by-step is
 [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md). This goes stale.
 
-Previous: [archive/HANDOFF-2026-09-17c.md](archive/HANDOFF-2026-09-17c.md)
-(the evening: five minutes was too generous, and going fast found three bugs).
+Previous: [archive/HANDOFF-2026-09-17d.md](archive/HANDOFF-2026-09-17d.md)
+(the night: holding 125 K, and the viewer could finally see it).
 
-> ## STATE: ARMED, tracking, holding 125 K on the numbers in this tree.
+> ## STATE: ARMED, tracking, holding 118 K. **The restart has NOT been done.**
 >
-> The recorder was **restarted at 20:12**, so it read this tree's
-> `config-ltspm3-armed.yaml` — `hold_speed: 0.25`, `move_speed: 0.03`,
-> `max_output_rate_pct_per_min: 20`, `authority_pct: 1.0`. The two previous
-> handoffs' "armed on the morning's numbers, nothing here reaches the
-> cryostat" caveat is spent.
+> Jeff moved the setpoint 125 → 118 K at 23:52 and it settled at 23:56. The
+> recorder has been up since 20:12 and is **still running the code it started
+> from** — so none of tonight's four commits are in the running process, and
+> the monitor's clock is still frozen.
 >
 > ```bash
 > python -m lschart -c config-ltspm3-armed.yaml status
 > ```
 >
-> **The viewer work below is on `main`, but not in the running process.**
-> The recorder has been up since 20:12 and Python does not re-read a module
-> any more than the recorder re-reads its config, so it still publishes the
-> old status block. The viewer itself is launched fresh and has all of it
-> now. What that costs, and why it can wait, is
-> [§3](#3-one-thing-wants-a-restart-and-it-can-wait).
->
-> **The monitor stopped judging when the recorder restarted** and has been
-> blind for the whole of this hold — a stopped clock.
-> [§4](#4-the-monitor-stops-judging-after-a-recorder-restart).
+> **[§4](#4-what-is-waiting-for-a-restart) is the two commands that finish
+> this**, and it is the whole of what is left. Everything below §4 is on
+> `main` and on the main checkout's disk; nothing below §4 has reached the
+> cryostat.
 >
 > Stopping is unchanged and always works:
 > ```bash
 > python -m lschart -c config-ltspm3-armed.yaml send hold
 > ```
 
-## 1. What the cryostat did tonight
+## 1. The 125 → 118 K move, graded
 
-**This is the first run on the shipped numbers**, and it is the measurement
-the last three handoffs were waiting for. From the recorder's own CSV,
-`data/ltspm3-armed_2026-09-17.csv`:
-
-| | |
-|---|---|
-| armed | 20:12, at about 130 K |
-| moved | down to 120 K, then **+5.07 K to 125 K** |
-| holding | 125 K since 20:34 — **2.0 h** by the time this was written |
-
-**The +5 K move, graded the way [requirements.md](docs/ltspm3/requirements.md)
-§2 grades one.** `t0` is the output step at 20:31:27 rather than a command time,
-because the recorder's CSV does not carry the software loop's setpoint — see
-[§5](#5-the-other-open-items):
+Jeff commanded it at 23:52. Graded from the recorder's CSV the way
+[requirements.md](docs/ltspm3/requirements.md) §2 grades one, `t0` the output
+step at 23:52:21:
 
 | | measured | Jeff's bar |
 |---|---|---|
-| 95 % of the move | **127 s** | — |
-| within 100 mK | 173 s | — |
-| within 50 mK | **193 s** (3.2 min) | inside 2–5 min |
-| overshoot | **+70 mK** | up to 250 mK |
+| 95 % of the move | **126 s** | — |
+| within 100 mK | 194 s | — |
+| within 50 mK and staying | **242 s** (4.0 min) | inside 2–5 min |
+| overshoot | **50 mK**, undershooting | up to 250 mK |
 
-Both requirements met, the second by more than three times over. The bench
-arithmetic for a move this size — about 40 s fixed plus 12 s per kelvin, which
-is §3b's — predicts 101 s to 95 %; the cryostat took 127 s. **26 s slower than
-the rehearsal and the right side of every gate**, which is the first real
-number anyone has for how well that arithmetic travels.
+**Both bars met, and this is the second cryostat move on the shipped
+numbers.** The bench arithmetic — about 40 s fixed plus 12 s per kelvin,
+[requirements.md](docs/ltspm3/requirements.md) §3b — predicts 124 s to 95 % for
+a 7.01 K move against the 126 s measured. **Two seconds.** Tonight's earlier
++5.07 K move came in 26 s *slower* than the same arithmetic predicted (127 s
+against 101 s), so two moves now bracket it rather than confirm it, and the
+larger move is the one that fits. Worth a third before anyone trusts the
+formula.
 
-**The hold, over 2.05 h at 125 K:** 20.3 mK rms about the setpoint, worst
-excursion 90 mK, mean 125.003 K. The output sits near 64.6 %, writing on about
-two cycles in three, moving some three DAC codes at a time and wandering over
-0.18 % — about 60 codes — across the two hours. That is a loop working, not a
-loop dithering: 0.18 % of authority is what holding 125 K to 20 mK cost.
+Note the settle is slower than the +5 K move's (242 s against 193 s) while the
+approach is faster. Nobody has looked at why.
 
-**What this does not yet say** is the thing the hold is *for*: slow wander at
-long averaging times. Two hours cannot answer it and neither can the bench, whose
-plant has white sensor noise and no slow disturbance. That is still
-`analysis/hold_quality.py` against the 2026-09-15 open-loop night — see §5.
+**Why 118 K.** It is where the open-loop reference night sits (2026-09-15,
+118.31 K at 64.007 %) and where every other number in the tree was measured —
+the band, the Allan ladder, §3's whole bench table. The 125 K hold could not be
+compared to any of them.
 
-These numbers have no durable home yet. If they are to become the cryostat's
-record rather than tonight's, they belong in `requirements.md` §3 beside the
-bench's, and §3b's "nothing here has run on the cryostat yet" wants striking
-when they go in.
+## 2. The monitor had three defects and they are fixed
 
-## 2. The viewer, which was blind to all of this
+All three were live, none is reachable from the archive replay, and the third
+was found by reading the code to fix the second.
+[plans/pid-2-monitor.md §2.6 and §2.7](plans/pid-2-monitor.md) carry the
+detail.
 
-Eight commits, on `main`. The loop had been retuned twice and the
-viewer reflected none of it: the software loop was one table row, and the one
-client that could not move its setpoint was the one open while somebody types
-temperatures.
+**1. A recorder restart froze the clock.** Measured from
+`data/plant_2026-09-17.csv`: it froze at **09:04:33**, the day's first restart,
+and **26,314 of that day's 46,236 samples** carry the frozen stamp.
+`plant.json` has been writing `t_s` **14.7 h behind `epoch`** every two
+seconds.
+
+The part worth carrying: **the freeze is silent for as long as nothing moves
+the heater.** It froze at 09:04 and the judge went on reporting normally until
+the 20:12 arming move latched the transient gate against a clock that could not
+advance. Cause and symptom eleven hours apart, which is why four days of
+`plant_*.csv` look healthy up to the point they suddenly do not.
+
+`Time` is relative to the *process*, so a restart appends to the same daily file
+with the column back at zero. The `max(t, self.last)` ratchet is right for a
+daylight-saving fold across a *file* boundary and wrong for this: it pins `t_s`
+at the highest value the file ever reached. The two are distinguishable — a
+fold has a new file and a backward epoch, a restart a backward relative column
+and a forward epoch — and `_Clock` now counts `restarts` beside `rewinds` so
+the record says which.
+
+**2. The headline said nothing.** `verdict` read `no opinion` on **every one of
+46,236 samples** while `missing_power` read `typical` on 85 % of them, because
+`tau` has no step to fit at a hold and its silence outranked four residuals
+that had something to say.
+
+**3. And it hid a warning.** The aggregate was over four of the six residuals —
+`cold_head` and the latched `fault_level` were published as rows and were not
+in the line at all. A compressor going off would have warned in its own row
+while the summary read whatever the other four said. That is the unsafe
+direction, and it had never been written down anywhere.
+
+Asked, Jeff chose **the worst thing the judge actually knows**: the worst of the
+residuals that *have* an opinion, over all six, with `verdict_for` naming them.
+`no opinion` still wins when nothing can speak. `plant.json`'s schema goes to
+**2** — the field is additive but the same cryostat in the same state now reads
+`typical` where it read `no opinion`.
+
+**Deliberately not changed:** a latched `fault_level` reads `warn` in the
+headline, because `warn` is the most severe word this monitor has. A fourth
+word would change every residual row, the viewer's palette and MATLAB's reader.
+**That is a question for Jeff**, not a thing to decide while fixing something
+else.
+
+## 3. The CSV can grade a move now
+
+Three columns beside `heater_pct`, filled off the controller by name and
+defaulted so `lschart` still imports nothing from `ltspm3`:
+`control.setpoint_k` (what it was chasing), `control.setpoint_target_k` (where
+it was told to go), `control.filtered_k` (what the loop thought it was
+reading — the error is against this, not the raw channel in the same row).
+
+Until now a move had to be timed off the heater's own output step, which is
+what §1's `t0` is and why that table is not a number anyone can check against a
+command. The `Time` column's contract is written down at last, in
+[file-interface.md](docs/recorder/file-interface.md) — it had no home anywhere
+in `docs/recorder/`, and reading it as monotonic-per-file is what cost 26,314
+samples.
+
+**1400 tests and `ruff` clean**; the Qt half also under
+`QT_QPA_PLATFORM=windows`. The archive replay is unmoved — 41 warn
+transitions, 3 fault-level, the 09-10 event still at 11:46 and −5.08 mW. The
+two clock tests and two of the headline tests were each run against the old
+code and **fail there**, which is the only evidence that a regression test
+regresses anything.
+
+## 4. What is waiting for a restart
+
+**The header changed, so the recorder will roll to a `_part2` file rather than
+append** — which is the right thing here: a new file, a new header, a `Time`
+column that restarts for a reason every consumer now handles.
+
+Do it from `C:\Coding\Python\lakeshoreABJ`, which is already fast-forwarded to
+`main` and has all four commits on disk. Ctrl-C the recorder's window rather
+than killing it, so it logs its row count on the way out; `on_exit: hold`
+leaves the heater exactly where it is either way.
+
+```
+python -m ltspm3 -c config-ltspm3-armed.yaml check
+```
+```
+python -m ltspm3 -c config-ltspm3-armed.yaml run --arm --setpoint 118.0
+```
+
+`--setpoint 118.0` on purpose: with no setpoint it arms to whatever the sample
+reads at that instant, and a chosen round number is what the night's
+`control.setpoint_target_k` column should say.
+
+Then the monitor, in its own window — **restart it after the recorder**, so it
+opens the new file rather than following the old one across the roll:
+
+```
+python -m ltspm3.monitor -c config-ltspm3-armed.yaml
+```
+
+**What to check once both are up**, and each of these is a thing that has been
+wrong before:
 
 | | |
 |---|---|
-| **the selector lists loops and outputs, not boxes** | `ls336 loop 1`…`loop 4`, `ls218 analog 1`, `software loop`. One `_target`, with the dropdown and the reading table as two *views* of it — so the software row is clickable now, and a read-only box's loops are not |
-| **the software loop takes a setpoint here** | kelvin and an optional rate, ramped by the supervisor. Its gate is the **opposite** of the manual output's: ownership disables that one and enables this one |
-| **a detail panel** | what the loop is reading, asked → allowed → written, the band inside its envelope, and the watt residual. Every mark on it is a field the supervisor publishes; the viewer judges nothing |
-| **the monitor's verdict** | reads `plant.json` beside the status file. PID_PLAN phase 5 |
-| **the status file publishes what the supervisor knows** | 17 fields → 39, additively and duck-typed, so invariant 1 holds and a plain recorder is unaffected |
+| `plant.json`'s `t_s` within a cycle of its `epoch` | it has been 14.7 h behind |
+| `verdict` reading `typical`, with `verdict_for` naming three or four residuals | it has read `no opinion` for four days |
+| the CSV's header carrying three `control.*` columns, non-empty | §3 |
+| the viewer's detail panel showing numbers rather than `—` | the running process publishes schema 3's old block; a fresh one publishes 39 fields |
+| `check`'s printed band bracketing the output the heater is holding | it was 64.08 % inside 62.96–64.96 at 00:24 |
 
-Two bugs found on the way, both live before tonight:
+**The monitor's baseline is young for six hours after any restart** — that is
+what a restart costs now, instead of costing everything. Read the first six
+hours of `plant_2026-09-18.csv` knowing it.
 
-- **`_queue` had a default instrument.** `IpcService._pick` auto-picks the only
-  controller when that field is empty, so once the software loop became a
-  selectable target with `instrument == ""`, a defaulted `setpoint`, `range` or
-  `pid` would have landed on the 336 — acknowledged OK, with no error
-  anywhere. It is a required keyword now.
-- **`_reconcile_targets` relied on Qt emitting.** Adding the first item to an
-  empty combo makes Qt set the index to 0 itself, so re-aiming *to* index 0 —
-  which is what a dropped first loop does — emitted nothing and left the panel
-  aimed at a loop that no longer existed.
+## 5. The night, and what it settles
 
-1387 tests and `ruff` clean; the Qt half also run under `QT_QPA_PLATFORM=windows`,
-because offscreen resolves no font and roughly doubles every measured width.
+**This is the measurement the last four handoffs have been waiting for**, and
+it needs nothing but leaving the cryostat alone until morning.
 
-## 3. One thing wants a restart, and it can wait
-
-**The Move control works against the recorder running right now.** It accepts
-commands, `ipc.allow_analog_output` is true, and the software branch of
-`setpoint` is in the tree the recorder started from.
-
-**The detail panel will be half dashes until the recorder restarts.** The
-process that has been up since 20:12 imported the old `status.py` and keeps
-publishing schema 3's block, which has none of the fields §2 added — so
-`phase`, `filtered_k`, the watt residual and the band's envelope read as
-`—`. That is
-the degrade the projection is built for and there is a test on it
-(`test_a_block_from_an_older_recorder_still_draws`), so it is a thing to know
-rather than a thing to fix. Pick the restart up whenever the cryostat is next
-free; nothing needs it tonight.
-
-## 4. The monitor stops judging after a recorder restart
-
-**Found by pointing the new viewer at the running recorder**, which is the
-first time anything put the verdict where somebody would see it.
-
-`python -m ltspm3.monitor` is running and writing `plant.json` every two
-seconds. It judged normally for most of four days — `missing_power` reads
-`typical` on 87–99 % of samples in `plant_2026-09-14` through `-17`. Then, at
-**20:12:47, sixteen seconds after the recorder was restarted**, every residual
-went to `no opinion` and has stayed there since. The reason reads `within 3 tau
-of a heater move` through a hold that has been settled for hours.
-
-So the judge has been blind for the whole of the armed hold in §1 — the one
-stretch it most needed to be watching.
-
-**Root cause: a stopped clock, not a threshold.** The recorder resets the CSV's
-`Time` column to zero on restart while the *same* daily file carries on. That
-happened six times today:
-
-```
-09:04:33   Time 32660 -> 0      14:51:06   Time 13057 -> 0
-10:44:26   Time  5953 -> 0      15:44:03   Time  3003 -> 0
-11:13:20   Time  1721 -> 0      20:12:31   Time 16099 -> 0
+```bash
+python -m analysis.hold_quality --csv "data/ltspm3-armed_2026-09-1[78]*.csv" \
+    --from 2026-09-18T00:30 --to 2026-09-18T12:00 \
+    --vs "data/ltspm3-heater_2026-09-1[56].csv" \
+    --vs-from 2026-09-15T18:00 --vs-to 2026-09-16T09:00
 ```
 
-`_Clock.at` in `ltspm3/monitor/source.py` builds `origin + relative_s` and then
-ratchets with `max(t, self.last)`. That ratchet is right for what it was
-written for — AUDIT-2026-09-10 finding 4, a daylight-saving fold across a
-*file* boundary, which `open_file` handles. A `Time` reset **inside** one file
-is not a fold: it is a new origin, and the ratchet turns it into a permanent
-freeze. `t_s` is now pinned at the value of the day's first reset and does not
-advance at all, while `epoch` and every reading do.
+Matched length, and now matched temperature, which is the whole reason the
+setpoint moved. **The bar to beat is the 2026-09-16 night on the weak hold:
+5.6× worse than open loop at 39 min of averaging, bands 1.63 / 3.34 / 7.59.**
+That night ran `hold_speed: 12`; this one runs 0.25, and
+[requirements.md](docs/ltspm3/requirements.md) §3a's Allan table says the ratio
+should be about 0.71 at 900 s. If it is not, the bench plant's white sensor
+noise and absent slow disturbance is the first suspect and the tuning is the
+second.
 
-Everything the judge decides lives in that timebase — `in_transient` compares
-`s.t_s - self._move_t`, `_Persist.update` needs `after_s` of it to elapse, the
-baseline ages by it — so once it stops, **no gate ever expires again**.
+This is the **one ungraded row** in
+[requirements.md](docs/ltspm3/requirements.md) §2 — Jeff's answer 2, the long
+wander. Everything else in that table has a number against it.
 
-**It is a fresh read of a file containing a reset that does it**, which is why
-the monitor judged fine earlier in the same day: the clock freezes at the
-highest `Time` the file ever reached, and nothing after that can exceed it.
+**And 118 → 120 K in the morning is stage 4e's cryostat gate exactly**: a 2 K
+move at 120 K, 95 % in about 60 s, within 50 mK inside 2–5 min. With §3's
+columns in the log it will be gradeable against the command rather than off
+the output step — the first move in this project that is.
 
-**Not the armed loop's dither.** One write is 0.009 % — 0.11 K of plant gain
-against a 1.0 K `move_k` — and nothing during the settled hold crosses it.
+## 6. The other open items
 
-### And a second, separate defect: `tau` pins the overall verdict
-
-The top-level `verdict` is `no opinion` on **every sample of all four days**,
-including the ones where every other residual says `typical`. It is
-`max(state for q, tc, tau, noise)` by rank, and `tau` answers `no move to
-measure` unless there is a step to fit — which, at a hold, there never is. So
-one residual that is *correctly* silent makes the headline permanently silent
-too, and a reader who looks only at the headline learns nothing.
-
-That is a design question rather than a bug, and PID_PLAN §7's own rule — no
-opinion is not typical, and a green light outside the table is a lie — is what
-makes it subtle: the headline is not *wrong*, it is just never informative.
-Either `tau` comes out of the worst-of, or the headline needs to say which
-residuals it is speaking for.
-
-**Phase 2's gate should not be read as met on the cryostat.** It was met
-against the archive, where a file is read once and the column is monotonic. The
-live path has never been exercised past a restart, and the soak wants rerunning
-once the clock is right.
-
-## 5. The other open items
-
-* **the night armed, then `hold_quality.py`.** Tonight *is* the night, and it
-  is 2 h in. The long-averaging half of Jeff's answer 2 needs it run against
-  2026-09-15 once there is a night of it.
+* **the diurnal cycle for phase 2's gate** starts when the fixed monitor does.
+  It wants a day, not 72 h, and the reasoning is in
+  [plans/pid-2-monitor.md](plans/pid-2-monitor.md)'s exit gate.
+* **`cold_head` takes 616 s to recover at a daily file roll** and nobody knows
+  why — two candidates, neither checked. A test that rolls a file under the
+  judge is still unwritten; seven unattended days is seven midnights.
+  pid-2-monitor §2.5.
+* **a fourth word for a latched fault** — §2. Jeff's call.
 * **the positional feedforward** still waits on a delivered-power gauge, and
   when it comes it needs `move_speed` re-graded against §3b rather than §3a.
 * **10 K still takes 16 min for a 2 K move**, below `min_output_pct`, in a
   regime nobody has looked at. Not on Jeff's path.
-* **new: the CSV does not carry the software loop's setpoint**, so a move has
-  to be timed off the heater's output step instead — which is what §1's `t0`
-  is, and it is why that row is 127 s rather than a number anybody can check
-  against a command. Recording the loop's own columns was deliberately left
-  out of the viewer work (it changes the log's header and rolls the file), but
-  it is what would make a move gradeable from the archive afterwards.
+* **requirements.md wants a §3c** once there is enough cryostat data to be the
+  cryostat's record rather than one night's. Two graded moves now (§1 and
+  09-17's +5.07 K) and a hold coming.
+* **MATLAB `plant()`** is phase 5's last outstanding item, and it now has a
+  `verdict_for` to read.
