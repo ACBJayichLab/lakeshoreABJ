@@ -847,6 +847,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: picked without parsing the cells back out again.  The instrument is
         #: already in the row; `row_target_key` is what reads it.
         self._loop_index: list[dict] = []
+        #: The keys the selector is offering, which is what decides whether a
+        #: row can be clicked.  One list, so the two routes cannot disagree
+        #: about what is reachable.
+        self._offered_keys: set = set()
         box.addWidget(self.readings, 0)
 
         # Three rows of labelled buttons became two dense ones.  These are
@@ -1627,6 +1631,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """One poll of both files.  Must never raise: it is on a timer."""
         try:
             self.source.poll()
+            # BEFORE the table, deliberately.  `_update_readings` re-selects
+            # the row matching the current target, so reconciling afterwards
+            # meant that on the tick a link dropped, the table matched against
+            # a target that no longer existed and the highlight landed wherever
+            # the row indices happened to have shifted to.
+            self._reconcile_targets()
             self._update_banner()
             self._update_readings()
             self._update_links()
@@ -1758,6 +1768,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         entries = list(reading_rows(self.source.channels(), self.source.links(),
                                     self.source.control()))
         self._loop_index = entries
+        self._offered_keys = {t.key for t in self._targets}
 
         self.readings.setVisible(bool(entries))
         grew = self.readings.rowCount() != len(entries)
@@ -1915,6 +1926,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
         has_loop = bool(row.get("has_loop"))
         instrument = str(row.get("instrument") or "")
         software = has_loop and not instrument
+        # **One rule, from the same list the selector is built from.**  A row
+        # is clickable exactly when it names something this panel can be aimed
+        # at -- so a read-only box's loops stop being clickable (they used to
+        # be, and produced a note apologising for doing nothing), and the
+        # software loop becomes clickable the moment the panel can honour it.
+        selectable = row_target_key(row) in self._offered_keys
         kelvin = row.get("kelvin") if row.get("usable") else None
         marks = (loop_marks(row, kelvin, rails=row.get("rails")) if has_loop
                  else {"trying": False, "saturated": False, "unsettled": False})
@@ -1968,7 +1985,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
             else:
                 theme.clear_foreground(item)
             flags = item.flags()
-            selectable = has_loop and not software
             item.setFlags(flags | QtCore.Qt.ItemIsSelectable if selectable
                           else flags & ~QtCore.Qt.ItemIsSelectable)
 
@@ -1976,13 +1992,21 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.readings.item(index, COL_CHANNEL).setToolTip(
                 "recorded, but no control loop reads it on this recorder")
             return
+        # An explanation of a row belongs on the row.  This used to be a note
+        # in the command panel, written when somebody clicked a loop the panel
+        # could not be aimed at -- which is an answer arriving after the
+        # question, in a different part of the window.
+        unreachable = ("" if selectable else
+                       f" — {instrument} is read-only on this recorder: "
+                       "watched, not commanded")
         self.readings.item(index, COL_CHANNEL).setToolTip(
             self._software_tooltip(row) if software else
             f"{instrument} loop {row.get('loop')}: "
             f"{row.get('mode') or 'mode unknown'}"
             + ("" if marks["trying"] else
                " — not trying to reach a setpoint, so neither warning "
-               "applies"))
+               "applies")
+            + unreachable)
         self.readings.item(index, COL_STATE).setToolTip(
             self._software_tooltip(row) if software else
             f"what OUTMODE? says loop {row.get('loop')} is doing: "
@@ -2091,8 +2115,6 @@ class ViewerWindow(QtWidgets.QMainWindow):
 
     def _update_commands(self) -> None:
         """Keep the command panel honest about what it can actually do."""
-        self._reconcile_targets()
-
         accepted = self.source.accepts_commands()
         allowed = self.source.source_allowed(GUI_SOURCE)
         enabled = (bool(self.spool) and accepted and allowed
@@ -2150,32 +2172,37 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._targets = targets
         by_key = {t.key: i for i, t in enumerate(targets)}
         was = self._target
+
+        # **Every index change happens with signals blocked, and
+        # `_target_changed` is then called by hand.**  Not a belt-and-braces
+        # habit: adding the first item to an empty combo makes Qt set the
+        # current index to 0 on its own, so re-aiming *to* index 0 -- which is
+        # what a dropped first loop does -- is a no-op that emits nothing, and
+        # the panel would keep the aim of a loop that no longer exists.
+        index = by_key.get(was.key, -1)
+        kept = index >= 0
+        if not kept and targets:
+            # Same box first, then anything: a link that lost one loop should
+            # not throw the panel onto a different instrument.
+            index = next((i for i, t in enumerate(targets)
+                          if t.instrument == was.instrument), 0)
+
         self.target_combo.blockSignals(True)
         self.target_combo.clear()
         for target in targets:
             self.target_combo.addItem(target.label, target)
-        index = by_key.get(was.key, -1)
         if index >= 0:
             self.target_combo.setCurrentIndex(index)
         self.target_combo.blockSignals(False)
+        self._target_changed()
 
-        if index < 0 and was.kind != "none":
-            # Same box first, then anything: a link that lost one loop should
-            # not throw the panel onto a different instrument.
-            same = next((i for i, t in enumerate(targets)
-                         if t.instrument == was.instrument), 0 if targets else -1)
-            self.target_combo.setCurrentIndex(same)       # fires _target_changed
-            if targets:
-                self._note(
-                    self.loop_note,
-                    f"{was.label} is no longer offered — "
-                    f"commanding {targets[same].label}",
-                    theme.note_style("warn", self))
-            else:
-                self._target = NO_TARGET
-                self._show_target_controls(capabilities({}))
-        else:
-            self._target_changed()
+        if not kept and was.kind != "none":
+            self._note(
+                self.loop_note,
+                f"{was.label} is no longer offered — "
+                f"commanding {targets[index].label}" if targets
+                else f"{was.label} is no longer offered — nothing to command",
+                theme.note_style("warn", self))
 
     def _target_changed(self, *_ignored) -> None:
         """Aim the whole panel at whatever the selector now holds.
@@ -2210,6 +2237,28 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.source.poll()
         self._sync_command_values()
         self._update_gate_notes()
+        self._select_target_row()
+
+    def _select_target_row(self) -> None:
+        """Move the table's highlight to whatever the panel is now aimed at.
+
+        The other half of "two routes, one selection": the selector having
+        moved must show up on the table immediately rather than on the next
+        tick, or the two disagree for a second every time one is used.
+
+        **Clearing is not tidy-up.**  An analog output has no thermometer and
+        therefore no row, so leaving the previous row lit beside a selector
+        reading `ls218 analog 1` is exactly the "two things that can disagree
+        about where a setpoint is going" failure this panel is built to avoid.
+        An empty table says the truth: what is selected is not in it.
+        """
+        want = next((r for r, row in enumerate(self._loop_index)
+                     if row_target_key(row) == self._target.key), -1)
+        with _quiet(self.readings):
+            if want >= 0:
+                self.readings.selectRow(want)
+            else:
+                self.readings.clearSelection()
 
     def _row_for_target(self) -> dict:
         """The status entry for the loop the panel is pointed at, or ``{}``.

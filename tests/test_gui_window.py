@@ -2851,3 +2851,92 @@ def test_a_command_must_say_what_it_addresses():
     parameter = inspect.signature(ViewerWindow._queue).parameters["instrument"]
     assert parameter.default is inspect.Parameter.empty
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+# -- two routes, one selection -------------------------------------------------
+#
+# The selector and the reading table are two *views* of `_target`, not two
+# places a selection is stored.  What these pin is that they cannot disagree:
+# each route moves the other, and the one case with nothing to highlight says
+# so rather than leaving the last row lit.
+
+
+def test_choosing_in_the_selector_moves_the_tables_highlight(tmp_path, qt_app):
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    choose(w, "ls336 loop 3")
+    (row,) = w.readings.selectionModel().selectedRows()
+    assert w.readings.item(row.row(), 2).text() == "3"
+    w.close()
+
+
+def test_clicking_a_row_moves_the_selector(tmp_path, qt_app):
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.readings.selectRow(3)
+    assert w.target_combo.currentText() == "ls336 loop 4"
+    assert w._target.loop == 4
+    w.close()
+
+
+def test_the_two_routes_settle_rather_than_ping_pong(tmp_path, qt_app):
+    """Each route moves the other, so the guards are what stop a click from
+    re-entering the handler that answered it."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    calls = []
+    original = w._target_changed
+    w._target_changed = lambda *a, **k: (calls.append(1), original(*a, **k))[1]
+    w.readings.selectRow(1)
+    assert len(calls) == 1
+    assert w._target.loop == 2 and w.target_combo.currentText() == "ls336 loop 2"
+    w.close()
+
+
+def test_a_target_with_no_row_leaves_nothing_highlighted(tmp_path, qt_app):
+    """An analog output drives a heater and reads no thermometer, so no row
+    represents it.  A row left lit beside a selector reading `ls218 analog 1`
+    is two things disagreeing about where the next command is going."""
+    w = cryostat(tmp_path, qt_app, [CTRL, MON])
+    w.readings.selectRow(1)
+    assert w.readings.selectionModel().selectedRows()
+    choose(w, "ls218 analog 1")
+    assert not w.readings.selectionModel().selectedRows()
+    w.close()
+
+
+def test_a_read_only_boxs_loops_cannot_be_clicked_and_say_why(tmp_path, qt_app):
+    """They used to be clickable and produce a note in the command panel
+    apologising for doing nothing -- an answer arriving after the question, in
+    a different part of the window."""
+    w = cryostat(tmp_path, qt_app, [dict(CTRL, writable=False), MON])
+    assert offered(w) == ["ls218 analog 1"]
+    item = w.readings.item(0, 0)
+    assert not item.flags() & QtCore.Qt.ItemIsSelectable
+    assert "read-only" in item.toolTip() and "watched, not commanded" in item.toolTip()
+    w.close()
+
+
+def test_a_target_that_vanishes_is_announced_rather_than_silently_swapped(
+        tmp_path, qt_app):
+    """Silently re-aiming a panel that applies power is the sharpest hazard in
+    having one list of targets.  It re-aims to the same box first, says so, and
+    drops whatever was half-typed for the loop that went away."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    choose(w, "ls336 loop 3")
+    w.setpoint_spin.setValue(300.0)
+    assert w._setpoint_dirty
+
+    with open(w.source.path) as fh:
+        status = json.load(fh)
+    status["t_wall"] = time.time()
+    status["links"][0]["loop_numbers"] = [1, 2]
+    status["links"][0]["loops"] = [loop_entry(n) for n in (1, 2)]
+    with open(w.source.path, "w") as fh:
+        json.dump(status, fh)
+    w.refresh()
+
+    # The first target on the same box, not a new box: a link that lost one
+    # loop should not throw the panel onto a different instrument.
+    assert w._target.loop == 1
+    assert "no longer offered" in w.loop_note.text()
+    assert "ls336 loop 3" in w.loop_note.text()
+    assert not w._setpoint_dirty                    # that 300 K meant loop 3
+    w.close()
