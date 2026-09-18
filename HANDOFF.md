@@ -69,8 +69,15 @@ detail.
 **1. A recorder restart froze the clock.** Measured from
 `data/plant_2026-09-17.csv`: it froze at **09:04:33**, the day's first restart,
 and **26,314 of that day's 46,236 samples** carry the frozen stamp.
-`plant.json` has been writing `t_s` **14.7 h behind `epoch`** every two
-seconds.
+`plant.json` was writing `t_s` **14.7 h behind `epoch`** every two seconds.
+
+**It healed itself at midnight and that is not a reprieve.** The daily file
+roll gives the clock a new origin — `open_file` has always handled a new
+file — so at 00:30 the unfixed process reads `t_s` level with `epoch` again.
+The freeze lasts from a restart until the next midnight, and it will come
+back the instant the recorder is restarted. Which is precisely what §4 does:
+**restarting the recorder while the old monitor is running re-freezes it on
+the spot.** Hence the order.
 
 The part worth carrying: **the freeze is silent for as long as nothing moves
 the heater.** It froze at 09:04 and the judge went on reporting normally until
@@ -90,6 +97,21 @@ the record says which.
 46,236 samples** while `missing_power` read `typical` on 85 % of them, because
 `tau` has no step to fit at a hold and its silence outranked four residuals
 that had something to say.
+
+Caught in the act at 00:30, from the still-unfixed process, on a cryostat
+behaving perfectly:
+
+```
+verdict: no opinion
+  missing_power    typical
+  coldplate        typical
+  cold_head        typical
+  tau              no opinion   no move to measure
+  noise            typical
+  fault_level      typical
+```
+
+**Five of six, and the headline is the one word anybody reads.**
 
 **3. And it hid a warning.** The aggregate was over four of the six residuals —
 `cold_head` and the latched `fault_level` were published as rows and were not
@@ -165,8 +187,9 @@ wrong before:
 
 | | |
 |---|---|
-| `plant.json`'s `t_s` within a cycle of its `epoch` | it has been 14.7 h behind |
-| `verdict` reading `typical`, with `verdict_for` naming three or four residuals | it has read `no opinion` for four days |
+| `plant.json`'s `t_s` within a cycle of its `epoch`, **checked after the recorder restart and not before** | the midnight roll healed it, so this passes on the old code right now and would have failed the moment the recorder restarted |
+| `plant.json` carrying `"schema": 2` | the plainest proof the new process is the one writing it |
+| `verdict` reading `typical`, with `verdict_for` naming five residuals | it read `no opinion` with five of six typical at 00:30 |
 | the CSV's header carrying three `control.*` columns, non-empty | §3 |
 | the viewer's detail panel showing numbers rather than `—` | the running process publishes schema 3's old block; a fresh one publishes 39 fields |
 | `check`'s printed band bracketing the output the heater is holding | it was 64.08 % inside 62.96–64.96 at 00:24 |
