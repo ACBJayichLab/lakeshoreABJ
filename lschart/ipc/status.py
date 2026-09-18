@@ -84,6 +84,14 @@ log = logging.getLogger(__name__)
 #: A client written against 2 keeps working and shows an unfamiliar state as
 #: itself, which is why every consumer here keys on ``tracking`` -- the one
 #: value that means "trying" -- rather than enumerating the others.
+#:
+#: **The ``control`` block is additive and its growth is not a bump.**  Fields
+#: have been added to it since 3 -- what the loop is reading, the three
+#: percentages, the watt residual, the envelope -- and none of them changes the
+#: meaning of a field that was already there.  A client must therefore default
+#: an absent key rather than test this number: a recorder is allowed to publish
+#: more than the client was written for, and a client is allowed to be pointed
+#: at one that publishes less.
 SCHEMA_VERSION = 3
 
 
@@ -416,12 +424,29 @@ class StatusWriter:
             v = getattr(status, name, None)
             return getattr(v, "value", v if v is None else str(v))
 
+        def maybe_bool(name):
+            """Tri-state, and the whole reason this is not ``bool(...)``.
+
+            ``model_trusted`` and ``corroborated`` mean *no opinion* when they
+            are None, which is neither trust nor distrust.  ``bool(None)`` is
+            False, so the obvious spelling would publish a claim nothing had
+            established -- which this codebase has already got wrong once, in
+            the field's own default.
+            """
+            value = getattr(status, name, None)
+            return None if value is None else bool(value)
+
         band = getattr(controller, "band", None)
         try:
             rail_low, rail_high = (float(band[0]), float(band[1]))
         except (TypeError, ValueError, IndexError):
             rail_low = rail_high = None
         cfg = getattr(controller, "cfg", None)
+        # The trajectory's own rate ceiling, which lives on the ramp rather
+        # than on the supervisor because it bounds the setpoint's path and not
+        # the heater's.  Two hops, both defaulted: a controller without a ramp
+        # is reported as having nothing to say about rates.
+        ramp_cfg = getattr(getattr(controller, "ramp", None), "cfg", None)
 
         return {
             "state": enum_value("state"),
@@ -453,6 +478,65 @@ class StatusWriter:
             "threshold_k": _num(getattr(cfg, "warn_error_k", None)),
             "alarms": [str(a) for a in getattr(status, "alarms", []) or []],
             "reason": str(getattr(status, "reason", "") or ""),
+            # Which gain schedule is in force.  `state` says `tracking` for a
+            # move and for a hold alike, so without this the gains appear to
+            # jump while nothing else on screen moved.
+            "phase": str(getattr(status, "phase", "") or ""),
+            # WHAT THE LOOP IS ACTING ON, which is not what the chart draws.
+            # The error is computed from the filtered value, so without it
+            # "why is the error not what I get off the trace" has no answer.
+            "raw_k": _num(getattr(status, "raw_k", None)),
+            "filtered_k": _num(getattr(status, "filtered_k", None)),
+            # This controller has no derivative gain -- its derivative IS this
+            # regressed slope -- so this is the only published evidence that
+            # the cryostat is still moving.
+            "slope_k_per_s": _num(getattr(status, "slope_k_per_s", None)),
+            "noise_k": _num(getattr(status, "noise_k", None)),
+            # WHICH test rejected a reading.  `health` says "suspect"; this
+            # says why, and `corroborated` is the evidence that separates a
+            # lying sensor from a cryostat that is genuinely moving.
+            "validity": enum_value("validity"),
+            "corroborated": maybe_bool("corroborated"),
+            # ASKED -> ALLOWED -> WRITTEN, one cycle's whole decision.
+            # `demand_pct` above is the ask; this is after every limit and
+            # before dithering; `output_pct` above is the code written.
+            "target_pct": _num(getattr(status, "target_pct", None)),
+            "readback_pct": _num(getattr(status, "readback_pct", None)),
+            # A loop reading `tracking` that has not written for many cycles is
+            # broken in a way nothing else here would show.
+            "wrote": bool(getattr(status, "wrote", False)),
+            # THE PREMISE, in watts: the residual the supervisor judges the
+            # cryostat by, and the band it is judged against.  A fault is a
+            # STEP, which is what `dq_step_w` carries -- the level carries the
+            # calibration.  `missing_power_w` is None for NO OPINION, and
+            # `residual_reason` is what says which; without it a blank premise
+            # line cannot be told from a broken one.
+            "missing_power_w": _num(getattr(status, "missing_power_w", None)),
+            "sigma_q_w": _num(getattr(status, "sigma_q_w", None)),
+            "dq_step_w": _num(getattr(status, "dq_step_w", None)),
+            "residual_reason": str(getattr(status, "residual_reason", "") or ""),
+            "model_error_k": _num(getattr(status, "model_error_k", None)),
+            "model_trusted": maybe_bool("model_trusted"),
+            # How much of the output is the ramp's lead rather than error
+            # correction, which is why a sweeping loop rails legitimately.
+            "velocity_ff_pct": _num(getattr(status, "velocity_ff_pct", None)),
+            # THE ENVELOPE THE BAND SITS INSIDE.  The band follows the
+            # setpoint and this does not, so the band alone cannot be drawn
+            # honestly -- and `hard_max_pct` is the part nothing moves.
+            "hard_min_pct": _num(getattr(cfg, "hard_min_pct", None)),
+            "hard_max_pct": _num(getattr(cfg, "hard_max_pct", None)),
+            # The companion to `threshold_k`: warn at one, fault at the other,
+            # so a client can show the margin rather than one edge of it.
+            "fault_error_k": _num(getattr(cfg, "fault_error_k", None)),
+            # Below this the watt residual has no opinion at all, which is the
+            # number that EXPLAINS A BLANK -- and a blank a client cannot
+            # explain is one it will eventually invent a reason for.
+            "min_output_pct": _num(getattr(cfg, "min_output_pct", None)),
+            # A client building a setpoint control must not be able to express
+            # a rate the supervisor will refuse, which is the same reason
+            # `max_output_pct` is published for an analog output.
+            "max_rate_k_per_min": _num(
+                getattr(ramp_cfg, "max_rate_k_per_min", None)),
         }
 
     def payload(

@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
+
 from lschart.gui.source import control_row, loop_marks
 from lschart.ipc.status import StatusWriter, read_status
 from lschart.model import Frame
@@ -43,7 +45,17 @@ def test_every_field_the_status_file_asks_for_is_one_the_supervisor_has(
     block = written(tmp_path, armed())
     for key in ("state", "mode", "health", "sensor", "setpoint_k",
                 "setpoint_target_k", "error_k", "output_pct", "demand_pct",
-                "rail_low_pct", "rail_high_pct", "threshold_k"):
+                "rail_low_pct", "rail_high_pct", "threshold_k",
+                # What the loop is reading, as against what the chart draws.
+                "phase", "raw_k", "filtered_k", "slope_k_per_s", "noise_k",
+                "validity",
+                # Asked -> allowed -> written, and the band's envelope.
+                "target_pct", "hard_min_pct", "hard_max_pct",
+                # The numbers that bound it, and the one that explains a blank.
+                "fault_error_k", "min_output_pct", "max_rate_k_per_min",
+                # The residual's band and its step, which always have a value
+                # even where the residual itself has no opinion.
+                "sigma_q_w", "dq_step_w", "velocity_ff_pct"):
         assert block[key] is not None, f"{key} did not survive the projection"
 
 
@@ -128,3 +140,82 @@ def test_a_saturated_loop_writes_below_its_own_rail(tmp_path, armed):
     # And the fixed pair a heater output is judged against says nothing at all
     # about this loop -- 63% is not 99%.
     assert not loop_marks(row, h.sup.status.filtered_k)["saturated"]
+
+
+def test_no_opinion_is_published_as_null_and_never_as_false(tmp_path, harness):
+    """The tri-states, where ``null`` is the CORRECT answer.
+
+    ``model_trusted``, ``corroborated`` and ``missing_power_w`` mean *no
+    opinion* when they are None, which is neither trust nor distrust.
+    ``bool(None)`` is False, so the obvious spelling of the projection would
+    publish a claim nothing had established -- and this codebase has already
+    made that mistake once, in `model_trusted`'s own default.
+
+    An unarmed loop is the case that proves it: nothing has run the model check
+    yet, so there is genuinely nothing to say.
+    """
+    h = harness()
+    h.step(2)
+    block = written(tmp_path, h)
+    for key in ("model_trusted", "corroborated", "missing_power_w",
+                "model_error_k", "readback_pct"):
+        assert key in block, f"{key} is not published at all"
+    # The one that must be null rather than False on a loop that has not run
+    # the check.  0 and False are both wrong answers here and they are
+    # different wrong answers.
+    assert block["model_trusted"] is None
+    assert block["missing_power_w"] is None
+    for key in ("model_trusted", "corroborated"):
+        assert block[key] in (None, True, False), f"{key} is not tri-state"
+        # `in` would accept 0 and 1, which is exactly the confusion at issue.
+        assert block[key] is None or isinstance(block[key], bool)
+
+
+def test_the_rate_ceiling_in_the_file_is_the_one_the_ramp_enforces(
+        tmp_path, armed):
+    """A client building a setpoint control must not be able to express a rate
+    the supervisor will refuse -- the same reason `max_output_pct` is published
+    for an analog output.  This is the contract that would rot in silence."""
+    h = armed()
+    block = written(tmp_path, h)
+    assert block["max_rate_k_per_min"] == h.sup.ramp.cfg.max_rate_k_per_min
+    over = block["max_rate_k_per_min"] * 2
+    with pytest.raises(ValueError):
+        h.sup.sweep_to(h.sup.status.setpoint_k + 5.0, over)
+
+
+def test_the_three_percentages_tell_one_story(tmp_path, armed):
+    """Asked -> allowed -> written is one cycle's whole decision, and it is
+    only readable if all three are published together."""
+    h = armed()
+    block = written(tmp_path, h)
+    assert block["demand_pct"] >= block["target_pct"]
+    assert block["hard_min_pct"] <= block["target_pct"] <= block["hard_max_pct"]
+    assert block["hard_min_pct"] <= block["output_pct"] <= block["hard_max_pct"]
+
+
+def test_a_disengaged_loop_says_it_did_not_write(tmp_path, armed):
+    """A loop reading `tracking` that has stopped writing is broken in a way
+    nothing else in this block would show, so `wrote` is its own field."""
+    h = armed()
+    held = h.sup.panic_hold()
+    h.step(2)
+    block = written(tmp_path, h)
+    assert block["wrote"] is False
+    assert block["mode"] == "off"
+    assert block["output_pct"] == pytest.approx(held)
+
+
+def test_a_residual_that_declines_to_judge_says_why(tmp_path, armed):
+    """A blank premise and a broken one look identical without this.
+
+    On an ARMED loop the check has run and has declined -- below
+    `min_output_pct` the watt residual genuinely has no opinion -- which is a
+    different thing from the unarmed case above, where nothing has run at all.
+    The reason is what lets a reader tell those two apart, and it is why
+    `min_output_pct` is published beside it.
+    """
+    block = written(tmp_path, armed())
+    if block["missing_power_w"] is None:
+        assert block["residual_reason"], "no opinion, and no reason given"
+        assert block["min_output_pct"] is not None

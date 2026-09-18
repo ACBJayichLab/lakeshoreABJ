@@ -97,6 +97,20 @@ client can tell "no such loop" from "a loop with nothing to say".
 | `threshold_k` | the loop's `warn_error_k` — the tracking error it warns at while the setpoint is not moving |
 | `p`, `i` | the gains **in force this cycle**, under the same names an instrument loop uses. There is no `d`: this controller takes its derivative from a regressed slope, not from a gain, so a number there would be an invention |
 | `alarms`, `reason` | sentences, not cells |
+| `phase` | which gain schedule is in force — `move` or `hold`. A *tuning*, not a statement that the setpoint is still |
+| `raw_k`, `filtered_k` | the reading as it arrived, and **what the loop is actually acting on** |
+| `slope_k_per_s`, `noise_k` | the regressed slope this controller uses instead of a derivative gain, and the trailing rms |
+| `validity`, `corroborated` | *which* test rejected a reading, and whether the other thermometers agree. `corroborated` is tri-state |
+| `target_pct` | after every limit, before dithering — the middle of asked → allowed → written |
+| `readback_pct`, `wrote` | what the box says it is at, and whether this cycle wrote at all |
+| `missing_power_w`, `sigma_q_w`, `dq_step_w` | the watt residual, the band it is judged against, and its **range** over the fault window. `missing_power_w` is tri-state |
+| `residual_reason` | why the residual has no opinion, when it has none |
+| `model_error_k`, `model_trusted` | measured − model at a settled hold, and the supervisor's verdict on it. `model_trusted` is tri-state |
+| `velocity_ff_pct` | how much of the output is the ramp's lead rather than error correction |
+| `hard_min_pct`, `hard_max_pct` | the envelope the authority band sits inside. `hard_max_pct` is the part nothing moves |
+| `fault_error_k` | the companion to `threshold_k`: warn at one, fault at the other |
+| `min_output_pct` | below this the watt residual has no opinion at all — the number that **explains a blank** |
+| `max_rate_k_per_min` | the trajectory's rate ceiling, off the ramp rather than the supervisor |
 
 **Why the gains are worth reading here.** A 33x loop's P/I/D are whatever
 somebody typed into it and stay put. A software loop's are *scheduled* — the
@@ -113,6 +127,33 @@ client cannot work that out from the percentage alone, so it is told.
 quantised to a DAC code and the band is re-applied by stepping *down* a code,
 so a saturated loop writes a number strictly below its own rail. Testing the
 output against the band would never fire; the demand is what ran out of room.
+
+**Why all three percentages.** `demand_pct` → `target_pct` → `output_pct` is
+**asked → allowed → written**, which is one cycle's whole decision, and it is
+only readable if the three arrive together. `readback_pct` and `wrote` are the
+pair beside them that catches the write that did not happen: a loop reading
+`tracking` that has not written for many cycles is broken in a way no other
+field here would show.
+
+**Why `null` is not `false`.** `model_trusted`, `corroborated` and
+`missing_power_w` are **tri-state**, and `null` means *no opinion* — which is
+neither trust nor distrust, and is not a clean bill. `bool(null)` is `false`,
+so the obvious way to write the projection would publish a claim nothing had
+established. A client must keep the three apart for the same reason, and
+`residual_reason` is what tells a blank premise from a broken one.
+
+**Why the rate ceiling is published.** A client building a setpoint control
+must not be able to express a rate the supervisor will refuse — the same reason
+`max_output_pct` is published for an analog output. The ceiling is the
+*trajectory's*, and it lives on the ramp rather than on the supervisor because
+it bounds the setpoint's path and not the heater's slew; those are two numbers
+and they are configured apart.
+
+**The block is additive, and a client must not test the schema number for
+it.** Fields have been added to it and none of them changed the meaning of one
+already there, so the version did not move. Default an absent key instead: a
+recorder may publish more than the client was written for, and a client may be
+pointed at one that publishes less.
 
 **Everything here is read by name and defaulted.** `lschart` must never import
 `ltspm3`, so a field the controller does not have is reported `null` rather
