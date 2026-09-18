@@ -162,11 +162,18 @@ somebody walks over to read from across the room, and the left panel is sized
 so the channel names fit beside it rather than eliding — two thermometers
 showing as `Stag…` is worse than useless.
 
-**Clicking a row with an instrument loop selects it** and every control in the
-command panel follows. There is no loop spin box and no output combo; two ways
-to choose a loop is two things that can disagree about where a setpoint is
-going. Rows with no loop, and the software loop's row, are not selectable —
-the panel has nothing to point at them with.
+**Clicking a row selects what it names** and every control in the command
+panel follows. That is one of the two routes to the same selection — the other
+is the selector in the panel — and they are two *views* of one value, not two
+places a selection is stored. The rule the original single selector was
+protecting is still kept: nothing holds a loop number of its own, so nothing
+can disagree about where a setpoint is going.
+
+A row is selectable exactly when it names something the panel can be aimed
+at. So **a thermometer no loop reads is not**, and **nor is a loop on a
+read-only box** — both are watched rather than commanded, and the row's own
+tooltip says which. The **software loop's row is**, because it takes a
+setpoint; see [below](#the-software-loops-row).
 
 Which sensor a loop reads comes from the **instrument** (`OUTMODE?`), not from
 a config key. On this family the loop number *is* the output number by
@@ -250,13 +257,62 @@ what the supervisor watches for as authority exhausted, and it faults only at
 the ceiling and only past `fault_error_k`. A loop that has stopped acting on a
 reading it does not believe shows `frozen` in the State column.
 
-**The row is read, not clicked.** It is the one row the command panel cannot
-follow: the software loop takes no setpoint, range or PID command — it takes
-`arm` and the panic `hold`, which are buttons of their own. Clicking it leaves
-the selection where it was, rather than pointing the panel at a loop it cannot
-honour. When health is anything but `ok` the row is coloured like a lit mark,
+**The row is clicked like any other**, and it aims the panel at the loop. It
+was the one row that would not select, on the grounds that the panel could not
+honour it — which was true while the panel was addressed to an *instrument* and
+this loop is on none. The panel is addressed to a loop or an output now, and
+has a control for this one, so what changed is the reason rather than the
+rule: a row is selectable when it names something the panel can be aimed at.
+
+What it does **not** take is a range or gains of its own, so those groups stay
+hidden for it. When health is anything but `ok` the row is coloured like a lit mark,
 because both marks go quiet exactly when the supervisor stops trusting its own
 measurement — which is the moment the row most needs to catch an eye.
+
+## The software loop's detail panel
+
+Under the reading table, and **only on a recorder that has a software loop** —
+which is not most of them, and where there is none the panel is not there at
+all rather than there and empty.
+
+The row above summarises the loop in nine columns. This is where the rest of
+what the recorder publishes about it goes, in four groups, in the order
+somebody diagnoses:
+
+| | |
+|---|---|
+| **What it is doing** | the supervisor's state and the loop mode, the setpoint (and where a ramp is heading), the tracking error against both the warn and the fault threshold, and which gain schedule is in force |
+| **What it is reading** | the raw reading and the **filtered** one — the error is computed from the second, which is why the trace alone never explained it — the regressed slope this controller uses instead of a derivative gain, the trailing noise, which test rejected a sample, whether the other thermometers agree, and the health verdict |
+| **What it is driving** | **asked → allowed → written**, which is one cycle's whole decision; the authority band and the envelope it sits inside; the ramp's lead; what the box reads back and whether this cycle wrote at all; the gains in force |
+| **What it believes** | the watt residual with its band and its step, and the model error with the supervisor's verdict on it. Then `reason` and any alarms, which are sentences and have nowhere else to go |
+
+Three rules govern it, and they are the same three that govern the marks on the
+row:
+
+**Nothing is painted in the normal case.** A healthy loop's panel has no
+colour in it anywhere. Ordinary text takes the palette's own foreground, so a
+constant here would be a bug on one theme or the other — see
+[Themes](#themes). The severities are semantic names resolved at paint time,
+and `tests/test_gui_theme.py` drives its check off the panel's own output
+rather than a written-down list, because a name that resolves to nothing is a
+warning that silently stops warning.
+
+**Every verdict is the supervisor's, never the viewer's.** The panel shows the
+residual and says nothing about whether it is acceptable; whether the model is
+trusted is a field the supervisor publishes, and a threshold applied here would
+be a second one able to disagree with the first. This viewer holds no port and
+judges nothing.
+
+**`null` reads as "no opinion", never as a zero.** A residual of 0 mW and a
+residual with nothing to say are different answers, and the second is not a
+clean bill of health. Where the residual declines to judge, the panel gives the
+reason the recorder published and the output floor below which it has no
+opinion — so a blank is explained rather than left to be guessed at. A missing
+number is an em dash.
+
+One consequence worth expecting: **`NOT written this cycle` is only marked
+while the loop is supposed to be driving.** A loop that has been held is not
+failing to write.
 
 ## Themes
 
@@ -296,8 +352,38 @@ of them failed on *both* grounds (cyan reaches only 2.26:1 on white).
 
 ## The control panel
 
-The **instrument selector** shares a line with the first group's title —
-"Setpoint" on the left, `Instrument [box]` on the right — with that group's
+The **selector lists loops and outputs**, not boxes: `336 loop 1`,
+`336 loop 2`, `218 analog 1`, and the software loop where there is one. Picking
+a box and then hunting its loop was two steps for one question, and it fitted a
+recorder whose job was thermometers rather than a cryostat whose most
+interesting loop is on no box at all.
+
+It is labelled **`Loop / output`** and deliberately not "Target": the Setpoint
+group labels its own spin box `Target` one group below, and two meanings of one
+word a few pixels apart is not a reading anybody should have to disambiguate in
+the panel that sends power.
+
+**A box that can be asked nothing is not listed.** A read-only instrument
+contributes no entries, and neither does one the recorder says has no loops and
+no settable analog output — an entry that selects nothing is worse than an
+absence.
+
+**The selection is restored by identity, not by position.** A loop's label
+carries the sensor and the sensor comes from `OUTMODE?`, so matching on the
+label would move the panel's aim when a loop was re-bound. And when the
+selected loop stops being offered — a link dropped, a loop unbound — the panel
+re-aims to the first entry **on the same box** and *says so* in the note under
+the selector, dropping whatever was half-typed for the loop that went away.
+Silently re-aiming a panel that applies power is the failure worth a sentence.
+
+**An output has no row to be clicked.** An analog output drives a heater and
+reads no thermometer, so nothing in the reading table represents it: it is
+reachable from the selector only, and selecting it leaves the table with
+nothing highlighted rather than with the last loop still lit. The two routes
+are for loops.
+
+The selector shares a line with the first group's title —
+"Setpoint" on the left, `Loop / output [combo]` on the right — with that group's
 border directly beneath and nothing between them. It is one combo box, and the
 panel has no rows to spare.
 
@@ -308,13 +394,14 @@ title band visibly empty — that band is what read as a gap. A group with no
 title has no band, so its frame starts at its widget top and the row above sits
 on the border.
 
-Which group is first depends on the box: a 218 has no loops, so Setpoint is
-hidden and the analog group is what shows. The titles are therefore stored
-rather than written straight onto the widgets, and two of them change at
-runtime (`Heater range (output 2)`, `Analog output 1 (max 70%)`).
+Which group is first depends on what is selected: an analog output shows the
+analog group where a loop shows Setpoint. The titles are therefore stored
+rather than written straight onto the widgets, and three of them change at
+runtime (`Heater range (output 2)`, `Analog output 1 (max 70%)`,
+`Software loop (≤ 5 K/min)`).
 
 
-One instrument selector, then whatever the selected box can actually be asked
+One selector, then whatever the selected loop or output can actually be asked
 to do. Which controls appear is decided by what the **recorder** says the
 instrument has (`links[].loops`, `heater_outputs`, `analog_output` in
 `status.json`), not by a model-number table kept in the viewer — the same table
@@ -322,10 +409,11 @@ in three places is the same table going stale in three places.
 
 | Control | Appears for | |
 |---|---|---|
-| **Setpoint** | a box with loops | kelvin, aimed at **the loop selected in the loop table**. Inert on its own: a setpoint does nothing while the range is 0 |
-| **PID gains** | a box with loops | P, I and D on **the selected loop** — the instrument's own, not any software loop's. All three go out together. Applies no power |
+| **Setpoint** | a selected instrument loop | kelvin. Inert on its own: a setpoint does nothing while the range is 0 |
+| **PID gains** | a selected instrument loop | P, I and D — the instrument's own, not any software loop's. All three go out together. Applies no power |
 | **Heater range** | a selected loop that drives a heater output | 0/1/2/3, applied to **that loop's** output. **Above 0 this applies power** |
-| **Analog output** | a box with a settable analog output (a 218) | one percentage. **Above 0 this applies power** — there is no inert half |
+| **Analog output** | a selected analog output (a 218's) | one percentage. **Above 0 this applies power** — there is no inert half |
+| **Software loop** | a selected software loop; disabled unless that loop is *tracking* | kelvin, and optionally a rate. **This applies power**: the loop is already driving, so it reaches the heater on the next cycle. It **ramps**, and the supervisor does the ramping |
 | **Arm software loop** | always; disabled while a software loop owns the output | close the software loop at the temperature the cryostat is at now — the way back from a hold. **This applies power** |
 | **Clear lockout** | always | clear a software loop's fault lockout. Does **not** resume the loop — it stays disarmed until armed. Beside Arm and not in the Panic menu, because it is the first step back toward power and is gated the same way |
 | **Panic ▾** | always, and never greyed out | a menu of the two ways to stop: **All heaters OFF** and **All temperatures HOLD** |
@@ -335,6 +423,41 @@ in three places is the same table going stale in three places.
 hides the heater-range control, because there is no range to set — and says so
 in a sentence rather than offering a control that could only produce a
 refusal.
+
+### A software loop's setpoint is the opposite gate
+
+This is the one thing in the panel that is easy to get backwards, so it is
+written down rather than left to be inferred from the code.
+
+**Ownership *disables* the manual analog control and Arm, and *enables* this
+one.** While a software loop is driving the output, a manual percentage would
+be overwritten within a cycle and arming an armed loop would step its setpoint
+with no ramp — so both go grey. A move is an instruction *to* the thing that is
+driving: it is meaningful only while the loop owns the output. A gate copied
+from the analog control would produce a control that is live exactly when it is
+useless.
+
+**It asks for `tracking`, not merely "the loop is closed".** A loop can be
+closed and `frozen` — declining to act on a reading it does not believe — or
+`ramping down`, which is a fault backing the heater off. A setpoint sent to
+either is accepted and stored, taking effect whenever the loop resumes: that
+looks like it worked, which is the worst kind of accepted command. The panel
+says which state is in the way instead, and a state this viewer has never heard
+of counts as "not tracking" rather than as "fine".
+
+**The confirmation threshold is the loop's own.** A move larger than the
+recorder's published `control.threshold_k` — the tracking error that loop warns
+at — opens a dialog; a trim under it goes straight out. That is a real
+threshold in kelvin belonging to the controller, not a number this viewer
+picked, and a loop that publishes none is confirmed every time. A modal on
+every small jump is friction nobody keeps and a modal nobody reads.
+
+**The rate is optional and its ceiling comes from the recorder.** Left alone,
+the move goes at the controller's own configured rate, which is what every
+other client does. The rate box is capped at the published
+`control.max_rate_k_per_min` for the same reason the analog box is capped at
+`max_output_pct`: a widget that can express a refused value invites a refusal.
+Rate limiting itself stays where it belongs — see the omissions below.
 
 **There is no "get PID" button, because there could not be one.** This viewer
 holds no port and cannot ask an instrument anything. The gains are in the panel
@@ -808,10 +931,17 @@ that failed a cycle.
 
 Omissions, not oversights:
 
-- **no ramp control** — same file protocol, just no widget yet;
+- **no ramp control for an instrument loop** — same file protocol, just no
+  widget yet. A software loop's move *is* ramped, by the supervisor;
 - **no ramping of the analog output.** Setting a percentage is one step. Rate
   limiting is control policy and belongs to the supervisor; a second set of
-  limits in the viewer is a second set of limits that can disagree;
+  limits in the viewer is a second set of limits that can disagree — which is
+  also why the software move carries a rate and no limiter: the number is
+  handed to the supervisor and refused there if it is too big;
+- **no chart trace for a software loop's setpoint.** The chart draws the log,
+  and the log is what was *measured*; a loop's setpoint is live state in the
+  status file. Drawing it would mean recording new columns, which changes the
+  log's header;
 - **no annotation of the log** from the viewer;
 - **no "everything held" view button** — see above.
 

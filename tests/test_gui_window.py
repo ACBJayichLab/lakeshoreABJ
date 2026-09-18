@@ -1174,7 +1174,12 @@ def test_an_acknowledgement_releases_every_button(tmp_path, qt_app, monkeypatch)
     open(w.source.path, "w").write(json.dumps(status))
     w.refresh()
 
-    assert all(b.isEnabled() for b in w._buttons())
+    # Every button the lock covers, EXCEPT the two that answer to the
+    # software loop's state as well: on a recorder with no such loop there is
+    # nothing to arm and nothing to move, and the lock releasing is not a
+    # claim that there is.
+    assert all(b.isEnabled() for b in w._buttons()
+               if b is not w.software_button)
     assert "done" in w.ack_label.text()
     w.close()
 
@@ -1290,7 +1295,12 @@ def test_a_field_tracks_again_once_its_command_is_acknowledged(
     status["commands"]["recent"] = [{"id": cid, "ok": True, "message": "set"}]
     open(w.source.path, "w").write(json.dumps(status))
     w.refresh()
-    assert all(b.isEnabled() for b in w._buttons())
+    # Every button the lock covers, EXCEPT the two that answer to the
+    # software loop's state as well: on a recorder with no such loop there is
+    # nothing to arm and nothing to move, and the lock releasing is not a
+    # claim that there is.
+    assert all(b.isEnabled() for b in w._buttons()
+               if b is not w.software_button)
     assert w.analog_spin.value() == pytest.approx(43.0)   # still the readback
 
     status["aux"] = [{"name": "ls218.aout1", "value": 43.0}]
@@ -2963,4 +2973,273 @@ def test_a_target_that_vanishes_is_announced_rather_than_silently_swapped(
     assert "no longer offered" in w.loop_note.text()
     assert "ls336 loop 3" in w.loop_note.text()
     assert not w._setpoint_dirty                    # that 300 K meant loop 3
+    w.close()
+
+
+# -- moving the software loop ---------------------------------------------------
+#
+# `send setpoint <K> --software` existed and was reachable from everything
+# except the viewer, which is what is open while somebody types temperatures.
+# The gate is the interesting part: it is the OPPOSITE of the analog control's.
+
+
+SW_FULL = dict(
+    SOFTWARE, phase="hold", raw_k=96.0, filtered_k=96.0, slope_k_per_s=0.0,
+    noise_k=0.01, validity="good", corroborated=True, target_pct=63.08,
+    readback_pct=63.07, wrote=True, missing_power_w=-0.0005, sigma_q_w=0.0015,
+    dq_step_w=0.0009, residual_reason="", model_error_k=-0.04,
+    model_trusted=True, velocity_ff_pct=0.0, hard_min_pct=0.0,
+    hard_max_pct=70.0, min_output_pct=28.0, max_rate_k_per_min=5.0,
+    fault_error_k=5.0,
+)
+
+
+def software_viewer(tmp_path, qt_app, name="sw.csv", **control):
+    """A viewer aimed at the software loop, on a recorder that allows writes."""
+    w = cryostat(tmp_path, qt_app, [MON], csv_name=name,
+                 control=dict(SW_FULL, **control))
+    choose(w, "software loop")
+    return w
+
+
+def test_the_software_loop_is_offered_and_can_be_aimed_at(tmp_path, qt_app):
+    w = software_viewer(tmp_path, qt_app)
+    assert "software loop" in offered(w)
+    assert w._target.kind == "software"
+    assert showing(w.software_group)
+    assert w.software_loop_label.text() == "sw → Sample"
+    w.close()
+
+
+def test_a_move_is_addressed_to_the_recorder_and_says_it_is_software(
+        tmp_path, qt_app, monkeypatch):
+    """`instrument=""` is the same addressing `arm` uses: this loop is the
+    recorder's, not a box's, which is why the service's software branch never
+    looks at the instrument field.  And `loop` is absent -- a key with a
+    meaningless value is one somebody will later read as meaningful."""
+    w = software_viewer(tmp_path, qt_app)
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.software_spin.setValue(98.0)
+    w.software_button.click()
+
+    (cmd,) = queued(w)
+    assert cmd["kind"] == "setpoint"
+    assert cmd["instrument"] == ""
+    assert cmd["software"] is True
+    assert cmd["kelvin"] == pytest.approx(98.0)
+    assert cmd["rate_k_per_min"] is None
+    assert "loop" not in cmd
+    w.close()
+
+
+def test_a_rate_is_sent_only_when_it_was_asked_for(tmp_path, qt_app,
+                                                   monkeypatch):
+    """Unticked, the controller's own configured rate is the one rate, which
+    is what every other client leaves alone."""
+    w = software_viewer(tmp_path, qt_app)
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.software_rate_check.setChecked(True)
+    w.software_rate_spin.setValue(2.5)
+    w.software_spin.setValue(98.0)
+    w.software_button.click()
+    (cmd,) = queued(w)
+    assert cmd["rate_k_per_min"] == pytest.approx(2.5)
+    w.close()
+
+
+def test_the_rate_box_cannot_express_a_rate_the_supervisor_would_refuse(
+        tmp_path, qt_app):
+    """`SetpointRamp.start` raises above the ceiling, so a widget that can ask
+    for more is a widget that invites a refusal -- the same reason the analog
+    box is capped at the recorder's `max_output_pct`."""
+    w = software_viewer(tmp_path, qt_app)
+    assert w.software_rate_spin.maximum() == pytest.approx(5.0)
+    w.software_rate_spin.setValue(50.0)
+    assert w.software_rate_spin.value() == pytest.approx(5.0)
+    assert "5 K/min" in shown_title(w, w.software_group)
+    w.close()
+
+
+def test_a_trim_needs_no_confirmation_and_a_journey_does(tmp_path, qt_app,
+                                                         monkeypatch):
+    """Jeff's day-to-day is typing temperatures and jumping around.  A modal on
+    every jump is friction nobody keeps, and one nobody reads.  The threshold
+    is the loop's OWN warn_error_k, published as `threshold_k`."""
+    asked = []
+    w = software_viewer(tmp_path, qt_app)
+    monkeypatch.setattr(w, "_confirm", lambda *a: (asked.append(a), True)[1])
+
+    w.software_spin.setValue(96.5)            # 0.5 K, inside threshold_k 1.0
+    w.software_button.click()
+    assert asked == []
+    assert len(queued(w)) == 1
+
+    # Clearing the lock by hand: queueing disabled every button, and a click
+    # on a disabled button is not a click.
+    w._pending = None
+    w.software_button.setEnabled(True)
+    w.software_spin.setValue(120.0)           # a journey
+    w.software_button.click()
+    assert len(asked) == 1
+    assert "APPLIES POWER" in asked[0][1]
+    assert "RAMPS" in asked[0][1]
+    w.close()
+
+
+def test_a_move_with_no_threshold_published_is_always_confirmed(
+        tmp_path, qt_app, monkeypatch):
+    """The honest answer when the controller offers no threshold is to ask,
+    not to pick a number here."""
+    asked = []
+    w = software_viewer(tmp_path, qt_app, threshold_k=None)
+    monkeypatch.setattr(w, "_confirm", lambda *a: (asked.append(a), True)[1])
+    w.software_spin.setValue(96.01)
+    w.software_button.click()
+    assert len(asked) == 1
+    w.close()
+
+
+def test_a_cancelled_move_queues_nothing(tmp_path, qt_app, monkeypatch):
+    w = software_viewer(tmp_path, qt_app)
+    monkeypatch.setattr(w, "_confirm", lambda *a: False)
+    w.software_spin.setValue(200.0)
+    w.software_button.click()
+    assert queued(w) == []
+    assert w._pending is None
+    w.close()
+
+
+def test_the_move_is_live_exactly_when_the_analog_control_is_not(
+        tmp_path, qt_app):
+    """**The gate is the other way round**, and this is the test that would
+    catch it being copied from the analog control.  Ownership disables a manual
+    output because the loop would overwrite it; a move is an instruction TO the
+    thing that is driving, so it is meaningful only while it drives."""
+    w = software_viewer(tmp_path, qt_app)
+    assert w.software_button.isEnabled()
+    assert not w.analog_button.isEnabled()
+    assert not w.arm_button.isEnabled()
+
+    set_control(w, mode="off", state="idle")          # a hold, from anywhere
+    assert not w.software_button.isEnabled()
+    assert w.analog_button.isEnabled()
+    assert w.arm_button.isEnabled()
+
+    set_control(w, mode="pid", state="tracking")      # and armed again
+    assert w.software_button.isEnabled()
+    assert not w.analog_button.isEnabled()
+    w.close()
+
+
+def test_a_loop_that_is_not_tracking_is_told_so_rather_than_offered_a_refusal(
+        tmp_path, qt_app):
+    """`mode == "pid"` is not enough.  A frozen loop is declining to act on its
+    reading and a ramping-down loop is a fault backing the heater off; a
+    setpoint sent to either is stored and takes effect whenever it resumes,
+    which looks like it worked and is not the same thing."""
+    w = software_viewer(tmp_path, qt_app, state="frozen")
+    assert not w.software_button.isEnabled()
+    assert "not tracking" in w.software_note.text()
+    assert "frozen" in w.software_note.text()
+
+    set_control(w, state="ramping_down")
+    assert not w.software_button.isEnabled()
+    w.close()
+
+
+def test_a_latched_loop_is_pointed_at_the_two_steps_back(tmp_path, qt_app):
+    w = software_viewer(tmp_path, qt_app, state="locked_out", mode="pid")
+    assert not w.software_button.isEnabled()
+    assert "locked out" in w.software_note.text()
+    assert "clear the lockout" in w.software_note.text()
+    assert "arm" in w.software_note.text()
+    w.close()
+
+
+def test_a_shut_gate_names_the_config_key_and_nothing_else(tmp_path, qt_app):
+    w = cryostat(tmp_path, qt_app, [MON], control=dict(SW_FULL),
+                 commands=dict(OPEN, allow_analog_output=False))
+    choose(w, "software loop")
+    assert not w.software_button.isEnabled()
+    assert w.software_note.text() == "ipc.allow_analog_output: false"
+    assert "like Arm" in w.software_note.toolTip()
+    w.close()
+
+
+def test_the_field_starts_from_where_the_ramp_is_heading(tmp_path, qt_app):
+    """Not `setpoint_k`, which is the instantaneous ramp position and ticks up
+    while somebody reads it.  The target is the thing being replaced."""
+    w = software_viewer(tmp_path, qt_app, setpoint_k=96.0,
+                        setpoint_target_k=118.0, ramping=True)
+    assert w.software_spin.value() == pytest.approx(118.0)
+    w.close()
+
+
+def test_a_sent_move_is_not_snapped_back_by_a_stale_block(tmp_path, qt_app,
+                                                          monkeypatch):
+    """Between an acknowledgement and the next cycle the control block still
+    holds the old target.  Showing 96 K again in the seconds after somebody
+    asked for 118 is worse than useless while power is the question."""
+    w = software_viewer(tmp_path, qt_app)
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.software_spin.setValue(118.0)
+    w.software_button.click()
+    cid = w._pending[0]
+
+    w.refresh()                                   # block still says 96
+    assert w.software_spin.value() == pytest.approx(118.0)
+
+    with open(w.source.path) as fh:
+        status = json.load(fh)
+    status["t_wall"] = time.time()
+    status["cycle"] = 9
+    status["commands"]["recent"] = [{"id": cid, "ok": True, "message": "ramping"}]
+    with open(w.source.path, "w") as fh:
+        json.dump(status, fh)
+    w.refresh()
+    assert w.software_spin.value() == pytest.approx(118.0)   # still held
+
+    set_control(w, setpoint_target_k=118.0)       # and now it agrees
+    assert w.software_spin.value() == pytest.approx(118.0)
+    w.close()
+
+
+def test_a_command_in_flight_locks_the_move_button_too(tmp_path, qt_app,
+                                                       monkeypatch):
+    w = software_viewer(tmp_path, qt_app)
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.software_spin.setValue(98.0)
+    w.software_button.click()
+    assert w._pending is not None
+    assert not w.software_button.isEnabled()
+    set_control(w, mode="pid", state="tracking")    # a refresh while it waits
+    assert not w.software_button.isEnabled()
+    w.close()
+
+
+def test_the_pending_release_re_asks_the_moves_gate_as_well_as_arms(
+        tmp_path, qt_app, monkeypatch):
+    """AUDIT-2026-09-16 finding 5 was this list being one button short, which
+    left the way back from a hold unavailable after a hold from elsewhere.
+    Releasing the lock must not hand back a button pointed at a loop that
+    stopped tracking while the command was in flight."""
+    w = software_viewer(tmp_path, qt_app)
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.software_spin.setValue(98.0)
+    w.software_button.click()
+    cid = w._pending[0]
+
+    with open(w.source.path) as fh:
+        status = json.load(fh)
+    status["t_wall"] = time.time()
+    status["cycle"] = 9
+    status["control"] = dict(status["control"], mode="off", state="idle")
+    status["commands"]["recent"] = [{"id": cid, "ok": True, "message": "ok"}]
+    with open(w.source.path, "w") as fh:
+        json.dump(status, fh)
+    w.refresh()
+
+    assert w._pending is None                      # the lock released
+    assert not w.software_button.isEnabled()       # but not into an idle loop
+    assert w.arm_button.isEnabled()                # and the way back is open
     w.close()

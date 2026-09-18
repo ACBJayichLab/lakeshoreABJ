@@ -841,9 +841,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.readings.setToolTip(
             "Every thermometer the recorder reads, with the control loop bound "
             "to it where there is one (from the instrument's own OUTMODE?). "
-            "Click a row with a loop to point the command panel at it. A "
-            "software loop is read rather than clicked — it takes Arm and the "
-            "panic Hold, not a setpoint, a range or gains.")
+            "Click a row with a loop to point the command panel at it — "
+            "including the software loop's, which takes a setpoint but no "
+            "range and no gains. A thermometer no loop reads, and a loop on a "
+            "read-only box, are watched rather than commanded and do not "
+            "select.")
         #: Row index -> the joined row, so a click can say which target was
         #: picked without parsing the cells back out again.  The instrument is
         #: already in the row; `row_target_key` is what reads it.
@@ -1157,6 +1159,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         stack.addWidget(self._pid_group())
         stack.addWidget(self._range_group())
         stack.addWidget(self._analog_group())
+        stack.addWidget(self._software_group())
 
         head = QtWidgets.QWidget()
         joined = QtWidgets.QVBoxLayout(head)
@@ -1173,7 +1176,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: of truth and the widget follows it.
         self._group_titles = {g: g.title() for g in (
             self.setpoint_group, self.pid_group,
-            self.range_group, self.analog_group)}
+            self.range_group, self.analog_group, self.software_group)}
 
         # The way back from a hold, and deliberately *outside* the panic menu:
         # arming starts the loop driving the heater again, which is the
@@ -1421,9 +1424,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         form = QtWidgets.QFormLayout(self.setpoint_group)
         _tighten(form)
 
-        # No loop selector here.  The loop table above *is* the selector, and
-        # two ways to choose a loop is two things that can disagree about
-        # which one a setpoint is going to.
+        # No loop selector here: the selector above and the reading table are
+        # the two routes, and they are two VIEWS of one `_target` rather than
+        # two places a selection lives.  A third control holding a loop number
+        # of its own would be the thing the original rule forbade -- something
+        # able to disagree about where a setpoint is going.
         self.loop_label = QtWidgets.QLabel("—")
         self.loop_label.setStyleSheet("font-weight:600;")
         form.addRow("Loop", self.loop_label)
@@ -1540,6 +1545,147 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self.range_note.setStyleSheet(theme.note_style("warn", self))
         form.addRow(self.range_note)
         return self.range_group
+
+    def _software_group(self) -> QtWidgets.QWidget:
+        """Move the software loop's setpoint.  The one control it takes.
+
+        `send setpoint <K> --software` has existed since the command spool
+        learned it, and was reachable from the CLI, from MATLAB and from a
+        script written this morning -- from everything except the viewer, which
+        is what is open while somebody types temperatures.
+
+        It **applies power**: the loop is already driving, so this reaches the
+        heater on the next cycle.  It is gated like `arm` and not like a 33x
+        setpoint, which is inert until a range is raised.
+
+        The viewer holds **no rate limiter and no setpoint policy**.  Rule 8 --
+        move the setpoint by ramping it, never by stepping it -- is enforced in
+        the supervisor, and a second set of limits here is a second set that
+        can disagree.  The rate box's ceiling is the recorder's own published
+        number, for the same reason the analog box is capped at
+        `max_output_pct`: a widget that can express a refused value is a widget
+        that invites a refusal.
+        """
+        self.software_group = QtWidgets.QGroupBox("Software loop")
+        form = QtWidgets.QFormLayout(self.software_group)
+        _tighten(form)
+
+        self.software_loop_label = QtWidgets.QLabel("—")
+        self.software_loop_label.setStyleSheet("font-weight:600;")
+        form.addRow("Loop", self.software_loop_label)
+
+        self.software_spin = QtWidgets.QDoubleSpinBox()
+        self.software_spin.setRange(0.0, 1000.0)
+        self.software_spin.setDecimals(3)
+        self.software_spin.setSuffix(" K")
+        # Tracks where the ramp is HEADING until edited -- see
+        # `_sync_command_values`.
+        self._software_dirty = False
+        self.software_spin.valueChanged.connect(self._software_edited)
+        form.addRow("Target", self.software_spin)
+
+        # Optional, and off by default: the rate the controller is configured
+        # with is the one rate, and every other client leaves it alone.
+        rate_row = QtWidgets.QHBoxLayout()
+        rate_row.setContentsMargins(0, 0, 0, 0)
+        rate_row.setSpacing(4)
+        self.software_rate_check = QtWidgets.QCheckBox("at")
+        self.software_rate_check.setToolTip(
+            "Unticked, the move goes at the controller's own configured rate, "
+            "which is what every other client does. Tick this only to slow a "
+            "particular move down.")
+        self.software_rate_spin = QtWidgets.QDoubleSpinBox()
+        self.software_rate_spin.setRange(0.01, 100.0)
+        self.software_rate_spin.setDecimals(2)
+        self.software_rate_spin.setSuffix(" K/min")
+        self.software_rate_spin.setEnabled(False)
+        self.software_rate_check.toggled.connect(
+            self.software_rate_spin.setEnabled)
+        rate_row.addWidget(self.software_rate_check)
+        rate_row.addWidget(self.software_rate_spin, 1)
+        rate_holder = QtWidgets.QWidget()
+        rate_holder.setLayout(rate_row)
+        form.addRow("Rate", rate_holder)
+
+        self.software_button = QtWidgets.QPushButton("Move setpoint…")
+        self.software_button.clicked.connect(self._send_software_setpoint)
+        form.addRow(self.software_button)
+
+        self.software_note = QtWidgets.QLabel("")
+        self.software_note.setWordWrap(True)
+        self.software_note.setStyleSheet(theme.note_style("warn", self))
+        form.addRow(self.software_note)
+        return self.software_group
+
+    def _software_edited(self, _value: float) -> None:
+        self._software_dirty = True
+
+    def _software_move_allowed(self) -> bool:
+        """Whether moving the software loop's setpoint is something to offer.
+
+        Two questions, in the order the recorder asks them: is the loop in a
+        state to act on a setpoint, and will this recorder accept the write.
+        """
+        return (self.source.software_loop_takes_setpoint()
+                and self.source.allows_analog_output())
+
+    def _send_software_setpoint(self) -> None:
+        """Move the software loop.  Ramped by the supervisor, not by the viewer."""
+        if self.spool is None or self._target.kind != "software":
+            return
+        control = self.source.control() or {}
+        kelvin = self.software_spin.value()
+        rate = (self.software_rate_spin.value()
+                if self.software_rate_check.isChecked() else None)
+
+        # **Confirm a journey, not a trim**, and against the loop's OWN
+        # threshold -- `warn_error_k`, which is a statement about how far the
+        # measurement may sit from the setpoint and therefore exactly the
+        # quantity a move is about to create.  Jeff's day-to-day is typing
+        # temperatures and jumping around; a modal on every jump is friction
+        # nobody keeps, and a modal on every jump is a modal nobody reads.
+        threshold = control.get("threshold_k")
+        here = (control.get("filtered_k") if control.get("filtered_k") is not None
+                else control.get("setpoint_target_k"))
+        if here is None:
+            here = control.get("setpoint_k")
+        far = (threshold is None or here is None
+               or abs(kelvin - float(here)) > float(threshold))
+        if far:
+            # The status file is written AFTER commands are applied, so a
+            # setpoint moved seconds ago may not be in it yet.  Say the age
+            # rather than present a stale number as current.
+            self.source.poll()
+            age = self.source.age_s
+            aged = f" (as of {age:.0f} s ago)" if age is not None else ""
+            span = ("" if here is None else
+                    f"\n\nThat is {kelvin - float(here):+.3f} K from "
+                    f"{float(here):.3f} K{aged}")
+            pace = ("at the controller's own configured rate"
+                    if rate is None else f"at {rate:.2f} K/min")
+            if not self._confirm(
+                "Move the software loop",
+                f"Move the software loop's setpoint to {kelvin:.3f} K?"
+                + span + "\n\n"
+                f"THIS APPLIES POWER. The loop is already driving the heater, "
+                f"so this reaches it on the next cycle — unlike an "
+                f"instrument setpoint, which does nothing until a range is "
+                f"raised.\n\n"
+                f"It RAMPS there {pace}; the supervisor's own rate ceiling, "
+                f"authority band and slew limit still bound what the heater "
+                f"can do about it.\n\n"
+                "It is not a panic action and is exempt from nothing: it needs "
+                "ipc.allow_analog_output like any other write.",
+            ):
+                return
+
+        self._queue("setpoint", instrument="", software=True, kelvin=kelvin,
+                    rate_k_per_min=rate)
+        # The readback is the control block's own `setpoint_target_k` -- where
+        # the ramp is heading -- and not an aux entry: this loop is not an
+        # instrument and publishes no aux readback.
+        self._await_readback("control.setpoint_target_k", kelvin,
+                             self._display_tolerance(self.software_spin))
 
     def _analog_group(self) -> QtWidgets.QWidget:
         """A 218 analog output, in percent.  The whole heater, in one number.
@@ -2010,10 +2156,15 @@ class ViewerWindow(QtWidgets.QMainWindow):
         and it is the whole reason this is one table rather than a loop table
         that quietly drops thermometers. A channel with an instrument loop
         fills everything and is **selectable**, which is how the command panel
-        is pointed. A software loop fills everything but is **not** selectable:
-        it takes no setpoint, range or PID command, only `arm` and the panic
-        `hold`, so a row that could be clicked into a selection the panel
-        cannot honour would be a row that lies.
+        is pointed.  A software loop fills everything and is selectable in
+        exactly the same way -- it takes a setpoint, and the panel has a
+        control for it -- but it has no range and no gains of its own, so
+        those groups stay hidden for it.
+
+        **Selectability is one rule and it is not written here:** a row can be
+        clicked when `row_target_key` finds it in the list the selector is
+        built from, so a loop on a read-only box is watched rather than
+        commanded and says so on the row.
         """
         has_loop = bool(row.get("has_loop"))
         instrument = str(row.get("instrument") or "")
@@ -2143,9 +2294,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
             parts.append(str(row["reason"]))
         for alarm in row.get("alarms") or []:
             parts.append(str(alarm))
-        parts.append("this loop is watched here, not commanded here: it takes "
-                     "no setpoint, range or PID command, only Arm and the "
-                     "panic Hold")
+        parts.append("click this row to aim the command panel at the loop: it "
+                     "takes a setpoint, Arm and the panic Hold, but no range "
+                     "and no gains of its own")
         return " — ".join(parts)
 
     @staticmethod
@@ -2328,6 +2479,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         self._setpoint_dirty = False
         self._range_dirty = False
         self._analog_dirty = False
+        self._software_dirty = False
         self._awaiting = None
         self.source.poll()
         self._sync_command_values()
@@ -2447,6 +2599,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # loop 3 has an analog output and no way to command it from here,
         # which is a sentence to say rather than a control to offer.
         self.analog_group.setVisible(self._target.kind == "analog")
+        self.software_group.setVisible(self._target.kind == "software")
+        if self._target.kind == "software":
+            sensor = self._target.sensor
+            self.software_loop_label.setText(
+                f"sw → {sensor}" if sensor else "sw")
 
         # The loop AND the sensor it reads, on the row that was already there.
         row = self._row_for_target()
@@ -2480,7 +2637,18 @@ class ViewerWindow(QtWidgets.QMainWindow):
         so it is also the honest answer to "what is this box at now", age and
         all.  ``None`` when the recorder does not carry that name: an older
         recorder or a query that failed this cycle.
+
+        **One pseudo-name, ``control.<field>``**, which reads the software
+        loop's block instead.  That loop is not an instrument and publishes no
+        aux readback, but a move still needs *something* that answers "did the
+        command land" -- `setpoint_target_k` is it.  So the readback guard
+        below works unchanged for it rather than growing a second slot, which
+        would be a second thing able to disagree about what is still owed.
+        Nothing else is spelled this way; every other name is a real readback.
         """
+        if name.startswith("control."):
+            value = (self.source.control() or {}).get(name[len("control."):])
+            return None if value is None else float(value)
         for entry in (self.source.status or {}).get("aux", []):
             if entry.get("name") == name:
                 value = entry.get("value")
@@ -2600,6 +2768,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
                     if index >= 0:
                         with _quiet(self.range_combo):
                             self.range_combo.setCurrentIndex(index)
+        elif self._target.kind == "software" and not self._software_dirty:
+            # `setpoint_target_k`, where the ramp is HEADING -- not
+            # `setpoint_k`, which is the instantaneous ramp position and ticks
+            # up while somebody reads it.  The target is the thing being
+            # replaced, and it is what a second move should start from.
+            name = "control.setpoint_target_k"
+            value = self._aux_value(name)
+            if value is not None and not held(name):
+                with _quiet(self.software_spin):
+                    self.software_spin.setValue(value)
         elif self._target.kind == "analog" and not self._analog_dirty:
             name = f"{instrument}.aout{self._target.analog_output}"
             value = self._aux_value(name)
@@ -2701,6 +2879,71 @@ class ViewerWindow(QtWidgets.QMainWindow):
                 "including to 0. Panic → All heaters OFF is exempt from this "
                 "gate and always works.")
 
+        # **THE OWNERSHIP QUESTION, THE OTHER WAY ROUND.**  The analog control
+        # above is disabled *while* a software loop owns the output, because a
+        # manual value would be overwritten within a cycle.  A move is
+        # meaningful ONLY while the loop owns the output: it is an instruction
+        # to the thing that is driving.  A gate copied from the analog control
+        # would produce a control that is live exactly when it is useless, so
+        # this asks its own question -- and asks it every refresh in both
+        # directions, because a `hold` typed in a terminal must switch it off
+        # and an `arm` from anywhere must switch it back on.
+        control = self.source.control() or {}
+        takes = self.source.software_loop_takes_setpoint()
+        move_ok = self._software_move_allowed()
+        self.software_spin.setEnabled(move_ok)
+        self.software_rate_check.setEnabled(move_ok)
+        self.software_rate_spin.setEnabled(
+            move_ok and self.software_rate_check.isChecked())
+        self.software_button.setEnabled(move_ok and self._pending is None)
+
+        ceiling = control.get("max_rate_k_per_min")
+        if ceiling is not None:
+            # The widget must not be able to express a rate the supervisor
+            # will refuse -- `SetpointRamp.start` raises above this.  Same
+            # reason the analog box is capped at `max_output_pct`.
+            self.software_rate_spin.setMaximum(float(ceiling))
+        self._set_group_title(
+            self.software_group,
+            "Software loop" if ceiling is None
+            else f"Software loop (≤ {float(ceiling):g} K/min)")
+
+        state = str(control.get("state") or "")
+        if not takes and state in ("locked_out", "crashed"):
+            self._note(self.software_note,
+                       f"the loop is {state.replace('_', ' ')} — clear the "
+                       "lockout, then arm it",
+                       theme.note_style("warn", self))
+            self.software_note.setToolTip(
+                "The loop stopped itself and nobody has looked at the cryostat "
+                "yet, so the supervisor refuses a setpoint. Clear lockout then "
+                "Arm is the way back, in that order and deliberately two acts.")
+        elif not takes:
+            self._note(self.software_note,
+                       f"the loop is not tracking ({state or 'no loop'}) — "
+                       "arm it first",
+                       theme.note_style("warn", self))
+            self.software_note.setToolTip(
+                "A setpoint only lands on a loop that is closed and acting on "
+                "its reading. Sent to one that is idle or frozen it would be "
+                "stored and take effect whenever the loop resumed, which looks "
+                "like it worked and is not the same thing.")
+        elif not self.source.allows_analog_output():
+            self._note(self.software_note, "ipc.allow_analog_output: false",
+                       theme.note_style("warn", self))
+            self.software_note.setToolTip(
+                "Moving this loop's setpoint commands the heater on the next "
+                "cycle, so it is gated exactly like Arm. Panic → All "
+                "temperatures HOLD is exempt from this gate and always works.")
+        else:
+            self._note(self.software_note, "ramped by the supervisor",
+                       theme.note_style("muted", self))
+            self.software_note.setToolTip(
+                "This viewer holds no rate limiter: the move goes through the "
+                "controller's own ramp at the one rate, and its authority "
+                "band and slew limit still bound the heater. A move larger "
+                "than the loop's warn_error_k asks for confirmation first.")
+
         # The gains are the one control that is worth *reading* where it
         # cannot be written, so the shut gate disables the button and leaves
         # the boxes live. Greying the numbers would take away the thing that
@@ -2788,6 +3031,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self._setpoint_dirty = False
             self._range_dirty = False
             self._analog_dirty = False
+            self._software_dirty = False
         elif QtCore.QDateTime.currentSecsSinceEpoch() > deadline:
             self.ack_label.setText(
                 "no acknowledgement — the recorder may not be reading commands")
@@ -2798,9 +3042,12 @@ class ViewerWindow(QtWidgets.QMainWindow):
             return                       # still waiting; leave the buttons locked
         for button in self._buttons():
             button.setEnabled(True)
-        # Except arm, which answers to ownership as well as to the lock -- and
-        # the command that just settled is very often the arm itself.
+        # Except the two that answer to ownership as well as to the lock --
+        # and the command that just settled is very often one of them.  Both,
+        # not just arm: AUDIT-2026-09-16 finding 5 was this list being one
+        # button short, which left the way back from a hold unavailable.
         self.arm_button.setEnabled(self._arm_allowed())
+        self.software_button.setEnabled(self._software_move_allowed())
 
     def _update_statusbar(self) -> None:
         status = self.source.status or {}
@@ -3426,7 +3673,8 @@ class ViewerWindow(QtWidgets.QMainWindow):
         other write.
         """
         return [self.send_button, self.pid_button, self.range_button,
-                self.analog_button, self.arm_button, self.clear_lockout_button]
+                self.analog_button, self.software_button, self.arm_button,
+                self.clear_lockout_button]
 
     def _confirm(self, title: str, text: str) -> bool:
         return QtWidgets.QMessageBox.question(

@@ -186,11 +186,49 @@ before you read the warning marks:
   trying. The row is coloured red instead. An unhealthy loop is not a loop
   failing to reach a setpoint; it is a loop that has stopped chasing one.
 
-The row is **read, not clicked**: the software loop takes no setpoint, range or
-PID command, only the `hold` and `arm` above, so it is the one row that will
-not select. Everything it shows comes from `status.json`, which any number of
-readers may open — see
+**Click the row** and the command panel aims at the loop: it takes a setpoint,
+and the `Software loop` group is where that is typed. It has no range and no
+gains of its own, so those groups stay hidden for it. Everything it shows comes
+from `status.json`, which any number of readers may open — see
 [file-interface](../recorder/file-interface.md#control--the-software-loop-where-there-is-one).
+
+Under the table, the same block again at length: what the loop is reading (the
+**filtered** value is what the error is computed from, which the trace alone
+could never explain), asked → allowed → written, and the watt residual with its
+band. The generic behaviour is in
+[gui](../recorder/gui.md#the-software-loops-detail-panel); what is specific to
+this cryostat is that **the band is about a percent wide**, so the three
+percentages sit close together and a rail there is a real one, and that the
+residual is usually the first thing to move when something is wrong with the
+heater circuit rather than with the loop.
+
+### Moving the setpoint from the viewer
+
+The same command the CLI sends, arriving at the same `sweep_to`:
+
+```bash
+python -m lschart -c config-ltspm3-armed.yaml send setpoint 120 --software
+```
+
+Two things about the viewer's version, both of which are the supervisor's
+doing rather than the viewer's:
+
+- **the move is ramped, and the viewer holds no rate limiter.** Rule 8 is
+  enforced in `set_setpoint`, so a step is turned into a ramp there and not
+  here. The rate box is optional — left alone, the move goes at the
+  controller's own `max_rate_k_per_min` — and it is capped at whatever the
+  recorder publishes for it. That ceiling and the heater's own slew limit are
+  two different numbers, configured apart; which is which is in
+  [requirements](requirements.md), and it is not restated here.
+- **the button is live only while the loop is `tracking`.** On this cryostat a
+  loop that has gone `frozen` does so for a sensor glitch and usually recovers
+  within a cycle or two, so the button greys and comes back on its own. After a
+  fault ramp-down it is `locked out`, and the note points at the two steps
+  back: clear the lockout, then arm.
+
+The confirmation threshold is the loop's own `warn_error_k`, so a trim goes
+straight out and a journey asks first. Read the number off `check`, never off
+this page.
 
 ## Before the first armed run
 

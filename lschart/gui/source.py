@@ -1627,6 +1627,34 @@ class StatusSource:
         """
         return (self.control() or {}).get("mode") == "pid"
 
+    def software_loop_takes_setpoint(self) -> bool:
+        """Would a setpoint sent to the software loop actually land?
+
+        **Not the same question as** :meth:`software_loop_owns_output`, and
+        close to its opposite.  Ownership is what *disables* manual control of
+        the output: something else is writing it every cycle.  This asks
+        whether the loop is in a state to act on a new setpoint at all -- and a
+        move is meaningful only *while* the loop owns the output, so a gate
+        copied from the other one would produce a control that is live exactly
+        when it is useless.
+
+        ``tracking`` and not merely ``mode == "pid"``.  A loop in `pid` may be
+        `frozen` -- declining to act on a reading it does not believe -- or
+        `ramping_down`, which is a fault backing the heater off from the model.
+        In both a setpoint would be accepted and stored, taking effect whenever
+        the loop resumed, which is the worst kind of accepted command: it looks
+        like it worked.
+
+        Testing for **the one value that means trying** is also what makes a
+        state this code has never heard of degrade to "no" rather than to
+        "yes", which is the rule :func:`control_row` follows for the same
+        reason.
+
+        False on a plain recorder, which has no ``control`` block at all.
+        """
+        control = self.control() or {}
+        return control.get("mode") == "pid" and control.get("state") == "tracking"
+
     def allows_pid(self) -> bool:
         """May a *file* retune a loop on this recorder?
 
