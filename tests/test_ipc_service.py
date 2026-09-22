@@ -230,7 +230,7 @@ def test_a_bad_loop_number_is_refused_by_the_driver(tmp_path):
 
 # -- the instrument's own ramp -----------------------------------------------
 #
-# `LakeShore.m`'s setRamp is the only client of this, and its help text makes a
+# `LSChartRecorder.m`'s setRamp is the only client of this, and its help text makes a
 # promise the handler is what keeps: "a rate of 0 turns ramping off (it does
 # NOT mean 'infinitely fast')".  MATLAB never sends `enable`, so that promise
 # rests entirely on the handler deriving it from the rate.

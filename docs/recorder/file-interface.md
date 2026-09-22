@@ -164,7 +164,7 @@ after the cryostat is inside the gate: measured on a simulated LTSPM3
 hysteretic — it leaves `hold` only past `move_error_k` — so a commanded move
 smaller than that inherits the previous hold's verdict. `ramping` is the
 trajectory's own answer, in kelvin, and is the one to pair with the rule.
-`matlab/LakeShore.m`'s `waitUntilSteady` is the worked example, dwell and all.
+`matlab/LSChartRecorder.m`'s `waitUntilSteady` is the worked example, dwell and all.
 
 **Why the rate ceiling is published.** A client building a setpoint control
 must not be able to express a rate the supervisor will refuse — the same reason
@@ -489,7 +489,7 @@ from the instrument to confirm the write.
 
 | | |
 |---|---|
-| **MATLAB** | [`matlab/README.md`](../../matlab/README.md) — `LakeShore.m`, plus `selftest.m` |
+| **MATLAB** | [`matlab/README.md`](../../matlab/README.md) — `LSChartRecorder.m`, plus `selftest.m` |
 | **The GUI** | [gui.md](gui.md) — just another client, with no privileges MATLAB lacks |
 | **The CLI** | `lschart status` and `lschart send` speak the same protocol |
 | **Anything else** | it is JSON in a directory; there is no library to link against |
@@ -508,7 +508,7 @@ repeat across sessions, and `await()` then matches an acknowledgement left in
 the recorder's ring by the **previous** session and reports its outcome as this
 command's. Observed, not theorised: a `setSetpoint` reported `pong`.
 
-So `LakeShore.m` derives ids from `tempname` (documented unique, and it does not
+So `LSChartRecorder.m` derives ids from `tempname` (documented unique, and it does not
 disturb the user's RNG state the way `rng('shuffle')` would), *and* `await`
 ignores any acknowledgement stamped before the command was issued. Belt and
 braces, because the failure it prevents is a confident confirmation of

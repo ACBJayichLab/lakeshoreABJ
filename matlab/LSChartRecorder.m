@@ -1,5 +1,5 @@
-classdef LakeShore < handle
-%LAKESHORE  Read and command a running lschart recorder, from MATLAB.
+classdef LSChartRecorder < handle
+%LSCHARTRECORDER  Read and command a running lschart recorder, from MATLAB.
 %
 %   MATLAB cannot open the instrument itself.  A Windows COM port has exactly
 %   one holder, and the recorder holds it -- so if this class opened COM10 the
@@ -20,7 +20,7 @@ classdef LakeShore < handle
 %
 %   Example
 %   -------
-%       ls = LakeShore('C:\lschart\data');
+%       ls = LSChartRecorder('C:\lschart\data');
 %       ls.isAlive()                    % is the recorder actually running?
 %       ls.temperature()                % every channel, as a struct
 %       ls.temperature('Sample')        % one channel, in kelvin
@@ -74,8 +74,8 @@ classdef LakeShore < handle
     end
 
     methods
-        function obj = LakeShore(directory)
-            %LAKESHORE  Point at the directory holding status.json.
+        function obj = LSChartRecorder(directory)
+            %LSCHARTRECORDER  Point at the directory holding status.json.
             if nargin < 1 || isempty(directory)
                 directory = 'data';
             end
@@ -101,7 +101,7 @@ classdef LakeShore < handle
                     pause(0.05);
                 end
             end
-            error('LakeShore:noStatus', ...
+            error('LSChartRecorder:noStatus', ...
                   ['cannot read %s (%s).\n' ...
                    'Is the recorder running, and is `ipc.enabled: true` in ' ...
                    'its config file?'], obj.StatusFile, last.message);
@@ -164,7 +164,7 @@ classdef LakeShore < handle
                     return
                 end
             end
-            error('LakeShore:noChannel', ...
+            error('LSChartRecorder:noChannel', ...
                   'no channel named "%s". This recorder has: %s', ...
                   channel, strjoin({chans.name}, ', '));
         end
@@ -217,7 +217,7 @@ classdef LakeShore < handle
             %   Empty for a box with no loops, and empty against a recorder
             %   older than schema 2, which did not publish this at all.
             %
-            %       ls = LakeShore('data');
+            %       ls = LSChartRecorder('data');
             %       t  = struct2table(ls.loops('ls336'))
             %
             if nargin < 3, s = obj.status(); end
@@ -227,7 +227,7 @@ classdef LakeShore < handle
                     return
                 end
             end
-            error('LakeShore:noInstrument', ...
+            error('LSChartRecorder:noInstrument', ...
                   'no instrument named "%s" in %s', instrument, obj.StatusFile);
         end
 
@@ -246,7 +246,7 @@ classdef LakeShore < handle
                     return
                 end
             end
-            error('LakeShore:noAux', 'no auxiliary value named "%s". Have: %s', ...
+            error('LSChartRecorder:noAux', 'no auxiliary value named "%s". Have: %s', ...
                   key, strjoin({items.name}, ', '));
         end
 
@@ -371,7 +371,7 @@ classdef LakeShore < handle
                 s = obj.status();
                 filename = s.recorder.path;
                 if isempty(filename)
-                    error('LakeShore:noLog', 'the recorder is not writing a log');
+                    error('LSChartRecorder:noLog', 'the recorder is not writing a log');
                 end
             end
             T = readtable(filename, 'VariableNamingRule', 'preserve');
@@ -641,12 +641,12 @@ classdef LakeShore < handle
             %       ls.note('ladder finished, 31 rungs');
             %
             if ~(ischar(text) || (isstring(text) && isscalar(text)))
-                error('LakeShore:note', ...
+                error('LSChartRecorder:note', ...
                       'note() takes one string; got a %s', class(text));
             end
             text = strtrim(char(text));
             if isempty(text)
-                error('LakeShore:note', ...
+                error('LSChartRecorder:note', ...
                       ['an empty note is a row that says something ' ...
                        'happened and not what']);
             end
@@ -764,7 +764,7 @@ classdef LakeShore < handle
                 if isempty(c)
                     % Configuration, not patience.  No amount of waiting turns
                     % a recorder-only install into one with a loop.
-                    error('LakeShore:noSoftwareLoop', ...
+                    error('LSChartRecorder:noSoftwareLoop', ...
                           ['this recorder has no software loop -- it records ' ...
                            'and does not steer. waitUntilSteady() is for the ' ...
                            'software PID; for an instrument loop, watch ' ...
@@ -861,7 +861,7 @@ classdef LakeShore < handle
                     % the alternative is `phase`, which reads `hold` 0.40 K
                     % either side of the setpoint, and a sweep that measured
                     % on that would be wrong quietly.
-                    error('LakeShore:noSettleRule', ...
+                    error('LSChartRecorder:noSettleRule', ...
                           ['this recorder publishes no settle rule ' ...
                            '(control.hold_error_k / hold_settle_s), so ' ...
                            'there is nothing to wait for.\nA recorder ' ...
@@ -915,7 +915,7 @@ classdef LakeShore < handle
 
             info.waited_s = toc(started);
             if nargout == 0 && ~steady
-                error('LakeShore:notSteady', ...
+                error('LSChartRecorder:notSteady', ...
                       'the cryostat did not settle: %s', info.why);
             end
         end
@@ -966,7 +966,7 @@ classdef LakeShore < handle
 
             fid = fopen(tmp, 'w');
             if fid < 0
-                error('LakeShore:cannotQueue', ...
+                error('LSChartRecorder:cannotQueue', ...
                       'cannot write to %s. Does the directory exist and is it writable?', ...
                       obj.CommandDirectory);
             end
@@ -1038,14 +1038,14 @@ classdef LakeShore < handle
             [id, issuedAt] = obj.submit(kind, args);
             [ok, message] = obj.await(id, issuedAt);
             if nout == 0 && ~ok
-                error('LakeShore:refused', '%s was refused: %s', kind, message);
+                error('LSChartRecorder:refused', '%s was refused: %s', kind, message);
             end
         end
 
         function assertFresh(obj, s)
             age = obj.ageOf(s);
             if age > obj.MaxAge
-                error('LakeShore:stale', ...
+                error('LSChartRecorder:stale', ...
                       ['status.json is %.1f s old (limit %.1f s): these ' ...
                        'temperatures are not current. The recorder has ' ...
                        'stopped or hung.'], age, obj.MaxAge);
@@ -1105,7 +1105,7 @@ classdef LakeShore < handle
         function chans = channelStruct(obj, s)
             chans = obj.asStructArray(s, 'channels');
             if isempty(chans)
-                error('LakeShore:noChannels', ...
+                error('LSChartRecorder:noChannels', ...
                       ['the recorder reports no channels at all -- every ' ...
                        'instrument link is probably down. Check `errors` and ' ...
                        '`links` in %s'], obj.StatusFile);

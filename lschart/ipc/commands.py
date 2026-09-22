@@ -116,7 +116,7 @@ class CommandSpool:
     """The directory itself, with the two halves of the protocol.
 
     :meth:`submit` is the client half -- used by the viewer, by the tests, and
-    mirrored line for line by ``matlab/LakeShore.m``.  :meth:`collect` is the
+    mirrored line for line by ``matlab/LSChartRecorder.m``.  :meth:`collect` is the
     recorder half.
     """
 

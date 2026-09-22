@@ -11,7 +11,7 @@ function results = lschart_sweep_demo(directory, temperatures, measureFcn)
 %       results = lschart_sweep_demo('C:\lschart\data', [110 115 120], ...
 %                                    @(ls, T) myExperiment(ls, T));
 %
-%   `measureFcn` is handed the LakeShore object and the temperature that was
+%   `measureFcn` is handed the LSChartRecorder object and the temperature that was
 %   asked for, and whatever it returns is collected into `results`.  Omit it
 %   and the sweep records the cryostat's own state at each point, which is
 %   enough to see that the sweep worked and nothing else.
@@ -29,7 +29,7 @@ function results = lschart_sweep_demo(directory, temperatures, measureFcn)
 %   that can move the heater for a reason nobody can reconstruct afterwards.
 %   The loop is left holding its last setpoint, which is where it already was.
 %
-%   See also LAKESHORE/SETTEMPERATURE, LAKESHORE/WAITUNTILSTEADY.
+%   See also LSCHARTRECORDER/SETTEMPERATURE, LSCHARTRECORDER/WAITUNTILSTEADY.
 
 if nargin < 2 || isempty(temperatures)
     error('lschart_sweep_demo:noTemperatures', ...
@@ -39,7 +39,7 @@ if nargin < 3 || isempty(measureFcn)
     measureFcn = @defaultMeasurement;
 end
 
-ls = LakeShore(directory);
+ls = LSChartRecorder(directory);
 
 % -- the guards, all before anything moves --------------------------------
 [alive, why] = ls.isAlive();

@@ -1,6 +1,6 @@
 # Talking to the recorder from MATLAB
 
-`LakeShore.m` lets a MATLAB script read temperatures from a running `lschart`
+`LSChartRecorder.m` lets a MATLAB script read temperatures from a running `lschart`
 recorder and command its instruments' setpoints.
 
 ## Why MATLAB does not open the instrument
@@ -66,7 +66,7 @@ crash if the client does".
 ## Use
 
 ```matlab
-ls = LakeShore('C:\lschart\data');
+ls = LSChartRecorder('C:\lschart\data');
 
 ls.isAlive()                 % is the recorder actually running and current?
 ls.channels()                % whatever the config names them, e.g. {'Sample', 'Coldplate'}
@@ -138,7 +138,7 @@ Use `submit` and `await` to queue without blocking.
 This is the shape of the thing, and it is meant to be this short:
 
 ```matlab
-ls = LakeShore('C:\lschart\data');
+ls = LSChartRecorder('C:\lschart\data');
 for T = [110 115 120]
     ls.setTemperature(T);        % the software loop, not a 33x setpoint
     ls.waitUntilSteady(T);       % blocks; raises if it never settles

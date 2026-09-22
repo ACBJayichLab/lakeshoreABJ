@@ -147,7 +147,7 @@ is left is `os.replace` under a real reader.
    refused with a message the operator sees, not a wrong one being run.
 
    What is still strictly unmeasured is whether MATLAB's own `movefile` is
-   atomic there, as opposed to the spool merely working. `LakeShore.m` records
+   atomic there, as opposed to the spool merely working. `LSChartRecorder.m` records
    why `java.io.File` was rejected for the guaranteed-atomic version: it drags
    in the JVM, which warns under `matlab -batch` and does not exist under
    `-nojvm`, for a guarantee the fail-closed parse makes unnecessary.

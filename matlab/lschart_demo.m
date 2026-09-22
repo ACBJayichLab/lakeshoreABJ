@@ -9,10 +9,10 @@ function lschart_demo(directory)
 %   recorder, run SELFTEST, which is that file's whole job.  This one
 %   deliberately does not repeat it.
 %
-%   Everything here goes through the LakeShore class, and that is the point.
+%   Everything here goes through the LSChartRecorder class, and that is the point.
 %   The file protocol -- the command spool, atomic writes, the
 %   acknowledgement handshake, staleness -- is implemented once, in
-%   LakeShore.m.  A user script that reimplements any of it has bought
+%   LSChartRecorder.m.  A user script that reimplements any of it has bought
 %   itself a second copy to keep in step with the recorder, and the failures
 %   are quiet ones: read the wrong field of status.json and nothing errors,
 %   you simply never match, and a command that WAS applied looks like a
@@ -24,7 +24,7 @@ function lschart_demo(directory)
     if nargin < 1 || isempty(directory)
         directory = fullfile(fileparts(mfilename('fullpath')), '..', 'data');
     end
-    ls = LakeShore(directory);   % shadows the `ls` builtin, as selftest does
+    ls = LSChartRecorder(directory);   % shadows the `ls` builtin, as selftest does
 
     % -- 0. Never trust a status file you have not checked ------------------
     % status.json outlives the process that wrote it, so a recorder killed an

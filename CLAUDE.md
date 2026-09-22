@@ -286,7 +286,7 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      the whole procedure on a virtual clock.  The ladder comes
                      from analysis/plan_sweep.py.
 
-matlab/              LakeShore.m -- MATLAB's half of the file protocol, plus
+matlab/              LSChartRecorder.m -- MATLAB's half of the file protocol, plus
                      selftest.m and a README. Not built; copied to the cryostat.
 .github/workflows/   tests.yml: lint, then the suite, on Linux/Windows/macOS x
                      py3.11/3.13.  A SKIPPED TEST FAILS THE BUILD -- every

@@ -251,7 +251,7 @@ def test_the_trajectory_says_it_is_moving_before_the_phase_does(tmp_path, armed)
     every point of every sweep.  `ramping` is the trajectory's own answer, in
     kelvin, and it is the one that moves when a command lands.
 
-    Pinned because it is the distinction `matlab/LakeShore.m`'s
+    Pinned because it is the distinction `matlab/LSChartRecorder.m`'s
     `waitUntilSteady` is built on, and nothing else would notice if the two
     fields quietly became the same answer.
     """

@@ -16,7 +16,7 @@ function selftest(directory)
     if nargin < 1 || isempty(directory)
         directory = fullfile('..', 'data');
     end
-    ls = LakeShore(directory);
+    ls = LSChartRecorder(directory);
     fprintf('status file : %s\n', ls.StatusFile);
 
     % -- 1. is anything there at all --------------------------------------

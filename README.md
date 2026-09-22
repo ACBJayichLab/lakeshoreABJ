@@ -68,7 +68,7 @@ two panic commands. See
 ```
 lschart/      the generic recorder    (docs/recorder/)
 ltspm3/        the LTSPM3 software PID (docs/ltspm3/)
-matlab/       LakeShore.m + selftest  -- copied to the cryostat, not built
+matlab/       LSChartRecorder.m + selftest  -- copied to the cryostat, not built
 examples/     annotated configs for a 335 on COM and a 336 on USB
 reference/    legacy MATLAB and 24 .xls logs -- reference only, not built
 tests/        generic;  tests_ltspm3/ is the control half

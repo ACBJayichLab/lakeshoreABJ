@@ -191,7 +191,7 @@ still has a kelvin premise check.
 ## 3.5 `FROZEN` and `CRASHED` — rules 6, 7
 
 - `SupervisorState.HOLDING` → **`FROZEN`**. Status schema bump; viewer and
-  `LakeShore.m` mappings updated in the same commit.
+  `LSChartRecorder.m` mappings updated in the same commit.
 - On an exception in `step()`: `panic_hold()`, state **`CRASHED`** with the
   exception's first line, recorder keeps writing, `arm` refused until `ack`.
 
