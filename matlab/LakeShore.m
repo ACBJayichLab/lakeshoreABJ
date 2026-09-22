@@ -282,7 +282,11 @@ classdef LakeShore < handle
             %
             %   Empty on a recorder with no `control:` section -- a plain
             %   `lschart` install -- which is not an error: that recorder
-            %   records and does not steer.
+            %   records and does not steer.  Where there IS a loop, every
+            %   field above is present, with [] for one this recorder does not
+            %   publish -- the same guarantee loops() gives, so a script can
+            %   read a field an older recorder has never heard of and get []
+            %   rather than an error.
             %
             %   Pass a status struct to read it from a snapshot you already
             %   have rather than making a second read that could disagree.
@@ -297,6 +301,26 @@ classdef LakeShore < handle
                 c.alarms = {};
             elseif ~iscell(c.alarms)
                 c.alarms = cellstr(c.alarms);
+            end
+            % EVERY FIELD IS PRESENT, with [] where this recorder does not
+            % publish it -- the same guarantee loops() gives, and for the same
+            % reason.  The block GROWS without the schema moving, so a client
+            % is expected to default an absent key rather than test for it;
+            % but in MATLAB reading an absent field is an ERROR, not an empty,
+            % so "default it" has to happen somewhere and here is the one
+            % place it can happen once.  Caught by pointing this at a recorder
+            % started before `hold_error_k` existed: `c.hold_error_k` threw
+            % where the contract says it should have read [].
+            %
+            % Not a copy of the schema -- a compatibility shim for the fields
+            % a client steers by, which are the ones whose absence is worth
+            % surviving.
+            for f = {'state', 'mode', 'health', 'sensor', 'phase', 'ramping', ...
+                     'setpoint_k', 'setpoint_target_k', 'error_k', ...
+                     'output_pct', 'raw_k', 'filtered_k', 'validity', ...
+                     'reason', 'hold_error_k', 'hold_settle_s', ...
+                     'max_rate_k_per_min'}
+                if ~isfield(c, f{1}), c.(f{1}) = []; end
             end
         end
 
@@ -831,14 +855,20 @@ classdef LakeShore < handle
 
                 dwell = info.hold_settle_s;
                 if isempty(dwell)
-                    % No scheduler, so no published rule.  `phase` never
-                    % leaves `hold` on such a loop and cannot be the answer
-                    % either, so say so rather than invent a tolerance.
+                    % Either a controller with no scheduler, or -- far more
+                    % likely -- a recorder started before 2026-09-22, when
+                    % the rule began to be published.  Refusing is the point:
+                    % the alternative is `phase`, which reads `hold` 0.40 K
+                    % either side of the setpoint, and a sweep that measured
+                    % on that would be wrong quietly.
                     error('LakeShore:noSettleRule', ...
                           ['this recorder publishes no settle rule ' ...
-                           '(hold_error_k / hold_settle_s), so there is ' ...
-                           'nothing to wait for. Watch control() yourself ' ...
-                           'against a tolerance you have chosen.']);
+                           '(control.hold_error_k / hold_settle_s), so ' ...
+                           'there is nothing to wait for.\nA recorder ' ...
+                           'started before 2026-09-22 does not publish it ' ...
+                           'and has to be restarted to. Everything else ' ...
+                           'here -- control(), setTemperature(), plant() -- ' ...
+                           'works against it unchanged.']);
                 end
                 % EITHER answer will do, and they are not the same question.
                 %
