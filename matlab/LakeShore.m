@@ -53,6 +53,20 @@ classdef LakeShore < handle
         %   The recorder rewrites it every cycle, so anything older than a few
         %   cycles means it has stopped, hung, or lost its disk.
         MaxAge (1,1) double = 5
+
+        %SETTLETIMEOUT  Seconds waitUntilSteady() will wait before giving up.
+        %   A ceiling on patience, not an expectation: a 2 K move at 120 K
+        %   settles in 2-5 minutes, and a move of tens of kelvin takes as long
+        %   as the cryostat takes.  The default is generous on purpose --
+        %   giving up early on a move that was going to arrive is the failure
+        %   that wastes a night, and the abort conditions below catch the
+        %   cases that never will.
+        SettleTimeout (1,1) double = 1800
+
+        %POLLINTERVAL  Seconds between reads of status.json while waiting.
+        %   The recorder rewrites it every cycle (2 s on LTSPM3); reading
+        %   faster than that only re-reads the same file.
+        PollInterval (1,1) double = 1
     end
 
     properties (Access = private)
@@ -236,6 +250,93 @@ classdef LakeShore < handle
                   key, strjoin({items.name}, ', '));
         end
 
+        function c = control(obj, s)
+            %CONTROL  The SOFTWARE loop's state, or [] if there is not one.
+            %
+            %   The software PID is not an instrument loop and does not appear
+            %   in loops(): it runs in the recorder, steers one thermometer,
+            %   and drives the 218's analog output.  This is its whole state
+            %   for the cycle just written.
+            %
+            %   The fields a script actually steers by:
+            %
+            %     state              idle | tracking | frozen | ramping_down |
+            %                        locked_out | crashed
+            %     mode               off | manual | pid
+            %     phase              hold | move -- which GAIN SCHEDULE is in
+            %                        force.  It is not the settled verdict and
+            %                        waitUntilSteady() does not wait on it:
+            %                        its clock does not start until the
+            %                        smoother's quarantined rate test
+            %                        underflows, minutes after the cryostat is
+            %                        inside the gate.
+            %     ramping            is the setpoint still travelling
+            %     setpoint_k         what it is chasing right now
+            %     setpoint_target_k  where it was told to end up
+            %     error_k            against `filtered_k`, not against the raw
+            %                        channel in the same cycle
+            %     health, validity   what it makes of its own sensor
+            %     alarms             a cell array; empty when it has none
+            %     hold_error_k       the settle rule, in kelvin, and
+            %     hold_settle_s      how long it must hold inside it
+            %
+            %   Empty on a recorder with no `control:` section -- a plain
+            %   `lschart` install -- which is not an error: that recorder
+            %   records and does not steer.
+            %
+            %   Pass a status struct to read it from a snapshot you already
+            %   have rather than making a second read that could disagree.
+            if nargin < 2, s = obj.status(); end
+            if ~isfield(s, 'control') || isempty(s.control)
+                c = []; return
+            end
+            c = s.control;
+            % jsondecode gives [] for an empty JSON array, and `{}` reads
+            % better than `[]` at a call site asking "any alarms?".
+            if ~isfield(c, 'alarms') || isempty(c.alarms)
+                c.alarms = {};
+            elseif ~iscell(c.alarms)
+                c.alarms = cellstr(c.alarms);
+            end
+        end
+
+        function p = plant(obj)
+            %PLANT  The monitor's verdict on the cryostat, or [] if not running.
+            %
+            %   The monitor is a SEPARATE PROCESS from the recorder -- it holds
+            %   no port and sends no commands -- so this file can be absent,
+            %   or stale, while the recorder is perfectly healthy.  Both are
+            %   reported rather than hidden: `age_s` is how old the verdict is
+            %   and `stale` is that age against the monitor's own
+            %   `stale_after_s`.
+            %
+            %   `verdict` is the worst thing the judge actually knows:
+            %   typical | warn | fault | no opinion, over the residuals named
+            %   in `verdict_for`.  A residual with nothing to say is left out
+            %   rather than counted as agreement -- `tau` says nothing at a
+            %   hold, because there is no move to measure.
+            %
+            %   Worth reading BETWEEN the points of a sweep.  The loop can be
+            %   tracking its setpoint perfectly while the cryostat underneath
+            %   it is not the one the model describes, and that is precisely
+            %   what this judges and the loop does not.
+            file = fullfile(obj.Directory, 'plant.json');
+            if ~isfile(file)
+                p = []; return
+            end
+            try
+                p = jsondecode(fileread(file));
+            catch
+                p = []; return     % mid-rewrite; the next read will have it
+            end
+            p.age_s = max(0, posixtime(datetime('now', 'TimeZone', 'UTC')) - p.epoch);
+            stale_after = 10;
+            if isfield(p, 'stale_after_s') && ~isempty(p.stale_after_s)
+                stale_after = p.stale_after_s;
+            end
+            p.stale = p.age_s > stale_after;
+        end
+
         function T = readLog(obj, filename)
             %READLOG  The recorder's CSV as a table, for analysis after a run.
             %
@@ -262,6 +363,46 @@ classdef LakeShore < handle
             %   range is the act that applies power.  See setRange.
             [ok, message, id] = obj.run('setpoint', ...
                 struct('loop', loop, 'kelvin', kelvin), nargout);
+        end
+
+        function [ok, message, id] = setTemperature(obj, kelvin, rateKPerMin)
+            %SETTEMPERATURE  Command the SOFTWARE loop to a temperature.
+            %
+            %   This is the one to reach for when you want the cryostat at a
+            %   temperature.  setSetpoint() moves an instrument loop's
+            %   setpoint; this moves the software PID's, which is a different
+            %   act with different gates behind it.
+            %
+            %   UNLIKE A 33x SETPOINT, THIS APPLIES POWER.  An armed software
+            %   loop is already driving the 218's analog output, and the 218
+            %   has no inert half -- no loop, no range, and a percentage that
+            %   IS the power.  Moving its setpoint therefore changes the heater
+            %   on the recorder's next cycle, so the recorder gates it exactly
+            %   as it gates arm(): `ipc.allow_analog_output: true`, plus
+            %   `allow_writes` on the 218.
+            %
+            %   The loop sweeps rather than steps: the recorder builds a
+            %   trajectory, rate-limits it, and rounds the corners, so what
+            %   arrives at the heater is a ramp and not a cliff.  Omit
+            %   rateKPerMin for the recorder's own default rate; a rate above
+            %   its ceiling is REFUSED rather than quietly clamped, and the
+            %   ceiling is published as `control.max_rate_k_per_min`.
+            %
+            %   It returns as soon as the recorder has accepted the command,
+            %   which is long before the cryostat has arrived.
+            %   waitUntilSteady() is the other half:
+            %
+            %       ls.setTemperature(120);
+            %       ls.waitUntilSteady(120);
+            %
+            %   Nothing here arms a loop that is not armed -- a setpoint given
+            %   to a disengaged loop is remembered and drives nothing.  arm()
+            %   is the act that closes it, and it is deliberately separate.
+            args = struct('kelvin', kelvin, 'software', true);
+            if nargin >= 3 && ~isempty(rateKPerMin)
+                args.rate_k_per_min = rateKPerMin;
+            end
+            [ok, message, id] = obj.run('setpoint', args, nargout);
         end
 
         function [ok, message, id] = setRamp(obj, loop, rateKPerMin)
@@ -488,6 +629,267 @@ classdef LakeShore < handle
             [ok, message, id] = obj.run('note', struct('text', text), nargout);
         end
 
+        % -- waiting -------------------------------------------------------
+
+        function [steady, info] = waitUntilSteady(obj, kelvin, timeout_s)
+            %WAITUNTILSTEADY  Block until the software loop has settled.
+            %
+            %   The other half of setTemperature(), and the reason a sweep can
+            %   be written as a for loop:
+            %
+            %       for T = [110 115 120]
+            %           ls.setTemperature(T);
+            %           ls.waitUntilSteady(T);
+            %           measure();                 % your experiment
+            %       end
+            %
+            %   WHAT "STEADY" MEANS IS THE RECORDER'S RULE, COUNTED HERE.
+            %   Steady is Jeff's settle gate, docs/ltspm3/requirements.md 1b --
+            %   "within 50 mK and staying" -- and both halves of it are read
+            %   from the recorder rather than written down here:
+            %
+            %     * the setpoint trajectory has ARRIVED (`ramping` false) --
+            %       the loop is holding a number, not still travelling to one;
+            %     * the error has been inside `hold_error_k` for
+            %       `hold_settle_s`, counted on the RECORDER's clock -- or, for
+            %       a hold already underway, the recorder says `phase` is
+            %       `hold` AND this sample is inside the gate, so a loop that
+            %       has been holding for days answers at once.
+            %
+            %   Both numbers come back in `info`, so a script logs the rule it
+            %   waited for instead of a rule it believed.
+            %
+            %   WHY THE DWELL IS COUNTED HERE AND NOT SIMPLY READ OFF `phase`.
+            %   `phase` applies the same two numbers and looks like the whole
+            %   answer.  It is the GAIN SCHEDULE, and its clock does not start
+            %   until the smoother's old rate test underflows -- about 18 time
+            %   constants, several minutes after the cryostat is inside the
+            %   gate.  That delay is deliberate and quarantined (it is load
+            %   bearing for the 7.1x gain drop; see
+            %   `SetpointSmoother.rate_underflowed`), but it is a fact about
+            %   retuning and not about the cryostat.  Measured on a simulated
+            %   LTSPM3 on 2026-09-22: `phase` still read `move` eight minutes
+            %   after a 2 K move had settled inside 11 mK.  So it is taken as
+            %   sufficient where it is already `hold` and never waited for --
+            %   waiting on it would add those minutes to every point of every
+            %   sweep, and would re-time every sweep the day the quarantine is
+            %   lifted.
+            %
+            %   Called with no output it RAISES if the cryostat did not
+            %   settle, which is the behaviour a sweep wants: measuring at a
+            %   temperature that never arrived is worse than stopping.  Ask
+            %   for outputs to handle it yourself:
+            %
+            %       [steady, info] = ls.waitUntilSteady(120);
+            %       if ~steady, ls.note(info.why); end
+            %
+            %   IT DOES NOT WAIT OUT A LOOP THAT WILL NEVER ARRIVE.  A fault
+            %   ramp-down, a lockout, a crash, a loop left idle or disengaged,
+            %   a recorder that stopped writing, or a loop aimed at a
+            %   different temperature all return at once and say which --
+            %   waiting half an hour to be told nothing happened is how a
+            %   night gets wasted.  A `frozen` loop is the exception: the
+            %   supervisor freezing its output over a suspect reading is
+            %   usually seconds long and self-clearing, so that one is waited
+            %   through and reported in `info.frozen_s`.
+            %
+            %   With no `kelvin` it waits for whatever the loop is currently
+            %   aimed at.  Pass the temperature you commanded and it also
+            %   checks the loop is still aimed there -- which is what catches
+            %   somebody else, or another script, moving it underneath you.
+            if nargin < 2, kelvin = []; end
+            if nargin < 3 || isempty(timeout_s), timeout_s = obj.SettleTimeout; end
+
+            started  = tic;
+            % Long enough for the command that caused this to reach the
+            % recorder if the caller did not block on it, and short enough
+            % that a setpoint nobody sent is reported in seconds.
+            grace_s  = max(5, 3 * obj.PollInterval);
+            unreadableSince = [];
+            settledSince = [];    % recorder wall clock, not MATLAB's
+            lastSeen     = [];
+            steady   = false;
+            info = struct('steady', false, 'why', '', 'waited_s', 0, ...
+                          'temperature_k', NaN, 'setpoint_k', NaN, ...
+                          'target_k', NaN, 'error_k', NaN, 'output_pct', NaN, ...
+                          'phase', '', 'state', '', 'health', '', ...
+                          'validity', '', 'alarms', {{}}, 'frozen_s', 0, ...
+                          'dwell_s', 0, 'hold_error_k', [], 'hold_settle_s', []);
+
+            while true
+                info.waited_s = toc(started);
+
+                try
+                    s = obj.status();
+                    unreadableSince = [];
+                catch err
+                    % A single failed read is not evidence of anything: the
+                    % file is rewritten every cycle and status() already
+                    % retries.  Sustained failure is, and the limit is the
+                    % same staleness limit everything else here uses.
+                    if isempty(unreadableSince), unreadableSince = tic; end
+                    if toc(unreadableSince) > obj.MaxAge
+                        info.why = sprintf(['cannot read the status file: %s. ' ...
+                            'The recorder has stopped.'], err.message);
+                        break
+                    end
+                    pause(obj.PollInterval); continue
+                end
+
+                c = obj.control(s);
+                if isempty(c)
+                    % Configuration, not patience.  No amount of waiting turns
+                    % a recorder-only install into one with a loop.
+                    error('LakeShore:noSoftwareLoop', ...
+                          ['this recorder has no software loop -- it records ' ...
+                           'and does not steer. waitUntilSteady() is for the ' ...
+                           'software PID; for an instrument loop, watch ' ...
+                           'loops(...) yourself.']);
+                end
+
+                info.temperature_k = obj.fieldOr(c, 'filtered_k', NaN);
+                info.setpoint_k    = obj.fieldOr(c, 'setpoint_k', NaN);
+                info.target_k      = obj.fieldOr(c, 'setpoint_target_k', NaN);
+                info.error_k       = obj.fieldOr(c, 'error_k', NaN);
+                info.output_pct    = obj.fieldOr(c, 'output_pct', NaN);
+                info.phase         = obj.fieldOr(c, 'phase', '');
+                info.state         = obj.fieldOr(c, 'state', '');
+                info.health        = obj.fieldOr(c, 'health', '');
+                info.validity      = obj.fieldOr(c, 'validity', '');
+                info.alarms        = c.alarms;
+                info.hold_error_k  = obj.fieldOr(c, 'hold_error_k', []);
+                info.hold_settle_s = obj.fieldOr(c, 'hold_settle_s', []);
+
+                age = obj.ageOf(s);
+                if age > obj.MaxAge
+                    info.why = sprintf(['status.json is %.1f s old: the ' ...
+                        'recorder has stopped updating it, so nothing here ' ...
+                        'is current.'], age);
+                    break
+                end
+
+                switch info.state
+                    case {'ramping_down', 'locked_out', 'crashed'}
+                        info.why = sprintf(['the loop is %s and will not ' ...
+                            'arrive: %s. ack() then arm() is the way back, ' ...
+                            'and the latch is there to make somebody look ' ...
+                            'at the cryostat first.'], ...
+                            strrep(info.state, '_', ' '), obj.reasonOf(c));
+                        break
+                    case 'idle'
+                        info.why = ['the software loop is idle -- it is not ' ...
+                            'armed, so a setpoint drives nothing. arm() ' ...
+                            'closes it.'];
+                        break
+                    case 'frozen'
+                        % Waited through on purpose: the supervisor declining
+                        % to act on a reading it does not believe is usually
+                        % seconds long and clears itself.  Counted on the
+                        % recorder's clock, as the sum of the intervals
+                        % actually observed frozen.
+                        if ~isempty(lastSeen)
+                            info.frozen_s = info.frozen_s + (s.t_wall - lastSeen);
+                        end
+                end
+                if strcmp(obj.fieldOr(c, 'mode', ''), 'off')
+                    info.why = ['the software loop is disengaged (mode off) ' ...
+                        'and is not writing to the heater. arm() closes it.'];
+                    break
+                end
+
+                aimedElsewhere = ~isempty(kelvin) && ~isnan(info.target_k) && ...
+                                 abs(info.target_k - kelvin) > 1e-3;
+                if aimedElsewhere && info.waited_s > grace_s
+                    info.why = sprintf(['the loop is aimed at %.4f K, not ' ...
+                        'the %.4f K being waited for. Something else moved ' ...
+                        'it.'], info.target_k, kelvin);
+                    break
+                end
+
+                % -- the dwell, on the recorder's clock ---------------------
+                %
+                % Its clock and not MATLAB's: a script that was paused, or a
+                % laptop that slept, must not be able to certify a hold that
+                % the cryostat did not serve.  A gap in what we SAW is treated
+                % the same way -- samples that went by while this was not
+                % looking cannot be counted towards a dwell, so the count
+                % restarts rather than assuming the cryostat behaved through
+                % them.
+                cadence = obj.fieldOr(s, 'interval_s', 2);
+                if ~obj.insideGate(c)
+                    settledSince = [];
+                elseif isempty(settledSince) || ...
+                       (~isempty(lastSeen) && s.t_wall - lastSeen > 2.5 * cadence)
+                    settledSince = s.t_wall;
+                end
+                lastSeen = s.t_wall;
+                if isempty(settledSince)
+                    info.dwell_s = 0;
+                else
+                    info.dwell_s = s.t_wall - settledSince;
+                end
+
+                dwell = info.hold_settle_s;
+                if isempty(dwell)
+                    % No scheduler, so no published rule.  `phase` never
+                    % leaves `hold` on such a loop and cannot be the answer
+                    % either, so say so rather than invent a tolerance.
+                    error('LakeShore:noSettleRule', ...
+                          ['this recorder publishes no settle rule ' ...
+                           '(hold_error_k / hold_settle_s), so there is ' ...
+                           'nothing to wait for. Watch control() yourself ' ...
+                           'against a tolerance you have chosen.']);
+                end
+                % EITHER answer will do, and they are not the same question.
+                %
+                % The dwell is the one that arrives first after a move, and it
+                % is Jeff's rule exactly: inside the gate, continuously, for
+                % `hold_settle_s`.
+                %
+                % The other is for a hold ALREADY UNDERWAY.  `phase` reading
+                % `hold` is the recorder saying this loop is in its hold
+                % regime, which it grants only after serving that same dwell
+                % itself and then keeps until the error passes `move_error_k`.
+                % A script that attaches to a loop which has been holding for
+                % days should not have to watch it for another two minutes to
+                % learn that -- but the phase alone must not be the answer
+                % either, because its hysteresis is 0.40 K wide: on the
+                % simulated cryostat it read `hold` at an error of 80 mK, well
+                % outside the 50 mK rule.  So this path asks for the recorder's
+                % verdict AND for this sample to be inside the gate, which is
+                % a statement no single noisy sample can carry on its own.
+                %
+                % Neither path can fire early on a commanded move: any sweep
+                % starts a ramp, and a ramp puts the phase into `move`.
+                recorderHolds = strcmp(info.phase, 'hold') && obj.insideGate(c);
+                if ~aimedElsewhere && (recorderHolds || info.dwell_s >= dwell)
+                    steady = true;
+                    info.steady = true;
+                    break
+                end
+
+                if info.waited_s > timeout_s
+                    info.why = sprintf(['not settled after %.0f s: error ' ...
+                        '%.4f K, %.0f s of the %.0f s inside %.3f K, ' ...
+                        'output %.3f %% (phase %s). The move may still be ' ...
+                        'arriving.'], info.waited_s, info.error_k, ...
+                        info.dwell_s, dwell, info.hold_error_k, ...
+                        info.output_pct, info.phase);
+                    break
+                end
+                % Never slower than the recorder writes: a poll that skips a
+                % published sample is a dwell that cannot be certified, and
+                % the gap check above would restart the count for ever.
+                pause(min(obj.PollInterval, max(0.2, cadence / 2)));
+            end
+
+            info.waited_s = toc(started);
+            if nargout == 0 && ~steady
+                error('LakeShore:notSteady', ...
+                      'the cryostat did not settle: %s', info.why);
+            end
+        end
+
         function [id, issuedAt] = submit(obj, kind, args, instrument)
             %SUBMIT  Queue a command without waiting for the acknowledgement.
             %   Returns the id, and when it was issued; pass both to await()
@@ -618,6 +1020,46 @@ classdef LakeShore < handle
                        'temperatures are not current. The recorder has ' ...
                        'stopped or hung.'], age, obj.MaxAge);
             end
+        end
+
+        function tf = insideGate(obj, c)
+            %INSIDEGATE  One sample against the settle rule.  Not the verdict.
+            %
+            % Two halves, and they answer different questions.  `ramping` is
+            % the TRAJECTORY's: the smoothed setpoint has stopped travelling,
+            % asked in kelvin against `ramp.settled_k`.  `hold_error_k` is the
+            % CRYOSTAT's: how far the sample may be from it.  The dwell -- how
+            % long this has to stay true -- is counted by the caller, on the
+            % recorder's clock.
+            %
+            % Requiring `ramping` false is also what makes the one-cycle skew
+            % at the start of a move harmless: the loop steps, then the spool
+            % is drained, then the status is written, so the status a command
+            % lands on carries a phase and an error computed before it.
+            ramping = obj.fieldOr(c, 'ramping', false);
+            gate    = obj.fieldOr(c, 'hold_error_k', []);
+            err     = obj.fieldOr(c, 'error_k', NaN);
+            tf = ~logical(ramping) && ~isempty(gate) && ~isnan(err) && ...
+                 abs(err) <= gate;
+        end
+
+        function v = fieldOr(~, s, name, default)
+            % jsondecode writes JSON null as [], and a field the recorder had
+            % nothing to say about must not become a plausible zero.
+            if isfield(s, name) && ~isempty(s.(name))
+                v = s.(name);
+            else
+                v = default;
+            end
+        end
+
+        function why = reasonOf(obj, c)
+            why = obj.fieldOr(c, 'reason', '');
+            alarms = obj.fieldOr(c, 'alarms', {});
+            if isempty(why) && ~isempty(alarms)
+                why = strjoin(cellstr(alarms), '; ');
+            end
+            if isempty(why), why = 'no reason published'; end
         end
 
         function k = kelvinOf(~, chan)

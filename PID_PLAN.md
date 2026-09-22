@@ -22,7 +22,7 @@ rules of [safety.md](docs/ltspm3/safety.md), one rule-scoped commit at a time.
 | **3** | [plans/pid-3-loop.md](plans/pid-3-loop.md) | the loop rebuilt on the model: one rate, two ratios, watts, **a band that follows the setpoint** | **BUILT 2026-09-14** — 8 scenarios × 6 temperatures green, 8 rate fields → 2, hold at 2 DAC codes/min. **Review fixes all ten landed 2026-09-15** ([plans/pid-3-review.md](plans/pid-3-review.md)): the bench no longer depends on the date, `CRASHED` latches, the descent is bounded and cannot be finished by a failed read, and **both kelvin rows are reachable** — a heater delivering half its power at 30 K now faults instead of holding 14 K low in silence. §3.6's soak outstanding |
 | **4a-i** | here | **the smoothed setpoint says when it has ARRIVED, in kelvin** — `RampConfig.settled_k`, 2026-09-18. It was an underflow test on the rate, so the status file read `ramping`, the velocity feedforward kept a decayed tail, and **rule 4's kelvin premise rows stayed switched off, for ~7 min after every move**. Now ~2 min. **The HOLD/MOVE gain switch is quarantined on the old test** and still waits: relaxing `kp` by 7.1× mid-convergence costs tens of mK, and a bench sweep over 380–480 s passes and fails in no order, so the delay is not a number to tune — the fix is to ramp the gain change rather than step it, and that is not done |
 | **4** | [plans/pid-4-commissioning.md](plans/pid-4-commissioning.md) | armed on the cryostat, then unattended, then to 300 K | **4a met 2026-09-16; 4e's bench gate met 2026-09-17** (`test_stage_4e_fast_move.py`), cryostat pending; then 7 days unattended, hold graded against the 09-15 open-loop night; ladder graded to 300 K |
-| **5** | §6 here | warnings and faults in the viewer | **BUILT** — verdict rows, the loop's detail panel and a software setpoint control; contrast test green. Live check and MATLAB `plant()` outstanding |
+| **5** | §6 here | warnings and faults in the viewer | **BUILT** — verdict rows, the loop's detail panel and a software setpoint control; contrast test green. **MATLAB's half landed 2026-09-22** — `plant()`, `control()`, `setTemperature()` and `waitUntilSteady()`, so a sweep script is a for loop. Live check outstanding |
 
 ---
 
@@ -321,7 +321,11 @@ command spool earning its keep.
   Its gate is the opposite of the manual output's, which is written down in
   [gui](docs/recorder/gui.md) rather than left to be inferred.
 
-**Still outstanding:** MATLAB `plant()`.
+**MATLAB `plant()` is built** (2026-09-22), and beside it the rest of what a
+sweep script needs: `control()`, `setTemperature()` and `waitUntilSteady()`,
+which waits on the recorder's own settle verdict rather than a rule copied into
+MATLAB. `matlab/README.md` and
+[file-interface](docs/recorder/file-interface.md) carry the contract.
 
 **Exit gate:** visible on a live recorder, contrast test green. The contrast
 half is met — `tests/test_gui_theme.py` drives its check off the panels' own

@@ -474,6 +474,8 @@ reader will expect, which is a separate commit and a question for Jeff. The
   ```
   cd /d C:\Coding\Python\lakeshoreABJ && git pull && .venv\Scripts\python.exe -m ltspm3.monitor -c config-ltspm3-heater.yaml
   ```
-- `lschart status` and MATLAB `plant()` do not read `plant.json` yet. That is
-  phase 5's work in the viewer and a ten-line reader in `LakeShore.m`; neither
-  blocks the soak, which only needs the file to exist and be current.
+- `lschart status` does not read `plant.json` yet; that is phase 5's work in
+  the viewer and does not block the soak, which only needs the file to exist
+  and be current. **MATLAB's `plant()` landed 2026-09-22** and reports the
+  file's age and staleness rather than hiding either, because the judge is a
+  separate process and can be stopped while the recorder is perfectly healthy.

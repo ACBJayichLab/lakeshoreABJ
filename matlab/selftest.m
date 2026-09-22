@@ -65,7 +65,35 @@ function selftest(directory)
         end
     end
 
-    % -- 4. what are we allowed to ask for --------------------------------
+    % -- 4. is there a software loop, and is it driving --------------------
+    %
+    % Printed, not checked.  Most recorders have no software loop at all and
+    % that is not a fault; what would be a fault is discovering it from the
+    % first setTemperature() of a sweep.  A loop that exists but is not armed
+    % is reported as such for the same reason -- it accepts a setpoint and
+    % drives nothing with it.
+    ctl = ls.control(s);
+    if isempty(ctl)
+        fprintf('software    : none -- this recorder records and does not steer\n');
+        fprintf('              (setTemperature/waitUntilSteady need `ltspm3`)\n');
+    else
+        fprintf('software    : %s on %s, %s, %.4f K (%s)\n', ...
+                ctl.state, ctl.sensor, ctl.mode, ctl.setpoint_k, ...
+                ternary(strcmp(ctl.mode, 'pid'), 'ARMED -- driving the heater', ...
+                        'not armed; a setpoint would drive nothing'));
+        if isempty(ctl.hold_error_k)
+            fprintf('settle rule : not published -- waitUntilSteady() has ');
+            fprintf('nothing to wait for and will say so\n');
+        else
+            rate = ctl.max_rate_k_per_min;
+            if isempty(rate), rate = NaN; end
+            fprintf('settle rule : within %.3f K for %.0f s, and at most ', ...
+                    ctl.hold_error_k, ctl.hold_settle_s);
+            fprintf('%.2f K/min\n', rate);
+        end
+    end
+
+    % -- 5. what are we allowed to ask for --------------------------------
     %
     % Printed rather than checked.  None of these being open is a perfectly
     % good configuration for a recorder somebody only wants MATLAB to read, so
@@ -89,7 +117,7 @@ function selftest(directory)
                 ternary(allowed, 'PERMITTED', 'NOT PERMITTED by ipc.sources'));
     end
 
-    % -- 5. can we command it ---------------------------------------------
+    % -- 6. can we command it ---------------------------------------------
     fprintf('ping        : ');
     [ok, message] = ls.ping();
     if ok
@@ -102,7 +130,7 @@ function selftest(directory)
                'and restart it.'], message);
     end
 
-    % -- 6. are the panic commands reachable -------------------------------
+    % -- 7. are the panic commands reachable -------------------------------
     %
     % Named rather than exercised.  hold() and heatersOff() both change what
     % the cryostat is doing, and a selftest that moved a setpoint or dropped a
@@ -113,7 +141,7 @@ function selftest(directory)
     fprintf('              (not exercised -- both change what the cryostat ');
     fprintf('is doing)\n');
 
-    % -- 7. the log annotation ---------------------------------------------
+    % -- 8. the log annotation ---------------------------------------------
     %
     % Also named rather than exercised, for a smaller reason: note() is
     % harmless to the cryostat, but a selftest that wrote a row into the log
