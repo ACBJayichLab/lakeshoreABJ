@@ -219,3 +219,45 @@ def test_a_residual_that_declines_to_judge_says_why(tmp_path, armed):
     if block["missing_power_w"] is None:
         assert block["residual_reason"], "no opinion, and no reason given"
         assert block["min_output_pct"] is not None
+
+
+def test_the_published_settle_rule_is_the_tuners_own(tmp_path, armed):
+    """THE RULE A WAITING CLIENT WAITS FOR, and that it is not retyped.
+
+    A script that commands a temperature and then waits for the cryostat is
+    waiting for the error to be inside `hold_error_k` for `hold_settle_s` --
+    Jeff's "within 50 mK and staying", docs/ltspm3/requirements.md 1b.  The
+    rule's own behaviour is pinned in `test_tuning.py`; what is pinned here is
+    that the two numbers a client reads off the status file are the *same two*
+    the tuner applies, so a MATLAB sweep cannot go on holding to a rule this
+    cryostat has stopped using.
+    """
+    h = armed()
+    cfg = h.sup.tuner.cfg
+    block = written(tmp_path, h)
+
+    assert block["hold_error_k"] == cfg.hold_error_k
+    assert block["hold_settle_s"] == cfg.hold_settle_s
+
+
+def test_the_trajectory_says_it_is_moving_before_the_phase_does(tmp_path, armed):
+    """WHY A CLIENT PAIRS THE RULE WITH `ramping` AND NOT WITH `phase`.
+
+    `phase` applies the same two numbers and looks like the settled verdict.
+    It is the gain schedule, and its dwell does not start until
+    `SetpointSmoother.rate_underflowed` -- ~18 time constants, quarantined
+    there on purpose -- so it reads `move` for minutes after the cryostat is
+    inside the gate, and a client that waited on it would add those minutes to
+    every point of every sweep.  `ramping` is the trajectory's own answer, in
+    kelvin, and it is the one that moves when a command lands.
+
+    Pinned because it is the distinction `matlab/LakeShore.m`'s
+    `waitUntilSteady` is built on, and nothing else would notice if the two
+    fields quietly became the same answer.
+    """
+    h = armed()
+    h.sup.sweep_to(h.sup.status.setpoint_k + 5.0, None)
+    h.step(2)
+    block = written(tmp_path, h)
+    assert block["ramping"] is True
+    assert block["phase"] == "move"

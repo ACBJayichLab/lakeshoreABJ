@@ -112,6 +112,7 @@ client can tell "no such loop" from "a loop with nothing to say".
 | `fault_error_k` | the companion to `threshold_k`: warn at one, fault at the other |
 | `min_output_pct` | below this the watt residual has no opinion at all — the number that **explains a blank** |
 | `max_rate_k_per_min` | the trajectory's rate ceiling, off the ramp rather than the supervisor |
+| `hold_error_k`, `hold_settle_s` | **the settle rule**: the error band a hold must stay inside, and for how long. What a client waiting out a move waits for — read with `ramping`, not with `phase` |
 
 **Why the gains are worth reading here.** A 33x loop's P/I/D are whatever
 somebody typed into it and stay put. A software loop's are *scheduled* — the
@@ -142,6 +143,28 @@ neither trust nor distrust, and is not a clean bill. `bool(null)` is `false`,
 so the obvious way to write the projection would publish a claim nothing had
 established. A client must keep the three apart for the same reason, and
 `residual_reason` is what tells a blank premise from a broken one.
+
+**Why the settle rule is published.** A client that commands a temperature and
+then waits for the cryostat has to know what "settled" is, and the answer must
+not be a number typed into the client. These two are the recorder's own — the
+error band, and how long the error must stay inside it — so a script waits on
+the rule the cryostat is actually graded by, sizes its timeout as a multiple of
+that rule rather than as a guess, and can say in its own log what it waited
+for. On LTSPM3 they are Jeff's settle gate, `within 50 mK and staying`
+([requirements](../ltspm3/requirements.md)).
+
+**Wait on these and `ramping`, NOT on `phase`.** `phase` applies the same two
+numbers and looks like the answer, and it is not one. It is the gain schedule,
+and its dwell does not start until the setpoint smoother's *old* rate test
+underflows — about eighteen time constants, and quarantined there deliberately
+because the 7.1× gain drop is leaning on the delay
+(`SetpointSmoother.rate_underflowed`). So `phase` reads `move` for minutes
+after the cryostat is inside the gate: measured on a simulated LTSPM3
+2026-09-22, eight minutes after a 2 K move had settled inside 11 mK. It is also
+hysteretic — it leaves `hold` only past `move_error_k` — so a commanded move
+smaller than that inherits the previous hold's verdict. `ramping` is the
+trajectory's own answer, in kelvin, and is the one to pair with the rule.
+`matlab/LakeShore.m`'s `waitUntilSteady` is the worked example, dwell and all.
 
 **Why the rate ceiling is published.** A client building a setpoint control
 must not be able to express a rate the supervisor will refuse — the same reason
