@@ -137,6 +137,7 @@ class MeasurementFilter:
         accel_window: int = 7,
         spike_sigma: float = 8.0,
         spike_floor_k: float = 0.02,
+        spike_min_k: float = 0.0,
         residual_window: int = 60,
         stale_after_s: float = 30.0,
         max_consecutive_spikes: int = 3,
@@ -158,6 +159,13 @@ class MeasurementFilter:
         self._accel_gain = 0.0
         self.spike_sigma = spike_sigma
         self.spike_floor_k = spike_floor_k
+        #: **The smallest miss the spike test may call a spike**, in kelvin,
+        #: whatever the noise says.  NOT a noise floor -- `spike_floor_k` is
+        #: that, and it also sets `acceleration_noise`, which the residual's
+        #: `slope_lag` band is built on, so raising it to quiet the spike test
+        #: would narrow the band during exactly the moves that need it.  This
+        #: one touches the spike test and nothing else.  0 is off.
+        self.spike_min_k = spike_min_k
         #: Past this long without an accepted sample the stored state describes
         #: a cryostat that has since moved, so :meth:`predict` is no longer a
         #: statement about the present.  See :meth:`is_spike`.
@@ -371,8 +379,19 @@ class MeasurementFilter:
 
         It is zero at a hold and zero at a constant rate however fast, so
         nothing this widens was ever narrow when it was needed.
+
+        **Under both, `spike_min_k`.**  The second term is right in form and
+        late in fact at the ONSET of a fast move: the acceleration estimate is
+        a slope of a 30 s slope and lags the heater kicking the sample from
+        rest.  On the cryostat 2026-09-23 every 2 K move started with the
+        prediction ~0.19 K behind a smooth, one-way curve against a 0.16 K
+        threshold, and two rejected samples froze the heater for 14 s.  The
+        glitch this test exists for is tens of kelvin (docs/ltspm3/safety.md),
+        so a minimum well above the onset miss and far below the glitch costs
+        nothing it was built to catch.
         """
-        noise = self.spike_sigma * max(self.noise_estimate(), self.spike_floor_k)
+        noise = max(self.spike_sigma * max(self.noise_estimate(), self.spike_floor_k),
+                    self.spike_min_k)
         horizon = (self.median.window // 2) * dt + self.lowpass.tau + dt
         stale_slope = self.acceleration_excess(dt) * self.slope_delay_s(dt)
         return noise + stale_slope * horizon

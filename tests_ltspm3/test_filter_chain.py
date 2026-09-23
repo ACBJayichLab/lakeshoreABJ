@@ -220,3 +220,75 @@ def test_the_supervisor_regime_check_now_uses_the_fitted_curve():
     assert s.model_error_k is not None, "the check never ran"
     assert abs(s.model_error_k) < 0.5
     assert s.model_trusted
+
+
+# -- the onset of a fast move is not a spike -----------------------------------
+
+#: THE SAMPLE, as the 218 read it, 2026-09-23 12:56:00-12:59:18: two and a half
+#: minutes of hold at 118 K and then the start of a 2 K move up.  Genuine data,
+#: copied here because `data/` does not exist on a fresh clone.  On the
+#: cryostat the readings at 166 s and 168 s were rejected as spikes -- the
+#: prediction, built on a 30 s slope, was ~0.19 K behind a smooth one-way curve
+#: against a 0.16 K threshold -- and the heater froze for 14 s.
+MOVE_ONSET_2026_09_23 = (
+    (0.0, 118.04), (2.0, 118.03), (4.0, 118.03), (6.5, 118.03), (8.0, 118.05), (10.0, 118.05),
+    (12.0, 118.03), (14.0, 118.05), (16.0, 118.06), (18.0, 118.05), (20.0, 118.03),
+    (22.0, 118.03), (24.0, 118.02), (26.0, 118.01), (28.0, 118.03), (30.0, 118.03),
+    (32.0, 118.03), (34.0, 118.04), (36.9, 118.04), (38.0, 118.04), (40.0, 118.04),
+    (42.0, 118.04), (44.0, 118.03), (46.0, 118.03), (48.0, 118.02), (50.0, 118.01),
+    (52.0, 118.02), (54.0, 118.02), (56.0, 118.00), (58.0, 118.01), (60.0, 118.04),
+    (62.0, 118.02), (64.0, 118.00), (66.4, 118.01), (68.0, 118.01), (70.0, 118.01),
+    (72.0, 118.01), (74.0, 118.01), (76.0, 118.00), (78.0, 118.01), (80.0, 118.02),
+    (82.0, 118.01), (84.0, 118.01), (86.0, 118.01), (88.0, 118.01), (90.0, 118.00),
+    (92.0, 118.01), (94.0, 118.00), (96.9, 117.98), (98.0, 117.99), (100.0, 117.99),
+    (102.0, 118.00), (104.0, 118.00), (106.0, 118.00), (108.0, 118.00), (110.0, 118.00),
+    (112.0, 117.99), (114.0, 117.99), (116.0, 117.99), (118.0, 117.99), (120.0, 118.00),
+    (122.0, 118.03), (124.0, 118.04), (126.4, 118.03), (128.0, 118.02), (130.0, 118.02),
+    (132.0, 118.02), (134.0, 118.01), (136.0, 118.01), (138.0, 118.00), (140.0, 118.01),
+    (142.0, 118.00), (144.0, 118.00), (146.0, 118.00), (148.0, 117.99), (150.0, 117.99),
+    (152.0, 117.99), (154.0, 117.99), (156.9, 118.01), (158.0, 118.06), (160.0, 118.12),
+    (162.0, 118.20), (164.0, 118.29), (166.0, 118.40), (168.0, 118.51), (170.0, 118.61),
+    (172.0, 118.74), (174.0, 118.86), (176.0, 118.97), (178.0, 119.09), (180.0, 119.19),
+    (182.0, 119.30), (184.0, 119.38), (186.4, 119.45), (188.0, 119.51), (190.0, 119.55),
+    (192.0, 119.58), (194.0, 119.63), (196.0, 119.66), (198.0, 119.70),
+)
+
+
+def _spikes(filt, samples):
+    """The supervisor's order: ask, then fold in only what was believed."""
+    rejected, last = [], None
+    for t, kelvin in samples:
+        dt = 2.0 if last is None else t - last
+        last = t
+        if filt.is_spike(kelvin, dt, t=t):
+            rejected.append(t)
+        elif filt.is_stale(t):
+            filt.reseed(t, kelvin)
+        else:
+            filt.update(t, kelvin, dt)
+    return rejected
+
+
+def test_the_onset_of_a_fast_move_on_the_cryostat_is_not_a_spike():
+    """The armed file's filter believes every reading of the 12:58 move, and
+    without `spike_min_k` it rejects the two the cryostat rejected."""
+    from bench_plant import bench_control_config
+
+    kwargs = dict(bench_control_config().filter)
+    assert _spikes(MeasurementFilter(**kwargs), MOVE_ONSET_2026_09_23) == []
+    kwargs["spike_min_k"] = 0.0
+    assert _spikes(MeasurementFilter(**kwargs), MOVE_ONSET_2026_09_23) == [166.0, 168.0], (
+        "the defect this pins has moved -- re-derive before trusting the fix")
+
+
+def test_spike_min_k_touches_the_spike_test_and_nothing_else():
+    """`spike_floor_k` also sets `acceleration_noise`, which the residual's
+    `slope_lag` band is built on; raising IT to quiet the spike test narrowed
+    the band (1.52 -> 1.44 mW at a settled 118 K) during exactly the moves it
+    exists for.  This one must leave the band alone."""
+    plain, floored = MeasurementFilter(), MeasurementFilter(spike_min_k=0.40)
+    _spikes(plain, MOVE_ONSET_2026_09_23[:80])
+    _spikes(floored, MOVE_ONSET_2026_09_23[:80])
+    assert floored.acceleration_noise(2.0) == plain.acceleration_noise(2.0)
+    assert floored.acceleration_excess(2.0) == plain.acceleration_excess(2.0)
+    assert plain.spike_threshold(2.0) < 0.40 <= floored.spike_threshold(2.0)
