@@ -81,10 +81,14 @@ function selftest(directory)
                 ctl.state, ctl.sensor, ctl.mode, ctl.setpoint_k, ...
                 ternary(strcmp(ctl.mode, 'pid'), 'ARMED -- driving the heater', ...
                         'not armed; a setpoint would drive nothing'));
-        if isempty(ctl.hold_error_k)
-            fprintf('settle rule : not published -- waitUntilSteady() has ');
-            fprintf('nothing to wait for and will say so\n');
+        if isempty(ctl.settled)
+            fprintf('settled     : not published -- waitUntilSteady() has ');
+            fprintf('nothing to wait for; restart the recorder\n');
         else
+            fprintf('settled     : %s\n', ternary(logical(ctl.settled), ...
+                    'yes -- the temperature can be trusted', 'no'));
+        end
+        if ~isempty(ctl.hold_error_k)
             rate = ctl.max_rate_k_per_min;
             if isempty(rate), rate = NaN; end
             fprintf('settle rule : within %.3f K for %.0f s, and at most ', ...

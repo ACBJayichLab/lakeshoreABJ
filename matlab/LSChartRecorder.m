@@ -263,13 +263,17 @@ classdef LSChartRecorder < handle
             %     state              idle | tracking | frozen | ramping_down |
             %                        locked_out | crashed
             %     mode               off | manual | pid
+            %     settled            THE VERDICT: can this temperature be
+            %                        trusted for a measurement.  Decided by
+            %                        the recorder, once -- tracking, on the
+            %                        hold gains, inside hold_error_k for
+            %                        hold_settle_s -- and what
+            %                        waitUntilSteady() waits on.
             %     phase              hold | move -- which GAIN SCHEDULE is in
-            %                        force.  It is not the settled verdict and
-            %                        waitUntilSteady() does not wait on it:
-            %                        its clock does not start until the
-            %                        smoother's quarantined rate test
-            %                        underflows, minutes after the cryostat is
-            %                        inside the gate.
+            %                        force.  It goes to hold on the cycle
+            %                        `settled` first comes true, and then
+            %                        stays there through small excursions
+            %                        that `settled` does not.
             %     ramping            is the setpoint still travelling
             %     setpoint_k         what it is chasing right now
             %     setpoint_target_k  where it was told to end up
@@ -277,8 +281,8 @@ classdef LSChartRecorder < handle
             %                        channel in the same cycle
             %     health, validity   what it makes of its own sensor
             %     alarms             a cell array; empty when it has none
-            %     hold_error_k       the settle rule, in kelvin, and
-            %     hold_settle_s      how long it must hold inside it
+            %     hold_error_k       the rule behind `settled`, in kelvin,
+            %     hold_settle_s      and how long it must hold inside it
             %
             %   Empty on a recorder with no `control:` section -- a plain
             %   `lschart` install -- which is not an error: that recorder
@@ -316,6 +320,7 @@ classdef LSChartRecorder < handle
             % a client steers by, which are the ones whose absence is worth
             % surviving.
             for f = {'state', 'mode', 'health', 'sensor', 'phase', 'ramping', ...
+                     'settled', ...
                      'setpoint_k', 'setpoint_target_k', 'error_k', ...
                      'output_pct', 'raw_k', 'filtered_k', 'validity', ...
                      'reason', 'hold_error_k', 'hold_settle_s', ...
@@ -667,37 +672,20 @@ classdef LSChartRecorder < handle
             %           measure();                 % your experiment
             %       end
             %
-            %   WHAT "STEADY" MEANS IS THE RECORDER'S RULE, COUNTED HERE.
-            %   Steady is Jeff's settle gate, docs/ltspm3/requirements.md 1b --
-            %   "within 50 mK and staying" -- and both halves of it are read
-            %   from the recorder rather than written down here:
+            %   WHAT "STEADY" MEANS IS THE RECORDER'S VERDICT, READ HERE.
+            %   Steady is `control.settled`, and nothing here counts a dwell
+            %   of its own: the recorder decides it once -- Jeff's settle gate,
+            %   docs/ltspm3/requirements.md 1b, "within 50 mK and staying" --
+            %   and the viewer shows the same field.  It is the same moment
+            %   the loop's gains switch to hold.  The rule behind it
+            %   (`hold_error_k`, `hold_settle_s`) comes back in `info`, so a
+            %   script logs the rule it waited for instead of a rule it
+            %   believed.
             %
-            %     * the setpoint trajectory has ARRIVED (`ramping` false) --
-            %       the loop is holding a number, not still travelling to one;
-            %     * the error has been inside `hold_error_k` for
-            %       `hold_settle_s`, counted on the RECORDER's clock -- or, for
-            %       a hold already underway, the recorder says `phase` is
-            %       `hold` AND this sample is inside the gate, so a loop that
-            %       has been holding for days answers at once.
-            %
-            %   Both numbers come back in `info`, so a script logs the rule it
-            %   waited for instead of a rule it believed.
-            %
-            %   WHY THE DWELL IS COUNTED HERE AND NOT SIMPLY READ OFF `phase`.
-            %   `phase` applies the same two numbers and looks like the whole
-            %   answer.  It is the GAIN SCHEDULE, and its clock does not start
-            %   until the smoother's old rate test underflows -- about 18 time
-            %   constants, several minutes after the cryostat is inside the
-            %   gate.  That delay is deliberate and quarantined (it is load
-            %   bearing for the 7.1x gain drop; see
-            %   `SetpointSmoother.rate_underflowed`), but it is a fact about
-            %   retuning and not about the cryostat.  Measured on a simulated
-            %   LTSPM3 on 2026-09-22: `phase` still read `move` eight minutes
-            %   after a 2 K move had settled inside 11 mK.  So it is taken as
-            %   sufficient where it is already `hold` and never waited for --
-            %   waiting on it would add those minutes to every point of every
-            %   sweep, and would re-time every sweep the day the quarantine is
-            %   lifted.
+            %   Pass the temperature you commanded.  The status file written
+            %   on the cycle a command lands still carries the verdict from
+            %   before it, and checking the loop is aimed at `kelvin` is what
+            %   keeps that stale `settled` from answering for the new setpoint.
             %
             %   Called with no output it RAISES if the cryostat did not
             %   settle, which is the behaviour a sweep wants: measuring at a
@@ -730,15 +718,15 @@ classdef LSChartRecorder < handle
             % that a setpoint nobody sent is reported in seconds.
             grace_s  = max(5, 3 * obj.PollInterval);
             unreadableSince = [];
-            settledSince = [];    % recorder wall clock, not MATLAB's
-            lastSeen     = [];
+            lastSeen     = [];    % recorder wall clock, for frozen_s
             steady   = false;
             info = struct('steady', false, 'why', '', 'waited_s', 0, ...
                           'temperature_k', NaN, 'setpoint_k', NaN, ...
                           'target_k', NaN, 'error_k', NaN, 'output_pct', NaN, ...
                           'phase', '', 'state', '', 'health', '', ...
                           'validity', '', 'alarms', {{}}, 'frozen_s', 0, ...
-                          'dwell_s', 0, 'hold_error_k', [], 'hold_settle_s', []);
+                          'settled', false, 'hold_error_k', [], ...
+                          'hold_settle_s', []);
 
             while true
                 info.waited_s = toc(started);
@@ -783,6 +771,7 @@ classdef LSChartRecorder < handle
                 info.alarms        = c.alarms;
                 info.hold_error_k  = obj.fieldOr(c, 'hold_error_k', []);
                 info.hold_settle_s = obj.fieldOr(c, 'hold_settle_s', []);
+                info.settled       = logical(obj.fieldOr(c, 'settled', false));
 
                 age = obj.ageOf(s);
                 if age > obj.MaxAge
@@ -830,69 +819,23 @@ classdef LSChartRecorder < handle
                     break
                 end
 
-                % -- the dwell, on the recorder's clock ---------------------
-                %
-                % Its clock and not MATLAB's: a script that was paused, or a
-                % laptop that slept, must not be able to certify a hold that
-                % the cryostat did not serve.  A gap in what we SAW is treated
-                % the same way -- samples that went by while this was not
-                % looking cannot be counted towards a dwell, so the count
-                % restarts rather than assuming the cryostat behaved through
-                % them.
-                cadence = obj.fieldOr(s, 'interval_s', 2);
-                if ~obj.insideGate(c)
-                    settledSince = [];
-                elseif isempty(settledSince) || ...
-                       (~isempty(lastSeen) && s.t_wall - lastSeen > 2.5 * cadence)
-                    settledSince = s.t_wall;
-                end
                 lastSeen = s.t_wall;
-                if isempty(settledSince)
-                    info.dwell_s = 0;
-                else
-                    info.dwell_s = s.t_wall - settledSince;
-                end
 
-                dwell = info.hold_settle_s;
-                if isempty(dwell)
-                    % Either a controller with no scheduler, or -- far more
-                    % likely -- a recorder started before 2026-09-22, when
-                    % the rule began to be published.  Refusing is the point:
-                    % the alternative is `phase`, which reads `hold` 0.40 K
-                    % either side of the setpoint, and a sweep that measured
-                    % on that would be wrong quietly.
-                    error('LSChartRecorder:noSettleRule', ...
-                          ['this recorder publishes no settle rule ' ...
-                           '(control.hold_error_k / hold_settle_s), so ' ...
-                           'there is nothing to wait for.\nA recorder ' ...
-                           'started before 2026-09-22 does not publish it ' ...
-                           'and has to be restarted to. Everything else ' ...
-                           'here -- control(), setTemperature(), plant() -- ' ...
-                           'works against it unchanged.']);
+                if ~isfield(c, 'settled') || isempty(c.settled)
+                    % A recorder started before 2026-09-23, when the verdict
+                    % began to be published.  Refusing is the point: the
+                    % alternative is re-deriving it here, which is the
+                    % duplicate this replaced.
+                    error('LSChartRecorder:noSettledVerdict', ...
+                          ['this recorder publishes no settled verdict ' ...
+                           '(control.settled), so there is nothing to wait ' ...
+                           'for.\nA recorder started before 2026-09-23 does ' ...
+                           'not publish it and has to be restarted to. ' ...
+                           'Everything else here -- control(), ' ...
+                           'setTemperature(), plant() -- works against it ' ...
+                           'unchanged.']);
                 end
-                % EITHER answer will do, and they are not the same question.
-                %
-                % The dwell is the one that arrives first after a move, and it
-                % is Jeff's rule exactly: inside the gate, continuously, for
-                % `hold_settle_s`.
-                %
-                % The other is for a hold ALREADY UNDERWAY.  `phase` reading
-                % `hold` is the recorder saying this loop is in its hold
-                % regime, which it grants only after serving that same dwell
-                % itself and then keeps until the error passes `move_error_k`.
-                % A script that attaches to a loop which has been holding for
-                % days should not have to watch it for another two minutes to
-                % learn that -- but the phase alone must not be the answer
-                % either, because its hysteresis is 0.40 K wide: on the
-                % simulated cryostat it read `hold` at an error of 80 mK, well
-                % outside the 50 mK rule.  So this path asks for the recorder's
-                % verdict AND for this sample to be inside the gate, which is
-                % a statement no single noisy sample can carry on its own.
-                %
-                % Neither path can fire early on a commanded move: any sweep
-                % starts a ramp, and a ramp puts the phase into `move`.
-                recorderHolds = strcmp(info.phase, 'hold') && obj.insideGate(c);
-                if ~aimedElsewhere && (recorderHolds || info.dwell_s >= dwell)
+                if ~aimedElsewhere && info.settled
                     steady = true;
                     info.steady = true;
                     break
@@ -900,17 +843,15 @@ classdef LSChartRecorder < handle
 
                 if info.waited_s > timeout_s
                     info.why = sprintf(['not settled after %.0f s: error ' ...
-                        '%.4f K, %.0f s of the %.0f s inside %.3f K, ' ...
-                        'output %.3f %% (phase %s). The move may still be ' ...
-                        'arriving.'], info.waited_s, info.error_k, ...
-                        info.dwell_s, dwell, info.hold_error_k, ...
-                        info.output_pct, info.phase);
+                        '%.4f K against %.3f K for %.0f s, output %.3f %% ' ...
+                        '(phase %s). The move may still be arriving.'], ...
+                        info.waited_s, info.error_k, info.hold_error_k, ...
+                        info.hold_settle_s, info.output_pct, info.phase);
                     break
                 end
-                % Never slower than the recorder writes: a poll that skips a
-                % published sample is a dwell that cannot be certified, and
-                % the gap check above would restart the count for ever.
-                pause(min(obj.PollInterval, max(0.2, cadence / 2)));
+                % Never slower than the recorder writes, so a verdict that
+                % came and went is not missed between two polls.
+                pause(min(obj.PollInterval, max(0.2, obj.fieldOr(s, 'interval_s', 2) / 2)));
             end
 
             info.waited_s = toc(started);
@@ -1050,27 +991,6 @@ classdef LSChartRecorder < handle
                        'temperatures are not current. The recorder has ' ...
                        'stopped or hung.'], age, obj.MaxAge);
             end
-        end
-
-        function tf = insideGate(obj, c)
-            %INSIDEGATE  One sample against the settle rule.  Not the verdict.
-            %
-            % Two halves, and they answer different questions.  `ramping` is
-            % the TRAJECTORY's: the smoothed setpoint has stopped travelling,
-            % asked in kelvin against `ramp.settled_k`.  `hold_error_k` is the
-            % CRYOSTAT's: how far the sample may be from it.  The dwell -- how
-            % long this has to stay true -- is counted by the caller, on the
-            % recorder's clock.
-            %
-            % Requiring `ramping` false is also what makes the one-cycle skew
-            % at the start of a move harmless: the loop steps, then the spool
-            % is drained, then the status is written, so the status a command
-            % lands on carries a phase and an error computed before it.
-            ramping = obj.fieldOr(c, 'ramping', false);
-            gate    = obj.fieldOr(c, 'hold_error_k', []);
-            err     = obj.fieldOr(c, 'error_k', NaN);
-            tf = ~logical(ramping) && ~isempty(gate) && ~isnan(err) && ...
-                 abs(err) <= gate;
         end
 
         function v = fieldOr(~, s, name, default)

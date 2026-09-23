@@ -160,14 +160,14 @@ cycle, and the recorder gates it exactly as it gates `arm()`:
 `ipc.allow_analog_output: true`. It does not arm anything: a setpoint handed to
 a loop that is not armed is remembered and drives nothing.
 
-**What "steady" means is the recorder's rule, counted by MATLAB.** Steady is
+**What "steady" means is the recorder's verdict, `control.settled`.** Steady is
 [Jeff's settle gate](../docs/ltspm3/requirements.md) — "within 50 mK and
-staying" — and both halves of it are read from the recorder rather than written
-down in MATLAB: the setpoint trajectory has arrived (`ramping` false), and the
-error has been inside `hold_error_k` for `hold_settle_s`, counted on the
-*recorder's* clock so a paused script or a sleeping laptop cannot certify a
-hold the cryostat did not serve. Both numbers come back in `info`, so a script
-can log the rule it waited for rather than a rule it believed:
+staying" — and the recorder decides it, once: the loop is tracking, the
+trajectory has arrived, and the error has been inside `hold_error_k` for
+`hold_settle_s`. MATLAB counts nothing of its own, and the viewer shows the
+same field, so the two cannot disagree. It is also the moment the loop's gains
+switch to hold. The rule behind it comes back in `info`, so a script can log
+the rule it waited for rather than a rule it believed:
 
 ```matlab
 [steady, info] = ls.waitUntilSteady(120);
@@ -187,16 +187,16 @@ Called with no output it **raises** if the cryostat did not settle, which is
 what a sweep wants — measuring at a temperature that never arrived is worse
 than stopping. Ask for `[steady, info]` to handle it yourself.
 
-**It deliberately does not wait on `control.phase`.** That field applies the
-same two numbers and looks like the answer, but it is the *gain schedule*, and
-its clock does not start until the setpoint smoother's old rate test underflows
-— about eighteen time constants, minutes after the cryostat is inside the gate.
-The delay is deliberate and quarantined upstream, but it is a fact about
-retuning rather than about the cryostat: measured against a simulated LTSPM3 on
-2026-09-22, `phase` still read `move` eight minutes after a 2 K move had settled
-inside 11 mK. Waiting on it would have added those minutes to every point of
-every sweep, and would silently re-time every sweep the day the quarantine is
-lifted. It is reported in `info.phase` and gates nothing.
+**Pass the temperature you commanded.** The status file written on the cycle
+a command lands still carries the verdict from before it, and checking the loop
+is aimed at that temperature is what keeps a stale `settled` from answering for
+the new setpoint. `control.phase` is reported in `info.phase` and gates
+nothing: it goes to hold with `settled`, and then stays there through small
+excursions that `settled` does not.
+
+A recorder started before 2026-09-23 does not publish `settled`, and
+`waitUntilSteady` raises `LSChartRecorder:noSettledVerdict` rather than
+re-deriving it. Restart the recorder.
 
 `control()` is the whole loop state behind all of this, and `plant()` is the
 monitor's verdict on the cryostat — a separate process, so it can be absent or
