@@ -560,6 +560,10 @@ class StatusWriter:
             # docs/recorder/file-interface.md.
             "hold_error_k": _num(getattr(tuner_cfg, "hold_error_k", None)),
             "hold_settle_s": _num(getattr(tuner_cfg, "hold_settle_s", None)),
+            # ...and how long a settled hold may be outside the band before it
+            # stops being settled -- what lets a measurement of many minutes
+            # rely on the verdict staying true through one noisy reading.
+            "unsettle_s": _num(getattr(tuner_cfg, "unsettle_s", None)),
         }
 
     def payload(

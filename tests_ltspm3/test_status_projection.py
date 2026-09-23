@@ -238,6 +238,7 @@ def test_the_published_settle_rule_is_the_tuners_own(tmp_path, armed):
 
     assert block["hold_error_k"] == cfg.hold_error_k
     assert block["hold_settle_s"] == cfg.hold_settle_s
+    assert block["unsettle_s"] == cfg.unsettle_s
 
 
 def test_settled_in_the_file_is_the_supervisors_own_verdict(tmp_path, armed):

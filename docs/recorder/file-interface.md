@@ -150,13 +150,15 @@ client reads it rather than working it out: the loop is tracking, the
 trajectory has arrived, and the error has been inside `hold_error_k` for
 `hold_settle_s`. It is the same clock that switches the gains, so `settled` and
 `phase: hold` first appear on the same cycle. After that they come apart on
-purpose. `settled` goes false the cycle the error leaves the band, and needs a
+purpose. `settled` goes false once the error has been outside the band for
+`unsettle_s` — one noisy reading does not clear it, so a measurement lasting
+many minutes can start on it and rely on it staying true — and then needs a
 full dwell to come back. The gains stay on `hold` until the error passes
 `move_error_k`, because retuning on every small excursion is worse than either
 tuning. A frozen or disengaged loop is never settled.
 
-**Why the settle rule is published beside it.** `hold_error_k` and
-`hold_settle_s` are the rule behind the verdict — on LTSPM3, Jeff's settle gate,
+**Why the settle rule is published beside it.** `hold_error_k`,
+`hold_settle_s` and `unsettle_s` are the rule behind the verdict — on LTSPM3, Jeff's settle gate,
 `within 50 mK and staying` ([requirements](../ltspm3/requirements.md)). They are
 there so a script can size its timeout as a multiple of the rule rather than as
 a guess, and say in its own log what it waited for — not so it can apply the

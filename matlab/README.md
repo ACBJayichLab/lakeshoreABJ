@@ -164,7 +164,9 @@ a loop that is not armed is remembered and drives nothing.
 [Jeff's settle gate](../docs/ltspm3/requirements.md) — "within 50 mK and
 staying" — and the recorder decides it, once: the loop is tracking, the
 trajectory has arrived, and the error has been inside `hold_error_k` for
-`hold_settle_s`. MATLAB counts nothing of its own, and the viewer shows the
+`hold_settle_s`, and once true it stays true through anything shorter than
+`unsettle_s` outside the band — so a measurement of many minutes started on it
+can rely on it. MATLAB counts nothing of its own, and the viewer shows the
 same field, so the two cannot disagree. It is also the moment the loop's gains
 switch to hold. The rule behind it comes back in `info`, so a script can log
 the rule it waited for rather than a rule it believed:

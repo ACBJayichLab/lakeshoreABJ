@@ -2366,7 +2366,9 @@ def control_detail(control: dict | None) -> list[dict] | None:
              "tip": "can this temperature be trusted for a measurement: inside "
                     + _num_text(control.get("hold_error_k"), "K", 3) + " for "
                     + _num_text(control.get("hold_settle_s"), "s", 0)
-                    + " and staying. The same moment the gains switch to hold"},
+                    + " and staying (a settled hold ends only after "
+                    + _num_text(control.get("unsettle_s"), "s", 0)
+                    + " outside). The same moment the gains switch to hold"},
             {"label": "gain schedule", "text": _words(control.get("phase")),
              "mark": "",
              "tip": "which tuning is in force. It goes to hold when the loop "

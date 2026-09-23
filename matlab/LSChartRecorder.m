@@ -282,7 +282,9 @@ classdef LSChartRecorder < handle
             %     health, validity   what it makes of its own sensor
             %     alarms             a cell array; empty when it has none
             %     hold_error_k       the rule behind `settled`, in kelvin,
-            %     hold_settle_s      and how long it must hold inside it
+            %     hold_settle_s      how long it must hold inside it, and
+            %     unsettle_s         how long a settled hold may be outside
+            %                        it before it stops being settled
             %
             %   Empty on a recorder with no `control:` section -- a plain
             %   `lschart` install -- which is not an error: that recorder
@@ -323,7 +325,7 @@ classdef LSChartRecorder < handle
                      'settled', ...
                      'setpoint_k', 'setpoint_target_k', 'error_k', ...
                      'output_pct', 'raw_k', 'filtered_k', 'validity', ...
-                     'reason', 'hold_error_k', 'hold_settle_s', ...
+                     'reason', 'hold_error_k', 'hold_settle_s', 'unsettle_s', ...
                      'max_rate_k_per_min'}
                 if ~isfield(c, f{1}), c.(f{1}) = []; end
             end
