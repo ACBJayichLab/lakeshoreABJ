@@ -1926,7 +1926,7 @@ def a_full_control(**kw):
         missing_power_w=-0.00058, sigma_q_w=0.00152, dq_step_w=0.0009,
         residual_reason="", model_error_k=-0.0469, model_trusted=True,
         velocity_ff_pct=0.0, hard_min_pct=0.0, hard_max_pct=70.0,
-        min_output_pct=28.0,
+        min_output_pct=28.0, settled=True, hold_error_k=0.05, hold_settle_s=120.0,
     )
     block.update(kw)
     return block
@@ -2167,6 +2167,19 @@ def test_a_block_from_an_older_recorder_still_draws():
     assert groups is not None
     assert detail_row(old, "premise")["text"] == "no opinion"
     assert detail_row(old, "slope")["text"] == "—"
+    assert detail_row(old, "settled")["text"] == "no opinion"
+
+
+def test_settled_is_the_recorders_verdict_and_never_a_mark():
+    """Read off the status file, not re-derived from the error here -- the
+    recorder is the one place it is decided.  And not a warning either way: a
+    loop on its way to a new setpoint is doing what it was asked."""
+    assert detail_row(a_full_control(), "settled")["text"] == "yes"
+    moving = a_full_control(settled=False, error_k=0.002)
+    assert detail_row(moving, "settled")["text"] == "no", (
+        "a small error is not settled unless the recorder says so")
+    assert detail_row(moving, "settled")["mark"] == ""
+    assert "0.050 K" in detail_row(a_full_control(), "settled")["tip"]
 
 
 # -- the verdict from outside --------------------------------------------------

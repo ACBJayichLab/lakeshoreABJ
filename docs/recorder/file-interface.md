@@ -144,27 +144,23 @@ so the obvious way to write the projection would publish a claim nothing had
 established. A client must keep the three apart for the same reason, and
 `residual_reason` is what tells a blank premise from a broken one.
 
-**Why the settle rule is published.** A client that commands a temperature and
-then waits for the cryostat has to know what "settled" is, and the answer must
-not be a number typed into the client. These two are the recorder's own — the
-error band, and how long the error must stay inside it — so a script waits on
-the rule the cryostat is actually graded by, sizes its timeout as a multiple of
-that rule rather than as a guess, and can say in its own log what it waited
-for. On LTSPM3 they are Jeff's settle gate, `within 50 mK and staying`
-([requirements](../ltspm3/requirements.md)).
+**`settled` is the verdict, and the one field to wait on.** Can this
+temperature be trusted for a measurement? The recorder decides it once, and a
+client reads it rather than working it out: the loop is tracking, the
+trajectory has arrived, and the error has been inside `hold_error_k` for
+`hold_settle_s`. It is the same clock that switches the gains, so `settled` and
+`phase: hold` first appear on the same cycle. After that they come apart on
+purpose. `settled` goes false the cycle the error leaves the band, and needs a
+full dwell to come back. The gains stay on `hold` until the error passes
+`move_error_k`, because retuning on every small excursion is worse than either
+tuning. A frozen or disengaged loop is never settled.
 
-**Wait on these and `ramping`, NOT on `phase`.** `phase` applies the same two
-numbers and looks like the answer, and it is not one. It is the gain schedule,
-and its dwell does not start until the setpoint smoother's *old* rate test
-underflows — about eighteen time constants, and quarantined there deliberately
-because the 7.1× gain drop is leaning on the delay
-(`SetpointSmoother.rate_underflowed`). So `phase` reads `move` for minutes
-after the cryostat is inside the gate: measured on a simulated LTSPM3
-2026-09-22, eight minutes after a 2 K move had settled inside 11 mK. It is also
-hysteretic — it leaves `hold` only past `move_error_k` — so a commanded move
-smaller than that inherits the previous hold's verdict. `ramping` is the
-trajectory's own answer, in kelvin, and is the one to pair with the rule.
-`matlab/LSChartRecorder.m`'s `waitUntilSteady` is the worked example, dwell and all.
+**Why the settle rule is published beside it.** `hold_error_k` and
+`hold_settle_s` are the rule behind the verdict — on LTSPM3, Jeff's settle gate,
+`within 50 mK and staying` ([requirements](../ltspm3/requirements.md)). They are
+there so a script can size its timeout as a multiple of the rule rather than as
+a guess, and say in its own log what it waited for — not so it can apply the
+rule itself. `matlab/LSChartRecorder.m`'s `waitUntilSteady` is the worked example.
 
 **Why the rate ceiling is published.** A client building a setpoint control
 must not be able to express a rate the supervisor will refuse — the same reason

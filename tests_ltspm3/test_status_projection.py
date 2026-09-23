@@ -240,24 +240,41 @@ def test_the_published_settle_rule_is_the_tuners_own(tmp_path, armed):
     assert block["hold_settle_s"] == cfg.hold_settle_s
 
 
-def test_the_trajectory_says_it_is_moving_before_the_phase_does(tmp_path, armed):
-    """WHY A CLIENT PAIRS THE RULE WITH `ramping` AND NOT WITH `phase`.
+def test_settled_in_the_file_is_the_supervisors_own_verdict(tmp_path, armed):
+    """THE FIELD A WAITING CLIENT WAITS ON, and that it is not re-derived.
 
-    `phase` applies the same two numbers and looks like the settled verdict.
-    It is the gain schedule, and its dwell does not start until
-    `SetpointSmoother.rate_underflowed` -- ~18 time constants, quarantined
-    there on purpose -- so it reads `move` for minutes after the cryostat is
-    inside the gate, and a client that waited on it would add those minutes to
-    every point of every sweep.  `ramping` is the trajectory's own answer, in
-    kelvin, and it is the one that moves when a command lands.
-
-    Pinned because it is the distinction `matlab/LSChartRecorder.m`'s
-    `waitUntilSteady` is built on, and nothing else would notice if the two
-    fields quietly became the same answer.
+    `settled` is decided once, in the supervisor (`Tuner.settled`: on the hold
+    gains, inside `hold_error_k` for `hold_settle_s`), and it is the same
+    clock that switches the gains -- so the file says `hold` and `settled`
+    together the first time.  A command that moves the setpoint takes both
+    away on the cycle it lands.  `matlab/LSChartRecorder.m`'s
+    `waitUntilSteady` reads this and counts nothing of its own.
     """
     h = armed()
+    for _ in range(200):
+        if h.sup.status.settled:
+            break
+        h.step(1)
+    block = written(tmp_path, h)
+    assert block["settled"] is True, "an armed loop at rest never settled"
+    assert block["phase"] == "hold"
+
     h.sup.sweep_to(h.sup.status.setpoint_k + 5.0, None)
     h.step(2)
     block = written(tmp_path, h)
     assert block["ramping"] is True
+    assert block["settled"] is False
     assert block["phase"] == "move"
+
+
+def test_a_frozen_loop_is_not_settled(tmp_path, armed):
+    """Nobody certified the hold through a cycle the loop refused to act on."""
+    h = armed()
+    for _ in range(200):
+        if h.sup.status.settled:
+            break
+        h.step(1)
+    assert h.sup.status.settled
+    h.sup.panic_hold()
+    h.step(2)
+    assert written(tmp_path, h)["settled"] is False

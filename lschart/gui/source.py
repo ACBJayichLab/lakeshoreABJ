@@ -2356,10 +2356,21 @@ def control_detail(control: dict | None) -> list[dict] | None:
              "mark": "warn" if off_setpoint else "",
              "tip": "warn past " + _num_text(threshold, "K", 2) + ", fault past "
                     + _num_text(control.get("fault_error_k"), "K", 2)},
+            # THE VERDICT, read and never re-derived here: the recorder is the
+            # one place `settled` is decided.  Absent from a recorder too old
+            # to publish it, and that is said rather than guessed.
+            {"label": "settled",
+             "text": ("no opinion" if control.get("settled") is None
+                      else "yes" if control.get("settled") else "no"),
+             "mark": "",
+             "tip": "can this temperature be trusted for a measurement: inside "
+                    + _num_text(control.get("hold_error_k"), "K", 3) + " for "
+                    + _num_text(control.get("hold_settle_s"), "s", 0)
+                    + " and staying. The same moment the gains switch to hold"},
             {"label": "gain schedule", "text": _words(control.get("phase")),
              "mark": "",
-             "tip": "which tuning is in force. A tuning, and not a statement "
-                    "that the setpoint is still"},
+             "tip": "which tuning is in force. It goes to hold when the loop "
+                    "is settled, and stays there through small excursions"},
         ]},
         {"title": "What it is reading", "rows": [
             {"label": "raw / filtered",

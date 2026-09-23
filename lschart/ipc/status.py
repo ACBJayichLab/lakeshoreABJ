@@ -447,11 +447,11 @@ class StatusWriter:
         # the heater's.  Two hops, both defaulted: a controller without a ramp
         # is reported as having nothing to say about rates.
         ramp_cfg = getattr(getattr(controller, "ramp", None), "cfg", None)
-        # The SETTLE RULE, by the same two hops.  `phase` below already says
-        # whether the loop has settled; these say by what rule, which is what a
-        # client scripting a series of holds needs in order to size its own
-        # timeout and to report what it waited for.  Without them the rule gets
-        # copied into every client and the copies rot.
+        # The SETTLE RULE, by the same two hops.  `settled` below is the
+        # verdict; these say by what rule, which is what a client scripting a
+        # series of holds needs in order to size its own timeout and to report
+        # what it waited for.  Without them the rule gets copied into every
+        # client and the copies rot.
         tuner_cfg = getattr(getattr(controller, "tuner", None), "cfg", None)
 
         return {
@@ -488,6 +488,14 @@ class StatusWriter:
             # move and for a hold alike, so without this the gains appear to
             # jump while nothing else on screen moved.
             "phase": str(getattr(status, "phase", "") or ""),
+            # **THE SETTLED VERDICT**, and the one field a client waits on:
+            # can this temperature be trusted for a measurement.  Computed once,
+            # in the supervisor -- TRACKING, the gain schedule on `hold`, and
+            # the error inside `hold_error_k` this cycle -- so it first comes
+            # true on the cycle the gains switch.  Every client reads it rather
+            # than counting a dwell of its own.  False, not absent, from a
+            # controller that has no opinion: nothing certified it.
+            "settled": bool(getattr(status, "settled", False)),
             # WHAT THE LOOP IS ACTING ON, which is not what the chart draws.
             # The error is computed from the filtered value, so without it
             # "why is the error not what I get off the trace" has no answer.
@@ -543,20 +551,13 @@ class StatusWriter:
             # `max_output_pct` is published for an analog output.
             "max_rate_k_per_min": _num(
                 getattr(ramp_cfg, "max_rate_k_per_min", None)),
-            # THE SETTLE RULE, so a client does not have to know it: the error
-            # band a hold must stay inside, and for how long.  Jeff's "within
-            # 50 mK and staying", docs/ltspm3/requirements.md 1b.  A script
-            # that waits out a move waits for exactly this, and these are what
-            # let it say so in its own log and set a timeout that is a
-            # multiple of the rule rather than a guess.
-            #
-            # NOT published as "what `phase` means", although the tuner
-            # applies them to decide it.  `phase` is the GAIN SCHEDULE and its
-            # dwell does not start until `rate_underflowed`, which is ~18 time
-            # constants and is quarantined there on purpose -- so it reads
-            # `move` for minutes after the cryostat is inside the gate.  A
-            # client pairs these with `ramping`, which is the trajectory's own
-            # answer in kelvin.  docs/recorder/file-interface.md.
+            # THE RULE BEHIND `settled`: the error band a hold must stay
+            # inside, and for how long before the verdict is first given.
+            # Jeff's "within 50 mK and staying", docs/ltspm3/requirements.md
+            # 1b.  Published so a script can say in its own log what it waited
+            # for, and set a timeout that is a multiple of the rule rather than
+            # a guess -- not so it can apply the rule itself.
+            # docs/recorder/file-interface.md.
             "hold_error_k": _num(getattr(tuner_cfg, "hold_error_k", None)),
             "hold_settle_s": _num(getattr(tuner_cfg, "hold_settle_s", None)),
         }

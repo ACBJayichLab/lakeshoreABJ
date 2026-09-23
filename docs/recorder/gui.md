@@ -282,7 +282,7 @@ somebody diagnoses:
 
 | | |
 |---|---|
-| **What it is doing** | the supervisor's state and the loop mode, the setpoint (and where a ramp is heading), the tracking error against both the warn and the fault threshold, and which gain schedule is in force |
+| **What it is doing** | the supervisor's state and the loop mode, the setpoint (and where a ramp is heading), the tracking error against both the warn and the fault threshold, whether the recorder calls the temperature **settled** (its own verdict, never re-derived in the viewer), and which gain schedule is in force |
 | **What it is reading** | the raw reading and the **filtered** one — the error is computed from the second, which is why the trace alone never explained it — the regressed slope this controller uses instead of a derivative gain, the trailing noise, which test rejected a sample, whether the other thermometers agree, and the health verdict |
 | **What it is driving** | **asked → allowed → written**, which is one cycle's whole decision; the authority band and the envelope it sits inside; the ramp's lead; what the box reads back and whether this cycle wrote at all; the gains in force |
 | **What it believes** | the watt residual with its band and its step, and the model error with the supervisor's verdict on it. Then `reason` and any alarms, which are sentences and have nowhere else to go |
