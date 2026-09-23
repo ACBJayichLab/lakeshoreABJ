@@ -292,7 +292,8 @@ def test_the_status_file_publishes_the_policy_as_an_array(tmp_path):
     assert cmds["source_policy"] is True
     assert cmds["source_default"] is False
     by_name = {e["name"]: e for e in cmds["sources"]}
-    assert set(by_name) == {"matlab", "lschart-cli"}
+    assert set(by_name) == {"matlab", "lschart-cli", "default"}
+    assert by_name["default"]["configured"] is False
     assert by_name["matlab"] == {
         "name": "matlab", "allowed": False,
         "configured": True, "disabled_at_runtime": True,
@@ -305,6 +306,49 @@ def test_a_recorder_with_no_policy_says_so_in_the_status_file(tmp_path):
     assert cmds["source_policy"] is False
     assert cmds["source_default"] is True
     assert cmds["sources"] == []
+
+
+def test_an_overlay_with_no_config_policy_is_still_published(tmp_path):
+    """No `ipc.sources`, and sources.json muting a client: the recorder
+    refuses it, so the status file has to say so for a viewer to agree."""
+    svc = service(tmp_path)
+    overlay(tmp_path, {"matlab": False})
+    status = tick(svc)
+    cmds = status["commands"]
+    assert cmds["source_policy"] is False       # the config's, and it has none
+    by_name = {e["name"]: e for e in cmds["sources"]}
+    assert by_name["matlab"]["allowed"] is False
+    assert by_name["default"]["allowed"] is True
+
+    from lschart.gui.source import StatusSource
+    src = StatusSource("nowhere.json")
+    src.status = status
+    assert not src.source_allowed("matlab")
+    assert src.source_configured("matlab")
+    assert src.source_allowed("lschart-gui")
+    assert "no restart" in src.source_note("matlab")
+
+
+def test_source_default_includes_an_overlay_muting_the_unnamed(tmp_path):
+    svc = service(tmp_path)
+    overlay(tmp_path, {"default": False})
+    cmds = tick(svc)["commands"]
+    assert cmds["source_default"] is False
+    assert not send(svc, "ping", source="lschart-gui")["ok"]
+
+
+def test_un_muting_one_client_under_a_muted_default_names_it(tmp_path):
+    """`source X on` removed X's entry, which under `default: false` left X
+    exactly as muted as before -- while the refusal told you to send it."""
+    svc = service(tmp_path)
+    overlay(tmp_path, {"default": False})
+    tick(svc)
+    assert send(svc, "source", name="matlab", allowed=True,
+                source="lschart-gui")["ok"]
+    assert json.loads((tmp_path / "sources.json").read_text()) == {
+        "default": False, "matlab": True}
+    assert send(svc, "ping", source="matlab")["ok"]
+    assert not send(svc, "ping", source="lschart-gui")["ok"]
 
 
 # -- the viewer's half ------------------------------------------------------

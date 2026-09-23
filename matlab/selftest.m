@@ -103,18 +103,32 @@ function selftest(directory)
     fprintf('gates       : heater range %s, analog output %s, PID %s\n', ...
             onOff(c, 'allow_heater_range'), onOff(c, 'allow_analog_output'), ...
             onOff(c, 'allow_pid'));
-    if isfield(c, 'source_policy') && c.source_policy
-        allowed = true;
+    % Not `source_policy` alone: that says only whether the CONFIG has one,
+    % and sources.json can mute this client on a recorder whose config says
+    % nothing.  The array is the answer; its `default` row stands for any
+    % label it does not name.
+    entries = [];
+    if isfield(c, 'sources') && isstruct(c.sources)
         entries = c.sources;
-        if isstruct(entries)
-            for i = 1:numel(entries)
-                if strcmp(entries(i).name, 'matlab')
-                    allowed = logical(entries(i).allowed);
-                end
+    end
+    if (isfield(c, 'source_policy') && c.source_policy) || ~isempty(entries)
+        allowed = true;
+        if isfield(c, 'source_default')
+            allowed = logical(c.source_default);
+        end
+        for i = 1:numel(entries)
+            if strcmp(entries(i).name, 'default')
+                allowed = logical(entries(i).allowed);
+            end
+        end
+        for i = 1:numel(entries)
+            if strcmp(entries(i).name, 'matlab')
+                allowed = logical(entries(i).allowed);
             end
         end
         fprintf('source      : this client is labelled "matlab" -- %s\n', ...
-                ternary(allowed, 'PERMITTED', 'NOT PERMITTED by ipc.sources'));
+                ternary(allowed, 'PERMITTED', ...
+                        'NOT PERMITTED (ipc.sources or sources.json)'));
     end
 
     % -- 6. can we command it ---------------------------------------------

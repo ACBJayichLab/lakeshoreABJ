@@ -1694,14 +1694,31 @@ class StatusSource:
         Degrades open for a recorder too old to publish a policy, the same way
         :func:`capabilities` degrades: an absent key means the question had not
         been invented yet, not that the answer is no.
+
+        **Not gated on** ``source_policy``, which says only whether the
+        *config* has one.  ``sources.json`` mutes a client on a recorder whose
+        config says nothing, and reading the array only when the config had a
+        policy showed a muted client as listening -- the tick refilled the
+        moment it was cleared, and MATLAB sat muted behind a ticked box.
+        """
+        entry = self._source_entry(name)
+        if entry is not None:
+            return bool(entry.get("allowed"))
+        cmds = (self.status or {}).get("commands") or {}
+        return bool(cmds.get("source_default", True))
+
+    def _source_entry(self, name: str) -> dict | None:
+        """The status file's row for this label, else its ``default`` row.
+
+        The ``default`` row stands for every label neither layer names, so it
+        is the right answer for an unnamed one -- and it is the only place an
+        older recorder publishes an overlay that mutes the unnamed, because
+        its ``source_default`` read the config alone.
         """
         cmds = (self.status or {}).get("commands") or {}
-        if not cmds.get("source_policy"):
-            return True
-        for entry in cmds.get("sources") or []:
-            if str(entry.get("name", "")) == name:
-                return bool(entry.get("allowed"))
-        return bool(cmds.get("source_default", True))
+        entries = {str(e.get("name", "")): e for e in cmds.get("sources") or []
+                   if isinstance(e, dict)}
+        return entries.get(name, entries.get("default"))
 
     def source_configured(self, name: str = "lschart-gui") -> bool:
         """Does the recorder's *config* permit this source at all?
@@ -1711,27 +1728,27 @@ class StatusSource:
         narrow. One the config permits but the overlay has muted is one click
         away.
         """
+        entry = self._source_entry(name)
+        if entry is not None:
+            return bool(entry.get("configured"))
         cmds = (self.status or {}).get("commands") or {}
         if not cmds.get("source_policy"):
             return True
-        for entry in cmds.get("sources") or []:
-            if str(entry.get("name", "")) == name:
-                return bool(entry.get("configured"))
+        # Reached only from a recorder too old to publish a `default` row, and
+        # there `source_default` was the config's own default -- the ceiling.
         return bool(cmds.get("source_default", True))
 
     def source_note(self, name: str = "lschart-gui") -> str:
         """One sentence on why this viewer is locked out, or ``""``."""
         if self.source_allowed(name):
             return ""
-        cmds = (self.status or {}).get("commands") or {}
-        for entry in cmds.get("sources") or []:
-            if str(entry.get("name", "")) == name:
-                if entry.get("disabled_at_runtime"):
-                    return (f"Commands from {name!r} are switched off at the "
-                            "recorder (sources.json in its IPC directory). "
-                            "Delete that entry to allow them again — no "
-                            "restart needed.")
-                break
+        # Permitted by the config but not allowed can only be the overlay --
+        # by name, or by its `default` entry muting everything it does not name.
+        if self.source_configured(name):
+            return (f"Commands from {name!r} are switched off at the "
+                    "recorder (sources.json in its IPC directory). Tick it "
+                    "again under Listen to, or delete that entry — no "
+                    "restart needed.")
         return (f"Commands from {name!r} are not permitted by this recorder's "
                 "configuration (ipc.sources). Changing that needs a config "
                 "edit and a restart.")

@@ -858,12 +858,16 @@ class IpcService:
             # An array of uniform objects, never an object keyed by source
             # name: `lschart-cli` would reach MATLAB as `lschart_cli`.
             "sources": self.sources.as_status(),
+            # Whether the CONFIG has a policy -- not whether anything is
+            # muted.  The overlay mutes on its own with no `ipc.sources` at
+            # all, so a client that skipped the array above whenever this was
+            # false would show a muted source as listening.  Read the array.
             "source_policy": not self.sources.unconfigured,
-            # What an unlisted source gets.  Published because a source the
-            # policy never names appears nowhere in the array above, and a
-            # client cannot otherwise tell "not mentioned, therefore fine" from
-            # "not mentioned, therefore refused".
-            "source_default": self.sources.unconfigured or self.sources.default,
+            # What an unlisted source gets, from BOTH layers.  Published
+            # because a source the policy never names appears nowhere in the
+            # array above, and a client cannot otherwise tell "not mentioned,
+            # therefore fine" from "not mentioned, therefore refused".
+            "source_default": self.sources.unlisted_allowed(),
             "queued": len(self.spool.pending()) if self.accept_commands else 0,
             "applied": self.applied,
             "refused": self.refused,

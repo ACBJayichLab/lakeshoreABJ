@@ -194,7 +194,14 @@ class SourcePolicy:
 
         self.refresh()
         overlay = dict(self.overlay)
-        if allowed:
+        if allowed and key != self.DEFAULT_KEY and not overlay.get(
+                self.DEFAULT_KEY, True):
+            # Written as True, because here absence would NOT mean allowed:
+            # the overlay's `default` entry mutes every client it does not
+            # name, so naming this one is the only way to make it an exception.
+            # Still only a narrowing -- the ceiling was checked above.
+            overlay[key] = True
+        elif allowed:
             # Removed rather than written as True.  The overlay's whole meaning
             # is "what has been taken away", and an entry saying a source is
             # allowed says nothing that the absence of one does not.
@@ -284,6 +291,17 @@ class SourcePolicy:
 
     # -- what the status file publishes ------------------------------------
 
+    def unlisted_allowed(self) -> bool:
+        """What a source neither layer names gets -- both layers, not just
+        the config's ``default``, or an overlay that mutes the unnamed would
+        be published as leaving them open."""
+        return self.allows(self.DEFAULT_KEY)
+
+    def narrows(self) -> bool:
+        """Is either layer saying anything at all?  The overlay narrows on its
+        own when the config has no policy, so ``unconfigured`` is not this."""
+        return not self.unconfigured or bool(self.overlay)
+
     def as_status(self) -> list[dict]:
         """Every source either layer names, as an array of uniform objects.
 
@@ -291,8 +309,16 @@ class SourcePolicy:
         given in :mod:`lschart.ipc.status`: MATLAB's ``jsondecode`` runs object
         keys through ``makeValidName``, and ``lschart-cli`` would arrive as
         ``lschart_cli``.
+
+        ``default`` is listed whenever there is a policy of either kind, so a
+        client asking about a label nobody named has a row to read -- its
+        ``configured`` is the ceiling an unnamed client gets, which is what a
+        viewer needs to know before offering an un-mute.
         """
-        names = sorted(set(self.configured) | set(self.overlay))
+        names = set(self.configured) | set(self.overlay)
+        if self.narrows():
+            names.add(self.DEFAULT_KEY)
+        names = sorted(names)
         return [
             {
                 "name": name,

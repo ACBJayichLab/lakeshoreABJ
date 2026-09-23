@@ -510,11 +510,13 @@ def cmd_status(args) -> int:
         print(f"  commands   : "
               f"{'accepted' if cmds.get('accepted') else 'NOT accepted'}, "
               f"{cmds.get('applied', 0)} applied / {cmds.get('refused', 0)} refused")
-        if cmds.get("source_policy"):
+        entries = [e for e in cmds.get("sources") or []
+                   if e.get("name") != "default"]    # that row IS "anything else"
+        if cmds.get("source_policy") or cmds.get("sources"):
             # Only printed when there is one.  A line saying "every source may
             # ask" on every recorder that has never heard of the policy would
-            # be noise on the common case.
-            entries = cmds.get("sources") or []
+            # be noise on the common case.  Not `source_policy` alone: that is
+            # the config's, and sources.json mutes a client without one.
             print("  sources    : "
                   + ", ".join(
                       f"{e.get('name')}="

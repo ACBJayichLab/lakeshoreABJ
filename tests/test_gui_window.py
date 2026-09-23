@@ -1969,6 +1969,94 @@ def test_cancelling_the_mute_puts_the_tick_back(tmp_path, qt_app, monkeypatch):
     w.close()
 
 
+def test_a_client_muted_with_no_config_policy_shows_unticked(tmp_path, qt_app):
+    """The live recorder on 2026-09-23, verbatim: no `ipc.sources`, so
+    `source_policy` false, and `sources.json` muting MATLAB.  The recorder was
+    refusing MATLAB and the box said MATLAB was heard, because the viewer only
+    read the array when the CONFIG had a policy."""
+    w = cryostat(tmp_path, qt_app, [CTRL], commands={
+        "accepted": True, "recent": [], "source_policy": False,
+        "source_default": True,
+        "sources": [{"name": "matlab", "allowed": False, "configured": True,
+                     "disabled_at_runtime": True}],
+    })
+    w.refresh()
+    assert not w.source_checks["matlab"].isChecked()
+    assert w.source_checks["matlab"].isEnabled(), "one click from un-muted"
+    assert w.source_check.isChecked()
+    assert w.source_checks["default"].isChecked()
+    w.close()
+
+
+def test_an_overlay_muting_the_unnamed_mutes_this_viewer_too(tmp_path, qt_app):
+    """`default: false` in sources.json, read by an older recorder whose
+    `source_default` was the config's alone -- the `default` row is where it
+    shows."""
+    w = cryostat(tmp_path, qt_app, [CTRL], commands={
+        "accepted": True, "recent": [], "source_policy": False,
+        "source_default": True,
+        "sources": [{"name": "default", "allowed": False, "configured": True,
+                     "disabled_at_runtime": True}],
+    })
+    w.refresh()
+    assert not w.source_checks["default"].isChecked()
+    assert not w.source_check.isChecked()
+    assert w.source_check.isEnabled()
+    assert not w.command_group.isEnabled()
+    w.close()
+
+
+def test_an_unanswered_click_is_not_undone_by_the_next_fill(tmp_path, qt_app,
+                                                           monkeypatch):
+    """The status file the next refresh reads was written before the recorder
+    saw the command, so it still says "listening".  Refilling from it put the
+    tick straight back, as if the click had not happened."""
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.refresh()
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.source_checks["matlab"].setChecked(False)
+    (cmd,) = queued(w)
+    for _ in range(3):
+        w.refresh()
+    assert not w.source_checks["matlab"].isChecked()
+
+    # Answered -- and refused, so the file is the truth again and the tick
+    # goes back to where the recorder actually is.
+    status = json.loads(open(w.source.path).read())
+    status["cycle"] = 4
+    status["t_wall"] = time.time()
+    status["commands"]["recent"] = [{"id": cmd["id"], "ok": False,
+                                     "message": "no"}]
+    open(w.source.path, "w").write(json.dumps(status))
+    w.refresh()
+    assert w.source_checks["matlab"].isChecked()
+    w.close()
+
+
+def test_an_answered_click_shows_what_the_recorder_did(tmp_path, qt_app,
+                                                       monkeypatch):
+    w = cryostat(tmp_path, qt_app, [CTRL])
+    w.refresh()
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.source_checks["matlab"].setChecked(False)
+    (cmd,) = queued(w)
+    status = json.loads(open(w.source.path).read())
+    status["cycle"] = 4
+    status["t_wall"] = time.time()
+    status["commands"]["recent"] = [{"id": cmd["id"], "ok": True, "message": ""}]
+    status["commands"]["sources"] = [
+        {"name": "default", "allowed": True, "configured": True,
+         "disabled_at_runtime": False},
+        {"name": "matlab", "allowed": False, "configured": True,
+         "disabled_at_runtime": True}]
+    open(w.source.path, "w").write(json.dumps(status))
+    for _ in range(3):
+        w.refresh()
+    assert not w.source_checks["matlab"].isChecked()
+    assert w._source_asked == {}
+    w.close()
+
+
 def test_the_periodic_fill_does_not_send_a_command(tmp_path, qt_app, monkeypatch):
     """A refresh is not a click. This runs on a one-second timer."""
     w = cryostat(tmp_path, qt_app, [CTRL], commands=muted())

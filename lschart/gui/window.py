@@ -636,6 +636,11 @@ class ViewerWindow(QtWidgets.QMainWindow):
         #: queued command, while that readback has not caught up yet.  One at
         #: a time, because one unacknowledged command locks every button.
         self._awaiting: _Awaiting | None = None
+        #: A Listen-to click the recorder has not answered yet: source name ->
+        #: (the state asked for, command id, deadline).  Without it the next
+        #: fill, reading a status file written before the command was applied,
+        #: undoes the click on screen for a cycle.
+        self._source_asked: dict[str, tuple[bool, str, float]] = {}
         self._first_load_done = False
         #: The hand-picked window, (t0, t1) in epoch seconds, or None while the
         #: view is following the recorder.  When it is set it is the authority
@@ -1469,16 +1474,35 @@ class ViewerWindow(QtWidgets.QMainWindow):
             with _quiet(self.source_checks[name]):
                 self.source_checks[name].setChecked(True)
             return
-        self._queue("source", instrument="", name=name, allowed=bool(checked))
+        cid = self._queue("source", instrument="", name=name,
+                          allowed=bool(checked))
         self._awaiting = None
+        if cid is not None:
+            self._source_asked[name] = (
+                bool(checked), cid, time.monotonic() + float(self.spool.ttl_s))
 
     def _sync_source_box(self) -> None:
-        """Reflect the recorder's answer, without the reflection sending one."""
+        """Reflect the recorder's answer, without the reflection sending one.
+
+        The answer is the status file's, always -- except while a click of
+        this viewer's is still unanswered, when the box shows what was asked.
+        Once the recorder acknowledges the command, accepted or refused, the
+        file is the answer again, which is what makes a refusal visible: the
+        tick goes back to where the recorder actually is.
+        """
         live = bool(self.spool) and self.source.accepts_commands()
         for name, label in SOURCE_CHOICES:
             check = self.source_checks[name]
             allowed = self.source.source_allowed(name)
             permitted = self.source.source_configured(name)
+            asked = self._source_asked.get(name)
+            if asked is not None:
+                wanted, cid, deadline = asked
+                if (self.source.ack_for(cid) is not None
+                        or time.monotonic() > deadline):
+                    del self._source_asked[name]
+                else:
+                    allowed = wanted
             with _quiet(check):
                 check.setChecked(allowed)
             # A source the *config* refuses cannot be un-muted from here at any
@@ -3788,8 +3812,10 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """
         return 0.5 * 10.0 ** -spin.decimals()
 
-    def _queue(self, kind: str, *, instrument: str, **args) -> None:
+    def _queue(self, kind: str, *, instrument: str, **args) -> str | None:
         """Submit one command and start waiting for its acknowledgement.
+
+        Returns the command's id, or ``None`` if nothing was queued.
 
         ``instrument=""`` addresses the recorder rather than one box, which is
         what ``heaters_off``, ``hold``, ``arm`` and ``ack`` want.
@@ -3803,7 +3829,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         with no error anywhere.  Every caller states its target.
         """
         if self.spool is None:
-            return
+            return None
         try:
             cid = self.spool.submit(
                 kind, instrument=instrument, source=GUI_SOURCE, **args,
@@ -3811,7 +3837,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         except OSError as exc:
             self.ack_label.setText(f"could not queue the command: {exc}")
             self.ack_label.setStyleSheet(theme.note_style("bad", self))
-            return
+            return None
         self.ack_label.setText(f"queued {kind} {cid}, waiting for the recorder…")
         self.ack_label.setStyleSheet(theme.note_style("muted", self))
         for button in self._buttons():
@@ -3822,6 +3848,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
             cid,
             QtCore.QDateTime.currentSecsSinceEpoch() + int(self.spool.ttl_s),
         )
+        return cid
 
     def _send_setpoint(self) -> None:
         """Queue a setpoint, after saying out loud what is about to happen."""
