@@ -371,4 +371,9 @@ def test_the_gains_switch_at_the_settle_instant_and_the_move_stays_settled(delta
             assert abs(h.plant.temperature - target) <= gate, (
                 f"left the {gate * 1e3:.0f} mK gate "
                 f"{h.clock.t - settled_at:.0f} s after it was called settled")
+            # And the FLAG stays true: a measurement lasting many minutes
+            # starts on it and must be able to rely on it.
+            assert st.settled, (
+                f"settled dropped {h.clock.t - settled_at:.0f} s after it "
+                f"was given, with the sample inside the gate")
     assert settled_at is not None, "never settled"

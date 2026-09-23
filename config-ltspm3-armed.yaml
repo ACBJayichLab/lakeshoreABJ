@@ -336,7 +336,11 @@ control:
     # the settle to the hold gains, which is what "slight adjustment" meant.
     move_error_k: 0.40
     hold_error_k: 0.05            # JEFF'S SETTLE GATE: within 50 mK and staying
-    hold_settle_s: 120.0
+    hold_settle_s: 120.0          # ...for this long, and then `settled` is true
+    # ...and a settled hold stops being settled only after this long outside
+    # the gate.  One Sample reading a quantum past 50 mK is not the cryostat
+    # leaving it: `tuning.py` has the replay over the real holds behind it.
+    unsettle_s: 30.0
     # A GUARD, never the thing that sets a gain.  At tau_cl on the floor the
     # schedule asks up to 3.37 %/K at the warm end, and the 1.0 default was
     # quietly setting the gain everywhere above 60 K instead of guarding it.

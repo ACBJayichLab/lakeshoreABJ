@@ -175,23 +175,61 @@ def test_settled_is_the_switch_to_hold():
     assert t.phase is ControlPhase.HOLD and t.settled
 
 
-def test_a_hold_that_leaves_the_gate_needs_a_full_dwell_to_be_settled_again():
-    """A trim or a small disturbance never enters MOVE (it is inside
-    `move_error_k`), so the gains stay on HOLD -- but the temperature is not
-    settled again until it has been back inside the gate for the full dwell.
-    That is "and staying", and it is what a measurement waits on."""
+def _settled_tuner():
     t = Tuner()
     t.update_phase(0.0, error_k=0.0, ramping=False)
     t.update_phase(200.0, error_k=0.0, ramping=False)
     assert t.settled
-    gate, move = t.cfg.hold_error_k, t.cfg.move_error_k
-    t.update_phase(202.0, error_k=(gate + move) / 2, ramping=False)
+    return t
+
+
+def test_a_settled_hold_rides_out_a_single_reading_past_the_gate():
+    """A measurement lasting many minutes starts on `settled` and has to be
+    able to rely on it staying true.  On the real holds, 17 of 18 readings
+    past 50 mK were one 10 mK quantum over the gate for 2-8 s."""
+    t = _settled_tuner()
+    blip = (t.cfg.hold_error_k + t.cfg.move_error_k) / 2
+    for dt in range(0, int(t.cfg.unsettle_s), 2):         # just under the limit
+        t.update_phase(202.0 + dt, error_k=blip, ramping=False)
+        assert t.settled, f"dropped {dt} s into a blip"
+    t.update_phase(202.0 + t.cfg.unsettle_s, error_k=0.0, ramping=False)
+    assert t.settled
+
+
+def test_a_hold_that_stays_out_of_the_gate_needs_a_full_dwell_to_be_settled_again():
+    """Past `unsettle_s` it is an excursion, not a reading -- the one real
+    case on the logs was 54 s at up to 80 mK.  The gains stay on HOLD (a
+    small excursion must not re-tune), and the temperature is not settled
+    again until it has been back inside the gate for the full dwell."""
+    t = _settled_tuner()
+    out = (t.cfg.hold_error_k + t.cfg.move_error_k) / 2
+    t.update_phase(202.0, error_k=out, ramping=False)
+    t.update_phase(202.0 + t.cfg.unsettle_s + 2.0, error_k=out, ramping=False)
     assert t.phase is ControlPhase.HOLD, "a small excursion must not re-tune"
     assert not t.settled
-    t.update_phase(204.0, error_k=0.0, ramping=False)
+    back = 202.0 + t.cfg.unsettle_s + 4.0
+    t.update_phase(back, error_k=0.0, ramping=False)
     assert not t.settled, "back inside the gate is not the same as settled"
-    t.update_phase(204.0 + t.cfg.hold_settle_s, error_k=0.0, ramping=False)
+    t.update_phase(back + t.cfg.hold_settle_s, error_k=0.0, ramping=False)
     assert t.settled
+
+
+def test_the_entry_dwell_is_strict():
+    """The allowance is for a hold already settled.  Getting there still
+    takes `hold_settle_s` CONTINUOUSLY inside the gate."""
+    t = Tuner()
+    t.update_phase(0.0, error_k=5.0, ramping=False)          # a move
+    t.update_phase(10.0, error_k=0.0, ramping=False)
+    t.update_phase(100.0, error_k=t.cfg.hold_error_k * 1.5, ramping=False)
+    t.update_phase(102.0, error_k=0.0, ramping=False)
+    t.update_phase(200.0, error_k=0.0, ramping=False)
+    assert not t.settled, "a blip during the entry dwell must restart it"
+
+
+def test_a_new_setpoint_ends_settled_at_once():
+    t = _settled_tuner()
+    t.update_phase(202.0, error_k=0.0, ramping=True)
+    assert not t.settled and t.phase is ControlPhase.MOVE
 
 
 def test_break_settle_restarts_the_dwell():
