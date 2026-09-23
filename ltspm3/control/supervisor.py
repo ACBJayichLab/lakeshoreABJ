@@ -62,7 +62,7 @@ from .filters import MeasurementFilter
 from .health import HealthState, SensorGuard, SensorGuardConfig
 from .pid import PID, PIDConfig
 from .ramp import RampConfig, SetpointRamp, SetpointSmoother
-from .tuning import Tuner, TuningConfig
+from .tuning import ControlPhase, Tuner, TuningConfig
 
 log = logging.getLogger(__name__)
 
@@ -331,6 +331,14 @@ class SupervisorStatus:
     dq_step_w: float = 0.0
     residual_reason: str = ""
     phase: str = "hold"
+    #: **Can this temperature be trusted for a measurement?**  ONE verdict,
+    #: and every client reads it rather than working it out: `Tuner.settled`
+    #: from a TRACKING loop -- on the hold gains, the trajectory arrived, and
+    #: the error inside `tuning.hold_error_k` for `hold_settle_s`.  It first
+    #: comes true on the cycle the gains switch, and goes false the cycle the
+    #: error leaves the gate, while the gains stay on HOLD until
+    #: `move_error_k`.
+    settled: bool = False
     kp: float = 0.0
     ti: float = 0.0
     velocity_ff_pct: float = 0.0
@@ -1217,6 +1225,7 @@ class HeaterSupervisor:
             if self._disengaged_by:
                 s.reason = self._disengaged_by
             self._wrote_last_cycle = False
+            self._publish_settled(s)
             self.status = s
             return s
 
@@ -1231,6 +1240,7 @@ class HeaterSupervisor:
             s.state = self.state
             s.output_pct = self.output_pct
             self._wrote_last_cycle = False
+            self._publish_settled(s)
             self.status = s
             return s
 
@@ -1310,8 +1320,19 @@ class HeaterSupervisor:
 
         s.output_pct = self.output_pct
         s.state = self.state
+        self._publish_settled(s)
         self.status = s
         return s
+
+    def _publish_settled(self, s: SupervisorStatus) -> None:
+        """`Tuner.settled`, and only from a TRACKING loop.  Any other cycle --
+        frozen over a doubtful reading, a fault being held, manual, disengaged
+        -- is one nobody can certify the hold through, so it restarts the
+        dwell rather than being counted towards it."""
+        if self.state is SupervisorState.TRACKING:
+            s.settled = self.tuner.settled
+        else:
+            self.tuner.break_settle()
 
     # -- PID branch, with the premise checks ------------------------------
 
@@ -1388,28 +1409,26 @@ class HeaterSupervisor:
         # integral by (dkp * error / ki) -- and 1/ki is ~3000 here.
         state_before = (self.pid.integral, self.pid.cfg.kp, self.pid.cfg.ti)
 
+        # THE SETTLE CLOCK, every tracking cycle whether or not the gains are
+        # scheduled, because `settled` is read off it and a loop with tuning
+        # off still has to be able to say it.  `ramping` is the trajectory's
+        # own answer in kelvin (`SetpointSmoother.settled`), the same one the
+        # status publishes.
+        was = self.tuner.phase
+        phase = self.tuner.update_phase(
+            t, error_k=self.pid.cfg.setpoint - s.filtered_k, ramping=s.ramping)
+
         # Retune for where we are and what we are doing.  Both the gain and the
         # time constant of a weakly-pinned island change with temperature, so a
         # single fixed pair of gains is only ever right at one operating point.
         if self.tuner.enabled:
-            phase = self.tuner.update_phase(
-                t,
-                error_k=self.pid.cfg.setpoint - s.filtered_k,
-                # **`rate_underflowed`, NOT `settled`, and deliberately.**  The
-                # other three readers of the smoother ask "has the trajectory
-                # arrived", which is `settled` and is answered in kelvin.  This
-                # one is really asking "is the plant at rest enough to survive
-                # a 7.1x drop in kp", and it has been getting a yes only
-                # because the old test took ~18 time constants.  Give it the
-                # honest 5 mK answer and a 0.5 K move relaxes its gains
-                # mid-convergence and takes 772 s to settle instead of 54.
-                # The delay is load-bearing and the threshold behind it is an
-                # accident; both stay until the gain change is ramped rather
-                # than stepped.  -> `SetpointSmoother.rate_underflowed`.
-                ramping=self.ramp.ramping or not self.smoother.rate_underflowed,
-            )
             kp, ti = self.tuner.gains_for(s.filtered_k, phase)
-            self.pid.set_gains(kp, ti)
+            # The MOVE -> HOLD handover keeps the integral's share, which is
+            # the average output, rather than this cycle's noisy P + I.  Until
+            # 2026-09-23 it kept P + I, and the switch waited ~18 smoother time
+            # constants because that was what hid the cost.  `PID.set_gains`.
+            handover = was is ControlPhase.MOVE and phase is ControlPhase.HOLD
+            self.pid.set_gains(kp, ti, keep="integral" if handover else "output")
             s.phase = phase.value
         s.kp, s.ti = self.pid.cfg.kp, self.pid.cfg.ti
 

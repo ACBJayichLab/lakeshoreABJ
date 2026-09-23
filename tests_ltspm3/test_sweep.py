@@ -395,14 +395,7 @@ def test_the_smoother_reports_arrival_in_kelvin_not_in_underflow():
         t += 2.0
         sm.update(t, 120.0)
     assert abs(120.0 - sm.value) <= 0.005, "it said arrived before it had"
-    arrived_at = t
-    assert arrived_at == pytest.approx(6.0 * tau, abs=2.5 * tau)
-
-    # And the old test is three times further out, on the same trajectory.
-    while not sm.rate_underflowed and t < 4000.0:
-        t += 2.0
-        sm.update(t, 120.0)
-    assert t > 2.5 * arrived_at
+    assert t == pytest.approx(6.0 * tau, abs=2.5 * tau)
 
 
 def test_a_reset_smoother_is_holding_nothing_and_says_so():

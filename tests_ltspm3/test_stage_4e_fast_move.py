@@ -59,6 +59,13 @@ OVERSHOOT_K = 0.25
 #: hysteresis cannot come to disagree.
 SETTLE_K = 0.05
 SETTLE_S = 300.0
+#: When the RECORDER may say so.  Jeff's window above is the temperature's;
+#: the verdict (`settled`, which is also the switch to the hold gains) then
+#: certifies it with `tuning.hold_settle_s` of dwell, counted from when the
+#: trajectory has arrived to 5 mK.  So it is graded one dwell later, and the
+#: half that matters is that the temperature never leaves the gate after it.
+#: Measured 234-316 s on the moves graded here.
+VERDICT_S = SETTLE_S + 120.0
 
 
 def settled_loop(kelvin=BENCH_K, **kw):
@@ -79,12 +86,15 @@ def move(h, delta_k, minutes):
     ts, temps, outs, states = [], [], [], set()
     railed = 0
     held, longest_hold = 0, 0
+    called_settled_s = None
     for _ in range(int(minutes * 60 / h.DT)):
         st = h.step(1)
         ts.append(h.clock.t - t0)
         temps.append(h.plant.temperature)
         outs.append(st.output_pct)
         states.add(st.state)
+        if called_settled_s is None and st.settled:
+            called_settled_s = h.clock.t - t0
         if st.state is SupervisorState.TRACKING:
             held = 0
         else:
@@ -104,8 +114,13 @@ def move(h, delta_k, minutes):
 
     sign = 1.0 if delta_k > 0 else -1.0
     overshoot = sign * (max(sign * x for x in temps) - sign * target)
+    # What the recorder CALLED settled, and the worst the sample did after it.
+    after = [abs(x - target) for t, x in zip(ts, temps)
+             if called_settled_s is not None and t >= called_settled_s]
     return dict(arrived_s=first_and_staying(ARRIVE_FRAC * abs(delta_k)),
                 settled_s=first_and_staying(SETTLE_K),
+                called_settled_s=called_settled_s,
+                worst_after_settled_k=max(after) if after else None,
                 overshoot_k=overshoot, railed=railed, states=states,
                 final_error_k=temps[-1] - target,
                 overdrive_pct=sign * (max(sign * o for o in outs) - outs[-1]),
@@ -129,7 +144,17 @@ def assert_arrived(r, *, arrive_s=ARRIVE_S, settle_s=SETTLE_S,
     assert abs(r["overshoot_k"]) <= overshoot_k, r
     assert r["settled_s"] is not None and r["settled_s"] <= settle_s, r
     assert r["railed"] == 0, r
+    assert_called_settled(r, verdict_s=settle_s + (VERDICT_S - SETTLE_S))
     assert_never_stopped(r)
+
+
+def assert_called_settled(r, *, verdict_s=VERDICT_S):
+    """The recorder's own verdict: `settled` inside Jeff's window, and TRUE --
+    the sample never leaves the gate after it.  That second half is what a
+    measurement taken on the verdict depends on."""
+    assert r["called_settled_s"] is not None, r
+    assert r["called_settled_s"] <= verdict_s, r
+    assert r["worst_after_settled_k"] <= SETTLE_K, r
 
 
 def assert_never_stopped(r):
@@ -232,6 +257,9 @@ def test_a_ten_kelvin_move_stays_inside_the_band():
     assert r["arrived_s"] is not None and r["arrived_s"] <= 240.0, r
     assert abs(r["overshoot_k"]) <= OVERSHOOT_K, r
     assert r["railed"] == 0, r
+    # The move that left the gate worst when the handover kept the last
+    # cycle's P + I -- 62 mK.  Measured 418 s to the verdict now.
+    assert_called_settled(r, verdict_s=240.0 + (VERDICT_S - SETTLE_S) + 60.0)
     assert_never_stopped(r)
 
 
@@ -247,6 +275,9 @@ def test_a_small_move_settles_inside_a_minute():
     r = move(settled_loop(), 0.5, minutes=20)
     assert r["settled_s"] is not None and r["settled_s"] <= 60.0, r
     assert abs(r["overshoot_k"]) <= OVERSHOOT_K, r
+    # 68 mK out, 772 s to settle, when the gains dropped mid-convergence with
+    # the old handover.  Measured 234 s to the verdict now.
+    assert_called_settled(r)
     assert_never_stopped(r)
 
 

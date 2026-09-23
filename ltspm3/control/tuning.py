@@ -332,6 +332,7 @@ class Tuner:
                          else FittedSchedule())
         self.phase = ControlPhase.HOLD
         self._settled_since: float | None = None
+        self._t: float | None = None
         #: The loop's pure delay, in seconds.  **Set by the supervisor from the
         #: filter chain and the measured cadence** -- see
         #: `MeasurementFilter.group_delay_s` -- because it is a property of that
@@ -367,26 +368,47 @@ class Tuner:
         return max(speed * tau, self.cfg.delay_floor * self.delay_s)
 
     def update_phase(self, t: float, *, error_k: float, ramping: bool) -> ControlPhase:
-        """Hysteretic HOLD/MOVE selection.
+        """Hysteretic HOLD/MOVE selection, and the settle dwell behind it.
 
         A ramp always means MOVE.  Otherwise MOVE is entered on a large error
         and left only after the error has been small for ``hold_settle_s`` --
         chattering between two tunings is worse than either of them.
+
+        **The dwell keeps counting in HOLD**, because it is also `settled`:
+        a hold whose error leaves `hold_error_k` stops being settled at once
+        and needs a full dwell to be settled again, while the gains stay on
+        HOLD until `move_error_k`.  Without that a trim or a small disturbance
+        -- neither of which enters MOVE -- would be called settled the moment
+        the error came back inside, which is not "and staying".
         """
         c = self.cfg
+        self._t = t
+        if ramping or abs(error_k) > c.hold_error_k:
+            self._settled_since = None
+        elif self._settled_since is None:
+            self._settled_since = t
         if ramping or abs(error_k) > c.move_error_k:
             self.phase = ControlPhase.MOVE
-            self._settled_since = None
-        elif self.phase is ControlPhase.MOVE:
-            if abs(error_k) <= c.hold_error_k:
-                if self._settled_since is None:
-                    self._settled_since = t
-                elif t - self._settled_since >= c.hold_settle_s:
-                    self.phase = ControlPhase.HOLD
-                    self._settled_since = None
-            else:
-                self._settled_since = None
+        elif self.phase is ControlPhase.MOVE and self._dwelt():
+            self.phase = ControlPhase.HOLD
         return self.phase
+
+    def _dwelt(self) -> bool:
+        return (self._settled_since is not None and self._t is not None
+                and self._t - self._settled_since >= self.cfg.hold_settle_s)
+
+    @property
+    def settled(self) -> bool:
+        """**Can this temperature be trusted for a measurement?**  On the hold
+        gains, and inside `hold_error_k` for a full `hold_settle_s`.  It first
+        comes true on the cycle the gains switch to HOLD -- one clock for both.
+        """
+        return self.phase is ControlPhase.HOLD and self._dwelt()
+
+    def break_settle(self) -> None:
+        """Restart the dwell, for a cycle nobody can certify: a loop frozen
+        over a doubtful reading, disengaged, or not tracking at all."""
+        self._settled_since = None
 
     def gains_for(self, kelvin: float, phase: ControlPhase | None = None
                   ) -> tuple[float, float]:

@@ -241,7 +241,9 @@ class SetpointSmoother:
         feedforward, and rule 4's kelvin premise rows, which stay switched off
         while the setpoint is moving.  Measured on the cryostat, that was
         9.3 minutes of `move` gains after a 2 K move which had settled inside
-        50 mK after two.
+        50 mK after two.  The gain switch went on reading the old test until
+        2026-09-23, because its handover kept the instantaneous output and the
+        delay was hiding what that cost; `PID.set_gains` fixed the handover.
 
         A smoother that has been `reset` and not yet updated is holding
         nothing, and says so.
@@ -249,29 +251,6 @@ class SetpointSmoother:
         if self.target is None or self.value is None:
             return True
         return abs(self.target - self.value) <= self.settled_k
-
-    @property
-    def rate_underflowed(self) -> bool:
-        """The OLD `settled`, kept for one caller, and it is not a settle test.
-
-        ``abs(rate) < 1e-9`` is reached about 18 time constants after a move --
-        longer for a bigger one, because the threshold is absolute and the
-        decay is exponential.  Three of the four things that used to read it
-        wanted :attr:`settled` and are better for the change.  The fourth is
-        the HOLD/MOVE gain switch, and that one turned out to be leaning on the
-        delay rather than on the question: relaxing `kp` by 7.1x while the
-        plant is still converging costs tens of millikelvin, and WHEN it costs
-        them depends on where in the residual transient the switch lands.
-        Swept on the bench 2026-09-18 over 380-480 s, the 0.5 / 2 / 10 K moves
-        pass and fail in no order at all -- 420 s fixes the small move and
-        breaks the large one, 440 s breaks the small one again.
-
-        So this stays, quarantined to that one call site and named for what it
-        actually is, until the gain change is made gradual instead of stepped.
-        Picking a number out of that sweep would be tuning it into passing.
-        -> PID_PLAN.md, phase 4.
-        """
-        return abs(self.rate_k_per_s) < 1e-9
 
     def update(self, t: float, target: float) -> float:
         self.target = target

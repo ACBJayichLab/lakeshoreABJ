@@ -111,7 +111,7 @@ class PID:
 
     # -- bumpless handover -------------------------------------------------
 
-    def set_gains(self, kp: float, ti: float) -> None:
+    def set_gains(self, kp: float, ti: float, *, keep: str = "output") -> None:
         """Retune without bumping the output.
 
         Two things move when the gains change, and both have to be absorbed:
@@ -124,11 +124,28 @@ class PID:
           against a standing error of a few kelvin that step in output is worth
           several kelvin on this cryostat.
 
-        So the integral is re-solved to hold ``P + I`` fixed across the change.
-        Gain scheduling is only safe if it is invisible in the output.
+        So by default (``keep="output"``) the integral is re-solved to hold
+        ``P + I`` fixed across the change.  Gain scheduling is only safe if it
+        is invisible in the output.
+
+        **``keep="integral"`` holds ``ki * I`` fixed instead**, and is for the
+        MOVE -> HOLD handover only.  There the error is inside the settle gate
+        by definition, so the old ``P`` is mostly sensor noise times a large
+        ``kp``, and holding ``P + I`` freezes whatever that noise was on the
+        last cycle into the hold loop's integral -- which then takes minutes to
+        unwind it.  On the cryostat 2026-09-23 that was 64.08 % inherited from
+        a move-gain output jittering around 64.10, and the sample sat 50 mK
+        low.  The integral is the loop's own running average of what the heater
+        needs, so keeping it lands the output on that average.  The output
+        moves by ``(kp_new - kp_old) * error`` -- towards the average, and
+        bounded by the gate.
         """
+        if keep not in ("output", "integral"):
+            raise ValueError(f"keep must be 'output' or 'integral', got {keep!r}")
         error = self.terms.error
         before = self.cfg.kp * error + self.cfg.ki * self.integral
+        if keep == "integral":
+            before = self.cfg.ki * self.integral + kp * error
 
         self.cfg.kp, self.cfg.ti = kp, ti
         new_ki = self.cfg.ki

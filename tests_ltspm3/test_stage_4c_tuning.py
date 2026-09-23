@@ -331,37 +331,44 @@ def test_check_says_the_gains_are_scheduled(capsys, tmp_path):
     assert "arrives late at any rate" in out
 
 
-def test_the_gains_do_not_relax_the_moment_the_trajectory_arrives():
-    """The quarantine in `update_phase`, pinned so it is not tidied away.
+@pytest.mark.parametrize("delta_k", [0.5, 2.0, -2.0, 10.0])
+def test_the_gains_switch_at_the_settle_instant_and_the_move_stays_settled(delta_k):
+    """**`settled` IS the switch to the hold gains**, and nothing leaves the gate.
 
-    `SetpointSmoother.settled` became an honest kelvin test on 2026-09-18 and
-    three of its four readers are better for it.  The HOLD/MOVE switch is the
-    fourth, and it was leaning on the delay rather than on the question:
-    relaxing `kp` by 7.1x while the plant is still converging costs tens of
-    millikelvin, and a 0.5 K move that settles in 54 s takes 772 s if the gains
-    drop mid-convergence.
-
-    So that one call site still reads `rate_underflowed`.  It is an accident
-    being used as a delay and it is labelled as one -- but removing it without
-    first making the gain change GRADUAL silently regresses every small move,
-    which is the failure this test exists to catch.  The bench sweep behind
-    that claim is in `SetpointSmoother.rate_underflowed`.
+    The dwell starts when the trajectory has ARRIVED (`SetpointSmoother.settled`,
+    5 mK) and runs `hold_settle_s` inside `hold_error_k`; that cycle is both the
+    MOVE -> HOLD switch and the first `settled`.  Until 2026-09-23 the switch
+    waited on the smoother's old rate test, ~18 time constants, because its
+    handover kept the last cycle's P + I: switched at the honest instant that
+    let a 0.5 K move out to 68 mK and a 10 K one to 62.  The handover keeps the
+    integral's share now (`PID.set_gains`), and this is what that buys -- the
+    switch minutes earlier, and the temperature still inside 50 mK from the
+    moment it is called settled.
     """
     h = harness(tuning=True)
     h.sup.arm(h.sup.status.filtered_k)
     h.minutes(5)
-    h.sup.set_setpoint(h.sup.status.filtered_k + 0.5)
+    target = h.sup.status.filtered_k + delta_k
+    h.sup.set_setpoint(target)
+    gate = h.sup.tuner.cfg.hold_error_k
 
-    arrived_at = None
-    for _ in range(400):
+    arrived_at = settled_at = None
+    for _ in range(int(20 * 60 / h.DT)):
         st = h.step(1)
-        if arrived_at is None and h.sup.smoother.settled:
+        if arrived_at is None and not st.ramping:
             arrived_at = h.clock.t
-            assert st.phase == ControlPhase.MOVE.value, (
-                "the gains relaxed as soon as the trajectory arrived -- the "
-                "plant is still converging there")
-        if arrived_at is not None and st.phase == ControlPhase.HOLD.value:
-            assert h.clock.t - arrived_at > 120.0, (
-                "the gain switch followed arrival too closely")
-            return
-    raise AssertionError("never returned to the hold gains")
+        if settled_at is None and st.settled:
+            settled_at = h.clock.t
+            assert st.phase == ControlPhase.HOLD.value, (
+                "settled came true without the gains switching")
+            assert arrived_at is not None
+            # At least a full dwell after arrival: the dwell also waits for the
+            # error to be inside the gate, which after 10 K it is not yet.
+            assert (h.clock.t - arrived_at
+                    >= h.sup.tuner.cfg.hold_settle_s - h.DT), (
+                "settled before the settle rule's dwell had run")
+        if settled_at is not None:
+            assert abs(h.plant.temperature - target) <= gate, (
+                f"left the {gate * 1e3:.0f} mK gate "
+                f"{h.clock.t - settled_at:.0f} s after it was called settled")
+    assert settled_at is not None, "never settled"

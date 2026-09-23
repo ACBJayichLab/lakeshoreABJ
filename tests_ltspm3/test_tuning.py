@@ -164,6 +164,48 @@ def test_settling_timer_restarts_if_the_error_grows_again():
     assert t.update_phase(140.0, error_k=0.0, ramping=False) is ControlPhase.MOVE
 
 
+def test_settled_is_the_switch_to_hold():
+    """One clock: the cycle the gains go to HOLD is the first `settled`."""
+    t = Tuner()
+    t.update_phase(0.0, error_k=5.0, ramping=False)
+    t.update_phase(10.0, error_k=0.0, ramping=False)
+    t.update_phase(120.0, error_k=0.0, ramping=False)
+    assert t.phase is ControlPhase.MOVE and not t.settled
+    t.update_phase(130.0, error_k=0.0, ramping=False)
+    assert t.phase is ControlPhase.HOLD and t.settled
+
+
+def test_a_hold_that_leaves_the_gate_needs_a_full_dwell_to_be_settled_again():
+    """A trim or a small disturbance never enters MOVE (it is inside
+    `move_error_k`), so the gains stay on HOLD -- but the temperature is not
+    settled again until it has been back inside the gate for the full dwell.
+    That is "and staying", and it is what a measurement waits on."""
+    t = Tuner()
+    t.update_phase(0.0, error_k=0.0, ramping=False)
+    t.update_phase(200.0, error_k=0.0, ramping=False)
+    assert t.settled
+    gate, move = t.cfg.hold_error_k, t.cfg.move_error_k
+    t.update_phase(202.0, error_k=(gate + move) / 2, ramping=False)
+    assert t.phase is ControlPhase.HOLD, "a small excursion must not re-tune"
+    assert not t.settled
+    t.update_phase(204.0, error_k=0.0, ramping=False)
+    assert not t.settled, "back inside the gate is not the same as settled"
+    t.update_phase(204.0 + t.cfg.hold_settle_s, error_k=0.0, ramping=False)
+    assert t.settled
+
+
+def test_break_settle_restarts_the_dwell():
+    """For a frozen or disengaged cycle: nobody certified the hold through it."""
+    t = Tuner()
+    t.update_phase(0.0, error_k=0.0, ramping=False)
+    t.update_phase(200.0, error_k=0.0, ramping=False)
+    assert t.settled
+    t.break_settle()
+    t.update_phase(210.0, error_k=0.0, ramping=False)
+    assert not t.settled
+    assert t.phase is ControlPhase.HOLD
+
+
 # -- bumpless retuning ------------------------------------------------------
 
 def test_changing_gains_does_not_step_the_output():
@@ -178,6 +220,30 @@ def test_changing_gains_does_not_step_the_output():
     pid.set_gains(0.2, 620.0)
     after = pid.update(measurement=99.0, slope=0.0, dt=0.0).output
     assert after == pytest.approx(before, abs=0.02), f"{before:.4f} -> {after:.4f}"
+
+
+def test_the_hold_handover_keeps_the_average_not_the_last_cycle():
+    """`keep="integral"`: the MOVE -> HOLD handover lands on the integral's
+    share, which is the loop's running average, and drops the old P -- which,
+    inside the settle gate, is mostly the last cycle's sensor noise times a
+    large kp.  The output moves by exactly (kp_new - kp_old) * error."""
+    pid = PID(PIDConfig(kp=2.4, ti=60.0, setpoint=118.0))
+    pid.prime(64.10)
+    for _ in range(30):
+        pid.update(measurement=118.0, slope=0.0, dt=2.0)
+    last = pid.update(measurement=118.01, slope=0.0, dt=2.0)   # +10 mK of noise
+    share = pid.cfg.ki * pid.integral
+
+    pid.set_gains(0.31, 519.0, keep="integral")
+    assert pid.cfg.ki * pid.integral == pytest.approx(share)
+    after = pid.update(measurement=118.01, slope=0.0, dt=0.0).output
+    assert after - last.output == pytest.approx((0.31 - 2.4) * last.error)
+    assert after > last.output, "the noisy P pulled the output low; this undoes it"
+
+
+def test_set_gains_refuses_an_unknown_keep():
+    with pytest.raises(ValueError):
+        PID(PIDConfig()).set_gains(0.1, 100.0, keep="average")
 
 
 # -- step-response identification -------------------------------------------
