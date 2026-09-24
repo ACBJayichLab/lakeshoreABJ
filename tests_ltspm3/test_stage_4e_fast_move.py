@@ -36,7 +36,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from bench_plant import DELIVERED_FRAC, STAGE_FILE, FittedHarness
+from bench_plant import DELIVERED_FRAC, STAGE_FILE, FittedHarness, bench_control_config
 
 from ltspm3.control import SupervisorState
 
@@ -205,26 +205,30 @@ def test_the_same_move_arrives_where_experiments_run(kelvin, arrive_s):
     assert_arrived(r, arrive_s=arrive_s)
 
 
-def test_at_180_the_ceiling_is_what_limits_the_move():
-    """**A limitation pinned so it cannot be mistaken for a tuning problem.**
+def test_at_180_the_ceiling_no_longer_limits_the_move():
+    """**The warm end arrives like the rest now.**  Under a 70 % `hard_max_pct`
+    the overdrive a fast move wants at 180 K railed on the ceiling and the
+    move took 226 s; with the cap above it the overdrive peaks near 72 % and
+    the move arrives in 76 s, overshooting 35 mK.
 
-    At 180 K the steady output is high enough that the overdrive a fast move
-    wants runs into `hard_max_pct` itself, so the move takes 226 s rather than
-    the 80-90 it takes lower down.  Nothing here is retunable: the cryostat is
-    giving what it is allowed to give.  It still arrives, still settles, and
-    still does not fault, which is the part that matters.
+    Not folded into the parametrised row above because the recorder's own
+    `settled` verdict is not graded here: the model puts the thermometer's rms
+    at 44 mK at 180 K against Jeff's 50 mK gate, so the median of three does
+    not stay inside it for the full dwell.  That is the 218 at 180 K and not
+    the loop -- `settled_s` below is the plant's temperature, which does.
 
-    If this starts arriving inside `ARRIVE_S`, somebody has raised the ceiling
-    or re-gauged the model -- check which, then move 180 K into the
-    parametrised row above.
+    If `peak_pct` ever comes back to `hard_max_pct`, the ceiling is binding
+    again -- somebody lowered it or re-gauged the model up; check which.
     """
     r = move(settled_loop(kelvin=180.0), 2.0, minutes=30)
-    assert r["arrived_s"] is not None and r["arrived_s"] <= 300.0, r
+    assert r["arrived_s"] is not None and r["arrived_s"] <= ARRIVE_S, r
     assert abs(r["overshoot_k"]) <= OVERSHOOT_K, r
-    assert r["settled_s"] is not None and r["settled_s"] <= 300.0, r
+    assert r["settled_s"] is not None and r["settled_s"] <= SETTLE_S, r
+    assert r["railed"] == 0, r
     assert_never_stopped(r)
-    assert r["peak_pct"] == pytest.approx(70.0, abs=0.02), (
-        "180 K no longer reaches the ceiling -- see the docstring")
+    ceiling = bench_control_config().supervisor.hard_max_pct
+    assert r["peak_pct"] < ceiling - 1.0, (
+        "180 K is back on the ceiling -- see the docstring")
 
 
 def test_sixty_kelvin_no_longer_overshoots():

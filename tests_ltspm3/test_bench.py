@@ -47,7 +47,7 @@ def test_the_bench_loads_its_limits_from_the_armed_config(kelvin):
     is a failure here rather than a surprise on the cryostat."""
     cfg = bench_control_config()
     assert cfg.enabled, "the bench needs the loop built; `run --arm` closes it"
-    assert cfg.supervisor.hard_max_pct == 70.0, "the ceiling is the guard"
+    assert cfg.supervisor.hard_max_pct == 85.0, "the ceiling is the guard"
     assert cfg.supervisor.on_exit == "hold"
     assert cfg.supervisor.safe_output_pct == 0.0
 

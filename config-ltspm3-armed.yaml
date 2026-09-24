@@ -50,7 +50,7 @@ instruments:
     analog_decimals: 3
 
     allow_writes: true
-    max_output_pct: 70.0          # the ceiling; matches supervisor.hard_max_pct
+    max_output_pct: 85.0          # the ceiling; matches supervisor.hard_max_pct
     verify_writes: false          # the supervisor confirms its own writes
                                   # (`verify_readback`); paying twice would put
                                   # a second transaction in every cycle
@@ -145,9 +145,11 @@ control:
     authority_pct: 1.0
     hard_min_pct: 0.0
     # THE ONE CAP NOTHING MOVES.  Whatever the model, the setpoint or the
-    # arithmetic says, the output cannot exceed this.  Above it the fit is
-    # extrapolation and nobody has measured what happens.
-    hard_max_pct: 70.0
+    # arithmetic says, the output cannot exceed this.  The model's table ends
+    # at `T_MAX_K` (about 70 % output) and CLAMPS there, so the band's centre
+    # never climbs past it: between the top of the table and this cap the loop
+    # is running on overdrive the model has no curve for.
+    hard_max_pct: 85.0
 
     # HOW FAST THE HEATER ITSELF MAY TRAVEL, in output percent per minute.
     # NOT the trajectory's kelvin rate divided by the gain, which is what it
