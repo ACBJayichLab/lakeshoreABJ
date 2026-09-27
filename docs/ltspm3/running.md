@@ -264,9 +264,12 @@ Which means, on this cryostat:
 - **at a hold the check is vacuous by design.** `dither: true` moves one 0.01 %
   code at a time, deliberately below `verify_tol_pct`. Worst case is one
   code;
-- **at 118 K it is vacuous while ramping too.** At the local gain there
-  ([thermal-response.md](thermal-response.md)) a full 5 K/min ramp is
-  0.36 %/min, or **0.012 % per 2 s cycle — under `verify_tol_pct`**;
+- **at 118 K a steady ramp is borderline.** At the local gain there
+  ([thermal-response.md](thermal-response.md)) a 5 K/min ramp is
+  0.36 %/min, or 0.012 % per 2 s cycle — under `verify_tol_pct` — and the
+  armed file's 10 K/min is 0.026 % per cycle, just over it. The heater's own
+  slew during the approach, up to `max_output_rate_pct_per_min`, is well
+  over it either way;
 - **at the cold end it bites.** The gain falls by more than an order of
   magnitude, the same rate is ~0.48 % per cycle, and there the readback is
   doing real work.

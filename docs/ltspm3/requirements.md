@@ -1,4 +1,4 @@
-# Requirements — Jeff, 2026-09-17, and the hold rule of 2026-09-18
+# Requirements — Jeff, 2026-09-17, the hold rule of 2026-09-18 and the rate of 2026-09-27
 
 **This is the document the loop is graded against.** It replaces the
 requirements table in `PID_PLAN.md` §1, which had been rewritten several times
@@ -8,9 +8,10 @@ reinterpreted as "a rate is a ceiling, not a promise" and "for a static hold the
 software PID has nothing to offer". Neither of those was Jeff's.
 
 The first section is his answers, verbatim, to eight questions asked once the
-drift was noticed, plus the two follow-ups that superseded parts of them —
-[§1b](#1b-the-follow-up-once-five-minutes-had-been-measured) on the move and
-[§1c](#1c-the-hold-once-a-night-of-it-had-been-measured) on the hold. The
+drift was noticed, plus the three follow-ups that superseded parts of them —
+[§1b](#1b-the-follow-up-once-five-minutes-had-been-measured) on the move,
+[§1c](#1c-the-hold-once-a-night-of-it-had-been-measured) on the hold and
+[§1d](#1d-the-rate-once-the-slew-was-its-own-number) on the rate. The
 second is what was taken from them. The third is what was measured against
 them: **3a and 3b on the bench, [3c](#3c-what-the-cryostat-measured-2026-09-17-to-09-18)
 on the cryostat**, and where the two disagree the cryostat wins.
@@ -91,6 +92,9 @@ Asked on 2026-09-17, after the retune was armed and the first moves watched.
     divided by the gain, the heater's own slew limit. How should it be split?**
     > Keep 5 K/min, add a separate heater slew limit
 
+    **The 5 K/min half is superseded by [§1d](#1d-the-rate-once-the-slew-was-its-own-number)**;
+    the separate slew limit stands.
+
 Two questions he asked back, answered here because the next person will ask
 them too:
 
@@ -135,6 +139,23 @@ That is a deliberate acceptance, not an oversight — 10 mK is at the
 thermometer's own noise, the loop is bought for the *move*, and the hold only
 has to not matter.
 
+## 1d. The rate, once the slew was its own number
+
+2026-09-27. He opened it:
+
+> I want to increase the rate at which the software PID goes to a setpoint.
+> Specifically the time to go from for example: 110K to 180K or back.
+> Currently limited by 5K/min if I understand correctly. Up to 10 K/min
+
+and, told that the same number also sets the fault response — the open-loop
+ramp-down and the walk back in after re-arming — and asked whether those should
+speed up too or stay at 5, chose **"Everything to 10"**: one rate, as before.
+
+**This supersedes the 5 K/min half of answer 12.** What §3a measured against
+raising the rate was measured while the heater's slew was still that rate
+divided by the gain; with the two apart, [§3d](#3d-ten-kelvin-per-minute-2026-09-27)
+is the re-measurement.
+
 ## 2. What was taken from them
 
 | | requirement | how it is graded |
@@ -143,7 +164,7 @@ has to not matter.
 | **settle** | and is then **within 50 mK and staying, inside 2-5 minutes** — the slight adjustment after the approach | the same test; `tuning.hold_error_k` is the same 50 mK, so the gate and the loop's own hysteresis cannot disagree |
 | **hold** | **ONE rule, over the whole Allan curve** (§1c, 2026-09-18): at every averaging time the armed hold is within **1.1×** of open loop **or** below **10 mK**, whichever it satisfies. Either clause passes | `analysis/hold_quality.py`, armed against a matched open-loop window on the **cryostat** — matched in length *and* in clock hours, since a diurnal term lives in these bands. The bench cannot grade it: its plant has no slow disturbance, and it predicted 0.71× where the cryostat measured 1.60× |
 | **hold, direction** | the loop has **real authority** at a hold — faster than the plant, not slower | `hold_speed` below 1 |
-| **rate** | 5 K/min is a **safety ceiling on the trajectory**, not a target, and it stays | `ramp.max_rate_k_per_min`. Measured 2026-09-17: raising it made moves worse, because it was also setting the next row |
+| **rate** | **10 K/min** (§1d, 2026-09-27) — the default for a move, the ceiling on a requested one, and the rate of the post-fault approach and the fault ramp-down: one number | `ramp.max_rate_k_per_min`. It was 5, and raising it measured worse on 2026-09-17 only because it was also setting the next row; §3d is the re-measurement. A 10 K/min ramp needs up to 8.5 % of velocity lead, so `max_velocity_ff_pct` moved with it |
 | **slew** | how fast the **heater output itself** may move is a **separate number**. It was derived from the rate ceiling through the gain, and that coupling is what made a move soft with a long tail | `supervisor.max_output_rate_pct_per_min`. The two are different quantities and are configured apart |
 | **band** | the authority band **follows the setpoint**, always. Its width is control room, sized to the model's level error plus the overdrive a fast move needs. It is **not** the "is the delivered power wrong" check — that is the watt residual's job | `HeaterSupervisor.target_band_centre_pct` asks `has_curve`, not `feedforward.enabled`; `authority_pct` 1.0 |
 | **use** | single setpoints typed by hand, and programmed ladders with a measurement at each rung. Both are the same operation: a move, then a hold | `send setpoint --software`; a ladder tool is the natural next thing |
@@ -217,7 +238,8 @@ below the model's level error cuts the heater at arming, which is pinned by
 **The rate ceiling is not the lever.** Raising `max_rate_k_per_min` from 5 to
 20 tripped the demand-anomaly freeze at 60 K and slowed 118 K to 6.9 min;
 10 K/min slowed 118 K to 5.4 min; lowering it to 2 or 1 made 60 K overshoot
-30–40 %. It stays at 5.
+30–40 %. It stays at 5. **Superseded by §1d and re-measured in §3d**: all of
+this was with the heater's slew still derived from the rate, which §3b removed.
 
 **The hold: 3 h at 118 K, Allan deviation as a ratio to the same plant open
 loop** (the bench plant has white sensor noise and no slow disturbance, so this
@@ -430,3 +452,54 @@ one reads 1.57 / 1.97 / 1.56×. But §3a's bench table predicted a ratio of
 has white sensor noise and no slow disturbance, so it cannot see the one effect
 this measurement exists to find. The caveat §2 has always carried is now a
 measured fact rather than a precaution.
+
+### 3d. Ten kelvin per minute, 2026-09-27
+
+**The bench, against §1d.** Same fitted plant and delivered-power gauge as 3a
+and 3b, the file's numbers throughout, moves as `test_stage_4e_fast_move.py`'s
+`move()` commands them (from the settled reading, by the span). 95 % / within
+50 mK and staying:
+
+| move | 5 K/min, cap 6 % | 10 K/min, cap 6 % | **10 K/min, cap 12 %** (shipped) |
+|---|---|---|---|
+| 110 → 180 K | 822 / 1024 s | 462 / 728 s | **424 / 640 s** |
+| 180 → 110 K | 822 / 978 s | 480 / 696 s | **424 / 598 s** |
+| 60 → 110 K | 594 / 748 s | — | 312 / 500 s |
+| 30 → 60 K | 376 / 536 s | — | 232 / 400 s |
+| 10 → 30 K | 290 / 356 s | — | 220 / 266 s |
+| 120 → 130 K | 156 / 280 s | — | 110 / 258 s |
+| +2 K at 30 / 60 / 100 / 120 / 180 K | 112 / 106 / 88 / 86 / 76 s to 95 % | — | 104 / 102 / 82 / 78 / 66 s |
+
+Every row tracking throughout — no hold, no fault — overshoot at most 35 mK,
+peak output 76.5 % against the 85 % ceiling, and coming down from 180 K the
+output never went below 56 %: the cryostat cools at 10 K/min with heater to
+spare. The
+5 K/min 2 K column is §3b's, reproduced. The test is
+`test_a_seventy_kelvin_move_goes_at_the_files_rate`.
+
+**So §3a's verdict was the coupling, not the rate.** With the slew its own
+number the rate does what it says: large moves take about half as long, and a
+2 K move barely changes, because at 2 K the corner, not the rate, shapes the
+start.
+
+**The velocity feedforward cap had to move with it.** A ramp needs `rate × τ / K`
+of lead above the holding output: 8.5 % at 180–195 K at 10 K/min, against
+the 6 % cap. At 6 % it still arrives, late, having trailed its own smoothed
+setpoint by about 4 K going up and 6.6 K coming down, against 0.45 and 0.15 K
+at 12 %. 12 % keeps the ~1.4× margin the cap had over 5 K/min's 4.23 %.
+
+**The spike test's margin at the onset of a move** is linear in the
+acceleration, which doubles for a long move (the corner does not change length).
+The 2026-09-23 onset, doubled, needs `spike_min_k` 0.349 K against 0.172 K as
+it happened, which is 87 % of the old 0.40. It is **0.60** now. Replayed over
+the archive (17 logs, 1224 h) through the armed filter, guard and coherence
+monitor: 0.40, 0.60 and 0.80 let through exactly the same readings among
+those more than 2 K off a 7-sample median, and false rejections fall 3.08 →
+2.72 per day.
+
+**The fault ramp-down follows the rate** (§1d): 118 K to base in 11.4 min,
+against 24 at 5 K/min. It still only ever lowers the heater, and never faster
+per write than the rate through the gain where the heater is.
+
+**Open:** these are bench numbers. The first 110 ↔ 180 K on the cryostat is
+the record, and the spike margin is the part the bench cannot grade.

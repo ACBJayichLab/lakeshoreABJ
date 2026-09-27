@@ -18,10 +18,12 @@ the 2026-09-15 open-loop night, on the cryostat.
 **What sets the arrival time is not in this file and not in `tuning:`.**  With
 `move_speed` parked on the dead-time floor, a move costs
 `span / rate + corner + about 2 tau_cl`, and all three of those are Jeff's
-choices from section 1b: `max_rate_k_per_min` 5, `delay_floor` 4 (so `tau_cl`
-is 12 s at the 2 s cadence and median of three), and a corner of 8 dead times.
-86 s at 120 K is the floor those three imply, and it is why ARRIVE_S is 100 and
-not the 30 the conversation opened with.
+choices: `max_rate_k_per_min` (5 in section 1b, 10 since 1d), `delay_floor` 4
+(so `tau_cl` is 12 s at the 2 s cadence and median of three), and a corner of
+8 dead times.  Only the first term scales with the move, so on 2 K the rate
+barely shows -- the corner alone is a 5 K/min start -- and on 70 K it is most
+of it.  About 86 s at 120 K is the floor, and it is why ARRIVE_S is 100 and not
+the 30 the conversation opened with.
 
 Everything here runs `stage="file"`: the numbers graded are the numbers the
 cryostat is handed.  The thresholds are Jeff's where he gave one and the bench
@@ -265,6 +267,48 @@ def test_a_ten_kelvin_move_stays_inside_the_band():
     # cycle's P + I -- 62 mK.  Measured 418 s to the verdict now.
     assert_called_settled(r, verdict_s=240.0 + (VERDICT_S - SETTLE_S) + 60.0)
     assert_never_stopped(r)
+
+
+#: **JEFF'S CASE for the rate** (docs/ltspm3/requirements.md §1d): 110 K to
+#: 180 K and back.  70 K at the file's 10 K/min is 7 minutes of trajectory;
+#: measured 424 s to 95 % both ways, and 640 / 598 s to within 50 mK.
+#: Graded at eight minutes and twelve -- under what 5 K/min takes to 95 % alone.
+BIG_MOVE_ARRIVE_S = 8 * 60.0
+BIG_MOVE_SETTLE_S = 12 * 60.0
+
+
+@pytest.mark.parametrize("start_k,end_k", [(110.0, 180.0), (180.0, 110.0)])
+def test_a_seventy_kelvin_move_goes_at_the_files_rate(start_k, end_k):
+    """The whole of 110-180 K at `ramp.max_rate_k_per_min`, both ways.
+
+    Two ways this goes wrong, and both are asserted rather than left to the
+    arrival time.  **The velocity lead reaching `max_velocity_ff_pct`**: a
+    10 K/min ramp needs 8.5 % of it at the top of the table, and at the old
+    6 % cap the sample trailed its setpoint by kelvin (requirements.md §3d) --
+    it still arrived, late, which is why the cap is asserted directly.  **The
+    ceiling**: the overdrive rides on 69 % of holding output at 180 K.
+    """
+    h = settled_loop(kelvin=start_k)
+    cap = h.sup.cfg.max_velocity_ff_pct
+    lead = []
+    real_step = h.step
+
+    def step(n=1):
+        st = real_step(n)
+        lead.append(abs(st.velocity_ff_pct or 0.0))
+        return st
+
+    h.step = step
+    r = move(h, end_k - start_k, minutes=25)
+    assert r["arrived_s"] is not None and r["arrived_s"] <= BIG_MOVE_ARRIVE_S, r
+    assert r["settled_s"] is not None and r["settled_s"] <= BIG_MOVE_SETTLE_S, r
+    assert abs(r["overshoot_k"]) <= OVERSHOOT_K, r
+    assert r["railed"] == 0, r
+    assert_never_stopped(r)
+    assert r["peak_pct"] < bench_control_config().supervisor.hard_max_pct - 1.0, r
+    assert max(lead) < cap - 1.0, (
+        f"the velocity lead reached {max(lead):.2f} % against a {cap:.2f} % cap "
+        "-- a throttle, not a ceiling; see the docstring")
 
 
 def test_a_small_move_settles_inside_a_minute():

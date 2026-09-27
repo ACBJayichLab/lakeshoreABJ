@@ -90,7 +90,8 @@ loop instead: the error it produced was read as a broken premise, so rule 8 was
 protecting the cryostat by breaking the loop, and it only worked because the
 premise check could not tell a commanded move from a fault.
 
-**There is one TRAJECTORY rate** — `ramp.max_rate_k_per_min`, 5 K/min — and a
+**There is one TRAJECTORY rate** — `ramp.max_rate_k_per_min`, 10 K/min since
+2026-09-27 ([requirements.md](requirements.md) §1d) — and a
 sweep, the post-fault approach and the fault ramp-down all use it. A kelvin
 rate is the right unit for all three, because they are statements about where
 the *sample* is going, and a rate in percent could not be: the gain spans

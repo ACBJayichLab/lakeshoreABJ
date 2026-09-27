@@ -206,9 +206,10 @@ def test_a_band_narrower_than_the_level_error_cuts_the_heater_at_arming():
 #: The tolerance is two minutes because the rule is written in kelvin and
 #: applied in percent through a curve: the sample falls at the one rate only to
 #: the accuracy of the local gain the descent converts with, and the assertion
-#: on the rate itself below is the statement that matters.
-RAMPDOWN_MINUTES = 24.0
-RAMPDOWN_TOL_MIN = 2.0
+#: on the rate itself below is the statement that matters.  Measured 11.4 min
+#: at the file's 10 K/min (it was 24 at 5, before requirements.md §1d).
+RAMPDOWN_MINUTES = 11.5
+RAMPDOWN_TOL_MIN = 1.5
 
 
 def test_the_fault_ramp_down_walks_the_curve_down_at_the_one_rate():
@@ -266,8 +267,11 @@ def test_the_output_rate_limiter_is_the_heaters_own_rate_at_either_stage(stage):
         h.sup.cfg.max_output_rate_pct_per_min)
     # And it is what a move actually gets, which the conversion was not.
     gain = h.sup.schedule.gain_at(BENCH_K)
-    converted = h.sup.ramp.cfg.max_rate_k_per_min / gain
-    assert converted == pytest.approx(0.40, abs=0.02)
+    rate = h.sup.ramp.cfg.max_rate_k_per_min
+    converted = rate / gain
+    # 0.40 %/min at 5 K/min, the number requirements.md §3b quotes; the file's
+    # rate scales it.
+    assert converted == pytest.approx(0.40 * rate / 5.0, rel=0.05)
     assert h.sup._rate_pct_per_min() > 10 * converted
 
     # The DESCENT still converts the one rate through the gain where it is.

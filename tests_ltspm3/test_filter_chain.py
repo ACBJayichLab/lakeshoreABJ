@@ -281,6 +281,28 @@ def test_the_onset_of_a_fast_move_on_the_cryostat_is_not_a_spike():
         "the defect this pins has moved -- re-derive before trusting the fix")
 
 
+def _onset_scaled(factor, samples=MOVE_ONSET_2026_09_23, at_s=157.0):
+    """The same onset with its departure from the hold multiplied: the
+    ACCELERATION a faster trajectory puts into the start of a move, since the
+    corner that shapes the start does not change length with the rate."""
+    base = next(k for t, k in reversed(samples) if t < at_s)
+    return tuple((t, k if t < at_s else base + factor * (k - base))
+                 for t, k in samples)
+
+
+def test_the_onset_at_ten_k_per_min_is_not_a_spike_either():
+    """**10 K/min doubles the acceleration at the start of a long move**
+    (docs/ltspm3/requirements.md §1d).  The 12:58 onset, doubled, is believed
+    by the armed file's filter.  Measured: it needs `spike_min_k` of 0.349 K,
+    against 0.172 K for the onset as it happened -- the miss is linear in the
+    acceleration, so this is the row to re-run if the rate moves again.
+    """
+    from bench_plant import bench_control_config
+
+    kwargs = dict(bench_control_config().filter)
+    assert _spikes(MeasurementFilter(**kwargs), _onset_scaled(2.0)) == []
+
+
 def test_spike_min_k_touches_the_spike_test_and_nothing_else():
     """`spike_floor_k` also sets `acceleration_noise`, which the residual's
     `slope_lag` band is built on; raising IT to quiet the spike test narrowed

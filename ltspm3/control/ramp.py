@@ -24,11 +24,13 @@ that knows the difference -- it carries ``C dT/dt`` explicitly.
 setpoint uses it: a commanded sweep, the approach after a fault, and the
 open-loop ramp-down.
 
-What makes one rate possible is that the OUTPUT limit is derived from it rather
-than set beside it: ``max_rate_k_per_min / K(T)``, floored where the model has
-no opinion.  A rate in percent is a different rate in kelvin at every
-temperature, which is why picking a kelvin rate to fit a percent rate can only
-ever be right in one place.
+It is a rate of the SAMPLE, in kelvin, because a rate in percent is a different
+rate in kelvin at every temperature.  How fast the HEATER may travel is a
+different quantity and a different number,
+``SupervisorConfig.max_output_rate_pct_per_min``; the two used to be one
+(``max_rate_k_per_min / K(T)``) and that sharing is what made every move soft.
+Only the fault ramp-down still converts, because it is a trajectory that has to
+run with no sensor.
 """
 
 from __future__ import annotations

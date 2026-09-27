@@ -213,8 +213,11 @@ control:
     # A CEILING ON THE DERIVED VELOCITY FEEDFORWARD, not the value.  The loop
     # computes what a ramp needs as rate*tau/K, and the band widens by the same
     # number, so the drive a ramp needs and the authority it is granted cannot
-    # disagree.  This is only the most it may ever come to.
-    max_velocity_ff_pct: 6.00
+    # disagree.  This is only the most it may ever come to -- and it must sit
+    # ABOVE what `ramp.max_rate_k_per_min` needs at the top of the table, or
+    # it is a throttle and the sample lags the ramp by kelvin.
+    # docs/ltspm3/requirements.md 3d.
+    max_velocity_ff_pct: 12.00
     model_check_slope_k_per_s: 0.002
 
     # The fault ramp-down descends at THE SAME ONE RATE, in kelvin, through the
@@ -278,11 +281,12 @@ control:
     tau_s: 30.0
 
   ramp:
-    # THE ONE RATE (Jeff, 2026-09-11).  It is the default sweep rate, the rate
-    # the post-fault approach walks in at, the rate the open-loop fault
-    # ramp-down descends at, and the ceiling on anything a client asks for.
-    # A safety ceiling, not a target (docs/ltspm3/requirements.md).
-    max_rate_k_per_min: 5.0
+    # THE ONE RATE (Jeff, 2026-09-11; 10 since 2026-09-27).  It is the default
+    # sweep rate, the rate the post-fault approach walks in at, the rate the
+    # open-loop fault ramp-down descends at, and the ceiling on anything a
+    # client asks for.  Raise it and `supervisor.max_velocity_ff_pct` has to
+    # stay above the lead it implies.  docs/ltspm3/requirements.md 1d and 3d.
+    max_rate_k_per_min: 10.0
     # Corner rounding.  The corner IS the closed-loop response time,
     # `move_speed * tau(T)`, because a trajectory with corners sharper than the
     # loop's own response gives lag in and overshoot out.  This is the FLOOR
@@ -369,8 +373,10 @@ control:
     # is 8 x a 20 mK floor = 0.16 K, and the onset of every fast move missed
     # the prediction by ~0.19 K and froze the heater for 14 s (2026-09-23).
     # The real glitch is tens of kelvin (docs/ltspm3/safety.md); replayed over
-    # the 63-day archive, 0.40 still catches every one of them.
-    spike_min_k: 0.40
+    # the 63-day archive, 0.40 still catches every one of them.  0.60 since
+    # 10 K/min (2026-09-27): the onset miss is linear in the rate, and 0.60
+    # catches the same archive glitches 0.40 did.  requirements.md 3d.
+    spike_min_k: 0.60
     stale_after_s: 30.0
 
 # -------------------------------------------------------------------- monitor

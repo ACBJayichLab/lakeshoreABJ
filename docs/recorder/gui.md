@@ -445,7 +445,7 @@ Which group is first depends on what is selected: an analog output shows the
 analog group where a loop shows Setpoint. The titles are therefore stored
 rather than written straight onto the widgets, and three of them change at
 runtime (`Heater range (output 2)`, `Analog output 1 (max 70%)`,
-`Software loop (≤ 5 K/min)`).
+`Software loop (≤ 10 K/min)`).
 
 
 One selector, then whatever the selected loop or output can actually be asked

@@ -595,8 +595,9 @@ class HeaterSupervisor:
         **This docstring is the one home for that number.**  A first-order
         plant following a ramp of rate ``r`` sits at an output ``r*tau/K``
         above the one that would HOLD where it is -- that is what makes it
-        move.  At 5 K/min it is 0.02 % at 10 K and **4.23 % at 180 K**, several
-        times the authority band, which is why a flat ceiling on the velocity
+        move.  At 5 K/min it is 0.02 % at 10 K and **4.23 % at 180 K**, and at
+        the armed file's 10 K/min **8.5 % at 180-195 K**; several times the
+        authority band either way, which is why a flat ceiling on the velocity
         feedforward is a throttle rather than a ceiling: it caps the drive, the
         integral supplies the rest, and it then overshoots when the ramp ends.
 
@@ -1854,7 +1855,8 @@ class HeaterSupervisor:
 
         In kelvin there is nothing to patch, where a rate in percent is a
         different descent at every temperature: the sample falls at the one
-        rate the whole way, and **118 K to base takes about 23 minutes**.
+        rate the whole way, and **118 K to base takes about 11.5 minutes** at
+        the armed file's 10 K/min (23 at the 5 K/min it had until 2026-09-27).
         This docstring is the one home for that figure.
 
         **It only ever lowers the heater** (rule 1).  A model that is wrong
