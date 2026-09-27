@@ -209,6 +209,10 @@ class FittedHarness(Harness):
                                                        enabled=BENCH_TUNING,
                                                        hold_speed=BENCH_HOLD_SPEED,
                                                        move_speed=BENCH_MOVE_SPEED)),
+                         # The trajectory's rate is a property of the
+                         # cryostat, like `hard_max_pct`: from the file at
+                         # either stage.
+                         ramp_cfg=kw.pop("ramp_cfg", None) or cfg.ramp,
                          filter_kwargs=filter_kwargs or dict(cfg.filter),
                          cadence_s=self.DT if cadence_s is None else cadence_s,
                          start_k=self.bench_k, model=plant, **kw)

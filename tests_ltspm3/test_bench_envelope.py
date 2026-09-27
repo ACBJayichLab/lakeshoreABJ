@@ -53,9 +53,14 @@ def test_the_cryostat_s_own_limits_still_come_from_the_file(monkeypatch):
     defaults.
     """
     cfg = bench_control_config()
-    moved = dataclasses.replace(cfg, supervisor=dataclasses.replace(
-        cfg.supervisor, hard_max_pct=55.0, min_rate_pct_per_min=0.33,
-        warn_error_k=2.5, fault_error_k=7.5))
+    moved = dataclasses.replace(
+        cfg,
+        supervisor=dataclasses.replace(
+            cfg.supervisor, hard_max_pct=55.0, min_rate_pct_per_min=0.33,
+            warn_error_k=2.5, fault_error_k=7.5),
+        # The trajectory's rate, which the harness did not read at all until
+        # 2026-09-27 and matched the file only by the default's coincidence.
+        ramp=dataclasses.replace(cfg.ramp, max_rate_k_per_min=3.25))
     app = bench_plant.bench_app_config()
     app.extensions["control"] = moved
     monkeypatch.setattr(bench_plant, "bench_app_config", lambda: app)
@@ -66,6 +71,7 @@ def test_the_cryostat_s_own_limits_still_come_from_the_file(monkeypatch):
     assert h.sup.cfg.warn_error_k == 2.5
     assert h.sup.cfg.fault_error_k == 7.5
     assert h.sup.cfg.hard_min_pct == cfg.supervisor.hard_min_pct
+    assert h.sup.ramp.cfg.max_rate_k_per_min == 3.25
 
 
 def test_the_pinning_is_a_default_and_a_test_can_still_choose():

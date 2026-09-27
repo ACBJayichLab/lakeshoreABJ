@@ -57,8 +57,8 @@ class Harness:
 
     def __init__(self, *, start_k=None, sup_cfg=None, pid_cfg=None, guard_cfg=None,
                  filter_kwargs=None, response=None, model=None, cadence_s=None,
-                 ff_cfg=None, tuning_cfg=None, aux_base=None, aux_coupling=None,
-                 wall_t0=None):
+                 ff_cfg=None, tuning_cfg=None, ramp_cfg=None, aux_base=None,
+                 aux_coupling=None, wall_t0=None):
         self.clock = VirtualClock()
         self.wall_t0 = self.WALL_T0 if wall_t0 is None else float(wall_t0)
         params = response or ResponseParams()
@@ -141,6 +141,10 @@ class Harness:
             # (`_rate_pct_per_min`).  A bench that cannot be handed the
             # cryostat's own switch cannot grade that.
             tuning_config=tuning_cfg,
+            # **THE RATE IS THE CRYOSTAT'S TOO**, and until 2026-09-27 nothing
+            # here passed it: every bench test ran `RampConfig()`'s default,
+            # which matched the file only while both said 5 K/min.
+            ramp_config=ramp_cfg,
             cadence_s=cadence_s,
             clock=self.clock,
             # Virtual seconds since the gauge, so the band the loop judges by
