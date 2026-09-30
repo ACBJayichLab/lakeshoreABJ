@@ -234,6 +234,20 @@ def cmd_check(args) -> int:
                   f"whether or not the feedforward term is on. "
                   f"{lo:.3f}%..{hi:.3f}% only while that is "
                   f"{s.operating_point_pct:g}%  (on_exit={s.on_exit})")
+            # **AND SAY WHAT HAPPENS PAST THE MODEL'S TABLE**, because the
+            # centre stops there and a setpoint beyond it is chased on the
+            # half-width alone.  Duck-typed and defaulted like the rest.
+            beyond = float(getattr(s, "authority_beyond_table_pct_per_k", 0.0) or 0.0)
+            if beyond > 0:
+                print(f"  beyond table   : +{beyond:g}% of half-width per kelvin "
+                      f"the setpoint sits past the model's table, on top of "
+                      f"the +/-{s.authority_pct:g}%; the centre stays at the "
+                      f"table's edge and hard_max_pct {s.hard_max_pct:g}% "
+                      f"still caps it")
+            else:
+                print("  beyond table   : NO widening -- a setpoint past the "
+                      "model's table is chased from the band at its edge, and "
+                      "rails once the gain runs out")
         else:
             print(f"  authority band : {lo:.3f}% .. {hi:.3f}%, FIXED -- no "
                   f"model curve, so the centre is operating_point_pct "

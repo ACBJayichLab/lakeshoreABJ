@@ -137,6 +137,22 @@ class SupervisorConfig:
     #: half-width below the level error cuts the heater at arming.  What the
     #: bench measured of each width is in docs/ltspm3/requirements.md 3.
     authority_pct: float = 1.0
+    #: **EXTRA half-width, per kelvin the SETPOINT sits past the model's
+    #: table**, on top of `authority_pct` and the ramp lead.  Zero by default,
+    #: and zero is the old behaviour: the band's centre CLAMPS at the table's
+    #: ends (`T_MAX_K`), so a setpoint past the top is chased from a window
+    #: centred on the output that holds the top, and anything more than
+    #: `authority_pct` of gain above it rails -- and a rail at the ceiling
+    #: with the error past `fault_error_k` is a fault ramp-down, for the crime
+    #: of asking for a temperature nobody has measured.
+    #:
+    #: This is deliberately a WIDENING and not an extrapolation of the centre:
+    #: the model still says nothing past its edge, the watt residual has no
+    #: opinion there either (`sample outside the table`), and what the loop is
+    #: granted is room, not a claim.  `hard_max_pct` caps it as it caps
+    #: everything.  The number itself is sized from the table's own last
+    #: slope: docs/ltspm3/running.md, "Above the table".
+    authority_beyond_table_pct_per_k: float = 0.0
     hard_min_pct: float = 0.0
     #: **The one cap nothing moves.**  Whatever the model, the setpoint or the
     #: arithmetic says, the output cannot exceed this.
@@ -629,10 +645,33 @@ class HeaterSupervisor:
         lead = rate * self.tuner.schedule.tau_at(here) / gain
         return min(lead, self.cfg.max_velocity_ff_pct)
 
+    def beyond_table_pct(self) -> float:
+        """The extra half-width a setpoint PAST THE TABLE is granted.
+
+        `SupervisorConfig.authority_beyond_table_pct_per_k` times how far the
+        setpoint being chased sits outside ``[T_MIN_K, T_MAX_K]``, and zero
+        inside it -- so nothing changes for any setpoint the model was fitted
+        over.  Taken from the same setpoint the centre is computed for, so the
+        window and its widening cannot disagree about where the loop is going.
+
+        Only where there is a curve at all: with no model the centre is the
+        constant `operating_point_pct`, there is no table to be past, and the
+        band stays what it was.
+        """
+        per_k = self.cfg.authority_beyond_table_pct_per_k
+        if per_k <= 0.0 or not self.has_curve:
+            return 0.0
+        setpoint = self.pid.cfg.setpoint
+        if setpoint > _M.T_MAX_K:
+            return per_k * (setpoint - _M.T_MAX_K)
+        if setpoint < _M.T_MIN_K:
+            return per_k * (_M.T_MIN_K - setpoint)
+        return 0.0
+
     @property
     def band(self) -> tuple[float, float]:
         c = self.cfg
-        half = c.authority_pct + self.ramp_lead_pct()
+        half = c.authority_pct + self.ramp_lead_pct() + self.beyond_table_pct()
         centre = self.band_centre_pct()
         lo = max(c.hard_min_pct, centre - half)
         hi = min(c.hard_max_pct, centre + half)

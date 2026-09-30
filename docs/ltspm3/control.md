@@ -175,6 +175,18 @@ where the loop was armed, so a 2 K move at 140 K faulted on the bench. The band
 is control room, not the check on whether the delivered power is right — that
 is the watt residual's job.
 
+**Past the top of the table the centre stops.** The fitted table ends at
+`T_MAX_K` and clamps, so a setpoint above it is chased from a window centred on
+the output that holds the table's edge, and every kelvin beyond has to come out
+of the half-width. `supervisor.authority_beyond_table_pct_per_k` (2026-09-30)
+adds half-width per kelvin the setpoint sits past either end, zero by default,
+capped by `hard_max_pct` like everything else. It widens; it does not
+extrapolate the centre, because the model has no claim there and the watt
+residual has no opinion there either (`sample outside the table`, so
+`model_trusted` reads false and only the kelvin rows watch the hold). The
+arithmetic behind the file's value is in
+[running.md](running.md#above-the-table).
+
 ## Configuration
 
 `ltspm3/config.py` registers the `control:` section on import, which is why

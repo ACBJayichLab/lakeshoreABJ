@@ -230,6 +230,48 @@ The confirmation threshold is the loop's own `warn_error_k`, so a trim goes
 straight out and a journey asks first. Read the number off `check`, never off
 this page.
 
+## Above the table
+
+The fitted table ends at **195 K** (`T_MAX_K`) and clamps. Three things follow
+from that for a setpoint above it, and only the first is a problem:
+
+- **the band's centre stops at the edge.** The output that holds 195 K is
+  about 70.3 % (`check` prints the band; the number here is the table's), and a
+  kelvin above the table costs about **0.08 %** of output if the table's last
+  slope simply continues, so `authority_pct` 1.0 runs out near 207 K. Past that
+  the loop rails at the ceiling, the sample stops coming up, and a rail with the
+  error past `fault_error_k` for `fault_after_s` is a **fault ramp-down** — for
+  asking for 220 K. `supervisor.authority_beyond_table_pct_per_k` is the
+  answer: extra half-width per kelvin past the table, so the window grows with
+  the distance rather than the centre pretending to know. The recommended
+  **0.15 %/K** is about twice the last slope, because the slope is rising and
+  unmeasured; at a hold it grants about 72.0 % at 200 K, 75.0 % at 220 K,
+  79.5 % at 250 K, and the 85 % ceiling from about 285 K up — against a linear
+  read of 70.7, 72.4, 74.8 and 78.7 % needed. `tests_ltspm3/test_beyond_table.py`
+  pins that arithmetic. `feedforward.max_pct` has to be raised with it, or the
+  curve's own 70 % default clamps the centre a quarter-percent under the
+  model's answer at the edge;
+- **the watt residual has no opinion** (`sample outside the table`), so
+  `model_trusted` reads false and the premise is watched in kelvin alone:
+  `warn_error_k` and `fault_error_k` at a hold, exactly as below
+  `min_output_pct`;
+- **the gains are clamped at the edge's**, K and τ at 195 K, which is a
+  small error a few kelvin up and a growing one at 300 K. A refit on the rungs
+  held up there — the ladder in
+  [plans/pid-4-commissioning.md](../../plans/pid-4-commissioning.md) — is what
+  moves `T_MAX_K`, and each hold above the table is one of its inputs.
+
+The two lines in the armed file are a config edit and a **recorder restart**;
+`on_exit: hold` leaves the heater where it is across one.
+
+```yaml
+control:
+  supervisor:
+    authority_beyond_table_pct_per_k: 0.15
+  feedforward:
+    max_pct: 85.0
+```
+
 ## Before the first armed run
 
 Three things are outstanding, in priority order.

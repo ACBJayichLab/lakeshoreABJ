@@ -57,6 +57,13 @@ def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) ->
             "zero width pins the loop to the model's answer and gives the "
             "integral nowhere to go"
         )
+    if s.authority_beyond_table_pct_per_k < 0:
+        problems.append(
+            "control.supervisor.authority_beyond_table_pct_per_k must not be "
+            "negative -- it widens the band past the model's table, and a "
+            "negative one would narrow it below authority_pct exactly where "
+            "the loop has the least to go on"
+        )
     if not s.hard_min_pct <= s.safe_output_pct <= s.hard_max_pct:
         problems.append(
             f"safe_output_pct {s.safe_output_pct}% is outside the hard limits "

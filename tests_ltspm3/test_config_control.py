@@ -108,6 +108,15 @@ def test_a_band_of_zero_width_is_rejected():
         cfg.validate()
 
 
+def test_a_negative_widening_past_the_table_is_rejected():
+    """Zero is the old behaviour; below zero narrows the band exactly where
+    the loop has the least to go on."""
+    cfg = _with_control()
+    cfg.extensions["control"].supervisor.authority_beyond_table_pct_per_k = -0.1
+    with pytest.raises(ConfigError, match="authority_beyond_table_pct_per_k"):
+        cfg.validate()
+
+
 def test_a_safe_output_the_ramp_down_could_never_reach_is_rejected():
     """It used to be "above the operating point", which was the band's centre.
     The centre moves now; the hard limits do not."""
