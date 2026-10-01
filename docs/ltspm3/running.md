@@ -79,9 +79,18 @@ responses are freeze and slow ramp-down.
 Distinct from a fault: this is an operator asking, not the supervisor deciding.
 
 ```bash
-python -m ltspm3 -c config.yaml send hold          # loop OPEN, heater frozen
-python -m ltspm3 -c config.yaml send heaters_off   # loop DISARMED, heater to 0
+python -m ltspm3 -c config.yaml send disengage     # loop OPEN, heater frozen -- the ordinary stop
 python -m ltspm3 -c config.yaml send arm           # closed again, holds here
+```
+
+**`disengage` is the typical way** (2026-09-30), and the viewer's **Disengage
+software loop** button beside Arm sends exactly it. It touches the software
+loop and nothing else: the loop stops regulating and the 218's output stays
+at its present value. The two panic actions do more and are for emergencies:
+
+```bash
+python -m ltspm3 -c config.yaml send hold          # EVERY loop on every box stopped where it is
+python -m ltspm3 -c config.yaml send heaters_off   # loop DISARMED, heater to 0
 ```
 
 **Both of these disengage the loop.** A person reaching for either has decided

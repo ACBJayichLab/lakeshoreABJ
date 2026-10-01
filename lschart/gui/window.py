@@ -120,6 +120,14 @@ ATLAS_SETTLE_MS = 1200
 #: and not a literal repeated at each call site.
 GUI_SOURCE = "lschart-gui"
 
+#: The Disengage button's tooltip while the software loop owns the output.
+#: One string, because the button is built in one place and re-described
+#: in another, and the two must not drift.
+DISENGAGE_TIP = (
+    "Open the software loop and leave the heater where it is. Nothing "
+    "regulates the sample afterwards, so it drifts with the cryostat. "
+    "Touches no other loop; “Arm software loop” is the way back.")
+
 #: The clients the source strip offers a switch for, and what to call them.
 #:
 #: ``default`` is not a client: it is the overlay's own catch-all, and unticking
@@ -1274,6 +1282,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
             "like any other write.")
         self.arm_button.clicked.connect(self._send_arm)
         box.addWidget(self.arm_button)
+
+        # The counterpart of Arm, and the TYPICAL way to stop the software
+        # loop -- the panic menu is for emergencies and stops every loop on
+        # every box (Jeff, 2026-09-30).  Live only while the loop owns the
+        # output, which is exactly when Arm is not: the two are one toggle
+        # drawn as two buttons, so that neither can be pressed twice.
+        self.disengage_button = QtWidgets.QPushButton("Disengage software loop…")
+        self.disengage_button.setToolTip(DISENGAGE_TIP)
+        self.disengage_button.clicked.connect(self._send_disengage)
+        box.addWidget(self.disengage_button)
 
         # Beside Arm and not in the panic menu, for the same reason Arm is not:
         # this is the first of the two steps back to driving the heater, and it
@@ -2952,10 +2970,16 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # `_pending` is the other half: while a command is in flight every
         # button is locked, and this must not re-open one behind that lock.
         self.arm_button.setEnabled(self._arm_allowed() and self._pending is None)
+        self.disengage_button.setEnabled(loop_owns and self._pending is None)
+        self.disengage_button.setToolTip(
+            DISENGAGE_TIP if loop_owns else
+            "The software loop is not driving the output, so there is "
+            "nothing to disengage.")
         self.arm_button.setToolTip(
             "The software loop is already closed, and a recorder refuses to "
             "arm one twice — arming again would step the setpoint with no "
-            "ramp. Send `hold` first if that is what you want."
+            "ramp. “Disengage software loop” first if that is what "
+            "you want."
             if loop_owns else
             "Close the software loop at the temperature the cryostat is at "
             "now — the way back from a hold. This APPLIES POWER and is gated "
@@ -2969,8 +2993,9 @@ class ViewerWindow(QtWidgets.QMainWindow):
             self.analog_note.setToolTip(
                 "A software PID is driving this output every cycle, so a "
                 "manual value here would be overwritten within one cadence. "
-                "Send `hold` first — that stops the loop and leaves the "
-                "heater where it is. Panic → All heaters OFF always works.")
+                "“Disengage software loop” first — that stops "
+                "the loop and leaves the heater where it is. Panic → All "
+                "heaters OFF always works.")
         elif analog_ok:
             self._note(self.analog_note, "one step, no ramp",
                        theme.note_style("muted", self))
@@ -3153,6 +3178,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         # not just arm: AUDIT-2026-09-16 finding 5 was this list being one
         # button short, which left the way back from a hold unavailable.
         self.arm_button.setEnabled(self._arm_allowed())
+        self.disengage_button.setEnabled(self.source.software_loop_owns_output())
         self.software_button.setEnabled(self._software_move_allowed())
 
     def _update_statusbar(self) -> None:
@@ -3780,7 +3806,7 @@ class ViewerWindow(QtWidgets.QMainWindow):
         """
         return [self.send_button, self.pid_button, self.range_button,
                 self.analog_button, self.software_button, self.arm_button,
-                self.clear_lockout_button]
+                self.disengage_button, self.clear_lockout_button]
 
     def _confirm(self, title: str, text: str) -> bool:
         return QtWidgets.QMessageBox.question(
@@ -3974,6 +4000,25 @@ class ViewerWindow(QtWidgets.QMainWindow):
         ):
             return
         self._queue("arm", instrument="")
+        self._awaiting = None
+
+    def _send_disengage(self) -> None:
+        """Open the software loop, heater frozen.  The ordinary stop."""
+        if self.spool is None:
+            return
+        if not self._confirm(
+            "Disengage the software loop",
+            "Open the software loop and leave the heater where it is?\n\n"
+            "The loop stops regulating and the 218's output is frozen at its "
+            "present value. That is a hold of a POWER, not of a temperature: "
+            "nothing regulates the sample afterwards, so it drifts with the "
+            "cryostat.\n\n"
+            "Only the software loop is touched. The 336's loops carry on. "
+            "“Arm software loop” is the way back, at whatever "
+            "temperature the cryostat is at then.",
+        ):
+            return
+        self._queue("disengage", instrument="")
         self._awaiting = None
 
     def _send_clear_lockout(self) -> None:

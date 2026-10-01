@@ -155,7 +155,7 @@ function selftest(directory)
     % heater range because somebody ran it to check their install would be a
     % worse failure than any it could detect.
     fprintf('panic       : heatersOff() and hold() are available here; ');
-    fprintf('arm() is the way back from a hold\n');
+    fprintf('disengage() is the ordinary stop, arm() the way back\n');
     fprintf('              (not exercised -- both change what the cryostat ');
     fprintf('is doing)\n');
 

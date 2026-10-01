@@ -92,6 +92,7 @@ ls.heatersOff();             % everything the recorder may write to, to zero
 ls.hold();                   % every loop stopped where it is
 ls.ack();                    % clear a software loop's fault lockout
 ls.arm();                    % close the software loop again
+ls.disengage();              % open it again, heater left where it is -- the ordinary stop
 ```
 
 `heatersOff()` also **disarms a software loop**, before it zeroes anything:

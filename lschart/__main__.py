@@ -845,6 +845,20 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
     arm.add_argument("kelvin", type=float, nargs="?", default=None)
 
     snd_sub.add_parser(
+        "disengage",
+        help="open the software loop, heater left where it is -- the ordinary "
+             "way to stop the software PID",
+        description="The counterpart of `arm` and the typical way to stop the "
+                    "software loop: it stops regulating and the 218's output "
+                    "is frozen at its present value. That is a hold of a "
+                    "POWER, so the sample drifts with the cryostat afterwards. "
+                    "Touches only the software loop -- unlike `hold`, which "
+                    "is a panic action and stops every closed loop on every "
+                    "box. Writes nothing, so no power gate; still passes "
+                    "ipc.accept_commands and the source policy.",
+    )
+
+    snd_sub.add_parser(
         "ack",
         help="clear a software loop's fault lockout -- the first step back",
         description="A completed fault ramp-down latches the loop out and "
@@ -888,6 +902,7 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "pid": ("p", "i", "d", "loop"),
             "hold": (),
             "arm": ("kelvin",),
+            "disengage": (),
             "ack": (),
             "source": ("name", "allowed"),
             "heaters_off": (),

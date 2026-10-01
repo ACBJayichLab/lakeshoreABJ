@@ -215,6 +215,7 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `heaters_off` | **panic** — every heater on every writable instrument to zero, and the software loop disarmed so the zero sticks |
 | `hold` | **panic** — every closed loop stopped where it is; a software loop disengaged, its heater left where it is |
 | `arm` | `kelvin` (optional) — close the software loop again. **Applies power**, and is exempt from nothing |
+| `disengage` | open the software loop and leave its heater where it is — the **ordinary** way to stop it, and only it. Writes nothing, so no power gate; not a panic kind, so the source policy applies. `hold` is the panic version and stops every loop on every box |
 | `ack` | clear a software loop's fault lockout. The first of the two steps back to driving, so gated exactly like `arm` |
 | `source` | `name`, `allowed` — mute or un-mute one client. Exempt from the source policy it edits, and from nothing else |
 

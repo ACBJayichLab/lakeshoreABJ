@@ -738,6 +738,37 @@ class IpcService:
             return "software loop ARMED, holding the temperature it is at now"
         return f"software loop ARMED at {kelvin:.4f} K"
 
+    def _do_disengage(self, cmd: Command) -> str:
+        """Open the software loop and leave its heater where it is.  TYPICAL.
+
+        The ordinary way to stop the software PID -- the counterpart of `arm`,
+        and the one an operator reaches for between one experiment and the
+        next.  Until this existed the only way was `hold`, which is a PANIC
+        action: it stops every closed loop on every writable box, the 336's
+        included, and bypasses the source policy to do it.  Stopping one
+        software loop is not an emergency and should not need one (Jeff,
+        2026-09-30).
+
+        Exactly the software half of `hold`, and nothing else: the loop
+        stops regulating and the 218's output is frozen at its present
+        value -- a POWER, so the sample drifts with the cryostat afterwards.
+        It writes to no instrument, so like `note` it has no power gate;
+        rule 1's safe direction is the loop letting go, never the loop taking
+        hold.  It still passes `ipc.accept_commands` and the source policy,
+        because it is not a panic kind and a muted client stays muted.
+
+        `arm` is the way back, and it is bumpless.
+        """
+        if not getattr(self.software_loop, "has_loop", False):
+            raise CommandError(
+                "this recorder has no software loop to disengage -- a "
+                "software loop comes from `ltspm3`, not from `lschart`"
+            )
+        try:
+            return self.software_loop.hold()
+        except RuntimeError as exc:
+            raise CommandError(str(exc)) from None
+
     def _do_ack(self, cmd: Command) -> str:
         """Clear a software loop's fault lockout.  Gated like `arm`, not exempt.
 

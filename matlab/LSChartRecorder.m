@@ -545,6 +545,25 @@ classdef LSChartRecorder < handle
             [ok, message, id] = obj.run('hold', struct(), nargout);
         end
 
+        function [ok, message, id] = disengage(obj)
+            %DISENGAGE  Open the software loop, heater left where it is.
+            %
+            %   The ordinary way to stop the software PID, and the
+            %   counterpart of arm(): the loop stops regulating and the
+            %   218's output is frozen at its present value.  That is a hold
+            %   of a POWER, so the sample drifts with the cryostat
+            %   afterwards.  Only the software loop is touched -- hold() is a
+            %   panic action and stops every closed loop on every box.
+            %
+            %   NOT a panic command: it writes to no instrument, so it needs
+            %   no power gate, but it passes `ipc.accept_commands` and the
+            %   per-client source policy like any ordinary command.
+            %
+            %   A no-op on a recorder with no software loop, which it says by
+            %   name rather than quietly succeeding.  arm() is the way back.
+            [ok, message, id] = obj.run('disengage', struct(), nargout);
+        end
+
         function [ok, message, id] = arm(obj, kelvin)
             %ARM  Close the software loop again -- the way back from hold().
             %

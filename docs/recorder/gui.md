@@ -462,6 +462,7 @@ in three places is the same table going stale in three places.
 | **Analog output** | a selected analog output (a 218's) | one percentage. **Above 0 this applies power** — there is no inert half |
 | **Software loop** | a selected software loop; disabled unless that loop is *tracking* | kelvin, and optionally a rate. **This applies power**: the loop is already driving, so it reaches the heater on the next cycle. It **ramps**, and the supervisor does the ramping |
 | **Arm software loop** | always; disabled while a software loop owns the output | close the software loop at the temperature the cryostat is at now — the way back from a hold. **This applies power** |
+| **Disengage software loop** | always; live only while a software loop owns the output | open the software loop and leave the heater where it is — the **ordinary** stop, the counterpart of Arm. Touches no other loop. The sample drifts afterwards: it is a hold of a power |
 | **Clear lockout** | always | clear a software loop's fault lockout. Does **not** resume the loop — it stays disarmed until armed. Beside Arm and not in the Panic menu, because it is the first step back toward power and is gated the same way |
 | **Panic ▾** | always, and never greyed out | a menu of the two ways to stop: **All heaters OFF** and **All temperatures HOLD** |
 | **Accept commands from this viewer** | always | whether the recorder is listening to *this viewer*. Unticking mutes it; ticking undoes that |

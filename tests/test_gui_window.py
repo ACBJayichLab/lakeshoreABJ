@@ -1174,12 +1174,12 @@ def test_an_acknowledgement_releases_every_button(tmp_path, qt_app, monkeypatch)
     open(w.source.path, "w").write(json.dumps(status))
     w.refresh()
 
-    # Every button the lock covers, EXCEPT the two that answer to the
+    # Every button the lock covers, EXCEPT the ones that answer to the
     # software loop's state as well: on a recorder with no such loop there is
-    # nothing to arm and nothing to move, and the lock releasing is not a
-    # claim that there is.
+    # nothing to arm, nothing to move and nothing to disengage, and the lock
+    # releasing is not a claim that there is.
     assert all(b.isEnabled() for b in w._buttons()
-               if b is not w.software_button)
+               if b not in (w.software_button, w.disengage_button))
     assert "done" in w.ack_label.text()
     w.close()
 
@@ -1295,12 +1295,12 @@ def test_a_field_tracks_again_once_its_command_is_acknowledged(
     status["commands"]["recent"] = [{"id": cid, "ok": True, "message": "set"}]
     open(w.source.path, "w").write(json.dumps(status))
     w.refresh()
-    # Every button the lock covers, EXCEPT the two that answer to the
+    # Every button the lock covers, EXCEPT the ones that answer to the
     # software loop's state as well: on a recorder with no such loop there is
-    # nothing to arm and nothing to move, and the lock releasing is not a
-    # claim that there is.
+    # nothing to arm, nothing to move and nothing to disengage, and the lock
+    # releasing is not a claim that there is.
     assert all(b.isEnabled() for b in w._buttons()
-               if b is not w.software_button)
+               if b not in (w.software_button, w.disengage_button))
     assert w.analog_spin.value() == pytest.approx(43.0)   # still the readback
 
     status["aux"] = [{"name": "ls218.aout1", "value": 43.0}]
@@ -2190,6 +2190,31 @@ def test_the_arm_button_comes_back_after_a_hold_the_viewer_did_not_send(
     # And it goes away again when the loop takes the output back.
     set_control(w, mode="pid", state="tracking")
     assert not w.arm_button.isEnabled()
+    w.close()
+
+
+def test_disengage_is_the_other_half_of_arm(tmp_path, qt_app, monkeypatch):
+    """One toggle drawn as two buttons: Disengage is live exactly when Arm is
+    not, it sends `disengage` and not the panic `hold`, and a command in
+    flight locks it like everything else."""
+    w = cryostat(tmp_path, qt_app, [MON], control=dict(SOFTWARE))
+    assert w.disengage_button.isEnabled()
+    assert not w.arm_button.isEnabled()
+    assert "way back" in w.disengage_button.toolTip()
+
+    set_control(w, mode="off", state="idle")
+    assert not w.disengage_button.isEnabled()
+    assert "nothing to disengage" in w.disengage_button.toolTip()
+    assert w.arm_button.isEnabled()
+
+    set_control(w, mode="pid", state="tracking")
+    monkeypatch.setattr(w, "_confirm", lambda *a: True)
+    w.disengage_button.click()
+    assert w._pending is not None
+    sent = queued(w)
+    assert len(sent) == 1
+    assert sent[0]["kind"] == "disengage" and sent[0]["instrument"] == ""
+    assert not w.disengage_button.isEnabled()
     w.close()
 
 

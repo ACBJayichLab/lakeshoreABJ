@@ -873,6 +873,41 @@ def test_heaters_off_on_a_plain_recorder_says_nothing_about_a_loop(tmp_path):
 # -- ack: the way back from a lockout ----------------------------------------
 
 
+def test_disengage_opens_the_software_loop_and_nothing_else(tmp_path):
+    """The ordinary stop (Jeff, 2026-09-30): the software half of `hold`, and
+    the instrument loops left alone."""
+    inst = instrument()
+    inst.read_frame()
+    svc = holding_service(tmp_path, inst)
+    svc.software_loop = FakeLoop()
+    before = inst.setpoint(1)
+    entry = send(svc, "disengage")
+    assert entry["ok"]
+    assert svc.software_loop.held
+    assert "frozen" in entry["message"]
+    assert inst.setpoint(1) == before, "disengage touched a 33x loop"
+
+
+def test_disengage_is_not_a_panic_kind_and_needs_no_power_gate(tmp_path):
+    """Letting go is the safe direction: no gate, but the source policy and
+    `accept_commands` still apply because it is not an emergency stop."""
+    from lschart.ipc.service import PANIC_KINDS, SOURCE_POLICY_EXEMPT
+    assert "disengage" not in PANIC_KINDS
+    assert "disengage" not in SOURCE_POLICY_EXEMPT
+    svc = service(tmp_path, monitor())          # analog gate shut
+    svc.software_loop = FakeLoop()
+    entry = send(svc, "disengage")
+    assert entry["ok"] and svc.software_loop.held
+
+
+def test_disengage_on_a_recorder_with_no_software_loop_says_so_by_name(tmp_path):
+    svc = service(tmp_path, monitor())
+    svc.software_loop = FakeLoop(present=False)
+    entry = send(svc, "disengage")
+    assert entry["ok"] is False
+    assert "no software loop" in entry["message"]
+
+
 def test_ack_clears_the_lockout(tmp_path):
     svc = service(tmp_path, monitor(), allow_analog_output=True)
     svc.software_loop = FakeLoop()
