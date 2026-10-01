@@ -143,6 +143,17 @@ control:
     # must not double as it (Jeff, 2026-09-17).  `hard_max_pct` is still the
     # cap nothing moves.
     authority_pct: 1.0
+    # PAST THE TOP OF THE TABLE (T_MAX_K) the band's centre stops climbing,
+    # so every kelvin above it has to come out of the half-width.  This is
+    # EXTRA half-width per kelvin the setpoint sits past the table's ends, on
+    # top of authority_pct and the ramp lead.  Sized from the table's own
+    # last slope, which says a kelvin costs about 0.08 % of output up there
+    # (docs/ltspm3/running.md, "Above the table"); this is roughly twice
+    # that, because the slope is rising and unmeasured past the top.  Zero is
+    # the old behaviour, which railed 12 K past the top and faulted at 25.
+    # hard_max_pct still caps the result.  Pinned by
+    # tests_ltspm3/test_beyond_table.py.  Jeff, 2026-09-30.
+    authority_beyond_table_pct_per_k: 0.15
     hard_min_pct: 0.0
     # THE ONE CAP NOTHING MOVES.  Whatever the model, the setpoint or the
     # arithmetic says, the output cannot exceed this.  The model's table ends
@@ -257,6 +268,15 @@ control:
     # `fitted` has no parameters -- it is a table with a cache key.  The three
     # below configure `cd10` only, kept so the pre-refit record reads back.
     source: fitted
+    # THE CURVE'S OWN CEILING on what it may propose, and therefore on where
+    # the BAND'S CENTRE may sit.  The class default of 70 was sized under a
+    # table that topped out at 70 %; since the table reached 249 K
+    # (2026-09-30) the model's own output at the top is 74.5 %, and 70 would
+    # clamp the centre from 196 K up and rail the loop everywhere above.
+    # Equal to supervisor.hard_max_pct, which is the cap that matters; this
+    # one only has to stay out of the way.  `check` prints CURVE CEILING
+    # while it does not.  Jeff, 2026-09-30.
+    max_pct: 85.0
     t_bath_k: 4.0
     ref_pct: 63.076
     ref_rise_k: 95.6
