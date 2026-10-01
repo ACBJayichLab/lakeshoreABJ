@@ -852,6 +852,20 @@ adjoint gradient and a coarser residual grid; `STEP_S` is already at the log's
 own 2 s cadence for a documented reason (coarsening to 4 s triples the worst
 residual), so the grid is not free to move.
 
+## Above the fit by confirmed extrapolation — 2026-09-30
+
+`extend_table.py` carries the shipped table past the fit's 195 K from
+`reference/cooldown-10/extension_anchors.csv` — one row per settled open-loop
+rung above the top, measured by hand from the recorder's CSV and reviewed as a
+diff like `segments.csv`. It fits exactly one number, a quadratic term on the
+fit's last slope; `cap` above the edge is the measured τ times the slope; the
+coldplate is a line. `--check` prints, for every anchor, what the straight
+line with nothing fitted predicted, which is the confirmation Jeff asked for
+instead of a refit. `export_response.py` calls `apply()` after writing, so a
+refit cannot drop the rows; `EXTENSION_FROM_K` in the generated file is where
+the fit ends and everything above it is replaced on every run. Stdlib only,
+loads the table as a data file, imports neither package.
+
 ## Caveats that outlive the numbers
 
 - **The two cooldowns differ by ~3.2 K at matched power.** Absorbed by

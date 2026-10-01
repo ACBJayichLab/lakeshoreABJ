@@ -42,6 +42,33 @@ class ControlConfig:
     feedforward: FeedforwardConfig = field(default_factory=FeedforwardConfig)
     filter: dict[str, Any] = field(default_factory=dict)
 
+    def curve_ceiling_problem(self) -> str | None:
+        """A sentence when `feedforward.max_pct` clamps the model's own output
+        below the top of its table, or ``None``.
+
+        Read duck-typed by `lschart`'s `check`.  The curve's ceiling was a
+        belt-and-braces cap under a 70 % table top, and when the table was
+        extended past that (2026-09-30) the class default quietly clamped the
+        band's CENTRE a few kelvin under the top: the loop then chases every
+        setpoint above that from a window centred too low, and rails.  Not a
+        validation error, because the bench loads the armed file and the
+        file is Jeff's to edit; but it is the first thing `check` should say.
+        """
+        from .model import fitted_response as M
+
+        ff = self.feedforward
+        if getattr(ff, "source", "fitted") != "fitted":
+            return None
+        top = M.percent_for_power(M.steady_power_w(M.T_MAX_K))
+        if ff.max_pct >= top:
+            return None
+        clamp_k = M.steady_temperature_k(M.power_w(ff.max_pct))
+        return (f"feedforward.max_pct {ff.max_pct:g}% is below the model's own "
+                f"{top:.2f}% at the top of its table ({M.T_MAX_K:g} K), so the "
+                f"band's centre is clamped above about {clamp_k:.0f} K and the "
+                f"loop rails there -- set feedforward.max_pct to "
+                f"supervisor.hard_max_pct ({self.supervisor.hard_max_pct:g})")
+
 
 def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) -> None:
     """Limits that contradict each other -- what a type check cannot catch."""

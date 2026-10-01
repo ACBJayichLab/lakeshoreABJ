@@ -1,11 +1,13 @@
 """**A setpoint past the top of the model's table**, 2026-09-30.
 
-The fitted table ends at `T_MAX_K` = 195 K and CLAMPS there: the band's
-centre for any setpoint above it is the output that holds 195 K, so every
-kelvin above the table has to come out of the half-width.  At the table's own
-last slope a kelvin up there costs about 0.08 % of output, so `authority_pct`
-1.0 runs out near 207 K -- and a rail at the ceiling with the error past
-`fault_error_k` is a fault ramp-down, for asking for 220 K.
+The table ends at `T_MAX_K` and CLAMPS there: the band's centre for any
+setpoint above it is the output that holds the top, so every kelvin above
+the table has to come out of the half-width.  At the table's last slope a
+kelvin up there costs about 0.08 % of output, so `authority_pct` 1.0 runs
+out about 12 K past the top -- and a rail at the ceiling with the error past
+`fault_error_k` is a fault ramp-down, for asking for 25 K more.  (When this
+was written the top was 195 K; it is wherever the extension in
+`analysis/extend_table.py` has carried it, and everything below is relative.)
 
 `SupervisorConfig.authority_beyond_table_pct_per_k` is the fix: extra
 half-width per kelvin the setpoint sits past the table's ends, zero by default.
@@ -34,8 +36,11 @@ from ltspm3.model import fitted_response as _M
 #: rather than a guess.
 RECOMMENDED_PCT_PER_K = 0.15
 
-#: The top of the table, where the walk past it starts.
-EDGE_K = 190.0
+#: Just inside the top of the table, where the walk past it starts.
+EDGE_K = _M.T_MAX_K - 5.0
+#: How far past the top the tests ask for.
+FAR_K = _M.T_MAX_K + 25.0
+NEAR_K = _M.T_MAX_K + 15.0
 
 
 def _cfgs(per_k: float):
@@ -84,7 +89,7 @@ def test_inside_the_table_the_knob_changes_nothing():
 def test_by_default_a_setpoint_past_the_table_is_chased_from_the_edge():
     """The old behaviour, pinned: centre at the edge, half-width unchanged."""
     h = armed_near_the_top(0.0)
-    chased = _chase(h, 220.0)
+    chased = _chase(h, FAR_K)
     assert h.sup.beyond_table_pct() == 0.0
     lo, hi = h.sup.band
     centre = _centre_at_the_edge(h)
@@ -93,12 +98,12 @@ def test_by_default_a_setpoint_past_the_table_is_chased_from_the_edge():
                                abs=1e-9)
     # ...and that ceiling is BELOW what a linear read of the table's last
     # slope says 220 K needs, which is why this used to fault.
-    assert hi < _need_pct(220.0), (chased, hi, _need_pct(220.0))
+    assert hi < _need_pct(FAR_K), (chased, hi, _need_pct(FAR_K))
 
 
 def test_past_the_table_the_band_widens_per_kelvin_and_the_centre_does_not_move():
     h = armed_near_the_top(RECOMMENDED_PCT_PER_K)
-    chased = _chase(h, 220.0)
+    chased = _chase(h, FAR_K)
     beyond = h.sup.beyond_table_pct()
     assert beyond == pytest.approx(RECOMMENDED_PCT_PER_K * (chased - _M.T_MAX_K))
     lo, hi = h.sup.band
@@ -108,13 +113,13 @@ def test_past_the_table_the_band_widens_per_kelvin_and_the_centre_does_not_move(
         min(h.sup.cfg.hard_max_pct,
             centre + h.sup.cfg.authority_pct + h.sup.ramp_lead_pct() + beyond),
         abs=1e-9)
-    assert hi > _need_pct(220.0)
+    assert hi > _need_pct(FAR_K)
 
 
 def test_the_hard_ceiling_still_caps_it():
     """Rule 5: `hard_max_pct` is the one cap nothing moves, this included."""
     h = armed_near_the_top(5.0)          # absurdly generous on purpose
-    _chase(h, 240.0)
+    _chase(h, _M.T_MAX_K + 45.0)
     lo, hi = h.sup.band
     assert hi == pytest.approx(h.sup.cfg.hard_max_pct)
     assert lo <= hi
@@ -124,7 +129,7 @@ def test_the_widening_is_granted_to_the_setpoint_not_to_the_reading():
     """The plant is pinned at the table's edge; the widening follows what the
     loop is CHASING, exactly as the centre does, so the two cannot disagree."""
     h = armed_near_the_top(RECOMMENDED_PCT_PER_K)
-    chased = _chase(h, 210.0)
+    chased = _chase(h, NEAR_K)
     assert h.sup.status.filtered_k <= _M.T_MAX_K + 0.5
     assert h.sup.beyond_table_pct() == pytest.approx(
         RECOMMENDED_PCT_PER_K * (chased - _M.T_MAX_K))
@@ -139,7 +144,8 @@ def _need_pct(kelvin: float) -> float:
     return _M.percent_for_power(q)
 
 
-@pytest.mark.parametrize("kelvin", [200.0, 220.0, 250.0, 300.0])
+@pytest.mark.parametrize("kelvin", [_M.T_MAX_K + 5.0, _M.T_MAX_K + 25.0,
+                                    _M.T_MAX_K + 50.0, 300.0])
 def test_the_recommended_value_covers_a_linear_extrapolation_to_300_k(kelvin):
     """The number in the armed file, tied to the table rather than decreed.
 

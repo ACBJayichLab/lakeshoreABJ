@@ -104,6 +104,16 @@ pipeline for it:
 The 4 K end costs nothing: no authority below ~28 % output, so holding at
 base is output zero, which the band's floor already allows.
 
+### 195 to 249 K without a refit — 2026-09-30
+
+Done by confirmed extrapolation rather than by the ladder: three open-loop
+rungs held by hand, the table's last slope predicting each to 0.1 / 0.7 /
+1.7 K, τ unchanged at 603–625 s. `analysis/extend_table.py` and
+`reference/cooldown-10/extension_anchors.csv`; the record is in
+[docs/ltspm3/thermal-response.md](../docs/ltspm3/thermal-response.md#above-the-fit-195-to-249-k-by-confirmed-extrapolation--2026-09-30).
+The ladder to 300 K is still the way to get the rest, one 40 min rung at a
+time, and each rung is one more row in the anchors file.
+
 ## Exit gate
 
 - REFIT_PLAN §1's three rows green: holds < 0.3 K, ladder < 0.5 K rms, every

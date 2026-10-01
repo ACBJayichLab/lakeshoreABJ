@@ -27,6 +27,13 @@ Columns, one row per grid point:
     slope    W/K     Lambda'(T) -- so tau = C/Lambda' needs no differencing
     cap      J/K     C(T), the heat capacity
     tc       K       the coldplate, interpolated from the settled dwells
+EXTENDED PAST THE FIT BY CONFIRMED EXTRAPOLATION -- analysis/extend_table.py,
+2026-09-30.  The fit ends at 195 K; the rows above it continue
+its last slope with one quadratic term fitted to the settled rungs in
+reference/cooldown-10/extension_anchors.csv, and `cap` there is the
+MEASURED tau times the slope.  Nothing above the fit's top is a fit.
+`python analysis/extend_table.py --check` prints the confirmation.
+(end of the extension note)
 """
 
 #: The actuator chain, this rig's: the 218's full scale, the 1.11 voltage
@@ -133,8 +140,23 @@ DELTA_P_FRAC = 0.007
 
 #: Outside this the table clamps rather than extrapolating.
 T_MIN_K = 4.7
-T_MAX_K = 195
+T_MAX_K = 249.1
 
+# -- extension: see analysis/extend_table.py --
+#: Where the FIT ends.  Every row above it is the extension, and the
+#: band widening past the table starts at T_MAX_K, not here.
+EXTENSION_FROM_K = 195
+#: The one fitted term: q = q_edge + slope_edge*d + EXTENSION_B*d^2.
+EXTENSION_B = 1.00964e-06
+#: The measured time constant above the fit, and what `cap` is made of.
+EXTENSION_TAU_S = 606
+#: (T_inf K, output %, level bar K, tau s or None) -- the settled rungs.
+EXTENSION_ANCHORS = (
+    (225.3, 72.445, 0.2, None),
+    (236.89, 73.443, 0.05, 603.0),
+    (249.1, 74.496, 0.05, 609.0),
+)
+# -- end extension --
 #: ``(T, lam, slope, cap, tc)``
 TABLE = (
     (4.7, 8.4051855e-05, 0.0014160915, 0.00010453608, 4.62543),
@@ -437,4 +459,24 @@ TABLE = (
     (190.201, 0.78951356, 0.0019059298, 1.1570442, 6.86761),
     (192.585, 0.79394932, 0.0019138028, 1.1600667, 6.87204),
     (195, 0.79846243, 0.0019211718, 1.1627511, 6.87632),
+    (197.445, 0.80316628, 0.0019261095, 1.1672224, 6.89006),
+    (199.921, 0.80794141, 0.0019311092, 1.1702522, 6.90398),
+    (202.428, 0.81278904, 0.0019361715, 1.1733199, 6.91807),
+    (204.967, 0.81771039, 0.0019412973, 1.1764262, 6.93233),
+    (207.537, 0.82270671, 0.0019464874, 1.1795714, 6.94678),
+    (210.139, 0.82777927, 0.0019517426, 1.182756, 6.96141),
+    (212.775, 0.83292938, 0.0019570637, 1.1859806, 6.97622),
+    (215.443, 0.83815836, 0.0019624515, 1.1892456, 6.99121),
+    (218.144, 0.84346755, 0.0019679069, 1.1925516, 7.0064),
+    (220.88, 0.84885834, 0.0019734307, 1.195899, 7.02177),
+    (223.65, 0.85433213, 0.0019790237, 1.1992884, 7.03734),
+    (226.454, 0.85989033, 0.0019846869, 1.2027203, 7.0531),
+    (229.294, 0.86553443, 0.0019904211, 1.2061952, 7.06906),
+    (232.169, 0.87126589, 0.0019962272, 1.2097137, 7.08522),
+    (235.081, 0.87708623, 0.0020021061, 1.2132763, 7.10158),
+    (238.029, 0.88299699, 0.0020080588, 1.2168836, 7.11815),
+    (241.013, 0.88899976, 0.0020140861, 1.2205361, 7.13492),
+    (244.036, 0.89509613, 0.0020201889, 1.2242345, 7.15191),
+    (247.096, 0.90128774, 0.0020263683, 1.2279792, 7.16911),
+    (249.1, 0.90535286, 0.0020304152, 1.2304316, 7.18037),
 )

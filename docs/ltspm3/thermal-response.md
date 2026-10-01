@@ -261,6 +261,44 @@ Two more rules the existing hand data teaches:
 **Any τ in these documents without a stated fit window should be read with that
 table in hand**, including the τ = 709 s above.
 
+## Above the fit: 195 to 249 K by confirmed extrapolation — 2026-09-30
+
+The fit ends at 195 K because the sweep did. Jeff wanted the loop at 200 K and
+above, and asked for it the right way: step up by hand, hold, and check that
+the table's own last slope carried straight on predicted what the cryostat
+did. Three rungs on the evening of 2026-09-30, open loop, from a four-hour
+armed hold at 185 K that itself matched the table to 0.2 K:
+
+| output | settled | held | straight line | miss | time constant |
+|---|---|---|---|---|---|
+| 72.445 % | 225.3 ± 0.2 K | 20 min, not from rest | 225.2 K | −0.1 K | not resolved |
+| 73.443 % | 236.89 K | 43 min untouched | 237.6 K | +0.7 K | 603 ± 15 s |
+| 74.496 % | 249.1 ± 0.1 K | 26 min untouched | 250.8 K | +1.7 K | 625 ± 30 s |
+
+**The time constant does not change above the table** — the fit's own
+C/Λ′ at the edge is 605 s — and the gain between rungs is 11.5 to 11.6 K/%
+against 11.9 at the edge. So the gain schedule clamping at the 195 K values
+was already right up to 250 K, and only the **level** drifts off the straight
+line, by about 0.035 K per kelvin past the edge: Λ′ is still rising there.
+
+`analysis/extend_table.py` carries the table to 249.1 K from these anchors
+(`reference/cooldown-10/extension_anchors.csv`): the fit's last slope plus
+**one** quadratic term, continuous in value and slope at the edge, `cap` the
+measured τ times the slope, the coldplate a line through the rungs. The
+extended curve puts the three rungs at −0.5, −0.1 and +0.3 K — the model's
+in-table error — and `--check` prints that table. **Nothing above 195 K is a
+fit**, and the generated file says so in its header; `EXTENSION_FROM_K` marks
+where the fit ends, and a re-export re-applies the extension.
+
+What the 225 K rung does not give: a time constant. Twenty minutes of a
+relaxation that was not started from rest fits τ anywhere from 400 to 1600 s
+with the same residual, which is [the rule below](#how-long-to-hold-a-step--and-why-r-will-not-tell-you)
+seen live. Its level is bounded to 0.2 K whatever τ is assumed.
+
+Above 249 K the table clamps as before and the supervisor's
+`authority_beyond_table_pct_per_k` is what lets a setpoint be chased there;
+the next rung, held 40 min untouched, is one more row in the anchors file.
+
 ## The consequence that shapes the whole design
 
 At ~10.0 K/%, one 0.01% DAC code is **~100 mK** — roughly forty times the sensor

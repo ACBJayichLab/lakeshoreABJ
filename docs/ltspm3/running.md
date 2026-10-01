@@ -241,8 +241,12 @@ this page.
 
 ## Above the table
 
-The fitted table ends at **195 K** (`T_MAX_K`) and clamps. Three things follow
-from that for a setpoint above it, and only the first is a problem:
+The table ends at `T_MAX_K` and clamps — **249 K since 2026-09-30**, when
+three hand-stepped rungs confirmed the extrapolation past the fit's own
+195 K and [thermal-response.md](thermal-response.md#above-the-fit-195-to-249-k-by-confirmed-extrapolation--2026-09-30)
+carried the table there. The arithmetic below is written at the fit's edge
+and applies at whatever the top is now. Three things follow from the clamp
+for a setpoint above it, and only the first is a problem:
 
 - **the band's centre stops at the edge.** The output that holds 195 K is
   about 70.3 % (`check` prints the band; the number here is the table's), and a
@@ -271,7 +275,11 @@ from that for a setpoint above it, and only the first is a problem:
   moves `T_MAX_K`, and each hold above the table is one of its inputs.
 
 The two lines in the armed file are a config edit and a **recorder restart**;
-`on_exit: hold` leaves the heater where it is across one.
+`on_exit: hold` leaves the heater where it is across one. **The second line
+is the one that matters now that the table reaches 249 K**: the model's own
+output at the top is 74.5 %, and the curve's class default of 70 % would
+clamp the band's centre from about 196 K up and rail the loop everywhere
+above. `check` prints a `CURVE CEILING` line while that is so.
 
 ```yaml
 control:

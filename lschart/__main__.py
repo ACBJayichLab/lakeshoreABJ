@@ -234,6 +234,13 @@ def cmd_check(args) -> int:
                   f"whether or not the feedforward term is on. "
                   f"{lo:.3f}%..{hi:.3f}% only while that is "
                   f"{s.operating_point_pct:g}%  (on_exit={s.on_exit})")
+            # **AND SAY IF THE CURVE'S OWN CEILING CLAMPS THE CENTRE** under
+            # the top of its table -- a sentence `ltspm3`'s section computes,
+            # read by name and defaulted (invariant 1).
+            ceiling = getattr(control, "curve_ceiling_problem", None)
+            problem = ceiling() if callable(ceiling) else None
+            if problem:
+                print(f"  CURVE CEILING  : {problem}")
             # **AND SAY WHAT HAPPENS PAST THE MODEL'S TABLE**, because the
             # centre stops there and a setpoint beyond it is chased on the
             # half-width alone.  Duck-typed and defaulted like the rest.

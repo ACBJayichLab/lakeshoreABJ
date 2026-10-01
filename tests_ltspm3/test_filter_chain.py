@@ -196,12 +196,17 @@ def test_the_loop_reads_the_FITTED_curve_and_not_cd10():
         assert ff.percent_for(kelvin) == pytest.approx(
             M.percent_for_power(M.steady_power_w(kelvin)), abs=1e-9)
 
-    # And it clamps rather than extrapolating.  The table ends at 195 K, so a
-    # 300 K setpoint gets the top of the table and not an invented number --
+    # And it clamps rather than extrapolating.  The table ends at T_MAX_K, so
+    # a 300 K setpoint gets the top of the table and not an invented number --
     # too little heat, which the integral supplies slowly, rather than a
     # feedforward step into a region nobody has measured.
     assert ff.percent_for(300.0) == pytest.approx(ff.percent_for(M.T_MAX_K))
-    assert ff.percent_for(300.0) < 70.0
+    # ...through the curve's own ceiling, which is the lower of the two: the
+    # model's output at the top of its table, or `max_pct`.  Since the table
+    # was extended past 70 % (2026-09-30) the class default of 70 is the one
+    # that binds here, and `check` says so for a file that leaves it there.
+    assert ff.percent_for(300.0) == pytest.approx(
+        min(ff.cfg.max_pct, M.percent_for_power(M.steady_power_w(M.T_MAX_K))))
 
 
 def test_the_supervisor_regime_check_now_uses_the_fitted_curve():

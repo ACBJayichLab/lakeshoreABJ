@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -428,6 +429,12 @@ def main() -> int:
         print("dry run: nothing written")
         return 0
     write(r, g, args.out)
+    # The confirmed extrapolation above the fit's top lives in its own
+    # committed anchors and is re-applied on every export, so a refit cannot
+    # silently drop the rows the loop runs on at 200-250 K.
+    import extend_table  # noqa: E402
+    if extend_table.ANCHORS.exists():
+        extend_table.apply(Path(args.out))
     return 0
 
 
