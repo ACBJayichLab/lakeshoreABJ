@@ -460,6 +460,17 @@ class HeaterSupervisor:
         #: up until they are not.  See `SupervisorConfig.sink_stale_s`.
         self._coldplate_k: float | None = None
         self._coldplate_t: float | None = None
+        #: **What drove each reading**: ``(t, output_pct, sink_k)``, one per
+        #: cycle, so the residual can ask what the heater and the coldplate
+        #: were AT THE INSTANT ITS SLOPE DESCRIBES rather than now.  The slope
+        #: is ~16 s old, and on 2026-10-01 setting it against this cycle's
+        #: output put +108 mW into `dQ` at the onset of a 10 K/min move and
+        #: faulted a cryostat doing exactly what it was told -- see
+        #: :meth:`_missing_power`.  Bounded by count at twice what the slope
+        #: window and the median can reach back over; an anchor older than the
+        #: oldest entry is no opinion, never a guess.
+        self._drive_hist: deque = deque(
+            maxlen=2 * (self.filter.slope.window + self.filter.median.window))
         #: Edge-triggered logging for a standing warning.
         self._warned = False
         self._pending_approach = False
@@ -1217,6 +1228,15 @@ class HeaterSupervisor:
             if sink is not None and getattr(sink, "usable", False):
                 self._coldplate_k = sink.kelvin
                 self._coldplate_t = t
+        # What drove THIS reading: the output in force since the last cycle --
+        # this cycle's write comes later -- and the sink as it stands, or None
+        # once it is stale.  Every cycle, whatever the mode, so the record has
+        # no holes; arming clears it, because a heater somebody moved by hand
+        # while the loop was off is not in it.
+        fresh = (self._coldplate_t is not None
+                 and t - self._coldplate_t <= self.cfg.sink_stale_s)
+        self._drive_hist.append(
+            (t, self.output_pct, self._coldplate_k if fresh else None))
         corroborated, why = self.coherence.corroboration(self.channel, t)
         s.corroborated = corroborated
 
@@ -1559,9 +1579,14 @@ class HeaterSupervisor:
 
     def _break_residual_history(self) -> None:
         """Forget the trailing window.  Called wherever the loop stops being
-        comparable with itself: arming, acknowledging, disengaging."""
+        comparable with itself: arming, acknowledging, disengaging.
+
+        The drive record goes with it: while the loop was off the heater may
+        have been moved by hand, and a residual that looked back across the
+        arm would charge the loop with an output it never had."""
         self._dq_hist.clear()
         self._dq_slow = None
+        self._drive_hist.clear()
 
     # -- rule 4, in watts --------------------------------------------------
 
@@ -1754,6 +1779,12 @@ class HeaterSupervisor:
         # 1976 s -- the exact moment the window rolled past the transient the
         # loss itself had caused.  Asking at the extremes keeps the sweep
         # protection, because during a sweep the extremes ARE in the sweep.
+        #
+        # It was still not enough while `slope_lag` was in this band: the
+        # high sample was often an onset's, so the reach was a move's instead
+        # of a half hour's.  Since the residual is taken at the slope's
+        # instant the step band carries no `slope_lag` at all -- see
+        # `_missing_power`.
         widest = math.hypot(hi[2], lo[2])
         fault_at = max(cfg.fault_mw * 1e-3, cfg.warn_sigma * widest)
         if step >= fault_at:
@@ -1782,13 +1813,47 @@ class HeaterSupervisor:
         residual, which carries `C dT/dt` explicitly and is valid while the
         cryostat is moving -- and a closed loop moves the heater every cycle,
         so a gate keyed to that would mean no opinion, ever.
+
+        **EVERY TERM IS TAKEN AT THE INSTANT THE SLOPE DESCRIBES**, about 16 s
+        ago (:meth:`MeasurementFilter.slope_anchor`), and not now.  ``dT/dt``
+        is a regression, so it is the slope at the centre of its window; the
+        heater power, the conductance and the heat capacity have to be read at
+        that same instant or the three terms are describing two different
+        cryostats.  At a hold and during a steady sweep the two are the same
+        cryostat and nothing changes.  While the rate is CHANGING they are not:
+        on 2026-10-01 a 250 -> 145 K move cut the heater 6.5 % in 20 s, the
+        sample was already falling 0.11 K/s while the slope still read 0.03,
+        and setting that slope against THIS cycle's power put +108 mW into
+        `dQ` -- a step fault, on a cryostat whose heat capacity the same
+        minutes measured at 0.999 of the model's.  The 2026-09-30 13:36 fault
+        on a 5 K move was the same thing upside down.  Taken at the slope's
+        instant the same two moves, replayed, read at most 15 and 18 mW
+        (`tests_ltspm3/test_residual_instant.py`).
+
+        What it costs is that a real step in delivered power reaches `dQ` one
+        slope-age late: ~16 s, against a fault that is specified as a step
+        within thirty minutes and is then held for `fault_after_s`.
         """
         cfg = self.cfg
         if s.filtered_k is None or self.output_pct is None:
             return None, 0.0, 0.0, "no reading"
-        if self.output_pct < cfg.min_output_pct:
+        cadence = self._cadence_s or 0.0
+        anchor = self.filter.slope_anchor(cadence)
+        if anchor is None:
+            return None, 0.0, 0.0, "slope not primed"
+        t_slope, kelvin = anchor
+        drive = self._drive_at(t_slope)
+        if drive is None:
+            # Just armed, or the record does not reach back that far.  For
+            # about one slope-age after arming, which is also when the step
+            # history has just been broken.
+            return None, 0.0, 0.0, "no record of the heater at the slope's instant"
+        pct, recorded_sink = drive
+        if pct is None:
+            return None, 0.0, 0.0, "no reading"
+        if pct < cfg.min_output_pct:
             return None, 0.0, 0.0, f"output below {cfg.min_output_pct:.0f} %"
-        if not _M.T_MIN_K <= s.filtered_k <= _M.T_MAX_K:
+        if not _M.T_MIN_K <= kelvin <= _M.T_MAX_K:
             return None, 0.0, 0.0, "sample outside the table"
         # **NO OPINION WHERE THE PLANT IS FASTER THAN THE SLOPE IS MEASURED.**
         # `dQ` carries `C dT/dt`, and dT/dt here is a regression over the slope
@@ -1806,47 +1871,79 @@ class HeaterSupervisor:
         # with a real filter it is never exactly zero -- the residual has no
         # opinion at a settled hold either, and below about 40 K there is then
         # no check of any kind.
-        window_s = self.filter.slope.window * (self._cadence_s or 0.0)
+        window_s = self.filter.slope.window * cadence
         if (abs(s.slope_k_per_s) > cfg.model_check_slope_k_per_s
-                and _M.tau_s(s.filtered_k) < window_s):
+                and _M.tau_s(kelvin) < window_s):
             return None, 0.0, 0.0, "the plant is faster than the slope window"
-        sink = self._coldplate_k
-        if sink is None:
+        if self._coldplate_t is None:
             # Never read one at all -- a cryostat with no coldplate channel.
             # The model's settled locus is the documented assumption there, and
             # there is no staleness to speak of because there is no reading.
-            sink = _M.coldplate_k(s.filtered_k)
-        elif (self._coldplate_t is not None
-              and s.t - self._coldplate_t > cfg.sink_stale_s):
+            sink = _M.coldplate_k(kelvin)
+        elif recorded_sink is None:
             # **A STALE SINK IS NO OPINION.**  `Lambda(T_s) - Lambda(T_c)` is
             # most of the residual and `Lambda'` at 6.6 K is nine times
             # `Lambda'` at 118, so 100 mK of sink is 1.5 mW -- a coldplate that
             # moves while the channel is down is invisible and lands in the
             # residual as if it were the sample's problem.  No opinion already
             # breaks the step history, so a sink that comes back cannot read as
-            # a step either.
+            # a step either.  Judged at the slope's instant, where the sink
+            # is read.
             return None, 0.0, 0.0, "coldplate stale"
-        dq = _M.missing_power_w(s.filtered_k, s.slope_k_per_s, sink,
-                                self.output_pct)
-        # **THE SLOPE THE RESIDUAL IS GIVEN IS 15 s OLD**, and while the
-        # cryostat is accelerating that is worth far more than any of the other
-        # terms: `C * (slope error)` reached 30 mW of a 32 mW excursion on a
-        # fast 2 K move, against a 10 mW fault.  Both numbers come from the
-        # filter chain rather than from anywhere anybody types, for the same
-        # reason `Tuner.delay_s` does.  Zero at a hold and zero at a constant
-        # sweep, so nothing this widens was ever narrow when it mattered.
-        cadence = self._cadence_s or 0.0
+        else:
+            sink = recorded_sink
+        dq = _M.missing_power_w(kelvin, s.slope_k_per_s, sink, pct)
+        # **THE LEVEL BAND KEEPS `slope_lag`; THE STEP BAND DOES NOT.**
+        #
+        # `slope_lag` is the allowance for a slope older than the other terms.
+        # The LEVEL warning is judged on one cycle, and at the corner of a
+        # fast move the aligned residual still swings 20-35 mW on the bench --
+        # the regression's own curvature -- so the level band keeps the
+        # allowance and warns no more often than it did.  It is wider than it
+        # needs to be now, which is the quiet direction for a warning.
+        #
+        # The STEP test sees the residual averaged over `STEP_AVERAGE_S`, and
+        # aligned, the onset averages away: at most 6.8 mW over every fast
+        # move on the bench and 14.9 mW over the two real ones, against the
+        # 10 mW floor and a band past it.  Kept in the step band, `slope_lag`
+        # did harm instead of good: the window's high sample is often taken at
+        # an onset, where the allowance is widest, so the threshold stayed up
+        # for as long as that sample was the high one, and a 12 % heater loss
+        # 30-240 s into a 10 K/min climb was never called.  Without it every
+        # case is called in 18-36 s.  The monitor's step band never had it
+        # (`judge.py`), so this is also the loop and the judge asking the same
+        # question.
         accel = self.filter.acceleration_excess(cadence)
         slope_delay = self.filter.slope_delay_s(cadence)
-        sigma = _M.sigma_q_w(s.filtered_k, self.output_pct, self.wall_clock(),
+        sigma = _M.sigma_q_w(kelvin, pct, self.wall_clock(),
                              dt_dt_k_per_s=s.slope_k_per_s,
                              d2t_dt2_k_per_s2=accel,
                              slope_delay_s=slope_delay)
-        fast = _M.sigma_q_fast_w(s.filtered_k, self.output_pct,
-                                 dt_dt_k_per_s=s.slope_k_per_s,
-                                 d2t_dt2_k_per_s2=accel,
-                                 slope_delay_s=slope_delay)
+        fast = _M.sigma_q_fast_w(kelvin, pct, dt_dt_k_per_s=s.slope_k_per_s)
         return dq, sigma, fast, ""
+
+    def _drive_at(self, t: float) -> tuple[float | None, float | None] | None:
+        """``(output_pct, sink_k)`` that drove a reading taken at ``t``.
+
+        Linear between the two cycles either side of ``t``: the slope's
+        instant is a mean over the window's timestamps and almost never lands
+        on a cycle.  Either half is None where either neighbour had none -- an
+        output never read, a sink gone stale -- and the whole answer is None
+        where the record does not reach back to ``t`` at all.
+        """
+        hist = self._drive_hist
+        if not hist or t < hist[0][0]:
+            return None
+        i = len(hist) - 1
+        while i > 0 and hist[i - 1][0] > t:
+            i -= 1
+        if i == 0:                       # one entry, and t is its own time
+            return hist[0][1], hist[0][2]
+        (t0, u0, c0), (t1, u1, c1) = hist[i - 1], hist[i]
+        a = 0.0 if t1 <= t0 else min(1.0, (t - t0) / (t1 - t0))
+        u = None if u0 is None or u1 is None else u0 + a * (u1 - u0)
+        c = None if c0 is None or c1 is None else c0 + a * (c1 - c0)
+        return u, c
 
     def _check_model(self, s: SupervisorStatus) -> None:
         """Report how far the settled measurement is from the curve.

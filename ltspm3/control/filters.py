@@ -117,6 +117,19 @@ class SlopeEstimator:
         sxy = sum((t - mt) * (y - my) for t, y in zip(self._t, self._y))
         return sxy / sxx
 
+    def centre(self) -> tuple[float, float] | None:
+        """``(mean t, mean y)`` over the window: the point the fitted line
+        passes through, and so the one instant the slope is a statement
+        about.  Evenly sampled, the least-squares slope of a locally
+        quadratic signal IS the derivative there, exactly; a dropped sample
+        moves both together and leaves a small curvature term.  ``None``
+        until primed, the same rule :meth:`update` reports a slope by.
+        """
+        if not self.primed:
+            return None
+        n = len(self._t)
+        return sum(self._t) / n, sum(self._y) / n
+
 
 class MeasurementFilter:
     """median -> single-pole low pass, plus a robust spike test and a slope.
@@ -249,6 +262,35 @@ class MeasurementFilter:
         return ((self.slope.window - 1) * cadence_s / 2.0
                 + (self.median.window // 2) * cadence_s
                 + self.lowpass.tau)
+
+    def slope_anchor(self, cadence_s: float) -> tuple[float, float] | None:
+        """``(t, kelvin)``: **the instant the reported slope describes**, on the
+        caller's clock, and the temperature at that instant.  ``None`` until
+        the slope is primed.
+
+        :meth:`slope_delay_s` says how OLD the slope is; this says WHEN it is
+        from, measured off the window's own timestamps rather than assumed
+        from the nominal cadence -- so a dropped cycle, a jittering bus or a
+        window still filling after a reseed moves it by exactly what it moved
+        the slope.  With a full window at the nominal cadence ``now - t`` is
+        :meth:`slope_delay_s`, to the arithmetic.
+
+        Both halves are the regression's own centre, ``(mean t, mean y)``,
+        moved back by the lag the values already carried into it (the median
+        and the pole, the same two terms :meth:`slope_delay_s` adds).  So the
+        slope and this temperature come from the same samples and cannot
+        disagree about which instant they mean.
+
+        The consumer is the watt residual: ``C dT/dt`` from the slope has to
+        be set against the heater power and the conductance **at the same
+        instant**, and the slope is ~16 s old.
+        """
+        centre = self.slope.centre()
+        if centre is None:
+            return None
+        t_mean, kelvin = centre
+        lag = (self.median.window // 2) * cadence_s + self.lowpass.tau
+        return t_mean - lag, kelvin
 
     @property
     def acceleration(self) -> float:

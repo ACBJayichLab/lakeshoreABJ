@@ -19,13 +19,23 @@ correct aggressively.
    means, only about what to do. It is valid at a hold **and during a sweep**,
    which a kelvin check is not.
 
+   **Every term is read at the instant the slope describes** (2026-10-01).
+   `dT/dt` is a regression, so it is the slope at the centre of its window,
+   ~16 s ago; the heater power, the conductance and `C(T)` are read at that
+   same instant (`MeasurementFilter.slope_anchor`) and not now. Read now, the
+   onset of a 10 K/min move put +108 mW into `δQ` and step-faulted a cryostat
+   whose heat capacity was right to 2 %. The price is a residual one slope-age
+   late, against a fault specified as a step within thirty minutes.
+
    - beyond `warn_sigma` × `σ_Q`: **alarm and keep tracking**. An alarm is not
      a freeze. The old check froze on any anomaly and escalated on a timer,
      which on a cryostat whose legitimate sweep lag is 43 K made freezing the
      normal outcome of doing what it was told;
    - a **step** of `fault_mw` inside `fault_window_s`: fault. Inherited from
      the monitor, not re-decided — a change in delivered power lands in the
-     residual immediately, and anything that takes hours did not step;
+     residual immediately, and anything that takes hours did not step. Its
+     band is the monitor's too: **no `slope_lag`**, which held the threshold up
+     after a move's onset and hid a 12 % heater loss for minutes;
    - **authority exhausted** — error past `fault_error_k` with the demand *and
      the output* railed at the **ceiling**, **while the setpoint is not
      moving**. Railed with a large error is the normal state of a loop
