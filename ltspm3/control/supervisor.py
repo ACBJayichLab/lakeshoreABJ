@@ -453,6 +453,9 @@ class HeaterSupervisor:
         #: average that feeds it.
         self._dq_hist: deque = deque()
         self._dq_slow: float | None = None
+        #: When the average started -- the step test judges nothing until
+        #: it has averaged one slope window of residual.
+        self._dq_since: float | None = None
         #: The sink, from this cycle's frame, and WHEN it was read.  The
         #: model's settled locus is the fallback for a cryostat that never
         #: reports one; a reading that has gone stale is no opinion instead,
@@ -1585,7 +1588,7 @@ class HeaterSupervisor:
         have been moved by hand, and a residual that looked back across the
         arm would charge the loop with an output it never had."""
         self._dq_hist.clear()
-        self._dq_slow = None
+        self._dq_slow = self._dq_since = None
         self._drive_hist.clear()
 
     # -- rule 4, in watts --------------------------------------------------
@@ -1721,7 +1724,7 @@ class HeaterSupervisor:
             # here is ARMING: without this, the window reaches back into the
             # pre-tracking samples and reads their offset as a step.
             self._dq_hist.clear()
-            self._dq_slow = None
+            self._dq_slow = self._dq_since = None
             return
 
         threshold = max(cfg.warn_sigma * sigma, 0.0)
@@ -1743,12 +1746,33 @@ class HeaterSupervisor:
         # A minute of averaging costs the test nothing it was measuring: the
         # fault it is specified to catch is a step within thirty minutes, and
         # the 2026-09-10 event reached its level in seven.
-        if dt > 0:
-            alpha = 1.0 if self._dq_slow is None else 1.0 - math.exp(
-                -dt / self.STEP_AVERAGE_S)
-            self._dq_slow = dq if self._dq_slow is None else (
-                self._dq_slow + alpha * (dq - self._dq_slow))
+        #
+        # **AND IT HAS TO HAVE AVERAGED BEFORE IT JUDGES.**  The average used
+        # to start from ONE raw cycle.  Whatever `dQ` read on the first cycle
+        # after the history broke -- arming, or the sample coming back into
+        # the table -- became the average outright, and then stood in the
+        # window as a sample for half an hour.  On 2026-10-01 that cycle was
+        # the corner of a move: +100 mW under the old residual, +15 mW under
+        # the aligned one, and against it ordinary hold readings were a
+        # "step".
+        #
+        # So the average is a running mean until a whole `STEP_AVERAGE_S` has
+        # gone in and the EMA after, and **nothing enters the window until it
+        # has averaged one slope window**.  Consecutive residuals share most
+        # of their regression's samples, so an average over less than a window
+        # is an average of one measurement.  It is the shortest wait that
+        # works and the longest that can: replayed, both 10-01 runs are clean
+        # from 30 s up, and a 3 % heater loss 20 s after arming is still
+        # called at 30 s and missed from 45 s, because past that the loss is
+        # inside the reference it is being compared with.  The level warning
+        # above does not wait.
         if self._dq_slow is None:
+            self._dq_slow, self._dq_since = dq, t
+        elif dt > 0:
+            alpha = max(1.0 - math.exp(-dt / self.STEP_AVERAGE_S),
+                        dt / (t - self._dq_since + dt))
+            self._dq_slow += alpha * (dq - self._dq_slow)
+        if t - self._dq_since < self.filter.slope.window * (self._cadence_s or 0.0):
             return
         self._dq_hist.append((t, self._dq_slow, fast))
         floor_t = t - cfg.fault_window_s

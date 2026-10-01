@@ -246,31 +246,45 @@ def _unix(stamp: str) -> float:
     return datetime.fromisoformat(stamp).replace(tzinfo=LAB_TZ).timestamp()
 
 
-def replay(name, *, arm_k, move_at, move_to_k):
+def replay(name, *, arm_k, commands):
     """Drive the shipped supervisor from what the recorder logged.
 
     Readings in, and THE LOGGED HEATER forced in as the output in force each
     cycle -- the one the previous row wrote -- so the residual sees what the
     cryostat was given rather than what this replay's loop would have done.
-    What the loop writes goes to the bench's simulator and nowhere.  Armed
-    after a minute of priming, and the move commanded at the moment the
-    operator commanded it.
+    What the loop writes goes to the bench's simulator and nowhere.  Armed at
+    `arm_k` after a minute of priming; then each `(kind, timestamp, value)` in
+    `commands` at the moment the operator sent it, through the same methods
+    the recorder calls: `setpoint` is `set_setpoint`, `disengage` is the
+    software half of `hold` (`panic_hold`), and `arm` with no value holds the
+    temperature the loop is at.
+
+    Returns `(seconds after the first command, status)` per cycle.
     """
     rows = _load_event(name)
     t0 = _unix(rows[0]["Timestamp"])
     h = FittedHarness(kelvin=min(arm_k, M.T_MAX_K - 1.0), stage=STAGE_FILE,
                       wall_t0=0.0)
-    t_move = _unix(move_at)
-    armed = moved_yet = False
+    pending = sorted(((_unix(at), kind, value) for kind, at, value in commands),
+                     key=lambda c: c[0])
+    t_first = pending[0][0]
+    armed = False
     out, u_prev = [], float(rows[0]["heater_pct"])
     for r in rows:
         t = _unix(r["Timestamp"])
         if not armed and t - t0 >= 60.0:
             h.sup.arm(arm_k)
             armed = True
-        if not moved_yet and t >= t_move:
-            h.sup.set_setpoint(move_to_k)
-            moved_yet = True
+        while pending and t >= pending[0][0]:
+            _, kind, value = pending.pop(0)
+            if kind == "setpoint":
+                h.sup.set_setpoint(value)
+            elif kind == "disengage":
+                h.sup.panic_hold()
+            elif kind == "arm":
+                h.sup.arm(h.sup.status.filtered_k if value is None else value)
+            else:
+                raise ValueError(kind)
         h.clock.t = t
         h.sup.output_pct = u_prev
         readings = {c: Reading(channel=c, kelvin=float(r[c]))
@@ -278,41 +292,54 @@ def replay(name, *, arm_k, move_at, move_to_k):
         st = h.sup.step(t, readings["Sample"], readings)
         out.append((t, st))
         u_prev = float(r["heater_pct"])
-    return [(t - t_move, st) for t, st in out]
+    return [(t - t_first, st) for t, st in out]
 
 
-#: (fixture event, armed at, the command's own timestamp, where it went to).
-#: The commands are the status file's `recent` list for 10-01 and the Notes
-#: column's `[matlab]` line for 09-30.
+#: What the operator sent, from the status file's `recent` list (10-01) and
+#: the Notes column's `[matlab]` line (09-30).
+OCT01 = "2026-10-01_250_to_145_to_220"
+OCT01_AS_SENT = [
+    ("setpoint", "2026-10-01T10:10:08.187", 145.0),
+    ("disengage", "2026-10-01T10:14:15.968", None),
+    ("arm", "2026-10-01T10:14:23.956", None),
+    ("setpoint", "2026-10-01T10:14:44.193", 220.0),
+]
+#: (fixture event, armed at, commands)
 EVENTS = [
-    ("2026-10-01_250_to_145", 250.0, "2026-10-01T10:10:08.187", 145.0),
-    ("2026-09-30_150_to_155", 150.0, "2026-09-30T13:36:35.000", 155.0),
+    (OCT01, 250.0, OCT01_AS_SENT),
+    ("2026-09-30_150_to_155", 150.0,
+     [("setpoint", "2026-09-30T13:36:35.000", 155.0)]),
 ]
 
 
-@pytest.mark.parametrize("name,arm_k,move_at,move_to_k", EVENTS)
-def test_the_moves_that_faulted_on_the_cryostat_neither_fault_nor_warn(
-        name, arm_k, move_at, move_to_k, caplog):
-    """**THE TWO REAL FAULTS.**
-
-    Before the change, the 10-01 replay faults 116 s after the command --
-    10:12:04, the second the cryostat did -- on a 104 mW step, and the 09-30
-    one warns on 9 cycles of the move at up to 90 mW.  The 09-30 fault itself
-    was a single cycle 0.5 mW past the 10 mW floor, called against the hours
-    of history the cryostat had and not reproduced by a replay that starts six
-    minutes before.  After: no fault, no warning, `dQ` at most 15 and 18 mW.
-    """
-    caplog.set_level(logging.ERROR)
-    out = replay(name, arm_k=arm_k, move_at=move_at, move_to_k=move_to_k)
+def assert_quiet(out):
     faulted = [(dt, st) for dt, st in out if stepped(st)]
     assert not faulted, (
         f"step fault {faulted[0][0]:.0f} s after the command: "
         f"{[a for a in faulted[0][1].alarms if 'stepped' in a][0]}")
     assert not ({SupervisorState.FROZEN, SupervisorState.RAMPING_DOWN}
                 & {st.state for _, st in out})
-    warned = [(dt, a) for dt, st in out if dt >= 0.0
+    warned = [(round(dt), a) for dt, st in out if dt >= 0.0
               for a in st.alarms if "missing power" in a]
     assert not warned, warned[:3]
+
+
+@pytest.mark.parametrize("name,arm_k,commands", EVENTS)
+def test_the_moves_that_faulted_on_the_cryostat_neither_fault_nor_warn(
+        name, arm_k, commands, caplog):
+    """**THE TWO REAL FAULTS**, replayed with the commands the operator sent.
+
+    Before the change, the 10-01 replay faults 116 s after the command --
+    10:12:04, the second the cryostat did -- on a 104 mW step, and the 09-30
+    one warns on 9 cycles of the move at up to 90 mW.  The 09-30 fault itself
+    was a single cycle 0.5 mW past the 10 mW floor, called against the hours
+    of history the cryostat had and not reproduced by a replay that starts six
+    minutes before.  After: no fault and no warning, through the descent, the
+    disengage, the re-arm and the hard reversal to 220 K that followed.
+    """
+    caplog.set_level(logging.ERROR)
+    out = replay(name, arm_k=arm_k, commands=commands)
+    assert_quiet(out)
 
     # **AND THE RESIDUAL WAS WATCHING.**  From one slope-age after the sample
     # is inside the table, every cycle of the move has an opinion.  The 250 K
@@ -324,3 +351,24 @@ def test_the_moves_that_faulted_on_the_cryostat_neither_fault_nor_warn(
     move = [st for dt, st in out if inside + 20.0 <= dt <= inside + 200.0]
     silent = [st.residual_reason for st in move if st.missing_power_w is None]
     assert move and not silent, silent[:3]
+
+
+def test_a_reversal_inside_one_unbroken_history_does_not_fault(caplog):
+    """**The 10-01 move without the disengage and the re-arm** -- the same
+    cryostat and the same heater, but the step history now runs unbroken from
+    the sample re-entering the table at the start of the descent, through the
+    hard reversal to 220 K, and on into the hold.
+
+    With only the residual aligned this faulted at 10:14:58, as the heater
+    swung up.  The cause was the step test's average, which started from ONE
+    raw cycle: the first `dQ` after the sample came back into the table was the
+    corner of the move, +14.7 mW, and it became the average outright and then
+    stood in the window as its high sample.  Against it the hold read as a
+    15-17 mW step.  The average now runs as a mean for its first minute, and
+    nothing enters the window until it has averaged one slope window.
+    """
+    caplog.set_level(logging.ERROR)
+    straight = [c for c in OCT01_AS_SENT if c[0] == "setpoint"]
+    out = replay(OCT01, arm_k=250.0, commands=straight)
+    assert_quiet(out)
+    assert max(st.dq_step_w for _, st in out) < 0.010

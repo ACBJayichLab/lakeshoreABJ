@@ -35,7 +35,10 @@ correct aggressively.
      the monitor, not re-decided — a change in delivered power lands in the
      residual immediately, and anything that takes hours did not step. Its
      band is the monitor's too: **no `slope_lag`**, which held the threshold up
-     after a move's onset and hid a 12 % heater loss for minutes;
+     after a move's onset and hid a 12 % heater loss for minutes. It judges an
+     **averaged** residual, and judges nothing until that average spans one
+     slope window, because an average seeded from one raw cycle made a move's
+     corner into a half-hour reference;
    - **authority exhausted** — error past `fault_error_k` with the demand *and
      the output* railed at the **ceiling**, **while the setpoint is not
      moving**. Railed with a large error is the normal state of a loop
