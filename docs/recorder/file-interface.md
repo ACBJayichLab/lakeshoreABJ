@@ -148,7 +148,11 @@ established. A client must keep the three apart for the same reason, and
 temperature be trusted for a measurement? The recorder decides it once, and a
 client reads it rather than working it out: the loop is tracking, the
 trajectory has arrived, and the error has been inside `hold_error_k` for
-`hold_settle_s`. It is the same clock that switches the gains, so `settled` and
+`hold_settle_s` — or, on a thermometer too noisy for that many clean seconds,
+the error's **mean** over `hold_settle_s` has been inside it once the dwell is
+`settle_wait_s` old (the plant's own time constant, so a slow tail has gone).
+`settle_error_k` is that mean, and the number to quote when a wait gives up.
+It is the same clock that switches the gains, so `settled` and
 `phase: hold` first appear on the same cycle. After that they come apart on
 purpose. `settled` goes false once the error has been outside the band for
 `unsettle_s` — one noisy reading does not clear it, so a measurement lasting

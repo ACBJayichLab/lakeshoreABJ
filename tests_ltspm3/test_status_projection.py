@@ -241,6 +241,19 @@ def test_the_published_settle_rule_is_the_tuners_own(tmp_path, armed):
     assert block["unsettle_s"] == cfg.unsettle_s
 
 
+def test_the_mean_the_verdict_is_judged_on_is_published(tmp_path, armed):
+    """`settle_error_k` and `settle_wait_s` are the tuner's own, by name --
+    a rename would leave a status file that parses and is quietly null, and
+    MATLAB's `no_settle` message would go back to quoting one noisy cycle."""
+    h = armed()
+    h.step(5)
+    block = written(tmp_path, h)
+    assert block["settle_error_k"] == pytest.approx(h.sup.tuner.settle_error_k)
+    assert block["settle_wait_s"] == pytest.approx(
+        h.sup.tuner.averaged_wait_s(h.sup.status.filtered_k))
+    assert block["settle_wait_s"] >= h.sup.tuner.cfg.hold_settle_s
+
+
 def test_settled_in_the_file_is_the_supervisors_own_verdict(tmp_path, armed):
     """THE FIELD A WAITING CLIENT WAITS ON, and that it is not re-derived.
 

@@ -477,12 +477,15 @@ class Tuner:
         return (self._settled_since is not None
                 and t - self._settled_since >= self.cfg.hold_settle_s)
 
+    def averaged_wait_s(self, kelvin: float) -> float:
+        """How old the dwell must be before the averaged path may certify it."""
+        return max(self.cfg.hold_settle_s, self.schedule.tau_at(kelvin))
+
     def _averaged_dwelt(self, t: float, kelvin: float | None) -> bool:
         c = self.cfg
         if kelvin is None or self._averaged_since is None:
             return False
-        if t - self._averaged_since < max(c.hold_settle_s,
-                                          self.schedule.tau_at(kelvin)):
+        if t - self._averaged_since < self.averaged_wait_s(kelvin):
             return False
         return (abs(self._mean_error(c.unsettle_s)) <= c.hold_error_k
                 and abs(self._mean_error(c.hold_settle_s)) <= c.hold_error_k)

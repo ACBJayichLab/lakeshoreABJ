@@ -350,11 +350,18 @@ class SupervisorStatus:
     #: **Can this temperature be trusted for a measurement?**  ONE verdict,
     #: and every client reads it rather than working it out: `Tuner.settled`
     #: from a TRACKING loop -- on the hold gains, the trajectory arrived, and
-    #: the error inside `tuning.hold_error_k` for `hold_settle_s`.  It first
-    #: comes true on the cycle the gains switch, and goes false the cycle the
-    #: error leaves the gate, while the gains stay on HOLD until
-    #: `move_error_k`.
+    #: the error inside `tuning.hold_error_k` for `hold_settle_s`, or its mean
+    #: inside once `settle_wait_s` has passed.  It first comes true on the
+    #: cycle the gains switch, and goes false after `unsettle_s` outside the
+    #: gate, while the gains stay on HOLD until `move_error_k`.
     settled: bool = False
+    #: The mean error over the last `hold_settle_s` -- what the averaged path
+    #: judges, and what to quote when it is not settled; one cycle's error at
+    #: 200 K is mostly noise.  None with no dwell running.
+    settle_error_k: float | None = None
+    #: How long the averaged path waits at this temperature, `tau(T)` floored
+    #: at `hold_settle_s`.  The longest a settle can take on a noisy hold.
+    settle_wait_s: float | None = None
     kp: float = 0.0
     ti: float = 0.0
     velocity_ff_pct: float = 0.0
@@ -1394,6 +1401,9 @@ class HeaterSupervisor:
         dwell rather than being counted towards it."""
         if self.state is SupervisorState.TRACKING:
             s.settled = self.tuner.settled
+            s.settle_error_k = self.tuner.settle_error_k
+            if s.filtered_k is not None:
+                s.settle_wait_s = self.tuner.averaged_wait_s(s.filtered_k)
         else:
             self.tuner.break_settle()
 
