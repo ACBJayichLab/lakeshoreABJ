@@ -156,12 +156,34 @@ raising the rate was measured while the heater's slew was still that rate
 divided by the gain; with the two apart, [§3d](#3d-ten-kelvin-per-minute-2026-09-27)
 is the re-measurement.
 
+## 1e. The settle, once 200 K would not settle
+
+2026-10-23. Scan86 set 200 K and gave up an hour later with `no_settle` while
+the sample sat at 200.00 ± 0.05 K: the filtered Sample carries 26–41 mK of
+noise there, and a dwell that restarts on any one reading past 50 mK almost
+never runs 120 s. Asked which rule "within 50 mK and staying" should mean, he
+chose **"Average must be in"** — the mean error over the dwell inside 50 mK,
+not every reading.
+
+Told that certifying on the mean after 120 s also switches to the hold gains
+earlier, and that on the bench's 110 → 180 K move that let the sample wander
+to 57 mK after being called settled:
+
+> I want matlab to wait until the temperature is actually settled AND the
+> gains are on the steadier ones. I don't want the wander to get worse
+
+**So both halves stand**: the 50 mK and the 2–5 minutes are unchanged, and
+where 120 clean seconds happen they still decide, exactly as before. The mean
+is a second way to settle, for a thermometer too noisy for the first, and it
+waits one plant time constant `tau(T)` first, so the slow tail has gone before
+the gains change. PID_PLAN.md 4a-ix has the measurements.
+
 ## 2. What was taken from them
 
 | | requirement | how it is graded |
 |---|---|---|
 | **move** | a 2 K move at 120 K is **95 % of the way there in 60 s**, overshooting by no more than **250 mK**, no rail, no fault. A fast approach, not a gentle one | `tests_ltspm3/test_stage_4e_fast_move.py` on the bench; on the cryostat, the recorder's CSV after a `send setpoint --software` |
-| **settle** | and is then **within 50 mK and staying, inside 2-5 minutes** — the slight adjustment after the approach | the same test; `tuning.hold_error_k` is the same 50 mK, so the gate and the loop's own hysteresis cannot disagree |
+| **settle** | and is then **within 50 mK and staying, inside 2-5 minutes** — the slight adjustment after the approach | the same test; `tuning.hold_error_k` is the same 50 mK, so the gate and the loop's own hysteresis cannot disagree. Every reading inside for 120 s, or — where the thermometer is too noisy for that (§1e) — the mean inside, once a plant `tau(T)` has passed |
 | **hold** | **ONE rule, over the whole Allan curve** (§1c, 2026-09-18): at every averaging time the armed hold is within **1.1×** of open loop **or** below **10 mK**, whichever it satisfies. Either clause passes | `analysis/hold_quality.py`, armed against a matched open-loop window on the **cryostat** — matched in length *and* in clock hours, since a diurnal term lives in these bands. The bench cannot grade it: its plant has no slow disturbance, and it predicted 0.71× where the cryostat measured 1.60× |
 | **hold, direction** | the loop has **real authority** at a hold — faster than the plant, not slower | `hold_speed` below 1 |
 | **rate** | **10 K/min** (§1d, 2026-09-27) — the default for a move, the ceiling on a requested one, and the rate of the post-fault approach and the fault ramp-down: one number | `ramp.max_rate_k_per_min`. It was 5, and raising it measured worse on 2026-09-17 only because it was also setting the next row; §3d is the re-measurement. A 10 K/min ramp needs up to 8.5 % of velocity lead, so `max_velocity_ff_pct` moved with it |

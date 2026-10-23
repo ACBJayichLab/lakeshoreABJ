@@ -377,3 +377,37 @@ def test_the_gains_switch_at_the_settle_instant_and_the_move_stays_settled(delta
                 f"settled dropped {h.clock.t - settled_at:.0f} s after it "
                 f"was given, with the sample inside the gate")
     assert settled_at is not None, "never settled"
+
+
+def _settled_at_target():
+    h = harness(tuning=True)
+    h.sup.arm(h.sup.status.filtered_k)
+    for _ in range(int(10 * 60 / h.DT)):
+        if h.step(1).settled:
+            return h
+    raise AssertionError("never settled")
+
+
+def test_resending_the_same_setpoint_keeps_settled():
+    """Scan86_b opens with `setTemperature(200)` on a loop already at 200 K.
+
+    `sweep_to` starts a ramp from the MEASUREMENT, a few mK off the target,
+    and at the one rate a cycle covers far more than that: the next cycle's
+    `ramp.value` ends it before `ramping` is read, and the smoother's target
+    has not moved.  So the dwell is not restarted and `waitUntilSteady`
+    answers at once."""
+    h = _settled_at_target()
+    target = h.sup.ramp.target
+    assert h.sup.filter.value != target, "the bench would not exercise the ramp"
+    h.sup.sweep_to(target, None)
+    assert h.sup.ramp.ramping
+    for _ in range(int(5 * 60 / h.DT)):
+        assert h.step(1).settled
+
+
+def test_a_different_setpoint_however_close_restarts_the_dwell():
+    """30 mK is a new target: the smoother has to travel it, which is
+    `ramping`, and a settle verdict for the old one is not one for this."""
+    h = _settled_at_target()
+    h.sup.sweep_to(h.sup.ramp.target + 0.03, None)
+    assert not h.step(1).settled

@@ -99,6 +99,7 @@ import bisect
 import enum
 import logging
 import math
+from collections import deque
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -159,7 +160,10 @@ class TuningConfig:
     #: Enter MOVE when a ramp is running or the error exceeds this.
     move_error_k: float = 0.25
     #: Return to HOLD only below this, and only after settling for a while.
-    #: That same moment is `Tuner.settled`.
+    #: That same moment is `Tuner.settled`.  Judged on every reading for
+    #: `hold_settle_s`, or -- for a thermometer too noisy for that, 200 K and
+    #: up on LTSPM3 (Jeff, 2026-10-23) -- on the MEAN over `hold_settle_s`
+    #: once the dwell is one plant `tau(T)` old.  `Tuner.update_phase`.
     hold_error_k: float = 0.10
     hold_settle_s: float = 120.0
     #: **How long a settled hold may be outside `hold_error_k` before it stops
@@ -170,6 +174,10 @@ class TuningConfig:
     #: reading past 50 mK dropped 18 times: 17 were a single 10 mK quantum
     #: over the gate for 2-8 s, and one was real -- 54 s at up to 80 mK.
     #: 30 s rides out the first kind and still catches the second.
+    #:
+    #: Also the averaged path's "and staying" window: its mean has to be
+    #: inside the gate too, because a drift THROUGH the setpoint averages to
+    #: nothing over `hold_settle_s` and not over this.
     unsettle_s: float = 30.0
 
     #: Absolute bounds on the scheduled gains.  A bad schedule entry, or an
@@ -341,9 +349,19 @@ class Tuner:
         self.schedule = (PlantSchedule(self.cfg.schedule) if self.cfg.schedule
                          else FittedSchedule())
         self.phase = ControlPhase.HOLD
+        #: Since when every reading has been inside the gate: the STRICT dwell.
         self._settled_since: float | None = None
-        #: When a SETTLED hold's error last left the gate, for `unsettle_s`.
+        #: When a CERTIFIED hold's error last left the gate, for `unsettle_s`.
         self._outside_since: float | None = None
+        #: Since when nothing has moved: the AVERAGED dwell.
+        self._averaged_since: float | None = None
+        #: ``(t, error_k)`` of the averaged dwell, trimmed to the longer of the
+        #: two windows plus the one sample before it, which bounds the first
+        #: interval inside the window.
+        self._errors: deque[tuple[float, float]] = deque()
+        #: Whether the dwell has been certified, by either path.  Latched:
+        #: only `unsettle_s` outside the gate, or a restart, clears it.
+        self._held = False
         self._t: float | None = None
         #: The loop's pure delay, in seconds.  **Set by the supervisor from the
         #: filter chain and the measured cadence** -- see
@@ -379,62 +397,144 @@ class Tuner:
         tau = self.schedule.tau_at(kelvin) if kelvin is not None else 0.0
         return max(speed * tau, self.cfg.delay_floor * self.delay_s)
 
-    def update_phase(self, t: float, *, error_k: float, ramping: bool) -> ControlPhase:
+    def update_phase(self, t: float, *, error_k: float, ramping: bool,
+                     kelvin: float | None = None) -> ControlPhase:
         """Hysteretic HOLD/MOVE selection, and the settle dwell behind it.
 
         A ramp always means MOVE.  Otherwise MOVE is entered on a large error
-        and left only after the error has been small for ``hold_settle_s`` --
-        chattering between two tunings is worse than either of them.
+        and left only once the dwell is certified -- chattering between two
+        tunings is worse than either of them.
+
+        **Two ways to certify the dwell, and either will do.**
+
+        * THE STRICT ONE, unchanged since 2026-09-23: every reading inside
+          `hold_error_k` for `hold_settle_s`.  One reading past the gate
+          restarts it.  On a quiet thermometer it is what decides, and every
+          graded move on the bench is decided by it.
+        * THE AVERAGED ONE (Jeff, 2026-10-23), for a thermometer too noisy for
+          the first.  At 200 K the filtered Sample carries 26-41 mK of noise
+          against the 50 mK gate, sixty clean readings in a row almost never
+          happen, and Scan86 sat at 200.00 K on the MOVE gains for an hour.
+          This one is certified when the time-weighted mean error over the
+          last `hold_settle_s` AND over the last `unsettle_s` are both inside
+          the gate -- but **only once the dwell is one plant time constant
+          old**, `tau(T)` from the shipped model.  A mean cannot see a slow
+          tail under that much noise, and certifying is also the switch to
+          the gentler gains: tried at `hold_settle_s`, the bench's 110 ->
+          180 K move switched mid-tail and the sample sagged out to 57 mK
+          after being called settled.  A tail decays on `tau`, so that is how
+          long a verdict that cannot see one waits.  A caller that does not
+          pass ``kelvin`` gets the strict path alone.
+
+        A ramp, an error past `move_error_k` or `break_settle` restarts both.
 
         **The dwell keeps counting in HOLD**, because it is also `settled`.
-        A settled hold whose error leaves `hold_error_k` for longer than
-        `unsettle_s` stops being settled and needs a full dwell to be settled
-        again, while the gains stay on HOLD until `move_error_k`.  Without
-        that a trim or a small disturbance -- neither of which enters MOVE --
-        would be called settled the moment the error came back inside, which
-        is not "and staying".  Shorter than `unsettle_s` is a reading, not an
-        excursion, and the verdict rides it out.
+        A certified hold whose error leaves `hold_error_k` for longer than
+        `unsettle_s` -- every reading, not the mean -- stops being settled and
+        needs a full dwell again, while the gains stay on HOLD until
+        `move_error_k`.  Without that a trim or a small disturbance -- neither
+        of which enters MOVE -- would be called settled the moment the error
+        came back inside, which is not "and staying".  Shorter than
+        `unsettle_s` is a reading, not an excursion, and the verdict rides it
+        out; noise centred on the setpoint does not keep fifteen readings in
+        a row outside 50 mK even at 200 K.
         """
         c = self.cfg
         self._t = t
         if ramping or abs(error_k) > c.move_error_k:
-            self._settled_since = self._outside_since = None
-        elif abs(error_k) > c.hold_error_k:
-            if not self.settled:
-                self._settled_since = self._outside_since = None
-            else:
-                if self._outside_since is None:
-                    self._outside_since = t
-                if t - self._outside_since > c.unsettle_s:
-                    self._settled_since = self._outside_since = None
+            self.break_settle()
         else:
-            self._outside_since = None
-            if self._settled_since is None:
-                self._settled_since = t
+            if self._averaged_since is None:
+                self._averaged_since = t
+            self._errors.append((t, error_k))
+            keep = t - max(c.hold_settle_s, c.unsettle_s)
+            while len(self._errors) > 1 and self._errors[1][0] <= keep:
+                self._errors.popleft()
+            if abs(error_k) > c.hold_error_k:
+                if not self._held:
+                    self._settled_since = None
+                else:
+                    if self._outside_since is None:
+                        self._outside_since = t
+                    if t - self._outside_since > c.unsettle_s:
+                        self.break_settle()
+                        self._averaged_since = t
+                        self._errors.append((t, error_k))
+            else:
+                self._outside_since = None
+                if self._settled_since is None:
+                    self._settled_since = t
+            if not self._held:
+                self._held = (self._strict_dwelt(t)
+                              or self._averaged_dwelt(t, kelvin))
         if ramping or abs(error_k) > c.move_error_k:
             self.phase = ControlPhase.MOVE
-        elif self.phase is ControlPhase.MOVE and self._dwelt():
+        elif self.phase is ControlPhase.MOVE and self._held:
             self.phase = ControlPhase.HOLD
         return self.phase
 
-    def _dwelt(self) -> bool:
-        return (self._settled_since is not None and self._t is not None
-                and self._t - self._settled_since >= self.cfg.hold_settle_s)
+    def _strict_dwelt(self, t: float) -> bool:
+        return (self._settled_since is not None
+                and t - self._settled_since >= self.cfg.hold_settle_s)
+
+    def averaged_wait_s(self, kelvin: float) -> float:
+        """How old the dwell must be before the averaged path may certify it."""
+        return max(self.cfg.hold_settle_s, self.schedule.tau_at(kelvin))
+
+    def _averaged_dwelt(self, t: float, kelvin: float | None) -> bool:
+        c = self.cfg
+        if kelvin is None or self._averaged_since is None:
+            return False
+        if t - self._averaged_since < self.averaged_wait_s(kelvin):
+            return False
+        return (abs(self._mean_error(c.unsettle_s)) <= c.hold_error_k
+                and abs(self._mean_error(c.hold_settle_s)) <= c.hold_error_k)
+
+    def _mean_error(self, window_s: float) -> float:
+        """Time-weighted mean error over the last ``window_s`` of the dwell.
+
+        Each reading stands for the interval since the one before it, so a
+        cycle the bus stretched counts for the time it covered.  A dwell with
+        no interval in it yet is its one reading.
+        """
+        t_end = self._errors[-1][0]
+        lo = max(t_end - window_s, self._averaged_since)
+        total = weight = 0.0
+        prev = None
+        for t, e in self._errors:
+            if prev is not None and t > lo:
+                dt = t - max(prev, lo)
+                total += e * dt
+                weight += dt
+            prev = t
+        return total / weight if weight > 0 else self._errors[-1][1]
+
+    @property
+    def settle_error_k(self) -> float | None:
+        """The mean error over the last `hold_settle_s` of the dwell, or None
+        while there is no dwell -- what a status line should show rather than
+        one cycle's error, which at 200 K is mostly noise."""
+        if self._averaged_since is None or not self._errors:
+            return None
+        return self._mean_error(self.cfg.hold_settle_s)
 
     @property
     def settled(self) -> bool:
         """**Can this temperature be trusted for a measurement?**  On the hold
-        gains, and inside `hold_error_k` for a full `hold_settle_s`.  It first
-        comes true on the cycle the gains switch to HOLD -- one clock for both
-        -- and then STAYS true through anything outside the gate shorter than
-        `unsettle_s`, so a measurement started on it can rely on it.
+        gains, and the dwell certified by either path of `update_phase`.  It
+        first comes true on the cycle the gains switch to HOLD -- one clock for
+        both -- and then STAYS true through anything outside the gate shorter
+        than `unsettle_s`, so a measurement started on it can rely on it.
         """
-        return self.phase is ControlPhase.HOLD and self._dwelt()
+        return self.phase is ControlPhase.HOLD and self._held
 
     def break_settle(self) -> None:
         """Restart the dwell, for a cycle nobody can certify: a loop frozen
         over a doubtful reading, disengaged, or not tracking at all."""
         self._settled_since = self._outside_since = None
+        self._averaged_since = None
+        self._errors.clear()
+        self._held = False
 
     def gains_for(self, kelvin: float, phase: ControlPhase | None = None
                   ) -> tuple[float, float]:

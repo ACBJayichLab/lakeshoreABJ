@@ -267,7 +267,8 @@ classdef LSChartRecorder < handle
             %                        trusted for a measurement.  Decided by
             %                        the recorder, once -- tracking, on the
             %                        hold gains, inside hold_error_k for
-            %                        hold_settle_s -- and what
+            %                        hold_settle_s, or its mean inside once
+            %                        settle_wait_s has passed -- and what
             %                        waitUntilSteady() waits on.
             %     phase              hold | move -- which GAIN SCHEDULE is in
             %                        force.  It goes to hold on the cycle
@@ -285,6 +286,10 @@ classdef LSChartRecorder < handle
             %     hold_settle_s      how long it must hold inside it, and
             %     unsettle_s         how long a settled hold may be outside
             %                        it before it stops being settled
+            %     settle_error_k     the mean error over hold_settle_s --
+            %                        what a noisy hold is judged on
+            %     settle_wait_s      how long a noisy hold waits before the
+            %                        mean may settle it, at this temperature
             %
             %   Empty on a recorder with no `control:` section -- a plain
             %   `lschart` install -- which is not an error: that recorder
@@ -747,7 +752,8 @@ classdef LSChartRecorder < handle
                           'phase', '', 'state', '', 'health', '', ...
                           'validity', '', 'alarms', {{}}, 'frozen_s', 0, ...
                           'settled', false, 'hold_error_k', [], ...
-                          'hold_settle_s', []);
+                          'hold_settle_s', [], 'settle_error_k', NaN, ...
+                          'settle_wait_s', NaN);
 
             while true
                 info.waited_s = toc(started);
@@ -793,6 +799,10 @@ classdef LSChartRecorder < handle
                 info.hold_error_k  = obj.fieldOr(c, 'hold_error_k', []);
                 info.hold_settle_s = obj.fieldOr(c, 'hold_settle_s', []);
                 info.settled       = logical(obj.fieldOr(c, 'settled', false));
+                % Absent from a recorder started before 2026-10-23: NaN, and
+                % the message below falls back to the one-cycle error.
+                info.settle_error_k = obj.fieldOr(c, 'settle_error_k', NaN);
+                info.settle_wait_s  = obj.fieldOr(c, 'settle_wait_s', NaN);
 
                 age = obj.ageOf(s);
                 if age > obj.MaxAge
@@ -863,11 +873,23 @@ classdef LSChartRecorder < handle
                 end
 
                 if info.waited_s > timeout_s
-                    info.why = sprintf(['not settled after %.0f s: error ' ...
-                        '%.4f K against %.3f K for %.0f s, output %.3f %% ' ...
-                        '(phase %s). The move may still be arriving.'], ...
-                        info.waited_s, info.error_k, info.hold_error_k, ...
-                        info.hold_settle_s, info.output_pct, info.phase);
+                    if ~isnan(info.settle_error_k)
+                        % The MEAN is what a noisy hold is judged on; one
+                        % cycle's error at 200 K is mostly the thermometer.
+                        info.why = sprintf(['not settled after %.0f s: mean ' ...
+                            'error %.4f K over %.0f s against %.3f K (a ' ...
+                            'noisy hold may take %.0f s), output %.3f %% ' ...
+                            '(phase %s). The move may still be arriving.'], ...
+                            info.waited_s, info.settle_error_k, ...
+                            info.hold_settle_s, info.hold_error_k, ...
+                            info.settle_wait_s, info.output_pct, info.phase);
+                    else
+                        info.why = sprintf(['not settled after %.0f s: error ' ...
+                            '%.4f K against %.3f K for %.0f s, output %.3f %% ' ...
+                            '(phase %s). The move may still be arriving.'], ...
+                            info.waited_s, info.error_k, info.hold_error_k, ...
+                            info.hold_settle_s, info.output_pct, info.phase);
+                    end
                     break
                 end
                 % Never slower than the recorder writes, so a verdict that

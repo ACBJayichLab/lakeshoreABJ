@@ -491,11 +491,18 @@ class StatusWriter:
             # **THE SETTLED VERDICT**, and the one field a client waits on:
             # can this temperature be trusted for a measurement.  Computed once,
             # in the supervisor -- TRACKING, the gain schedule on `hold`, and
-            # the error inside `hold_error_k` this cycle -- so it first comes
-            # true on the cycle the gains switch.  Every client reads it rather
-            # than counting a dwell of its own.  False, not absent, from a
-            # controller that has no opinion: nothing certified it.
+            # the dwell certified -- so it first comes true on the cycle the
+            # gains switch.  Every client reads it rather than counting a dwell
+            # of its own.  False, not absent, from a controller that has no
+            # opinion: nothing certified it.
             "settled": bool(getattr(status, "settled", False)),
+            # The mean error over the dwell, which on a noisy hold is what the
+            # verdict is judged on, and how long a noisy hold may take to be
+            # judged at all.  So a client that gives up can say why in
+            # numbers that mean something -- one cycle's `error_k` at 200 K is
+            # mostly the thermometer.
+            "settle_error_k": _num(getattr(status, "settle_error_k", None)),
+            "settle_wait_s": _num(getattr(status, "settle_wait_s", None)),
             # WHAT THE LOOP IS ACTING ON, which is not what the chart draws.
             # The error is computed from the filtered value, so without it
             # "why is the error not what I get off the trace" has no answer.

@@ -363,6 +363,9 @@ control:
     move_error_k: 0.40
     hold_error_k: 0.05            # JEFF'S SETTLE GATE: within 50 mK and staying
     hold_settle_s: 120.0          # ...for this long, and then `settled` is true
+    # (or, where the Sample is too noisy for 120 clean seconds -- 200 K -- the
+    # MEAN inside it, once a plant tau(T) has passed: `Tuner.update_phase`,
+    # requirements.md 1e)
     # ...and a settled hold stops being settled only after this long outside
     # the gate.  One Sample reading a quantum past 50 mK is not the cryostat
     # leaving it: `tuning.py` has the replay over the real holds behind it.
