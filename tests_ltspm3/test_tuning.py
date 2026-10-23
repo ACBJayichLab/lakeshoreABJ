@@ -244,6 +244,102 @@ def test_break_settle_restarts_the_dwell():
     assert t.phase is ControlPhase.HOLD
 
 
+# -- the averaged path: a thermometer too noisy for the strict dwell ----------
+
+def _armed_tuner():
+    """The shipped gate: 50 mK, 120 s, 30 s (config-ltspm3-armed.yaml)."""
+    return Tuner(TuningConfig(move_error_k=0.40, hold_error_k=0.05,
+                              hold_settle_s=120.0, unsettle_s=30.0))
+
+
+def _feed(t, errors, *, start=0.0, dt=2.0, kelvin=200.0):
+    """One error per cycle; the time after the last one, and `settled` on
+    every cycle."""
+    verdicts = []
+    now = start
+    for e in errors:
+        t.update_phase(now, error_k=e, ramping=False, kelvin=kelvin)
+        verdicts.append(t.settled)
+        now += dt
+    return now, verdicts
+
+
+def test_the_noise_at_200_k_settles_one_plant_tau_after_the_dwell_starts():
+    """Scan86, 2026-10-23: 26-41 mK of filtered noise against the 50 mK
+    gate, so sixty clean readings in a row never came and the loop sat at
+    setpoint on the MOVE gains for an hour.  The mean settles it -- after one
+    `tau(T)`, because a mean cannot see a slow tail under this much noise and
+    settling is also the switch to the gentler gains."""
+    import random
+    rng = random.Random(86)
+    t = _armed_tuner()
+    tau = t.schedule.tau_at(200.0)
+    t.update_phase(0.0, error_k=1.0, ramping=False, kelvin=200.0)   # arriving
+    now, first, after = 2.0, None, []
+    while now < 3600.0:
+        t.update_phase(now, error_k=rng.gauss(0.0, 0.035), ramping=False,
+                       kelvin=200.0)
+        if t.settled and first is None:
+            first = now
+        if first is not None:
+            after.append(t.settled)
+        now += rng.uniform(1.6, 2.6)                          # the bus jitters
+    assert first is not None and tau <= first < tau + 60.0, (first, tau)
+    assert all(after), "a settled hold at 200 K fell over on noise"
+    assert t.phase is ControlPhase.HOLD
+
+
+def test_without_a_temperature_only_the_strict_path_certifies():
+    """`kelvin` is how the averaged path knows how long a tail lasts; a
+    caller that cannot say gets the rule as it was."""
+    import random
+    rng = random.Random(86)
+    t = _armed_tuner()
+    _, v = _feed(t, [rng.gauss(0.0, 0.035) for _ in range(1800)], kelvin=None)
+    assert not any(v)
+
+
+def test_an_offset_past_the_gate_never_settles_however_noisy():
+    """80 mK under 35 mK of noise: the 120 s mean is good to about 5 mK, so
+    this is past the gate by six of those.  An offset within a few mK of the
+    gate is a coin toss under this much noise, and no rule can say otherwise."""
+    import random
+    rng = random.Random(7)
+    t = _armed_tuner()
+    _, v = _feed(t, [0.08 + rng.gauss(0.0, 0.035) for _ in range(1800)])
+    assert not any(v)
+    t = _armed_tuner()
+    _, v = _feed(t, [0.04 + rng.gauss(0.0, 0.01) for _ in range(400)])
+    assert v[-1], "an offset inside the gate is settled"
+
+
+def test_a_recent_excursion_blocks_the_averaged_path():
+    """The `unsettle_s` mean is the "and staying": a minute at 60 mK at the
+    end of the dwell is 30 mK over the last two minutes, and not settled.
+    Alternating 60 mK readings beforehand: mean nil, and never sixty clean
+    in a row, so the strict path cannot be what answers."""
+    t = _armed_tuner()
+    now, _ = _feed(t, [0.06, -0.06] * 140)
+    _, v = _feed(t, [0.06] * 60, start=now)
+    assert not any(v)
+
+
+def test_the_averaged_path_restarts_on_an_error_past_the_move_gate():
+    t = _armed_tuner()
+    now, _ = _feed(t, [0.06, 0.0] * 150)                    # strict never
+    now, _ = _feed(t, [0.5], start=now)                     # past move_error_k
+    _, v = _feed(t, [0.06, 0.0] * 150, start=now)
+    assert not any(v), "the dwell before the move error still counted"
+
+
+def test_the_mean_is_time_weighted():
+    """A cycle the bus stretched covers more time, and counts for it."""
+    t = _armed_tuner()
+    for tt, e in ((0.0, 0.0), (2.0, 0.0), (12.0, 0.03), (14.0, 0.0)):
+        t.update_phase(tt, error_k=e, ramping=False, kelvin=200.0)
+    assert t.settle_error_k == pytest.approx(0.03 * 10.0 / 14.0)
+
+
 # -- bumpless retuning ------------------------------------------------------
 
 def test_changing_gains_does_not_step_the_output():

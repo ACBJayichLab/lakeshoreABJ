@@ -1479,7 +1479,8 @@ class HeaterSupervisor:
         # status publishes.
         was = self.tuner.phase
         phase = self.tuner.update_phase(
-            t, error_k=self.pid.cfg.setpoint - s.filtered_k, ramping=s.ramping)
+            t, error_k=self.pid.cfg.setpoint - s.filtered_k, ramping=s.ramping,
+            kelvin=s.filtered_k)
 
         # Retune for where we are and what we are doing.  Both the gain and the
         # time constant of a weakly-pinned island change with temperature, so a
