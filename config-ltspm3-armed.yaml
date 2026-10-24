@@ -369,6 +369,9 @@ control:
     # ...and a settled hold stops being settled only after this long outside
     # the gate.  One Sample reading a quantum past 50 mK is not the cryostat
     # leaving it: `tuning.py` has the replay over the real holds behind it.
+    # A hold settled on the MEAN stops being settled when the mean does, not
+    # on this: at 220 K the reading wanders past 50 mK for 30 s about once an
+    # hour while the sample does not.
     unsettle_s: 30.0
     # A GUARD, never the thing that sets a gain.  At tau_cl on the floor the
     # schedule asks up to 3.37 %/K at the warm end, and the 1.0 default was

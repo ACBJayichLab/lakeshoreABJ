@@ -168,7 +168,8 @@ trajectory has arrived, and the error has been inside `hold_error_k` for
 `hold_settle_s` (or, where the thermometer is too noisy for that — 200 K — its
 mean has, once `settle_wait_s` has passed; `info.settle_error_k` is that mean
 and is what a `no_settle` message quotes), and once true it stays true through anything shorter than
-`unsettle_s` outside the band — so a measurement of many minutes started on it
+`unsettle_s` outside the band (or, settled on the mean, until the mean leaves
+it) — so a measurement of many minutes started on it
 can rely on it. MATLAB counts nothing of its own, and the viewer shows the
 same field, so the two cannot disagree. It is also the moment the loop's gains
 switch to hold. The rule behind it comes back in `info`, so a script can log

@@ -156,7 +156,9 @@ It is the same clock that switches the gains, so `settled` and
 `phase: hold` first appear on the same cycle. After that they come apart on
 purpose. `settled` goes false once the error has been outside the band for
 `unsettle_s` — one noisy reading does not clear it, so a measurement lasting
-many minutes can start on it and rely on it staying true — and then needs a
+many minutes can start on it and rely on it staying true; a hold certified on
+the mean goes false only when the mean over `hold_settle_s` leaves the band —
+and then needs a
 full dwell to come back. The gains stay on `hold` until the error passes
 `move_error_k`, because retuning on every small excursion is worse than either
 tuning. A frozen or disengaged loop is never settled.
