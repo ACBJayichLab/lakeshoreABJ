@@ -332,6 +332,43 @@ def test_the_averaged_path_restarts_on_an_error_past_the_move_gate():
     assert not any(v), "the dwell before the move error still counted"
 
 
+def _settled_on_the_mean():
+    """Certified by the averaged path: alternating 60 mK readings, mean nil,
+    never sixty clean in a row."""
+    t = _armed_tuner()
+    now, v = _feed(t, [0.06, -0.06] * 320)
+    assert v[-1] and t._held_on_mean
+    return t, now
+
+
+def test_a_hold_settled_on_the_mean_rides_out_the_thermometers_wander():
+    """220 K, 2026-10-01: every one of 20 drop-outs in 15 h was the 30 s mean
+    of the reading swinging 60-100 mK while the 2 min mean sat inside 30 mK --
+    and the plant's own tau there is ten minutes, so the sample cannot have
+    gone 80 mK and back in a minute.  A hold certified on the mean is
+    judged on the mean: a minute at 80 mK in a two-minute window is 40."""
+    t, now = _settled_on_the_mean()
+    _, v = _feed(t, [0.08] * 30 + [0.0] * 30, start=now)
+    assert all(v), "a minute of thermometer wander unsettled a mean-certified hold"
+
+
+def test_a_hold_settled_on_the_mean_leaves_when_the_mean_does():
+    t, now = _settled_on_the_mean()
+    _, v = _feed(t, [0.07] * 60, start=now)
+    assert not v[-1], "a two-minute mean of 70 mK is out of the gate"
+
+
+def test_a_hold_settled_strictly_keeps_the_strict_exit():
+    """The one real excursion on the logs, 54 s at up to 80 mK at 120 K, was
+    on a quiet thermometer: the strict path certified it and the strict exit
+    still catches it, though its two-minute mean is inside the gate."""
+    t = _armed_tuner()
+    now, v = _feed(t, [0.0] * 70)
+    assert v[-1] and not t._held_on_mean
+    _, v = _feed(t, [0.07] * 27, start=now)
+    assert not v[-1]
+
+
 def test_the_mean_is_time_weighted():
     """A cycle the bus stretched covers more time, and counts for it."""
     t = _armed_tuner()
