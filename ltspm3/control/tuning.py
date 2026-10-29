@@ -167,7 +167,8 @@ class TuningConfig:
     hold_error_k: float = 0.10
     hold_settle_s: float = 120.0
     #: **How long a settled hold may be outside `hold_error_k` before it stops
-    #: being settled.**  A measurement lasting many minutes starts on
+    #: being settled** -- one certified on every reading; one certified on the
+    #: mean stops when the mean does.  A measurement lasting many minutes starts on
     #: `settled` and must be able to rely on it staying true, and a flag that
     #: falls over on one noisy reading cannot be relied on.  Replayed over
     #: every armed hold 2026-09-18..23 (122 h), a flag that dropped on any
@@ -360,8 +361,12 @@ class Tuner:
         #: interval inside the window.
         self._errors: deque[tuple[float, float]] = deque()
         #: Whether the dwell has been certified, by either path.  Latched:
-        #: only `unsettle_s` outside the gate, or a restart, clears it.
+        #: only leaving the gate by the certifying path's own test, or a
+        #: restart, clears it.
         self._held = False
+        #: Whether it was the AVERAGED path that certified it -- and so the
+        #: mean, not the readings, that decides when it stops.
+        self._held_on_mean = False
         self._t: float | None = None
         #: The loop's pure delay, in seconds.  **Set by the supervisor from the
         #: filter chain and the measured cadence** -- see
@@ -429,15 +434,20 @@ class Tuner:
         A ramp, an error past `move_error_k` or `break_settle` restarts both.
 
         **The dwell keeps counting in HOLD**, because it is also `settled`.
-        A certified hold whose error leaves `hold_error_k` for longer than
-        `unsettle_s` -- every reading, not the mean -- stops being settled and
-        needs a full dwell again, while the gains stay on HOLD until
-        `move_error_k`.  Without that a trim or a small disturbance -- neither
-        of which enters MOVE -- would be called settled the moment the error
-        came back inside, which is not "and staying".  Shorter than
-        `unsettle_s` is a reading, not an excursion, and the verdict rides it
-        out; noise centred on the setpoint does not keep fifteen readings in
-        a row outside 50 mK even at 200 K.
+        A certified hold stops being settled by the test of the path that
+        certified it, and then needs a full dwell again, while the gains stay
+        on HOLD until `move_error_k`.  Without that a trim or a small
+        disturbance -- neither of which enters MOVE -- would be called settled
+        the moment the error came back inside, which is not "and staying".
+
+        * Certified strictly: every reading outside `hold_error_k` for longer
+          than `unsettle_s`.  Shorter is a reading, not an excursion.
+        * Certified on the mean: the mean over `hold_settle_s` outside it.
+          The per-reading exit dropped 220 K 20 times in 15 h (2026-10-01),
+          every one the 30 s mean of the READING swinging 60-100 mK while the
+          two-minute mean sat inside 30 mK -- and with `tau` ten minutes
+          there, the sample cannot go 80 mK and back in a minute.  A hold the
+          readings were too noisy to certify is too noisy to un-certify.
         """
         c = self.cfg
         self._t = t
@@ -453,20 +463,27 @@ class Tuner:
             if abs(error_k) > c.hold_error_k:
                 if not self._held:
                     self._settled_since = None
-                else:
-                    if self._outside_since is None:
-                        self._outside_since = t
-                    if t - self._outside_since > c.unsettle_s:
-                        self.break_settle()
-                        self._averaged_since = t
-                        self._errors.append((t, error_k))
+                elif self._outside_since is None:
+                    self._outside_since = t
             else:
                 self._outside_since = None
                 if self._settled_since is None:
                     self._settled_since = t
-            if not self._held:
-                self._held = (self._strict_dwelt(t)
-                              or self._averaged_dwelt(t, kelvin))
+            if self._held:
+                if self._held_on_mean:
+                    left = abs(self._mean_error(c.hold_settle_s)) > c.hold_error_k
+                else:
+                    left = (self._outside_since is not None
+                            and t - self._outside_since > c.unsettle_s)
+                if left:
+                    self.break_settle()
+                    self._averaged_since = t
+                    self._errors.append((t, error_k))
+            else:
+                if self._strict_dwelt(t):
+                    self._held, self._held_on_mean = True, False
+                elif self._averaged_dwelt(t, kelvin):
+                    self._held, self._held_on_mean = True, True
         if ramping or abs(error_k) > c.move_error_k:
             self.phase = ControlPhase.MOVE
         elif self.phase is ControlPhase.MOVE and self._held:
@@ -523,8 +540,8 @@ class Tuner:
         """**Can this temperature be trusted for a measurement?**  On the hold
         gains, and the dwell certified by either path of `update_phase`.  It
         first comes true on the cycle the gains switch to HOLD -- one clock for
-        both -- and then STAYS true through anything outside the gate shorter
-        than `unsettle_s`, so a measurement started on it can rely on it.
+        both -- and then STAYS true until the certifying path's own test says
+        it has left the gate, so a measurement started on it can rely on it.
         """
         return self.phase is ControlPhase.HOLD and self._held
 
@@ -534,7 +551,7 @@ class Tuner:
         self._settled_since = self._outside_since = None
         self._averaged_since = None
         self._errors.clear()
-        self._held = False
+        self._held = self._held_on_mean = False
 
     def gains_for(self, kelvin: float, phase: ControlPhase | None = None
                   ) -> tuple[float, float]:

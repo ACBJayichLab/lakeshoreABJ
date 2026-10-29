@@ -285,7 +285,9 @@ classdef LSChartRecorder < handle
             %     hold_error_k       the rule behind `settled`, in kelvin,
             %     hold_settle_s      how long it must hold inside it, and
             %     unsettle_s         how long a settled hold may be outside
-            %                        it before it stops being settled
+            %                        it before it stops being settled (one
+            %                        settled on the mean stops when the
+            %                        mean leaves it)
             %     settle_error_k     the mean error over hold_settle_s --
             %                        what a noisy hold is judged on
             %     settle_wait_s      how long a noisy hold waits before the

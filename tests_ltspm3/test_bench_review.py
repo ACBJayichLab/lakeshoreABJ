@@ -104,14 +104,47 @@ def test_a_heater_that_stops_delivering_faults_at_either_date(kelvin, wall_t0, f
     stopped adding up, and the loop cannot make the power back because
     restoring it needs `1/sqrt(frac)` of the output against a band one percent
     wide.
+
+    **The loss comes after five minutes of hold, not at arming** (2026-10-29,
+    with the loop's `fault_mw` at 15).  A step is a RANGE against what came
+    before, and `armed()` hands over a loop whose step history is empty: the
+    residual has no opinion for a slope-age after arming and the step test
+    waits one slope window more, so a loss in that gap is first seen by the
+    window already 8 mW in, and a 19.8 mW loss reads as a 12 mW step.  At the
+    10 mW floor that still faulted and was 4a-viii's probe for the wait; at 15
+    it does not, and it is not the cryostat's case -- a heater fails during a
+    hold with hours of reference behind it.  The at-arming case keeps its own
+    test below.
     """
     h = armed(kelvin, wall_t0=DRIFT_T0_UNIX + wall_t0)
+    h.minutes(5)
     h.deliver(frac)
     cfg = h.sup.cfg
     assert run_until_fault(h, cfg.fault_window_s + cfg.fault_after_s), (
         f"a {100 * (1 - frac):.0f} % power loss at {kelvin} K never faulted")
     assert any("stepped" in a or "authority exhausted" in a
                for x in h.history[-40:] for a in x.alarms)
+
+
+@pytest.mark.parametrize("kelvin", WATT_TEMPERATURES)
+def test_a_loss_in_the_first_half_minute_after_arming_is_still_warned(kelvin):
+    """**A 3 % loss 20 s after arming**, the case the row above no longer
+    grades as a step fault at `fault_mw: 15`.
+
+    The step test has nothing to range it against yet, and 15 mW is above
+    what the contaminated reference leaves of it.  What catches it is the
+    LEVEL row: the residual sits 17-25 mW out against a settled band of 1.5,
+    and that warning does not wait for a reference.  A 12 % loss at arming
+    still step-faults (the row above at 0.88 passed with the hold removed),
+    because 54-93 mW is far past anything the gap can hide.
+    """
+    h = armed(kelvin, wall_t0=DRIFT_T0_UNIX)
+    h.step(10)
+    h.deliver(0.97)
+    h.minutes(2)
+    warned = [s for s in h.history if any("missing power" in a for a in s.alarms)]
+    assert warned, f"a 3 % loss at arming raised no level warning at {kelvin} K"
+    assert warned[0].t - h.history[-60].t < 120.0
 
 
 # -- 3R.2, CRASHED survives an idle cycle -----------------------------------

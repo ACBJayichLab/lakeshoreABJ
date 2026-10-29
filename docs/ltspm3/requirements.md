@@ -178,6 +178,12 @@ is a second way to settle, for a thermometer too noisy for the first, and it
 waits one plant time constant `tau(T)` first, so the slow tail has gone before
 the gains change. PID_PLAN.md 4a-ix has the measurements.
 
+Later the same day he asked to **"update the rules to allow for 220 K
+operation"**: at 220 K `settled`, once given, dropped out about once an hour
+on the thermometer's own wander. So a hold settled on the mean now also
+*stops* being settled on the mean (PID_PLAN.md 4a-x). A hold settled on every
+reading keeps the per-reading exit.
+
 ## 2. What was taken from them
 
 | | requirement | how it is graded |

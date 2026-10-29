@@ -354,7 +354,8 @@ class SupervisorStatus:
     #: the error inside `tuning.hold_error_k` for `hold_settle_s`, or its mean
     #: inside once `settle_wait_s` has passed.  It first comes true on the
     #: cycle the gains switch, and goes false after `unsettle_s` outside the
-    #: gate, while the gains stay on HOLD until `move_error_k`.
+    #: gate (or, certified on the mean, when the mean leaves it), while the
+    #: gains stay on HOLD until `move_error_k`.
     settled: bool = False
     #: The mean error over the last `hold_settle_s` -- what the averaged path
     #: judges, and what to quote when it is not settled; one cycle's error at

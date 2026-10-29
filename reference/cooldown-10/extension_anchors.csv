@@ -1,0 +1,5 @@
+date,u_pct,t_inf_k,t_inf_err_k,tau_s,tau_err_s,tc_k,note
+2026-09-30,72.445,225.3,1.0,,,7.070,"Hand step, recorder idle, 20:37:38-20:58:00: 20 min and not from rest (a one-minute 81 % boost and 72.25/72.50 doublets before it). An exponential fit bounds the level only loosely with tau anywhere 400-1600 s, so tau is blank; the bar was 0.2 K until the 13 h closed-loop hold at 220 K disagreed with it by a kelvin (2026-10-29). Coldplate: mean of the last 10 min"
+2026-09-30,73.443,236.89,0.05,603,,7.123,"Hand step, recorder idle, 20:58:02-21:42:49, 45 min untouched; exponential approach, whole window and last half agreeing. Coldplate: mean of the last 10 min"
+2026-09-30,74.496,249.1,0.05,609,,7.180,"Hand step, recorder idle, 21:42:50-22:35:13, 52 min untouched, the loop re-armed at 22:35 on 250 K. Exponential approach as above. Coldplate: mean of the last 10 min"
+2026-10-01,72.091,220.00,0.05,,,7.055,"Closed-loop hold 10:35-23:59 (eseem5mT_220K and T1_5mT_220K), 13.4 h, settled 93 % of it: the temperature is the setpoint and the output is the mean heater_pct over the hold (sd 0.064 %). No step, so no tau. Coldplate: mean over the hold"
