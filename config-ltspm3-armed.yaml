@@ -189,7 +189,18 @@ control:
                                   # Below min_output_pct it is the only check
                                   # there is, which is why it is not optional.
     warn_sigma: 3.0               # sigma_q_w from the model
-    fault_mw: 10.0                # Jeff, 2026-09-14.  A FLOOR under 3 sigma...
+    # Jeff, 2026-09-14: 10, as A FLOOR under 3 sigma.  15 since 2026-10-29,
+    # Jeff again: the LANDING of a 10 K/min move swings the averaged residual
+    # 9-11 mW against the hold before it (every landing above ~180 K in the
+    # log, and the 10-28 fault), which is the sample's own response to the
+    # heater cut and not a change in the circuit.  The losses the loop is
+    # graded on are 17 mW and up (a 3 % loss at 60 K), and the monitor's own
+    # floor below stays at 10 so a 10-15 mW step at a hold is still REPORTED,
+    # just not acted on.  What 15 gives up on the bench: a 3 % loss in the
+    # first half minute AFTER ARMING, before the step test has a reference,
+    # is warned (the level row, at once) and no longer step-faulted; a loss
+    # at a hold is caught as before.  PID_PLAN.md 4a-xi.
+    fault_mw: 15.0
     fault_window_s: 1800.0        # ...and a STEP within half an hour, not a
                                   # level: a change in delivered power lands in
                                   # the residual immediately, and anything that
@@ -413,7 +424,10 @@ control:
 monitor:
   enabled: true
   warn_mw: 5.0                    # Jeff, 2026-09-14, as a FLOOR under 3 sigma
-  fault_mw: 10.0                  # ...and a STEP inside fault_window_s
+  fault_mw: 10.0                  # ...and a STEP inside fault_window_s.  Still
+                                  # 10 where the loop's went to 15: the judge
+                                  # never sees a move (its transient gate),
+                                  # and reports what the loop no longer acts on
   fault_window_s: 1800.0
   warn_after_s: 600.0             # long enough that a settling transient is
                                   # not an alarm.  plans/pid-2-monitor.md
