@@ -295,9 +295,55 @@ relaxation that was not started from rest fits τ anywhere from 400 to 1600 s
 with the same residual, which is [the rule below](#how-long-to-hold-a-step--and-why-r-will-not-tell-you)
 seen live. Its level is bounded to 0.2 K whatever τ is assumed.
 
+**Two closed-loop holds confirm it, 2026-10-01.** The next day the loop held
+220 K for 13 h and 250 K for 10 h (the `eseem5mT_220K`, `T1_5mT_220K` and
+`chk4_250K` measurements), and a settled closed-loop hold is an anchor too:
+the setpoint is the temperature and the mean output over the hold is what
+holds it.
+
+| output (mean) | held | extended curve | residual |
+|---|---|---|---|
+| 72.091 % (sd 0.064) | 220.00 K, 13.4 h | 220.49 K | **+0.49 K** |
+| 74.550 % (sd 0.14) | 250.00 K, 10.2 h | 249.81 K | −0.19 K |
+
+The 250 K hold lands on the 249.1 K rung to two tenths of a kelvin. The
+220 K hold and the 225.3 K rung disagree by a kelvin over five, which one
+quadratic term cannot bend to, and it is the rung that gives: 20 minutes
+not from rest, after a one-minute 81 % boost and two doublets, is exactly
+the window [the rule below](#how-long-to-hold-a-step--and-why-r-will-not-tell-you)
+says cannot bound a level to 0.2 K. **The 220 K hold is the fourth row of
+the anchors file** and that rung's bar is 1.0 K now; `b` moves from 1.010 to
+1.067 µW/K², the table's top stays 249.1 K, and between 200 and 250 K the
+model's level is good to about **half a kelvin** — the loop, which holds the
+setpoint and not the model, does not care.
+
+**The 250 K hold is deliberately not a row**, although it would move the top
+to 250.0 K. A hold at the table's very top is half in and half out of it —
+the residual's opinion flickers with every 60 mK of thermometer noise, and
+the step history with it — and with that hold *inside*, the 10-01 reversal
+(250 → 145 → 220 K) replayed through the shipped supervisor freezes the heater
+for 18 s at the 220 K landing on the step test's thin landing margin
+([PID_PLAN.md](../../PID_PLAN.md) 4a-xi). So the rule for a rung: **put it
+above the highest temperature you intend to hold.** The 250 K hold stays here
+as the confirmation it is.
+
+**The anchors file was reconstructed on 2026-10-29.** `*.csv` is gitignored
+and the file never reached the tree, so the generated table could not be
+regenerated from a fresh clone. The three 09-30 rungs were re-read from the
+recorder's own log (`ltspm3-armed_2026-09-30.csv`, 20:37–22:35, open loop
+with the recorder idle); the file's rows reproduce the shipped `b`, τ and
+every `q`/`slope`/`cap` value exactly before the fourth row was added, and
+only the extension's coldplate column moved, by up to 2.6 mK, because the
+original coldplate averages were not recoverable. The shipped table froze
+609 s for the top rung's τ where the table above says 625 ± 30; the file
+carries 609. The windows and the averaging rule are in each row's note.
+
 Above 249 K the table clamps as before and the supervisor's
 `authority_beyond_table_pct_per_k` is what lets a setpoint be chased there;
-the next rung, held 40 min untouched, is one more row in the anchors file.
+the next rung — a hand step held 40 min untouched, or a closed-loop hold
+settled for an hour, placed above the temperatures that will be held — is
+one more row in the anchors file, and `python analysis/extend_table.py`
+rewrites the table.
 
 ## The consequence that shapes the whole design
 

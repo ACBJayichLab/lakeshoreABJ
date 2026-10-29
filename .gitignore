@@ -44,3 +44,8 @@ analysis/steps*.csv
 
 # The ODE fit cache -- derived, keyed on a digest of its inputs
 analysis/.fit_cache/
+
+# ...and the extension anchors are an INDEX too: the settled rungs above the
+# fit that analysis/extend_table.py carries the shipped table to.  Reviewed as
+# a diff; without it the table cannot be regenerated.
+!reference/cooldown-10/extension_anchors.csv
