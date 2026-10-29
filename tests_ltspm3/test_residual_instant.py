@@ -304,11 +304,14 @@ OCT01_AS_SENT = [
     ("arm", "2026-10-01T10:14:23.956", None),
     ("setpoint", "2026-10-01T10:14:44.193", 220.0),
 ]
+OCT28 = "2026-10-28_170_to_185"
 #: (fixture event, armed at, commands)
 EVENTS = [
     (OCT01, 250.0, OCT01_AS_SENT),
     ("2026-09-30_150_to_155", 150.0,
      [("setpoint", "2026-09-30T13:36:35.000", 155.0)]),
+    # Scan93's first rung, from the Notes column's `[matlab]` line.
+    (OCT28, 170.0, [("setpoint", "2026-10-28T15:07:31.016", 185.0)]),
 ]
 
 
@@ -372,3 +375,31 @@ def test_a_reversal_inside_one_unbroken_history_does_not_fault(caplog):
     out = replay(OCT01, arm_k=250.0, commands=straight)
     assert_quiet(out)
     assert max(st.dq_step_w for _, st in out) < 0.010
+
+
+def test_a_landing_corner_is_not_held_as_a_step_for_half_an_hour(caplog):
+    """**2026-10-28 15:11, 170 -> 185 K at 10 K/min**, the third fault on
+    the cryostat, and the first that was not about the onset.
+
+    The landing averaged +5.90 mW at 15:09:43 against a hold at -3 mW, and
+    the sag after it -4.35 mW at 15:11:48.  The RANGE of those two was 10.04
+    then 10.25 mW, past the 10 mW floor because the fast band collapses with
+    dT/dt at exactly the cycles a landing's corner is worst; and since a range
+    holds its extremes for the whole window, `fault_after_s` could not filter
+    it.  Replayed before the change this faults at 15:11:43, the second the
+    cryostat did.  The monitor's settled residual is -3 mW from 125 to 220 K,
+    so nothing about the plant stepped.
+
+    The landing is not `holding` -- the smoother arrives at 15:13:51 -- so its
+    samples are judged as they come and never kept.
+    """
+    caplog.set_level(logging.ERROR)
+    out = replay(OCT28, arm_k=170.0, commands=EVENTS[-1][2])
+    assert_quiet(out)
+    peak_dt, peak = max(((dt, st.dq_step_w) for dt, st in out), key=lambda x: x[1])
+    assert peak < 0.010, f"{1e3 * peak:.2f} mW at +{peak_dt:.0f} s"
+    # **AND IT CAME BACK DOWN.**  Kept, the corner held the range up for the
+    # whole window; this is what a range made only of still samples buys.
+    late = [st.dq_step_w for dt, st in out if dt >= peak_dt + 120.0]
+    assert late and max(late) < 0.5 * peak, (
+        f"{1e3 * max(late):.2f} mW two minutes after a {1e3 * peak:.2f} mW peak")
