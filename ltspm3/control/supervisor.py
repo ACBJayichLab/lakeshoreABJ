@@ -343,7 +343,8 @@ class SupervisorStatus:
     #: as typical -- `residual_reason` says which.
     missing_power_w: float | None = None
     sigma_q_w: float = 0.0
-    #: The range of the residual over `fault_window_s`.  A fault is a STEP.
+    #: The range of the residual over `fault_window_s`: every sample taken
+    #: while the setpoint was still, and this cycle's.  A fault is a STEP.
     dq_step_w: float = 0.0
     residual_reason: str = ""
     phase: str = "hold"
@@ -1786,12 +1787,40 @@ class HeaterSupervisor:
             self._dq_slow += alpha * (dq - self._dq_slow)
         if t - self._dq_since < self.filter.slope.window * (self._cadence_s or 0.0):
             return
-        self._dq_hist.append((t, self._dq_slow, fast))
+        # **A SAMPLE TAKEN WHILE THE SETPOINT MOVES IS JUDGED AND NOT KEPT.**
+        #
+        # The range is the monitor's statistic, and it is right there: the
+        # monitor has no opinion through a transient, so nothing it ranges over
+        # is a move.  This loop keeps its opinion through every move, and a
+        # move's corner -- the regression's own curvature, which a minute's
+        # average shrinks but does not remove -- then stood in the window as an
+        # extreme for half an hour.  Nothing the 180 s of `fault_after_s` could
+        # filter: once the corner was an extreme the range stayed tripped.
+        #
+        # 2026-10-28 15:11, 170 -> 185 K at 10 K/min: the landing averaged
+        # +5.90 mW against a hold at -3, the sag after it -4.35, and the range
+        # of those two was 10.25 mW -- a fault, a ramp-down to 0 % and a sample
+        # at 5 K, on a residual whose settled level is -3 mW from 125 to 220 K.
+        #
+        # So the window keeps only what was measured while the setpoint was
+        # NOT moving -- `holding`, the trajectory gate the kelvin rows use --
+        # and a moving sample is judged as NOW against it and then let go.  A
+        # heater that stops delivering mid-move is still called, because NOW
+        # is in the move and the hold before it is still in the window; and a
+        # loss at a hold, at arming included, is the range it always was.
+        # What a move's corner can no longer do is outlive the cycle it was
+        # measured on.
+        self._dq_hist.append((t, self._dq_slow, fast, holding))
         floor_t = t - cfg.fault_window_s
         while len(self._dq_hist) > 1 and self._dq_hist[0][0] < floor_t:
             self._dq_hist.popleft()
-        hi = max(self._dq_hist, key=lambda x: x[1])
-        lo = min(self._dq_hist, key=lambda x: x[1])
+        now = self._dq_hist[-1]
+        if not holding:
+            self._dq_hist.pop()
+        kept = [x for x in self._dq_hist if x[3]]
+        kept.append(now)
+        hi = max(kept, key=lambda x: x[1])
+        lo = min(kept, key=lambda x: x[1])
         step = hi[1] - lo[1]
         s.dq_step_w = step
         # A FLOOR UNDER THE BAND, not a replacement for it: at a settled hold
@@ -1804,23 +1833,17 @@ class HeaterSupervisor:
         # quadrature the way the uncertainty on a difference is, rather than
         # the widest band anywhere in the window.
         #
-        # The widest-anywhere form had the right instinct -- evaluated at this
-        # instant, a window containing a sweep gets judged against the settled
-        # band and faults on motion that was inside the band the whole time it
-        # was moving -- and the wrong reach.  It let ONE transient anywhere in
-        # half an hour raise the threshold for the whole half hour, including
-        # for samples taken long after the cryostat went quiet.  With
-        # `slope_lag` in the band that stopped being theoretical: a 3 % power
-        # loss at 100 K, an unmistakable 20 mW fault, went undetected for
-        # 1976 s -- the exact moment the window rolled past the transient the
-        # loss itself had caused.  Asking at the extremes keeps the sweep
-        # protection, because during a sweep the extremes ARE in the sweep.
+        # The widest-anywhere form let ONE transient anywhere in half an hour
+        # raise the threshold for the whole half hour: a 3 % power loss at
+        # 100 K, an unmistakable 20 mW fault, went undetected for 1976 s --
+        # the moment the window rolled past the transient the loss itself had
+        # caused.  Asking at the extremes keeps the sweep protection, because
+        # during a sweep NOW is one of them.
         #
-        # It was still not enough while `slope_lag` was in this band: the
-        # high sample was often an onset's, so the reach was a move's instead
-        # of a half hour's.  Since the residual is taken at the slope's
-        # instant the step band carries no `slope_lag` at all -- see
-        # `_missing_power`.
+        # The step band carries no `slope_lag`: the residual is taken at the
+        # slope's instant -- see `_missing_power` -- and the band at a corner
+        # sample used to stick in the window as an extreme and hide a 12 %
+        # heater loss.  A corner is not kept now either.
         widest = math.hypot(hi[2], lo[2])
         fault_at = max(cfg.fault_mw * 1e-3, cfg.warn_sigma * widest)
         if step >= fault_at:

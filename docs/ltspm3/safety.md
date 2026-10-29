@@ -38,7 +38,13 @@ correct aggressively.
      after a move's onset and hid a 12 % heater loss for minutes. It judges an
      **averaged** residual, and judges nothing until that average spans one
      slope window, because an average seeded from one raw cycle made a move's
-     corner into a half-hour reference;
+     corner into a half-hour reference. **The window keeps only samples taken
+     while the setpoint is not moving** (2026-10-29); a moving one is judged
+     as this cycle's and let go. The monitor's range never sees a move, because
+     its transient gate has no opinion there, and this loop's does: a landing's
+     corner stood as an extreme for half an hour and faulted the 10-28
+     170 → 185 K move. A loss mid-move is still called (now against the hold
+     before it), and a loss at a hold is the range it always was;
    - **authority exhausted** — error past `fault_error_k` with the demand *and
      the output* railed at the **ceiling**, **while the setpoint is not
      moving**. Railed with a large error is the normal state of a loop
