@@ -45,6 +45,19 @@ correct aggressively.
      corner stood as an extreme for half an hour and faulted the 10-28
      170 → 185 K move. A loss mid-move is still called (now against the hold
      before it), and a loss at a hold is the range it always was;
+   - **a declared field move widens the step, it does not switch it off**
+     (2026-10-29, 4a-xii). The heater circuit's magnetoresistance moves the
+     delivered power with the field — the same `−(1−a)·P(u)` a failing
+     connector puts in `δQ`, and nothing in the recorder knows the field, so
+     the operator says so (`field moving` / `settled` / `zero`). While it
+     moves, its samples are judged and not kept, like a moving setpoint's,
+     against a threshold of `field_power_frac` of `P(u)`; `field_settle_s`
+     after the move is declared over, the new level becomes the reference. A
+     loss past the allowance faults mid-move, a loss after the move is judged
+     against the new level, and a move nobody ends is ended by
+     `field_move_max_s` with a standing alarm. What it gives up: a heater
+     failing by less than the allowance *during* a move is taken into the new
+     reference, and is left to the level warning and the kelvin rows;
    - **authority exhausted** — error past `fault_error_k` with the demand *and
      the output* railed at the **ceiling**, **while the setpoint is not
      moving**. Railed with a large error is the normal state of a loop
