@@ -168,3 +168,57 @@ def test_an_unknown_field_state_is_refused():
     h = armed(140.0)
     with pytest.raises(ValueError, match="moving"):
         h.sup.set_field("ramping")
+
+
+# -- rule 5: the band carries the field's allowance ---------------------------
+
+
+def test_a_field_that_is_on_widens_the_band_by_what_its_allowance_needs():
+    """`1/sqrt(1 - frac)` of the centre: the output that puts back the power
+    `field_power_frac` takes away.  On from the declared move until the field
+    is declared zero AND has settled."""
+    import math
+
+    h = armed(140.0)
+    lo0, hi0 = h.sup.band
+    centre = h.sup.band_centre_pct()
+    extra = centre * (1.0 / math.sqrt(1.0 - h.sup.cfg.field_power_frac) - 1.0)
+    h.sup.set_field("moving")
+    h.step(1)
+    lo, hi = h.sup.band
+    assert hi - hi0 == pytest.approx(extra, abs=0.02)
+    assert lo0 - lo == pytest.approx(extra, abs=0.02)
+    h.sup.set_field("settled")
+    h.minutes(5)
+    assert h.sup.band[1] == pytest.approx(hi, abs=0.02)
+    h.sup.set_field("moving")
+    h.minutes(1)
+    h.sup.set_field("zero")
+    h.minutes(1)
+    assert h.sup.band[1] > hi0 + extra / 2, "narrowed before the field settled"
+    h.minutes(2)
+    assert h.sup.band[1] == pytest.approx(hi0, abs=0.02)
+
+
+@pytest.mark.parametrize("kelvin", (140.0, 180.0))
+def test_the_loop_makes_the_power_back_inside_the_widened_band(kelvin):
+    """**Measured before this step**: with the step test widened and the band
+    not, a 3 % change rails the one-point band at 140 and 180 K and the
+    sample sits 0.4-1 K low for as long as the field is on.  Restoring 3 %
+    needs 1.5 % more output, about one point there.
+
+    It is not fast -- a 3 % change ramped in over four minutes pulls the
+    sample about 3 K low and the hold gains take most of an hour to bring it
+    back -- but it comes back, which railed it never did."""
+    h = armed(kelvin)
+    h.minutes(5)
+    h.sup.set_field("moving")
+    ramp_delivery(h, 1.0, 0.97, minutes=4)
+    h.sup.set_field("settled")
+    h.minutes(60)
+    assert not faulted(h)
+    tail = [s for s in h.history[-150:] if s.error_k is not None]
+    mean = sum(s.error_k for s in tail) / len(tail)
+    assert abs(mean) < 0.1, f"{mean:+.3f} K an hour after the move"
+    lo, hi = h.sup.band
+    assert max(s.output_pct for s in tail) < hi - 0.2, "still railed"

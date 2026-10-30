@@ -475,6 +475,20 @@ class HeaterSupervisor:
         self.smoother = SetpointSmoother(self._smooth_tau_s(),
                                          value=self.pid.cfg.setpoint,
                                          settled_k=self.ramp.cfg.settled_k)
+        #: The magnet, as declared -- see `set_field`.  Set BEFORE the first
+        #: `_apply_band_to_pid` too: a field that is on widens the band.
+        #: Independent of the loop's mode: arming, disengaging and
+        #: acknowledging do not move a magnet, so none of them touches this.
+        self._field = FIELD_ZERO
+        #: When the present move was declared, for `field_move_max_s`.
+        self._field_since: float | None = None
+        #: Set when a move is declared over: the step test stays widened until
+        #: then (`field_settle_s`), and the field becomes `_field_after`.
+        self._field_release_at: float | None = None
+        self._field_after = FIELD_SETTLED
+        #: A move that `field_move_max_s` ended rather than the operator.  A
+        #: standing alarm until the next `set_field`.
+        self._field_expired = ""
         #: Set BEFORE the first `_apply_band_to_pid`, because the band's floor
         #: now asks where the heater is.
         self.output_pct: float | None = None   # last value we commanded
@@ -534,19 +548,6 @@ class HeaterSupervisor:
         #: `off`/`idle` is also where a never-armed loop sits, and those
         #: are different things to read on a screen.
         self._disengaged_by = ""
-        #: The magnet, as declared -- see `set_field`.  Independent of the
-        #: loop's mode: arming, disengaging and acknowledging do not move a
-        #: magnet, so none of them touches this.
-        self._field = FIELD_ZERO
-        #: When the present move was declared, for `field_move_max_s`.
-        self._field_since: float | None = None
-        #: Set when a move is declared over: the step test stays widened until
-        #: then (`field_settle_s`), and the field becomes `_field_after`.
-        self._field_release_at: float | None = None
-        self._field_after = FIELD_SETTLED
-        #: A move that `field_move_max_s` ended rather than the operator.  A
-        #: standing alarm until the next `set_field`.
-        self._field_expired = ""
 
     # -- the loop's own dead time ------------------------------------------
 
@@ -742,10 +743,34 @@ class HeaterSupervisor:
             return per_k * (_M.T_MIN_K - setpoint)
         return 0.0
 
+    def field_allowance_pct(self) -> float:
+        """The EXTRA half-width a field that is on is granted (4a-xii).
+
+        A field that takes `field_power_frac` of the heater's power away needs
+        `1/sqrt(1 - frac)` of the output to put it back -- the 218 drives a
+        voltage, and power goes as its square -- and that is a LEVEL error in
+        the model's centre, which is what `authority_pct` is sized for and
+        what a few percent of magnetoresistance overruns: measured on the
+        bench, a 3 % change at 180 K rails the one-point band and leaves the
+        sample a kelvin low.
+
+        On from the moment a move is declared until the field is declared
+        ``zero`` and has settled, because the resistance follows the field and
+        not the move.  The same fraction the step test tolerates, so the loop
+        is never allowed to need more output than it is allowed to have.
+        Nothing here is heat: `hard_max_pct` still caps, and the output rate
+        limiter still sets how fast the heater travels into the window.
+        """
+        frac = self.cfg.field_power_frac
+        if self._field == FIELD_ZERO or frac <= 0.0:
+            return 0.0
+        return self.band_centre_pct() * (1.0 / math.sqrt(1.0 - frac) - 1.0)
+
     @property
     def band(self) -> tuple[float, float]:
         c = self.cfg
-        half = c.authority_pct + self.ramp_lead_pct() + self.beyond_table_pct()
+        half = (c.authority_pct + self.ramp_lead_pct() + self.beyond_table_pct()
+                + self.field_allowance_pct())
         centre = self.band_centre_pct()
         lo = max(c.hard_min_pct, centre - half)
         hi = min(c.hard_max_pct, centre + half)

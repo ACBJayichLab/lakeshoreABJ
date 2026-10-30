@@ -136,6 +136,16 @@ correct aggressively.
    travels into a newly opened window is the output rate limiter, and what
    refuses an absurd setpoint step is rule 8.
 
+   **A field that is on widens it by the output its allowance needs**
+   (2026-10-29, 4a-xii): `1/√(1 − field_power_frac)` of the centre, from the
+   declared move until the field is declared zero and has settled. The heater
+   circuit's magnetoresistance is a level error in the centre, which is what
+   the half-width is for, and a few percent of it overruns one point: on the
+   bench a 3 % change at 140–180 K railed the band and left the sample
+   0.4–1 K low for as long as the field was on. It is the same fraction the
+   step test tolerates, so the loop is never allowed to need more output than
+   it may have; `hard_max_pct` still caps.
+
    It may go *below* the band, but only as a fault ramp-down — the one
    direction where leaving the band is the safe one.
 6. **On exit, hold.** Zeroing a sample heater on a live cryostat is its own

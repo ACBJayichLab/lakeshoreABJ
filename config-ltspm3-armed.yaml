@@ -234,7 +234,9 @@ control:
     # loop.  PID_PLAN.md 4a-xii.
     field_power_frac: 0.05        # what a declared move may change, as a
                                   # fraction of the heater's power: the step
-                                  # test's threshold while the field moves.
+                                  # test's threshold while the field moves,
+                                  # and the output the authority band adds
+                                  # (2.6 % of it) while a field is on.
                                   # A GUESS (nothing logged ran above 10 mT);
                                   # the first move's dq_step_w measures it
     field_move_max_s: 3600.0      # a move nobody ends is ended here, with an
