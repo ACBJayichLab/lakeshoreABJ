@@ -255,6 +255,16 @@ def cmd_check(args) -> int:
                 print("  beyond table   : NO widening -- a setpoint past the "
                       "model's table is chased from the band at its edge, and "
                       "rails once the gain runs out")
+            # **AND WHAT A DECLARED FIELD BUYS**, because it is the other
+            # thing that widens the band and only `send field` turns it on.
+            frac = float(getattr(s, "field_power_frac", 0.0) or 0.0)
+            if frac > 0:
+                print(f"  field          : `send field moving` tolerates a "
+                      f"{100 * frac:g}% change in the heater's delivered power "
+                      f"(the step test), and while a field is on the band "
+                      f"widens by the output that needs; a move not declared "
+                      f"settled ends after "
+                      f"{getattr(s, 'field_move_max_s', 0):g} s")
         else:
             print(f"  authority band : {lo:.3f}% .. {hi:.3f}%, FIXED -- no "
                   f"model curve, so the centre is operating_point_pct "
@@ -877,6 +887,19 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
                     "needs ipc.allow_analog_output like `arm` does.",
     )
 
+    fld = snd_sub.add_parser(
+        "field",
+        help="tell the software loop the magnet is moving, settled or at zero",
+        description="A field ramp can move the power the sample heater "
+                    "delivers (magnetoresistance), which the software loop "
+                    "would otherwise read as a failing heater. `moving` "
+                    "before a ramp, `settled` or `zero` after it. Widens the "
+                    "loop's authority over the heater, so it needs "
+                    "ipc.allow_analog_output like `arm`. Written into the "
+                    "log's Notes column.",
+    )
+    fld.add_argument("state", choices=("moving", "settled", "zero"))
+
     snd_sub.add_parser(
         "heaters_off",
         help="every writable heater to zero: 33x ranges AND 218 analog outputs, "
@@ -911,6 +934,7 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "arm": ("kelvin",),
             "disengage": (),
             "ack": (),
+            "field": ("state",),
             "source": ("name", "allowed"),
             "heaters_off": (),
             "ping": (),

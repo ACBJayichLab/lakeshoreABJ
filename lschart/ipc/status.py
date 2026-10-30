@@ -503,6 +503,11 @@ class StatusWriter:
             # mostly the thermometer.
             "settle_error_k": _num(getattr(status, "settle_error_k", None)),
             "settle_wait_s": _num(getattr(status, "settle_wait_s", None)),
+            # What the operator last said the magnet is doing (`send field`),
+            # and whether the loop is still treating it as a move.  Empty and
+            # False from a controller that has never heard of a field.
+            "field": str(getattr(status, "field_state", "") or ""),
+            "field_moving": bool(getattr(status, "field_moving", False)),
             # WHAT THE LOOP IS ACTING ON, which is not what the chart draws.
             # The error is computed from the filtered value, so without it
             # "why is the error not what I get off the trace" has no answer.

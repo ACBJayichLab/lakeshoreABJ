@@ -769,6 +769,40 @@ class IpcService:
         except RuntimeError as exc:
             raise CommandError(str(exc)) from None
 
+    def _do_field(self, cmd: Command) -> str:
+        """Tell the software loop what the magnet is doing: ``moving``,
+        ``settled`` or ``zero``.
+
+        On a cryostat whose heater circuit is magnetoresistive, a field ramp
+        moves the power the heater delivers -- the same step in the loop's
+        watt residual a failing connector makes -- and the recorder has no
+        other way to know the field moved.  What the loop does with it is
+        `ltspm3`'s business; here it is a word passed through by name.
+
+        **Gated like `arm`**, because it is the power-applying direction: a
+        field that is on widens the loop's authority band.  And it goes into
+        the log's ``Notes`` column, because a step in the residual that a
+        person excused has to be visible as excused afterwards.
+        """
+        state = str(cmd.args.get("state") or "").strip().lower()
+        if not getattr(self.software_loop, "has_loop", False):
+            raise CommandError(
+                "this recorder has no software loop to tell about the field "
+                "-- a software loop comes from `ltspm3`, not from `lschart`"
+            )
+        if not self.allow_analog_output:
+            raise CommandError(
+                "declaring a field widens the software loop's authority over "
+                "the heater, and this recorder does not accept that from a "
+                "file; set ipc.allow_analog_output: true"
+            )
+        try:
+            message = self.software_loop.set_field(state)
+        except RuntimeError as exc:
+            raise CommandError(str(exc)) from None
+        self._notes.append(f"[{cmd.source or '?'}] field {state}")
+        return message
+
     def _do_ack(self, cmd: Command) -> str:
         """Clear a software loop's fault lockout.  Gated like `arm`, not exempt.
 

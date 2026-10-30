@@ -93,7 +93,14 @@ ls.hold();                   % every loop stopped where it is
 ls.ack();                    % clear a software loop's fault lockout
 ls.arm();                    % close the software loop again
 ls.disengage();              % open it again, heater left where it is -- the ordinary stop
+ls.setField('moving');       % the magnet is about to ramp ...
+ls.setField('settled');      % ... and has stopped ('zero' if it ended at 0 T)
 ```
+
+`setField()` brackets every magnet ramp on a cryostat whose heater is
+magnetoresistive (LTSPM3): without it the loop reads the change in delivered
+power as a failing heater and faults. `control().field` and
+`control().field_moving` report what it last heard.
 
 `heatersOff()` also **disarms a software loop**, before it zeroes anything:
 writing zero once to an output something else drives every cycle does not turn

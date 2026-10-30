@@ -268,7 +268,8 @@ ltspm3/                      LTSPM3 ONLY -- imports lschart, never the reverse
                      calls here -- the last two are what makes an armed loop's
                      setpoint movable from outside the process at all
                      (`send setpoint --software`, and the viewer's
-                     Software loop control);
+                     Software loop control) -- and `set_field()`, the magnet
+                     as the operator declares it (`send field`, PID_PLAN 4a-xii);
                      `lschart/ipc/status.py`'s `_control` -- there is no
                      `control/status.py` -- also READS `band`, `cfg` and
                      `ramp.cfg` for the status file's `control` block.  All of it

@@ -157,6 +157,47 @@ imports `ltspm3` (invariant 1):
 Any of these from a plain recorder finds no software loop and says so by name,
 rather than quietly succeeding.
 
+## High field: tell the loop when the magnet moves
+
+The sample heater circuit is **magnetoresistive** (Jeff, 2026-10-29): at high
+field the output that holds a temperature changes. The 218 drives a voltage, so
+a resistance that moves with the field moves the power delivered at a fixed
+output — and to the loop's watt residual that is exactly what a failing
+connector looks like. Undeclared, a few percent of it step-faults the loop and
+ramps the heater down. The recorder does not know the field, so **bracket
+every magnet ramp**:
+
+```bash
+python -m ltspm3 -c config.yaml send field moving    # before the magnet starts
+python -m ltspm3 -c config.yaml send field settled   # once it has stopped (or: zero)
+```
+
+From MATLAB, `ls.setField('moving')` / `ls.setField('settled')`. The loop stays
+armed throughout; there is no `disengage`/`arm` and no bump.
+
+What the loop does with it (`control.supervisor` in the armed file, PID_PLAN.md
+4a-xii, safety.md rules 4 and 5):
+
+- **while moving**, the step test tolerates a change of up to
+  `field_power_frac` of the heater's power, judged against the hold before the
+  move. **A bigger change still faults**, mid-move included;
+- `field_settle_s` **after `settled`**, the new level is the step test's
+  reference, and a heater loss after that is judged as it always was;
+- **while any field is on** (from `moving` until `zero` has settled), the
+  authority band is wider by the output `field_power_frac` needs to put back;
+- a move nobody ends is ended after `field_move_max_s` with a standing alarm.
+  For a longer ramp, send `field moving` again;
+- the monitor reads the same declaration from the CSV (`control.field_moving`):
+  no opinion through the move, and its baseline restarts at the new level.
+
+**`field_power_frac` is a guess** — nothing logged ran above 10 mT. After the
+first real move, read `dq_step_w` in the status file (or the residual's shift
+in the monitor) and set it to a comfortable margin over what the field
+actually did. **And it is not fast:** the loop puts the power back on its hold
+gains, so a change of a few percent pulls the sample off its setpoint by
+kelvins for a good fraction of an hour at 140–180 K. A slower magnet ramp
+makes a smaller excursion. Wait for `settled` before measuring.
+
 ## Watching it on screen
 
 The viewer is a separate process and holds no port, so it is safe to open

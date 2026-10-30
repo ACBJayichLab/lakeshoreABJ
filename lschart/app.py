@@ -479,6 +479,22 @@ class Application:
         ack()
         return "lockout cleared; the loop is disarmed -- `arm` to close it again"
 
+    def set_field(self, state: str) -> str:
+        """What the magnet is doing, passed to the software loop by name.
+
+        Duck-typed like ``hold`` and ``acknowledge``: `ltspm3`'s supervisor
+        uses it to tell a field-driven change in delivered heater power from a
+        failing heater, and `lschart` may not know that.  A ValueError from it
+        -- a word it does not take -- reaches the client as a refusal.
+        """
+        declare = getattr(self.supervisor, "set_field", None)
+        if not callable(declare):
+            raise RuntimeError(
+                "no software loop is configured -- this is a recorder, and "
+                "there is nothing here a field could matter to"
+            )
+        return declare(state)
+
     def current_temperature(self) -> float | None:
         """Latest usable reading on the control channel, or None."""
         frame = self.ring.latest()

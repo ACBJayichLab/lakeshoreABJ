@@ -619,10 +619,10 @@ def test_the_status_file_reports_the_pid_gate(tmp_path):
 class FakeLoop:
     """A software loop, duck-typed exactly as `IpcService` reaches for one.
 
-    Six names, which is the whole contract: `has_loop`, `hold`, `arm`,
-    `sweep_to`, `disarm` and `acknowledge`.  `present=False` is the recorder-only case --
-    the object is still handed over, because "there is no loop here" is an
-    answer a client needs by name.
+    Seven names, which is the whole contract: `has_loop`, `hold`, `arm`,
+    `sweep_to`, `disarm`, `acknowledge` and `set_field`.  `present=False` is
+    the recorder-only case -- the object is still handed over, because "there
+    is no loop here" is an answer a client needs by name.
 
     `hold` and `disarm` are not the same thing and the difference is the point:
     a held loop is still driving (clamped to its authority band), a disarmed
@@ -671,6 +671,14 @@ class FakeLoop:
             raise RuntimeError("no software loop is configured -- this is a recorder")
         self.acknowledged = True
         return "lockout cleared; the loop is disarmed -- `arm` to close it again"
+
+    def set_field(self, state):
+        if not self.has_loop:
+            raise RuntimeError("no software loop is configured -- this is a recorder")
+        if state not in ("moving", "settled", "zero"):
+            raise ValueError(f"the field is one of moving, settled, zero, not {state!r}")
+        self.field = state
+        return f"field {state}"
 
 
 def held_frame(**readings):
@@ -904,6 +912,50 @@ def test_disengage_on_a_recorder_with_no_software_loop_says_so_by_name(tmp_path)
     svc = service(tmp_path, monitor())
     svc.software_loop = FakeLoop(present=False)
     entry = send(svc, "disengage")
+    assert entry["ok"] is False
+    assert "no software loop" in entry["message"]
+
+
+# -- field: the magnet, as the operator declares it ---------------------------
+
+
+def test_field_reaches_the_software_loop_and_the_log(tmp_path):
+    """PID_PLAN.md 4a-xii.  Passed through by name, and written into the
+    Notes column so an excused step in the residual reads as excused."""
+    svc = service(tmp_path, monitor(), allow_analog_output=True)
+    svc.software_loop = FakeLoop()
+    entry = send(svc, "field", state="moving")
+    assert entry["ok"], entry["message"]
+    assert svc.software_loop.field == "moving"
+    assert svc.take_note() == "[?] field moving"
+
+
+def test_field_is_gated_like_arm_because_it_widens_the_band(tmp_path):
+    from lschart.ipc.service import PANIC_KINDS, SOURCE_POLICY_EXEMPT
+    assert "field" not in PANIC_KINDS
+    assert "field" not in SOURCE_POLICY_EXEMPT
+    svc = service(tmp_path, monitor(), allow_analog_output=False)
+    svc.software_loop = FakeLoop()
+    entry = send(svc, "field", state="moving")
+    assert entry["ok"] is False
+    assert "ipc.allow_analog_output" in entry["message"]
+    assert not hasattr(svc.software_loop, "field")
+    assert svc.take_note() == ""
+
+
+def test_field_with_a_word_the_loop_does_not_take_is_refused(tmp_path):
+    svc = service(tmp_path, monitor(), allow_analog_output=True)
+    svc.software_loop = FakeLoop()
+    entry = send(svc, "field", state="ramping")
+    assert entry["ok"] is False
+    assert "refused" in entry["message"] and "moving" in entry["message"]
+    assert svc.take_note() == ""
+
+
+def test_field_on_a_recorder_with_no_software_loop_says_so_by_name(tmp_path):
+    svc = service(tmp_path, monitor(), allow_analog_output=True)
+    svc.software_loop = FakeLoop(present=False)
+    entry = send(svc, "field", state="moving")
     assert entry["ok"] is False
     assert "no software loop" in entry["message"]
 

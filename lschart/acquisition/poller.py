@@ -45,10 +45,15 @@ log = logging.getLogger(__name__)
 #: where it was told to go, where it was being led, and what the loop thought
 #: it was reading -- the error it acts on is against the FILTERED reading, not
 #: against the raw channel already in the row.
+#:
+#: `control.field_moving` (1 while the loop treats the magnet as moving) is
+#: the fourth, because a monitor reading this CSV has no other way to tell a
+#: declared field move from a failing heater.  Not plotted: no unit suffix.
 CONTROL_AUX_COLUMNS = (
     ("control.setpoint_k", "setpoint_k"),
     ("control.setpoint_target_k", "setpoint_target_k"),
     ("control.filtered_k", "filtered_k"),
+    ("control.field_moving", "field_moving"),
 )
 
 

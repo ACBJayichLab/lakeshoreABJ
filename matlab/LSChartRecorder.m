@@ -292,6 +292,11 @@ classdef LSChartRecorder < handle
             %                        what a noisy hold is judged on
             %     settle_wait_s      how long a noisy hold waits before the
             %                        mean may settle it, at this temperature
+            %     field              zero | moving | settled -- the magnet,
+            %                        as setField() last declared it
+            %     field_moving       true while the loop still treats the
+            %                        field as moving (field_settle_s past
+            %                        setField('settled'))
             %
             %   Empty on a recorder with no `control:` section -- a plain
             %   `lschart` install -- which is not an error: that recorder
@@ -333,7 +338,7 @@ classdef LSChartRecorder < handle
                      'setpoint_k', 'setpoint_target_k', 'error_k', ...
                      'output_pct', 'raw_k', 'filtered_k', 'validity', ...
                      'reason', 'hold_error_k', 'hold_settle_s', 'unsettle_s', ...
-                     'max_rate_k_per_min'}
+                     'max_rate_k_per_min', 'field', 'field_moving'}
                 if ~isfield(c, f{1}), c.(f{1}) = []; end
             end
         end
@@ -617,6 +622,37 @@ classdef LSChartRecorder < handle
             %   A no-op on a recorder with no software loop, which it says by
             %   name rather than quietly succeeding.
             [ok, message, id] = obj.run('ack', struct(), nargout);
+        end
+
+        function [ok, message, id] = setField(obj, state)
+            %SETFIELD  Tell the software loop what the magnet is doing.
+            %
+            %   The heater circuit is magnetoresistive: a field ramp moves the
+            %   power the heater delivers, which the loop would otherwise read
+            %   as a failing heater and fault on.  Bracket every ramp:
+            %
+            %       ls.setField('moving');     % before the magnet starts
+            %       ... ramp, wait for the supply to report the field ...
+            %       ls.setField('settled');    % or 'zero' if it ended at 0
+            %
+            %   While moving, the loop tolerates a change of up to
+            %   field_power_frac of the heater's power (a larger one still
+            %   faults) and, while any field is on, its authority band is
+            %   widened by the output that change needs.  A move nobody ends
+            %   is ended by the recorder after field_move_max_s, with an
+            %   alarm -- for a longer ramp, call setField('moving') again.
+            %
+            %   NOT a panic command: it widens the loop's authority over the
+            %   heater, so it passes the source policy and
+            %   `ipc.allow_analog_output` exactly as arm() does.  Written into
+            %   the log's Notes column.
+            state = lower(strtrim(char(state)));
+            if ~any(strcmp(state, {'moving', 'settled', 'zero'}))
+                error('LSChartRecorder:setField', ...
+                      'setField takes ''moving'', ''settled'' or ''zero''; got ''%s''', ...
+                      state);
+            end
+            [ok, message, id] = obj.run('field', struct('state', state), nargout);
         end
 
         function [ok, message, id] = setSource(obj, name, listen)

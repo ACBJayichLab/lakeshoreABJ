@@ -163,6 +163,10 @@ full dwell to come back. The gains stay on `hold` until the error passes
 `move_error_k`, because retuning on every small excursion is worse than either
 tuning. A frozen or disengaged loop is never settled.
 
+**`field` and `field_moving`** are what a `field` command last declared about
+the magnet and whether the loop is still treating it as moving — which runs a
+little past `settled`. Empty and `false` from a loop that takes no `field`.
+
 **Why the settle rule is published beside it.** `hold_error_k`,
 `hold_settle_s` and `unsettle_s` are the rule behind the verdict — on LTSPM3, Jeff's settle gate,
 `within 50 mK and staying` ([requirements](../ltspm3/requirements.md)). They are
@@ -223,6 +227,7 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `arm` | `kelvin` (optional) — close the software loop again. **Applies power**, and is exempt from nothing |
 | `disengage` | open the software loop and leave its heater where it is — the **ordinary** way to stop it, and only it. Writes nothing, so no power gate; not a panic kind, so the source policy applies. `hold` is the panic version and stops every loop on every box |
 | `ack` | clear a software loop's fault lockout. The first of the two steps back to driving, so gated exactly like `arm` |
+| `field` | `state`: `moving`, `settled` or `zero` — tell a software loop what the magnet is doing, for a cryostat whose heater power moves with the field. Passed to the loop by name; it widens the loop's authority, so gated exactly like `arm`. Written into the `Notes` column |
 | `source` | `name`, `allowed` — mute or un-mute one client. Exempt from the source policy it edits, and from nothing else |
 
 `heaters_off` and `hold` are the only commands not aimed at one box. Every other
@@ -561,6 +566,7 @@ has to ask once:
 | `control.setpoint_k` | what it was chasing at that instant — a ramp's present value, not its destination |
 | `control.setpoint_target_k` | where it was told to go |
 | `control.filtered_k` | the reading the loop's error is computed against, which is **not** the raw channel in the same row |
+| `control.field_moving` | 1 while the loop treats the magnet as moving (`field` above), else 0 — the only way a process reading the CSV can tell a declared field move from a change in the heater. No unit suffix, so the viewer does not plot it |
 
 They are read off the controller by name and defaulted, so a controller that
 publishes only some of them yields only those columns, and `lschart` still
