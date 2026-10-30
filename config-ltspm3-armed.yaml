@@ -227,18 +227,25 @@ control:
                                   # coldplate moving while the channel is down
                                   # would land in dQ as the sample's problem.
 
-    # THE MAGNET.  The heater circuit's resistance moves with the field and
-    # the 218 drives a voltage, so a field move is a step in delivered power
-    # -- the shape of a failing connector.  `send field moving` before a ramp
-    # and `send field settled` (or `zero`) after it; nothing else tells the
-    # loop.  PID_PLAN.md 4a-xii.
-    field_power_frac: 0.05        # what a declared move may change, as a
+    # THE MAGNET.  A field ADDS heat to the sample, so a field move is a step
+    # in the watt residual -- the shape of a failing connector.  `send field
+    # moving <tesla>` before a ramp and `send field settled` (or `zero`)
+    # after it; nothing else tells the loop.  PID_PLAN.md 4a-xii, 4a-xiii.
+    #
+    # MEASURED 2026-10-30, 150-180 K, loop disengaged at 66.497 %: +42.8 mW
+    # at 100 mT, +68.4 mW at 150 mT, -71.0 mW back to 5 mT (reversible).
+    # Fitted 0.654 W * B^1.17, 1.1 mW rms; 250 mT is ~129 mW BY EXTRAPOLATION.
+    # Field direction as used that day; temperature dependence not measured.
+    field_heat_w_per_t: 0.654     # the fit: W at 1 T ...
+    field_heat_exponent: 1.17     # ... times |B|^this.  Drives the feedforward
+    field_ramp_s: 60.0            # the magnet's ramp; the feedforward is
+                                  # spread over this long
+    field_power_frac: 0.20        # what a declared move may change, as a
                                   # fraction of the heater's power: the step
                                   # test's threshold while the field moves,
-                                  # and the output the authority band adds
-                                  # (2.6 % of it) while a field is on.
-                                  # A GUESS (nothing logged ran above 10 mT);
-                                  # the first move's dq_step_w measures it
+                                  # and how far the band's FLOOR (only) drops
+                                  # while a field is on.  250 mT is 18-20 %
+                                  # of the heater at 100-150 K
     field_move_max_s: 3600.0      # a move nobody ends is ended here, with an
                                   # alarm; `field moving` again restarts it
     field_settle_s: 120.0         # widened this long after `settled`, then

@@ -503,19 +503,25 @@ class FittedResponse:
       which is what a cooler losing ground looks like from here.  The sample's
       own steady state rises with it, through ``Lambda'`` at the sink.
       Linearised in ``conductance_w``, so a few kelvin is the honest range.
+    * ``extra_heat_w`` -- heat reaching the sample from somewhere other than
+      the heater, in watts, whatever the output.  What a magnetic field did on
+      2026-10-30: +42.8 mW at 100 mT and +68.6 mW at 150 mT with the output
+      unchanged (PID_PLAN.md 4a-xiii).
 
-    Both default to "the model is right", and with the defaults the ODE is
+    All three default to "the model is right", and with the defaults the ODE is
     arithmetically the one that was integrated before they existed.
     """
 
     def __init__(self, params: FittedParams | None = None, *,
                  start_k: float | None = None, start_pct: float = 0.0,
                  delivered_frac: float = 1.0,
-                 sink_offset_k: float = 0.0) -> None:
+                 sink_offset_k: float = 0.0,
+                 extra_heat_w: float = 0.0) -> None:
         self.p = params or FittedParams()
         self.pct = float(start_pct)
         self.delivered_frac = float(delivered_frac)
         self.sink_offset_k = float(sink_offset_k)
+        self.extra_heat_w = float(extra_heat_w)
         self._t = float(self.steady_state(start_pct) if start_k is None else start_k)
 
     # -- the model --------------------------------------------------------
@@ -558,7 +564,7 @@ class FittedResponse:
     def advance(self, dt: float) -> None:
         if dt <= 0:
             return
-        q_in = power_w(self.pct) * self.delivered_frac
+        q_in = power_w(self.pct) * self.delivered_frac + self.extra_heat_w
         n = max(1, min(self.MAX_SUBSTEPS,
                        int(dt / (self.SUBSTEP_FRACTION * tau_s(self._t))) + 1))
         step = dt / n

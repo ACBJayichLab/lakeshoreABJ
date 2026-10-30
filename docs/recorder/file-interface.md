@@ -163,9 +163,10 @@ full dwell to come back. The gains stay on `hold` until the error passes
 `move_error_k`, because retuning on every small excursion is worse than either
 tuning. A frozen or disengaged loop is never settled.
 
-**`field` and `field_moving`** are what a `field` command last declared about
-the magnet and whether the loop is still treating it as moving — which runs a
-little past `settled`. Empty and `false` from a loop that takes no `field`.
+**`field`, `field_moving` and `field_t`** are what a `field` command last
+declared about the magnet, whether the loop is still treating it as moving —
+which runs a little past `settled` — and the field in tesla. Empty, `false`
+and `null` from a loop that takes no `field`.
 
 **Why the settle rule is published beside it.** `hold_error_k`,
 `hold_settle_s` and `unsettle_s` are the rule behind the verdict — on LTSPM3, Jeff's settle gate,
@@ -227,7 +228,7 @@ Handled on the acquisition thread, because that thread owns the bus.
 | `arm` | `kelvin` (optional) — close the software loop again. **Applies power**, and is exempt from nothing |
 | `disengage` | open the software loop and leave its heater where it is — the **ordinary** way to stop it, and only it. Writes nothing, so no power gate; not a panic kind, so the source policy applies. `hold` is the panic version and stops every loop on every box |
 | `ack` | clear a software loop's fault lockout. The first of the two steps back to driving, so gated exactly like `arm` |
-| `field` | `state`: `moving`, `settled` or `zero` — tell a software loop what the magnet is doing, for a cryostat whose heater power moves with the field. Passed to the loop by name; it widens the loop's authority, so gated exactly like `arm`. Written into the `Notes` column |
+| `field` | `state`: `moving`, `settled` or `zero`, and optionally `tesla` — tell a software loop what the magnet is doing, for a cryostat whose heat balance moves with the field. Passed to the loop by name; it changes what the loop may do with the heater, so gated exactly like `arm`. Written into the `Notes` column |
 | `source` | `name`, `allowed` — mute or un-mute one client. Exempt from the source policy it edits, and from nothing else |
 
 `heaters_off` and `hold` are the only commands not aimed at one box. Every other

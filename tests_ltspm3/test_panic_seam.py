@@ -114,8 +114,8 @@ class SoftwareLoop:
         return (f"software loop sweeping to {kelvin:.4f} K at "
                 f"{rate_k_per_min:g} K/min")
 
-    def set_field(self, state):
-        return self.sup.set_field(state)
+    def set_field(self, state, tesla=None):
+        return self.sup.set_field(state, tesla)
 
 
 def apply(svc, harness, kind, **kw):
@@ -375,7 +375,7 @@ def test_a_software_setpoint_is_refused_when_the_gate_is_shut(tmp_path, armed):
 def test_a_field_declared_through_the_spool_reaches_the_supervisor(armed_service):
     """PID_PLAN.md 4a-xii, end to end: the spool, the service's gate, the
     supervisor, and back out through the status file -- with the band in the
-    file the widened one the supervisor now enforces."""
+    file the one the supervisor now enforces: floor lowered, ceiling not."""
     svc, h = armed_service
     before = h.sup.band
     entry = apply(svc, h, "field", state="moving")
@@ -383,7 +383,8 @@ def test_a_field_declared_through_the_spool_reaches_the_supervisor(armed_service
     h.step(1)
     control = snapshot(svc, h)["control"]
     assert (control["field"], control["field_moving"]) == ("moving", True)
-    assert control["rail_high_pct"] > before[1]
+    assert control["rail_low_pct"] < before[0]
+    assert control["rail_high_pct"] == pytest.approx(before[1])
     assert svc.take_note().endswith("field moving")
 
 

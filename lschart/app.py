@@ -479,7 +479,7 @@ class Application:
         ack()
         return "lockout cleared; the loop is disarmed -- `arm` to close it again"
 
-    def set_field(self, state: str) -> str:
+    def set_field(self, state: str, tesla: float | None = None) -> str:
         """What the magnet is doing, passed to the software loop by name.
 
         Duck-typed like ``hold`` and ``acknowledge``: `ltspm3`'s supervisor
@@ -493,7 +493,7 @@ class Application:
                 "no software loop is configured -- this is a recorder, and "
                 "there is nothing here a field could matter to"
             )
-        return declare(state)
+        return declare(state, tesla)
 
     def current_temperature(self) -> float | None:
         """Latest usable reading on the control channel, or None."""

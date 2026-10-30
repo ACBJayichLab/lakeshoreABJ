@@ -297,6 +297,7 @@ classdef LSChartRecorder < handle
             %     field_moving       true while the loop still treats the
             %                        field as moving (field_settle_s past
             %                        setField('settled'))
+            %     field_t            the field last declared, in tesla
             %
             %   Empty on a recorder with no `control:` section -- a plain
             %   `lschart` install -- which is not an error: that recorder
@@ -338,7 +339,7 @@ classdef LSChartRecorder < handle
                      'setpoint_k', 'setpoint_target_k', 'error_k', ...
                      'output_pct', 'raw_k', 'filtered_k', 'validity', ...
                      'reason', 'hold_error_k', 'hold_settle_s', 'unsettle_s', ...
-                     'max_rate_k_per_min', 'field', 'field_moving'}
+                     'max_rate_k_per_min', 'field', 'field_moving', 'field_t'}
                 if ~isfield(c, f{1}), c.(f{1}) = []; end
             end
         end
@@ -624,23 +625,29 @@ classdef LSChartRecorder < handle
             [ok, message, id] = obj.run('ack', struct(), nargout);
         end
 
-        function [ok, message, id] = setField(obj, state)
+        function [ok, message, id] = setField(obj, state, tesla)
             %SETFIELD  Tell the software loop what the magnet is doing.
             %
             %   The heater circuit is magnetoresistive: a field ramp moves the
             %   power the heater delivers, which the loop would otherwise read
             %   as a failing heater and fault on.  Bracket every ramp:
             %
-            %       ls.setField('moving');     % before the magnet starts
+            %       ls.setField('moving', 0.25);   % before the magnet starts
             %       ... ramp, wait for the supply to report the field ...
-            %       ls.setField('settled');    % or 'zero' if it ended at 0
+            %       ls.setField('settled');        % or 'zero' if it ended at 0
+            %
+            %   The field in tesla is what the loop's feedforward is computed
+            %   from: it steps the heater down by the heat the field adds
+            %   (fitted, field_heat_w_per_t) over field_ramp_s, so the sample
+            %   barely moves.  setField('settled', B) with no move only
+            %   RECORDS a field that is already there -- after a restart.
             %
             %   While moving, the loop tolerates a change of up to
             %   field_power_frac of the heater's power (a larger one still
-            %   faults) and, while any field is on, its authority band is
-            %   widened by the output that change needs.  A move nobody ends
-            %   is ended by the recorder after field_move_max_s, with an
-            %   alarm -- for a longer ramp, call setField('moving') again.
+            %   faults) and, while any field is on, its authority band's
+            %   floor is lowered by the output that change needs.  A move
+            %   nobody ends is ended by the recorder after field_move_max_s,
+            %   with an alarm -- for a longer ramp, call setField again.
             %
             %   NOT a panic command: it widens the loop's authority over the
             %   heater, so it passes the source policy and
@@ -652,7 +659,11 @@ classdef LSChartRecorder < handle
                       'setField takes ''moving'', ''settled'' or ''zero''; got ''%s''', ...
                       state);
             end
-            [ok, message, id] = obj.run('field', struct('state', state), nargout);
+            args = struct('state', state);
+            if nargin >= 3 && ~isempty(tesla)
+                args.tesla = double(tesla);
+            end
+            [ok, message, id] = obj.run('field', args, nargout);
         end
 
         function [ok, message, id] = setSource(obj, name, listen)

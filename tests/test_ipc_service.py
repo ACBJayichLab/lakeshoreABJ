@@ -672,7 +672,7 @@ class FakeLoop:
         self.acknowledged = True
         return "lockout cleared; the loop is disarmed -- `arm` to close it again"
 
-    def set_field(self, state):
+    def set_field(self, state, tesla=None):
         if not self.has_loop:
             raise RuntimeError("no software loop is configured -- this is a recorder")
         if state not in ("moving", "settled", "zero"):
@@ -928,6 +928,19 @@ def test_field_reaches_the_software_loop_and_the_log(tmp_path):
     assert entry["ok"], entry["message"]
     assert svc.software_loop.field == "moving"
     assert svc.take_note() == "[?] field moving"
+
+
+def test_field_carries_the_tesla_through_to_the_loop_and_the_log(tmp_path):
+    """4a-xiii: the field value is what the loop's feedforward is computed
+    from, so it has to arrive as a number and land in the Notes column."""
+    svc = service(tmp_path, monitor(), allow_analog_output=True)
+    seen = []
+    loop = FakeLoop()
+    loop.set_field = lambda state, tesla=None: seen.append((state, tesla)) or "ok"
+    svc.software_loop = loop
+    assert send(svc, "field", state="moving", tesla=0.25)["ok"]
+    assert seen == [("moving", 0.25)]
+    assert svc.take_note() == "[?] field moving 0.25 T"
 
 
 def test_field_is_gated_like_arm_because_it_widens_the_band(tmp_path):

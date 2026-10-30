@@ -508,6 +508,7 @@ class StatusWriter:
             # False from a controller that has never heard of a field.
             "field": str(getattr(status, "field_state", "") or ""),
             "field_moving": bool(getattr(status, "field_moving", False)),
+            "field_t": _num(getattr(status, "field_t", None)),
             # WHAT THE LOOP IS ACTING ON, which is not what the chart draws.
             # The error is computed from the filtered value, so without it
             # "why is the error not what I get off the trace" has no answer.

@@ -1,17 +1,21 @@
-"""A magnet that moves the heater's delivered power -- PID_PLAN.md 4a-xii.
+"""A magnet that adds heat to the sample -- PID_PLAN.md 4a-xii and 4a-xiii.
 
-Jeff, 2026-10-29: at high field the heater output the loop needs changes, and
-the cause is the heater circuit's magnetoresistance.  The 218 drives a voltage,
-so a resistance that moves with the field moves the power delivered at a fixed
-output, and the residual steps by `-(1-a) P(u)` -- the exact shape of the
-failing connector the step test exists to catch.  `FittedHarness.deliver` is
-that change.
+Measured 2026-10-30 with the loop disengaged at 66.497 %: +42.8 mW at
+100 mT, +68.4 mW at 150 mT, and -71.0 mW back to 5 mT.  To the loop's watt
+residual that is a step of the shape a failing connector makes, so the
+operator declares it (`set_field`).  `plant.extra_heat_w` is that heat on the
+bench; `FittedHarness.deliver` is the heater failing, which a field must not
+be allowed to hide.
 
-What is graded here is that a DECLARED field move is tolerated up to
-`field_power_frac` and no further, that the tolerance ends, and that it ends
-even when nobody ends it.
+What is graded here: a DECLARED field move is tolerated up to
+`field_power_frac` and no further; the tolerance ends, even when nobody ends
+it; the band's floor and only its floor makes room; and with the field in
+tesla the fitted feedforward holds the sample where the PID alone overshoots
+by ten to twenty kelvin.
 """
 from __future__ import annotations
+
+import math
 
 import pytest
 
@@ -44,8 +48,8 @@ def run_until_fault(h, seconds):
 
 
 def ramp_delivery(h, start, end, minutes):
-    """The field ramping: the delivered fraction walks from ``start`` to
-    ``end`` over ``minutes``, one cycle at a time, as a magnet's does."""
+    """The heater's delivered fraction walking from ``start`` to ``end`` over
+    ``minutes``, one cycle at a time."""
     n = int(round(minutes * 60.0 / h.DT))
     for i in range(1, n + 1):
         h.deliver(start + (end - start) * i / n)
@@ -54,20 +58,35 @@ def ramp_delivery(h, start, end, minutes):
             return
 
 
-@pytest.mark.parametrize("kelvin", WATT_TEMPERATURES)
-def test_a_declared_field_move_that_moves_the_heater_does_not_fault(kelvin):
-    """**The case this exists for.**  A 3 % change in delivered power is 17 to
-    23 mW at these temperatures -- past the 15 mW floor, and an undeclared one
-    faults (`test_a_heater_that_stops_delivering_faults_at_either_date` at
-    0.97 is exactly this change, arriving with no field to explain it).
+def ramp_heat(h, start_w, end_w, seconds=None):
+    """The field ramping: its heat walks from ``start_w`` to ``end_w`` over
+    the magnet's ramp, `field_ramp_s` unless told otherwise."""
+    seconds = h.sup.cfg.field_ramp_s if seconds is None else seconds
+    n = max(1, int(round(seconds / h.DT)))
+    for i in range(1, n + 1):
+        h.plant.extra_heat_w = start_w + (end_w - start_w) * i / n
+        h.step(1)
+        if faulted(h):
+            return
 
-    Declared, the loop keeps tracking through the move and for a whole fault
-    window after it: the new level is the reference once the field settles.
-    """
+
+def errors(h, since=0):
+    return [s.error_k for s in h.history[since:] if s.error_k is not None]
+
+
+# -- rule 4: the step test ---------------------------------------------------
+
+
+@pytest.mark.parametrize("kelvin", WATT_TEMPERATURES)
+def test_a_declared_field_move_does_not_fault(kelvin):
+    """**The case this exists for**: 150 mT's measured 68 mW, declared with
+    no field value -- so no feedforward, and the residual steps by all of it.
+    The loop keeps tracking through the move and for a whole fault window
+    after it: the new level is the reference once the field settles."""
     h = armed(kelvin)
     h.minutes(5)
     h.sup.set_field("moving")
-    ramp_delivery(h, 1.0, 0.97, minutes=4)
+    ramp_heat(h, 0.0, h.sup.field_heat_w(0.15))
     assert not faulted(h), h.history[-1].alarms
     h.sup.set_field("settled")
     cfg = h.sup.cfg
@@ -80,13 +99,13 @@ def test_a_declared_field_move_that_moves_the_heater_does_not_fault(kelvin):
 
 @pytest.mark.parametrize("kelvin", WATT_TEMPERATURES)
 def test_a_loss_past_the_allowance_still_faults_during_a_move(kelvin):
-    """Widened, not switched off: 15 % is three times `field_power_frac`, and
-    the heater circuit failing during a move is still a fault."""
+    """Widened, not switched off: 40 % is twice `field_power_frac`, and the
+    heater circuit failing during a move is still a fault."""
     h = armed(kelvin)
     h.minutes(5)
     h.sup.set_field("moving")
     h.minutes(1)
-    h.deliver(0.85)
+    h.deliver(0.60)
     cfg = h.sup.cfg
     assert run_until_fault(h, cfg.fault_window_s + cfg.fault_after_s)
     assert any("stepped" in a or "authority exhausted" in a
@@ -100,12 +119,12 @@ def test_once_the_field_has_settled_a_loss_is_a_step_again(kelvin):
     judged against the NEW level, which is what re-referencing means."""
     h = armed(kelvin)
     h.minutes(5)
-    h.sup.set_field("moving")
-    ramp_delivery(h, 1.0, 0.97, minutes=2)
+    h.sup.set_field("moving", 0.15)
+    ramp_heat(h, 0.0, h.sup.field_heat_w(0.15))
     h.sup.set_field("settled")
     h.minutes(5)
     assert not faulted(h)
-    h.deliver(0.97 * 0.97)
+    h.deliver(0.97)
     cfg = h.sup.cfg
     assert run_until_fault(h, cfg.fault_window_s + cfg.fault_after_s), (
         f"a 3 % loss at a settled field never faulted at {kelvin} K")
@@ -170,55 +189,130 @@ def test_an_unknown_field_state_is_refused():
         h.sup.set_field("ramping")
 
 
-# -- rule 5: the band carries the field's allowance ---------------------------
+# -- rule 5: the floor makes room, the ceiling does not ------------------------
 
 
-def test_a_field_that_is_on_widens_the_band_by_what_its_allowance_needs():
-    """`1/sqrt(1 - frac)` of the centre: the output that puts back the power
-    `field_power_frac` takes away.  On from the declared move until the field
-    is declared zero AND has settled."""
-    import math
-
+def test_a_field_that_is_on_lowers_the_floor_and_leaves_the_ceiling():
+    """`1 - sqrt(1 - frac)` of the centre, off the FLOOR only: a field adds
+    heat, so it only ever needs less output.  On from the declared move until
+    the field is declared zero AND has settled."""
     h = armed(140.0)
     lo0, hi0 = h.sup.band
     centre = h.sup.band_centre_pct()
-    extra = centre * (1.0 / math.sqrt(1.0 - h.sup.cfg.field_power_frac) - 1.0)
+    room = centre * (1.0 - math.sqrt(1.0 - h.sup.cfg.field_power_frac))
     h.sup.set_field("moving")
     h.step(1)
     lo, hi = h.sup.band
-    assert hi - hi0 == pytest.approx(extra, abs=0.02)
-    assert lo0 - lo == pytest.approx(extra, abs=0.02)
+    assert hi == pytest.approx(hi0, abs=0.02), "the ceiling moved"
+    assert lo0 - lo == pytest.approx(room, abs=0.02)
     h.sup.set_field("settled")
     h.minutes(5)
-    assert h.sup.band[1] == pytest.approx(hi, abs=0.02)
+    assert h.sup.band == pytest.approx((lo, hi), abs=0.02)
     h.sup.set_field("moving")
     h.minutes(1)
     h.sup.set_field("zero")
     h.minutes(1)
-    assert h.sup.band[1] > hi0 + extra / 2, "narrowed before the field settled"
+    assert h.sup.band[0] < lo0 - room / 2, "narrowed before the field settled"
     h.minutes(2)
-    assert h.sup.band[1] == pytest.approx(hi0, abs=0.02)
+    assert h.sup.band == pytest.approx((lo0, hi0), abs=0.02)
 
 
-@pytest.mark.parametrize("kelvin", (140.0, 180.0))
-def test_the_loop_makes_the_power_back_inside_the_widened_band(kelvin):
-    """**Measured before this step**: with the step test widened and the band
-    not, a 3 % change rails the one-point band at 140 and 180 K and the
-    sample sits 0.4-1 K low for as long as the field is on.  Restoring 3 %
-    needs 1.5 % more output, about one point there.
-
-    It is not fast -- a 3 % change ramped in over four minutes pulls the
-    sample about 3 K low and the hold gains take most of an hour to bring it
-    back -- but it comes back, which railed it never did."""
+@pytest.mark.parametrize("kelvin", (100.0, 180.0))
+def test_without_feedforward_the_loop_gets_there_inside_the_lowered_floor(kelvin):
+    """250 mT's extrapolated heat, ~18 % of the heater, declared with no
+    field value: the PID alone has to find an output 5-6 points down.  The
+    one-point band rails it; the lowered floor lets it arrive.  It is not
+    fast -- this is the case the feedforward exists for -- but it gets there,
+    and nothing about it lifts the ceiling."""
     h = armed(kelvin)
     h.minutes(5)
+    _, hi0 = h.sup.band
     h.sup.set_field("moving")
-    ramp_delivery(h, 1.0, 0.97, minutes=4)
+    ramp_heat(h, 0.0, h.sup.field_heat_w(0.25))
     h.sup.set_field("settled")
     h.minutes(60)
     assert not faulted(h)
-    tail = [s for s in h.history[-150:] if s.error_k is not None]
-    mean = sum(s.error_k for s in tail) / len(tail)
-    assert abs(mean) < 0.1, f"{mean:+.3f} K an hour after the move"
-    lo, hi = h.sup.band
-    assert max(s.output_pct for s in tail) < hi - 0.2, "still railed"
+    tail = errors(h)[-150:]
+    assert abs(sum(tail) / len(tail)) < 0.3, "never got back to the setpoint"
+    assert h.sup.band[1] == pytest.approx(hi0, abs=0.02)
+
+
+# -- the fitted feedforward -----------------------------------------------------
+
+
+@pytest.mark.parametrize("kelvin", WATT_TEMPERATURES)
+@pytest.mark.parametrize("tesla", (0.15, 0.25))
+def test_the_feedforward_holds_the_sample_through_a_field_move(kelvin, tesla):
+    """With the field in tesla, the output goes down by the fitted heat as the
+    field brings it in, so the PID has nothing to correct.  The same move
+    declared without a value overshoots by ten to twenty kelvin."""
+    h = armed(kelvin)
+    h.minutes(5)
+    start = len(h.history)
+    h.sup.set_field("moving", tesla)
+    ramp_heat(h, 0.0, h.sup.field_heat_w(tesla))
+    h.sup.set_field("settled")
+    h.minutes(30)
+    assert not faulted(h)
+    worst = max(abs(e) for e in errors(h, start))
+    assert worst < 0.5, f"{worst:.2f} K off with the feedforward"
+    assert h.history[-1].field_t == pytest.approx(tesla)
+
+
+@pytest.mark.parametrize("scale", (0.7, 1.3), ids=["field 30 % cooler", "30 % hotter"])
+def test_a_fit_that_is_wrong_by_a_third_costs_kelvins_and_not_a_fault(scale):
+    """250 mT is an extrapolation from 150.  If the field turns out 30 %
+    hotter or cooler than the fit, the feedforward gets most of it and the
+    PID the rest: a few kelvin, back to the setpoint inside the hour."""
+    h = armed(150.0)
+    h.minutes(5)
+    h.sup.set_field("moving", 0.25)
+    ramp_heat(h, 0.0, scale * h.sup.field_heat_w(0.25))
+    h.sup.set_field("settled")
+    h.minutes(60)
+    assert not faulted(h)
+    assert max(abs(e) for e in errors(h)) < 10.0
+    tail = errors(h)[-150:]
+    assert abs(sum(tail) / len(tail)) < 0.2
+
+
+def test_going_back_to_zero_gives_the_output_back():
+    h = armed(150.0)
+    h.minutes(5)
+    before = h.history[-1].output_pct
+    heat = h.sup.field_heat_w(0.25)
+    h.sup.set_field("moving", 0.25)
+    ramp_heat(h, 0.0, heat)
+    h.sup.set_field("settled")
+    h.minutes(20)
+    assert h.history[-1].output_pct < before - 3.0
+    start = len(h.history)
+    h.sup.set_field("moving", 0.0)
+    ramp_heat(h, heat, 0.0)
+    h.sup.set_field("zero")
+    h.minutes(20)
+    assert not faulted(h)
+    assert max(abs(e) for e in errors(h, start)) < 0.5
+    assert h.history[-1].output_pct == pytest.approx(before, abs=0.1)
+
+
+def test_settled_with_a_field_records_it_and_moves_nothing():
+    """After a restart at field the output already answers the field, so
+    declaring it must not step anything -- only `moving` acts."""
+    h = armed(150.0)
+    h.minutes(2)
+    bias = h.sup.pid.bias
+    h.sup.set_field("settled", 0.15)
+    h.minutes(2)
+    assert h.sup.pid.bias == bias
+    assert h.history[-1].field_t == pytest.approx(0.15)
+
+
+def test_no_feedforward_while_the_loop_is_not_armed():
+    """A disengaged loop's output is the operator's; a move declared then
+    queues nothing for the next arm to inherit."""
+    h = armed(150.0)
+    h.sup.panic_hold()
+    h.sup.set_field("moving", 0.25)
+    assert h.sup._field_ff_left == 0.0
+    assert h.sup._field_t == pytest.approx(0.25)
