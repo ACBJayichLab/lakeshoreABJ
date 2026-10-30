@@ -67,6 +67,11 @@ from ..model import fitted_response as M
 TYPICAL, NO_OPINION, WARN = "typical", "no opinion", "warn"
 _RANK = {TYPICAL: 0, NO_OPINION: 1, WARN: 2}
 
+#: The recorder's column saying the software loop is treating the magnet as
+#: moving -- `lschart.acquisition.poller.CONTROL_AUX_COLUMNS`.  Absent from the
+#: archive and from any log written before 2026-10-29, where it reads as 0.
+FIELD_COLUMN = "control.field_moving"
+
 
 @dataclass
 class MonitorConfig:
@@ -415,6 +420,7 @@ class Judge:
         self._stage = _Persist(self.cfg.warn_after_s)
         self._last_u: float | None = None
         self._move_t: float | None = None
+        self._field_moving = False
         self._segment: int | None = None
         self._last_t: float | None = None
         #: The pole fit is the one expensive check -- up to 800 points of
@@ -533,6 +539,7 @@ class Judge:
         for f in self._stage_fit.values():
             f.clear()
         self._last_u = self._move_t = None
+        self._field_moving = False
         self._last_t = None
         self.baseline_seeded_t = None
         self._fault_hist.clear()
@@ -567,6 +574,22 @@ class Judge:
         return s.t_s - self._move_t < settle
 
     def _track_move(self, s) -> None:
+        # **A DECLARED FIELD MOVE IS A MOVE** (PID_PLAN.md 4a-xii).  The heater
+        # circuit's magnetoresistance changes the delivered power with the
+        # field, which is a step in the residual and a new delivered FRACTION
+        # -- the very quantity the baseline holds.  So: no opinion while it
+        # moves and for the transient after, and the baseline is dropped when
+        # the move starts and re-seeded at the new level once there is an
+        # opinion again.  Without the second half it froze at the old level
+        # and warned for as long as the field stayed on.
+        moving = (s.aux or {}).get(FIELD_COLUMN, 0.0) >= 0.5
+        if moving:
+            self._move_t = s.t_s
+            if not self._field_moving:
+                self.baseline = self.baseline_t = None
+                self.baseline_seeded_t = None
+                self.baseline_age_s = 0.0
+        self._field_moving = moving
         if s.u_pct is None:
             return
         if self._last_u is not None and s.sample_k is not None:

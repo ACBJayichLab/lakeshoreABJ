@@ -240,6 +240,43 @@ def test_no_opinion_while_the_coldplate_is_atypical():
     assert state(r, "missing_power") == NO_OPINION
 
 
+def field_moved(declared: bool):
+    """118 K, then a field move that takes 3 % of the heater's delivered
+    power, and the loop putting it back: the sample stays where it was and the
+    commanded output rises by `1/sqrt(0.97)`.  Returns the records after."""
+    from ltspm3.monitor.judge import FIELD_COLUMN
+
+    j = Judge()
+    run(j, kelvin=118.0, seconds=40000.0)
+    tc = M.coldplate_k(118.0)
+    after = M.percent_for_power(M.power_w(at(118.0)) / 0.97)
+    out, t = [], 40000.0
+    while t < 40000.0 + 6 * 3600.0:
+        moving = declared and t < 40600.0
+        pct = after if t >= 40300.0 else at(118.0)
+        out.append(j.step(Sample(
+            t_s=t, epoch_s=1.788e9 + t, sample_k=118.0, coldplate_k=tc,
+            u_pct=pct, aux={FIELD_COLUMN: 1.0 if moving else 0.0})))
+        t += 2.0
+    return out
+
+
+def test_a_declared_field_move_is_a_move_and_the_baseline_starts_again():
+    """PID_PLAN.md 4a-xii.  Undeclared, a 3 % change in delivered power at
+    118 K leaves the residual 20 mW out, and it warns for as long as the
+    field stays on, because the baseline freezes on it.  (The loop's own
+    output step trips the heater-move gate, so it is not REPORTED as a step.)
+    Declared through `control.field_moving`, it is a move -- no opinion
+    through it -- and the baseline re-seeds at the new delivered fraction."""
+    undeclared = field_moved(False)
+    assert state(undeclared[-1], "missing_power") == WARN
+
+    declared = field_moved(True)
+    assert all(state(r, "fault_level") != WARN for r in declared)
+    assert state(declared[100], "missing_power") == NO_OPINION
+    assert state(declared[-1], "missing_power") == TYPICAL
+
+
 def test_a_new_recording_drops_the_baseline_but_not_the_calibration():
     """CD10 has a 65 h and a 187 h hole in it.
 
