@@ -292,3 +292,22 @@ def test_a_frozen_loop_is_not_settled(tmp_path, armed):
     h.sup.panic_hold()
     h.step(2)
     assert written(tmp_path, h)["settled"] is False
+
+
+def test_the_field_the_operator_declared_is_in_the_block(tmp_path, armed):
+    """PID_PLAN.md 4a-xii: `field` is the word last declared and
+    `field_moving` whether the loop still treats the magnet as moving -- which
+    outlasts `settled` by `field_settle_s`."""
+    h = armed()
+    block = written(tmp_path, h)
+    assert (block["field"], block["field_moving"]) == ("zero", False)
+    h.sup.set_field("moving")
+    h.step(1)
+    block = written(tmp_path, h)
+    assert (block["field"], block["field_moving"]) == ("moving", True)
+    h.sup.set_field("settled")
+    h.step(1)
+    assert written(tmp_path, h)["field_moving"] is True
+    h.step(int(h.sup.cfg.field_settle_s / h.DT) + 2)
+    block = written(tmp_path, h)
+    assert (block["field"], block["field_moving"]) == ("settled", False)

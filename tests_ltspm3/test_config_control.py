@@ -117,6 +117,23 @@ def test_a_negative_widening_past_the_table_is_rejected():
         cfg.validate()
 
 
+@pytest.mark.parametrize("frac", [-0.01, 0.3])
+def test_a_field_allowance_outside_a_quarter_of_the_power_is_rejected(frac):
+    """PID_PLAN.md 4a-xii.  Past a quarter, a declared move would take the
+    step test's sight of the heater circuit failing during it."""
+    cfg = _with_control()
+    cfg.extensions["control"].supervisor.field_power_frac = frac
+    with pytest.raises(ConfigError, match="field_power_frac"):
+        cfg.validate()
+
+
+def test_a_field_move_that_never_ends_is_rejected():
+    cfg = _with_control()
+    cfg.extensions["control"].supervisor.field_move_max_s = 0.0
+    with pytest.raises(ConfigError, match="field_move_max_s"):
+        cfg.validate()
+
+
 def test_a_safe_output_the_ramp_down_could_never_reach_is_rejected():
     """It used to be "above the operating point", which was the band's centre.
     The centre moves now; the hard limits do not."""

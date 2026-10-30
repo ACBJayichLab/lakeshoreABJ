@@ -91,6 +91,19 @@ def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) ->
             "negative one would narrow it below authority_pct exactly where "
             "the loop has the least to go on"
         )
+    if not 0.0 <= s.field_power_frac <= 0.25:
+        problems.append(
+            f"control.supervisor.field_power_frac {s.field_power_frac:g} must be "
+            "between 0 and 0.25 -- it is how much of the heater's power a "
+            "declared field move may take with it unjudged, and past a quarter "
+            "the step test could no longer see the heater circuit failing "
+            "during one")
+    if s.field_move_max_s <= 0 or s.field_settle_s < 0:
+        problems.append(
+            "control.supervisor.field_move_max_s must be positive and "
+            "field_settle_s not negative -- the first is what ends a move "
+            "nobody ended, so at zero a declared move would never widen "
+            "anything")
     if not s.hard_min_pct <= s.safe_output_pct <= s.hard_max_pct:
         problems.append(
             f"safe_output_pct {s.safe_output_pct}% is outside the hard limits "

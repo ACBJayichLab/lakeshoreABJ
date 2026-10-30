@@ -137,6 +137,7 @@ python -m lschart -c config.yaml send hold
 python -m lschart -c config.yaml send arm            # or `send arm 96.5`
 python -m lschart -c config.yaml send disengage      # open the software loop, heater left as is
 python -m lschart -c config.yaml send ack            # clear a fault lockout
+python -m lschart -c config.yaml send field moving   # magnet ramping (then `settled` / `zero`)
 python -m lschart -c config.yaml send source lschart-gui off
 python -m lschart -c config.yaml send note "reseated the heater connector"
 ```

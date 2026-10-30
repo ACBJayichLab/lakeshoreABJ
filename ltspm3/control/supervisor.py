@@ -102,6 +102,10 @@ class SupervisorState(enum.Enum):
 #: meant to be able to stop it where it stands.
 LATCHED = (SupervisorState.LOCKED_OUT, SupervisorState.CRASHED)
 
+#: What the operator may say about the magnet -- :meth:`HeaterSupervisor.set_field`.
+FIELD_ZERO, FIELD_MOVING, FIELD_SETTLED = "zero", "moving", "settled"
+FIELD_STATES = (FIELD_ZERO, FIELD_MOVING, FIELD_SETTLED)
+
 
 @dataclass
 class SupervisorConfig:
@@ -262,6 +266,35 @@ class SupervisorConfig:
     #: avoid.  A few cycles, because the sink is read on every one of them.
     sink_stale_s: float = 30.0
 
+    # -- the magnet --------------------------------------------------------
+    #
+    # **A FIELD CHANGES WHAT THE HEATER DELIVERS** (Jeff, 2026-10-29: the
+    # heater circuit's magnetoresistance).  The 218 drives a VOLTAGE, so a
+    # resistance that moves with the field moves the delivered power at a fixed
+    # output -- the same `-(1-a) P(u)` in the residual a reseated connector
+    # puts there, and the step test cannot tell the two apart.  Nothing in the
+    # recorder knows the field, so the operator (or the field-sweep script)
+    # says when it moves: `set_field`.  PID_PLAN.md 4a-xii.
+    #
+    # Neither check is switched off by it.  A declared move WIDENS the step
+    # test to this fraction of the heater's power, and a field that is on
+    # widens the authority band by the output that fraction needs; a loss
+    # bigger than that still faults, mid-move included.
+
+    #: The most a field may change the power the heater circuit delivers, as a
+    #: fraction of it.  **A guess, not a measurement**: nothing in the archive
+    #: ran above 10 mT.  The first declared move's `dq_step_w` measures it.
+    field_power_frac: float = 0.05
+    #: A move nobody ends is ended here, with a standing alarm: the step test
+    #: does not stay widened on a forgotten command.  Re-declaring a move
+    #: restarts the clock, for a ramp longer than this.
+    field_move_max_s: float = 3600.0
+    #: How long the step test stays widened AFTER the move is declared over,
+    #: before it takes the new level as its reference -- the magnet's own
+    #: settling plus the residual's slope window, which reaches back across the
+    #: end of the move.
+    field_settle_s: float = 120.0
+
     #: A one-cycle lurch in the *feedback* terms (P+I+D) this large means a bad
     #: reading is driving the loop, not that the cryostat needs the output.
     #: Kept: it is about the READING, not about the cryostat.
@@ -347,6 +380,11 @@ class SupervisorStatus:
     #: while the setpoint was still, and this cycle's.  A fault is a STEP.
     dq_step_w: float = 0.0
     residual_reason: str = ""
+    #: The magnet, as the operator last declared it: `zero`, `moving` or
+    #: `settled`.  `field_moving` is True for as long as the step test is
+    #: widened, which runs `field_settle_s` past the move's declared end.
+    field_state: str = "zero"
+    field_moving: bool = False
     phase: str = "hold"
     #: **Can this temperature be trusted for a measurement?**  ONE verdict,
     #: and every client reads it rather than working it out: `Tuner.settled`
@@ -437,6 +475,20 @@ class HeaterSupervisor:
         self.smoother = SetpointSmoother(self._smooth_tau_s(),
                                          value=self.pid.cfg.setpoint,
                                          settled_k=self.ramp.cfg.settled_k)
+        #: The magnet, as declared -- see `set_field`.  Set BEFORE the first
+        #: `_apply_band_to_pid` too: a field that is on widens the band.
+        #: Independent of the loop's mode: arming, disengaging and
+        #: acknowledging do not move a magnet, so none of them touches this.
+        self._field = FIELD_ZERO
+        #: When the present move was declared, for `field_move_max_s`.
+        self._field_since: float | None = None
+        #: Set when a move is declared over: the step test stays widened until
+        #: then (`field_settle_s`), and the field becomes `_field_after`.
+        self._field_release_at: float | None = None
+        self._field_after = FIELD_SETTLED
+        #: A move that `field_move_max_s` ended rather than the operator.  A
+        #: standing alarm until the next `set_field`.
+        self._field_expired = ""
         #: Set BEFORE the first `_apply_band_to_pid`, because the band's floor
         #: now asks where the heater is.
         self.output_pct: float | None = None   # last value we commanded
@@ -691,10 +743,34 @@ class HeaterSupervisor:
             return per_k * (_M.T_MIN_K - setpoint)
         return 0.0
 
+    def field_allowance_pct(self) -> float:
+        """The EXTRA half-width a field that is on is granted (4a-xii).
+
+        A field that takes `field_power_frac` of the heater's power away needs
+        `1/sqrt(1 - frac)` of the output to put it back -- the 218 drives a
+        voltage, and power goes as its square -- and that is a LEVEL error in
+        the model's centre, which is what `authority_pct` is sized for and
+        what a few percent of magnetoresistance overruns: measured on the
+        bench, a 3 % change at 180 K rails the one-point band and leaves the
+        sample a kelvin low.
+
+        On from the moment a move is declared until the field is declared
+        ``zero`` and has settled, because the resistance follows the field and
+        not the move.  The same fraction the step test tolerates, so the loop
+        is never allowed to need more output than it is allowed to have.
+        Nothing here is heat: `hard_max_pct` still caps, and the output rate
+        limiter still sets how fast the heater travels into the window.
+        """
+        frac = self.cfg.field_power_frac
+        if self._field == FIELD_ZERO or frac <= 0.0:
+            return 0.0
+        return self.band_centre_pct() * (1.0 / math.sqrt(1.0 - frac) - 1.0)
+
     @property
     def band(self) -> tuple[float, float]:
         c = self.cfg
-        half = c.authority_pct + self.ramp_lead_pct() + self.beyond_table_pct()
+        half = (c.authority_pct + self.ramp_lead_pct() + self.beyond_table_pct()
+                + self.field_allowance_pct())
         centre = self.band_centre_pct()
         lo = max(c.hard_min_pct, centre - half)
         hi = min(c.hard_max_pct, centre + half)
@@ -1038,6 +1114,91 @@ class HeaterSupervisor:
         """Request a manual output.  Still clamped and rate limited on the way out."""
         self.manual_pct = pct
 
+    def set_field(self, state: str) -> str:
+        """The operator says what the magnet is doing: ``moving``, ``settled``
+        or ``zero``.  Returns the sentence for the acknowledgement.
+
+        **Why the loop has to be told.**  The heater circuit's resistance moves
+        with the field, the 218 drives a voltage, so the delivered power moves
+        at a fixed output -- and that is a step in the residual of exactly the
+        shape a failing connector makes.  The recorder does not know the field,
+        so this is the only way the step test can tell the two apart.
+
+        ``moving`` -- a ramp is starting (or still going: saying it again
+        restarts `field_move_max_s`).  Until the move is over the step test
+        judges against the hold BEFORE it with its threshold widened to
+        `field_power_frac` of the heater's power, and keeps nothing measured
+        during it, the same as a moving setpoint.
+
+        ``settled`` / ``zero`` -- the ramp has ended, at a field or at none.
+        The test stays widened for `field_settle_s` more and then takes the new
+        level as its reference.  The authority band carries the field's
+        allowance for as long as the field is not ``zero``.
+
+        Nothing here moves the heater, and none of it survives as a loosened
+        check: a move ends by itself after `field_move_max_s`, with an alarm.
+        """
+        if state not in FIELD_STATES:
+            raise ValueError(
+                f"the field is one of {', '.join(FIELD_STATES)}, not {state!r}")
+        now = self.clock()
+        self._field_expired = ""
+        cfg = self.cfg
+        if state == FIELD_MOVING:
+            again = self._field == FIELD_MOVING
+            self._field = FIELD_MOVING
+            self._field_since = now
+            self._field_release_at = None
+            log.warning("field %s: the step test is widened to %.0f %% of the "
+                        "heater's power until it settles",
+                        "still moving" if again else "moving",
+                        100 * cfg.field_power_frac)
+            return (f"field {'still ' if again else ''}moving: the step test "
+                    f"tolerates {100 * cfg.field_power_frac:g} % of the heater's "
+                    f"power until the field settles (at most "
+                    f"{cfg.field_move_max_s:.0f} s from now)")
+        if self._field == FIELD_MOVING:
+            # The move is over; the test stays widened a little longer.
+            self._field_release_at = now + cfg.field_settle_s
+            self._field_after = state
+            log.warning("field %s: the step test re-references in %.0f s",
+                        state, cfg.field_settle_s)
+            return (f"field {state}: the step test takes the new level as its "
+                    f"reference in {cfg.field_settle_s:.0f} s")
+        # No move was declared.  Only the band's allowance changes, and the
+        # step test keeps the reference it has -- a field that really moved
+        # unannounced has already been judged as the step it was.
+        self._field = state
+        log.warning("field declared %s with no move", state)
+        return (f"field {state} (no move was declared, so the step test keeps "
+                "its reference)")
+
+    def _restart_step_test(self) -> None:
+        """Drop the step test's window and its average: the next level it
+        measures, one slope window from now, is the new reference."""
+        self._dq_hist.clear()
+        self._dq_slow = self._dq_since = None
+
+    def _advance_field(self, t: float) -> None:
+        """End a move whose settling time is up, or that nobody ended."""
+        if self._field != FIELD_MOVING:
+            return
+        if self._field_release_at is not None:
+            if t < self._field_release_at:
+                return
+            self._field = self._field_after
+        elif t - self._field_since >= self.cfg.field_move_max_s:
+            self._field_expired = (
+                f"a field move declared {t - self._field_since:.0f} s ago was "
+                "never declared settled; the step test is judging again on "
+                "the level it has now -- `field settled` clears this")
+            log.warning("%s", self._field_expired)
+            self._field = FIELD_SETTLED
+        else:
+            return
+        self._field_since = self._field_release_at = None
+        self._restart_step_test()
+
     def acknowledge(self) -> None:
         """Clear a lockout after the operator has looked at the cryostat.
 
@@ -1232,6 +1393,11 @@ class HeaterSupervisor:
             ti=self.pid.cfg.ti,
         )
         s.raw_k = reading.kelvin if reading is not None else None
+        # Whatever the mode: a magnet moves whether or not the loop is armed,
+        # and a move's clock runs either way.
+        self._advance_field(t)
+        s.field_state = self._field
+        s.field_moving = self._field == FIELD_MOVING
 
         # -- believe the sensor? --------------------------------------------
         if readings:
@@ -1727,6 +1893,8 @@ class HeaterSupervisor:
         # judge.py).  Judging a step against the whole band instead means the
         # loop goes deaf to real steps as the gauge ages while the monitor,
         # looking at the same residual, still calls them.
+        if self._field_expired:
+            anomalies.append(self._field_expired)
         dq, sigma, fast, why = self._missing_power(s)
         s.missing_power_w, s.sigma_q_w, s.residual_reason = dq, sigma, why
         if dq is None:
@@ -1810,12 +1978,20 @@ class HeaterSupervisor:
         # loss at a hold, at arming included, is the range it always was.
         # What a move's corner can no longer do is outlive the cycle it was
         # measured on.
-        self._dq_hist.append((t, self._dq_slow, fast, holding))
+        #
+        # **A FIELD MOVE IS A MOVE TOO** (4a-xii).  Its samples are judged and
+        # not kept, for the same reason: the level they sit at is on its way
+        # somewhere, and kept, the old field's level would stand against the
+        # new one for half an hour after the move.  `_advance_field` empties
+        # the window once the field has settled.
+        field_moving = self._field == FIELD_MOVING
+        keep = holding and not field_moving
+        self._dq_hist.append((t, self._dq_slow, fast, keep))
         floor_t = t - cfg.fault_window_s
         while len(self._dq_hist) > 1 and self._dq_hist[0][0] < floor_t:
             self._dq_hist.popleft()
         now = self._dq_hist[-1]
-        if not holding:
+        if not keep:
             self._dq_hist.pop()
         kept = [x for x in self._dq_hist if x[3]]
         kept.append(now)
@@ -1846,6 +2022,13 @@ class HeaterSupervisor:
         # heater loss.  A corner is not kept now either.
         widest = math.hypot(hi[2], lo[2])
         fault_at = max(cfg.fault_mw * 1e-3, cfg.warn_sigma * widest)
+        # WIDENED, NOT SWITCHED OFF, while the field moves: to the change in
+        # delivered power the field is allowed to make, in watts at THIS
+        # output.  A loss past it is still a step, and an open heater is all
+        # of `P(u)`.
+        if field_moving and self.output_pct is not None:
+            fault_at = max(fault_at,
+                           cfg.field_power_frac * _M.power_w(self.output_pct))
         if step >= fault_at:
             faults.append(
                 f"the residual stepped {1e3 * step:.2f} mW inside "
