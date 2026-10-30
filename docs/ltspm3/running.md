@@ -159,21 +159,31 @@ rather than quietly succeeding.
 
 ## High field: tell the loop when the magnet moves
 
-The sample heater circuit is **magnetoresistive** (Jeff, 2026-10-29): at high
-field the output that holds a temperature changes. The 218 drives a voltage, so
-a resistance that moves with the field moves the power delivered at a fixed
-output — and to the loop's watt residual that is exactly what a failing
-connector looks like. Undeclared, a few percent of it step-faults the loop and
-ramps the heater down. The recorder does not know the field, so **bracket
-every magnet ramp**:
+**A field adds heat to the sample** — measured 2026-10-30 with the loop
+disengaged at 66.497 %: +42.8 mW at 100 mT, +68.4 mW at 150 mT, −71.0 mW back
+to 5 mT, so it is reversible. Fitted `0.654 W × B^1.17` (the armed file's
+`field_heat_w_per_t` / `field_heat_exponent`); 250 mT is ~129 mW **by
+extrapolation**. The mechanism is not settled: the coldplate dipped ~70 mK as
+the field came up and rose on the way down, which fits the sample's thermal
+link losing conductance in field better than a change in the heater. To the
+loop's watt residual it looks like a failing connector, and the recorder does
+not know the field, so **bracket every magnet ramp, with the field**:
 
 ```bash
-python -m ltspm3 -c config.yaml send field moving    # before the magnet starts
-python -m ltspm3 -c config.yaml send field settled   # once it has stopped (or: zero)
+python -m ltspm3 -c config.yaml send field moving 0.25   # before the magnet starts
+python -m ltspm3 -c config.yaml send field settled       # once it has stopped
+python -m ltspm3 -c config.yaml send field moving 0      # and back down ...
+python -m ltspm3 -c config.yaml send field zero          # ... once it is at zero
 ```
 
-From MATLAB, `ls.setField('moving')` / `ls.setField('settled')`. The loop stays
-armed throughout; there is no `disengage`/`arm` and no bump.
+From MATLAB, `ls.setField('moving', 0.25)` / `ls.setField('settled')`. The
+loop stays armed throughout; there is no `disengage`/`arm` and no bump. With
+the field in tesla the loop steps the heater by the fitted heat over
+`field_ramp_s` (the magnet's ramp, 60 s), and on the bench the sample stays
+within a few tenths of a kelvin; without it the PID alone lets a 250 mT step
+overshoot by ~20 K. **After a recorder restart at field**, record it with
+`send field settled 0.25` — that moves nothing, it only tells the loop where
+the field is.
 
 What the loop does with it (`control.supervisor` in the armed file, PID_PLAN.md
 4a-xii, safety.md rules 4 and 5):
@@ -184,19 +194,18 @@ What the loop does with it (`control.supervisor` in the armed file, PID_PLAN.md
 - `field_settle_s` **after `settled`**, the new level is the step test's
   reference, and a heater loss after that is judged as it always was;
 - **while any field is on** (from `moving` until `zero` has settled), the
-  authority band is wider by the output `field_power_frac` needs to put back;
+  authority band's **floor** is lower by the output `field_power_frac` needs;
+  the ceiling never moves, because a field only ever needs less heat;
 - a move nobody ends is ended after `field_move_max_s` with a standing alarm.
   For a longer ramp, send `field moving` again;
 - the monitor reads the same declaration from the CSV (`control.field_moving`):
   no opinion through the move, and its baseline restarts at the new level.
 
-**`field_power_frac` is a guess** — nothing logged ran above 10 mT. After the
-first real move, read `dq_step_w` in the status file (or the residual's shift
-in the monitor) and set it to a comfortable margin over what the field
-actually did. **And it is not fast:** the loop puts the power back on its hold
-gains, so a change of a few percent pulls the sample off its setpoint by
-kelvins for a good fraction of an hour at 140–180 K. A slower magnet ramp
-makes a smaller excursion. Wait for `settled` before measuring.
+**What is still a guess:** the heat above 150 mT (extrapolated), how it
+depends on temperature (measured only at 150–180 K), and on field direction.
+If the fit is 30 % off, a 250 mT step costs 3–7 K that the loop takes back
+inside the hour; the monitor's residual after each move says how far off it
+was. Wait for `settled` before measuring.
 
 ## Watching it on screen
 

@@ -301,10 +301,11 @@ def test_the_field_the_operator_declared_is_in_the_block(tmp_path, armed):
     h = armed()
     block = written(tmp_path, h)
     assert (block["field"], block["field_moving"]) == ("zero", False)
-    h.sup.set_field("moving")
+    h.sup.set_field("moving", 0.15)
     h.step(1)
     block = written(tmp_path, h)
     assert (block["field"], block["field_moving"]) == ("moving", True)
+    assert block["field_t"] == pytest.approx(0.15)
     h.sup.set_field("settled")
     h.step(1)
     assert written(tmp_path, h)["field_moving"] is True

@@ -46,9 +46,10 @@ correct aggressively.
      170 → 185 K move. A loss mid-move is still called (now against the hold
      before it), and a loss at a hold is the range it always was;
    - **a declared field move widens the step, it does not switch it off**
-     (2026-10-29, 4a-xii). The heater circuit's magnetoresistance moves the
-     delivered power with the field — the same `−(1−a)·P(u)` a failing
-     connector puts in `δQ`, and nothing in the recorder knows the field, so
+     (2026-10-29, 4a-xii). A field moves the sample's heat balance —
+     measured 2026-10-30 as heat ADDED, 43 mW at 100 mT — a step in `δQ` of
+     the shape a failing connector makes, and nothing in the recorder knows
+     the field, so
      the operator says so (`field moving` / `settled` / `zero`). While it
      moves, its samples are judged and not kept, like a moving setpoint's,
      against a threshold of `field_power_frac` of `P(u)`; `field_settle_s`
@@ -136,15 +137,24 @@ correct aggressively.
    travels into a newly opened window is the output rate limiter, and what
    refuses an absurd setpoint step is rule 8.
 
-   **A field that is on widens it by the output its allowance needs**
-   (2026-10-29, 4a-xii): `1/√(1 − field_power_frac)` of the centre, from the
-   declared move until the field is declared zero and has settled. The heater
-   circuit's magnetoresistance is a level error in the centre, which is what
-   the half-width is for, and a few percent of it overruns one point: on the
-   bench a 3 % change at 140–180 K railed the band and left the sample
-   0.4–1 K low for as long as the field was on. It is the same fraction the
-   step test tolerates, so the loop is never allowed to need more output than
-   it may have; `hard_max_pct` still caps.
+   **A field that is on lowers the floor, and only the floor** (4a-xii,
+   made one-sided in 4a-xiii): by `1 − √(1 − field_power_frac)` of the
+   centre, from the declared move until the field is declared zero and has
+   settled. A field **adds** heat (measured 2026-10-30: +42.8 mW at 100 mT,
+   +68.4 mW at 150 mT, reversible), so holding a temperature at field needs
+   less output — a level error in the centre, which is what the half-width is
+   for, and 100 mT overruns one point. 4a-xii widened both edges before the
+   sign was known; at the fraction 250 mT needs that put the ceiling ~8 points
+   above the hold, authority to heat that no field asks for. The floor is the
+   safe edge. The ceiling stays where the setpoint puts it.
+
+   **And a declared field value moves the output first** (4a-xiii):
+   `field moving <tesla>` steps the PID's bias down by the fitted heat
+   (`field_heat_w_per_t · |B|^field_heat_exponent`) over `field_ramp_s`. Left
+   to the PID, a 250 mT step overshoots 17–21 K on the bench; with the fit
+   right it stays inside 0.25 K, and 30 % wrong costs 3–7 K. Only while
+   armed, only on `moving` — `settled <tesla>` records a field the output
+   already answers.
 
    It may go *below* the band, but only as a fault ramp-down — the one
    direction where leaving the band is the safe one.

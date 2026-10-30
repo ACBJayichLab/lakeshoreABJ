@@ -268,22 +268,21 @@ class SupervisorConfig:
 
     # -- the magnet --------------------------------------------------------
     #
-    # **A FIELD CHANGES WHAT THE HEATER DELIVERS** (Jeff, 2026-10-29: the
-    # heater circuit's magnetoresistance).  The 218 drives a VOLTAGE, so a
-    # resistance that moves with the field moves the delivered power at a fixed
-    # output -- the same `-(1-a) P(u)` in the residual a reseated connector
-    # puts there, and the step test cannot tell the two apart.  Nothing in the
-    # recorder knows the field, so the operator (or the field-sweep script)
-    # says when it moves: `set_field`.  PID_PLAN.md 4a-xii.
+    # **A FIELD ADDS HEAT TO THE SAMPLE** (measured 2026-10-30 with the loop
+    # disengaged: +42.8 mW at 100 mT, +68.4 mW at 150 mT, reversible).  In the
+    # residual that is a step of the shape a reseated connector makes, and the
+    # step test cannot tell the two apart.  Nothing in the recorder knows the
+    # field, so the operator (or the field-sweep script) says when it moves:
+    # `set_field`.  PID_PLAN.md 4a-xii, 4a-xiii.
     #
     # Neither check is switched off by it.  A declared move WIDENS the step
     # test to this fraction of the heater's power, and a field that is on
-    # widens the authority band by the output that fraction needs; a loss
-    # bigger than that still faults, mid-move included.
+    # lowers the authority band's floor by the output that fraction needs; a
+    # loss bigger than that still faults, mid-move included.
 
-    #: The most a field may change the power the heater circuit delivers, as a
-    #: fraction of it.  **A guess, not a measurement**: nothing in the archive
-    #: ran above 10 mT.  The first declared move's `dq_step_w` measures it.
+    #: The most a field may change the heat reaching the sample, as a fraction
+    #: of the heater's power: the step test's tolerance while the field moves,
+    #: and how far the band's FLOOR drops while a field is on.
     field_power_frac: float = 0.05
     #: A move nobody ends is ended here, with a standing alarm: the step test
     #: does not stay widened on a forgotten command.  Re-declaring a move
@@ -294,6 +293,17 @@ class SupervisorConfig:
     #: settling plus the residual's slope window, which reaches back across the
     #: end of the move.
     field_settle_s: float = 120.0
+    #: **THE FIELD'S HEAT, fitted**: ``field_heat_w_per_t * |B| **
+    #: field_heat_exponent`` watts reach the sample at a field of ``B`` tesla,
+    #: on top of the heater.  Zero means no model, and then a declared move
+    #: has no feedforward.  With one, `set_field('moving', tesla)` steps the
+    #: output down by the heat the move will add, spread over
+    #: `field_ramp_s`, so the sample need not move first for the loop to
+    #: answer -- on the bench a 150 mT step left to the PID overshot ~10 K.
+    field_heat_w_per_t: float = 0.0
+    field_heat_exponent: float = 1.0
+    #: The magnet's own ramp: the feedforward is spread over this long.
+    field_ramp_s: float = 60.0
 
     #: A one-cycle lurch in the *feedback* terms (P+I+D) this large means a bad
     #: reading is driving the loop, not that the cryostat needs the output.
@@ -385,6 +395,8 @@ class SupervisorStatus:
     #: widened, which runs `field_settle_s` past the move's declared end.
     field_state: str = "zero"
     field_moving: bool = False
+    #: The field as last declared, in tesla (0 when none was given).
+    field_t: float = 0.0
     phase: str = "hold"
     #: **Can this temperature be trusted for a measurement?**  ONE verdict,
     #: and every client reads it rather than working it out: `Tuner.settled`
@@ -489,6 +501,12 @@ class HeaterSupervisor:
         #: A move that `field_move_max_s` ended rather than the operator.  A
         #: standing alarm until the next `set_field`.
         self._field_expired = ""
+        #: The field as last declared, in tesla, and the feedforward of a
+        #: declared move still to be applied to the PID's bias, in percent,
+        #: with the rate it goes in at.
+        self._field_t = 0.0
+        self._field_ff_left = 0.0
+        self._field_ff_rate = 0.0
         #: Set BEFORE the first `_apply_band_to_pid`, because the band's floor
         #: now asks where the heater is.
         self.output_pct: float | None = None   # last value we commanded
@@ -744,35 +762,37 @@ class HeaterSupervisor:
         return 0.0
 
     def field_allowance_pct(self) -> float:
-        """The EXTRA half-width a field that is on is granted (4a-xii).
+        """How much LOWER the band's floor goes while a field is on (4a-xiii).
 
-        A field that takes `field_power_frac` of the heater's power away needs
-        `1/sqrt(1 - frac)` of the output to put it back -- the 218 drives a
-        voltage, and power goes as its square -- and that is a LEVEL error in
-        the model's centre, which is what `authority_pct` is sized for and
-        what a few percent of magnetoresistance overruns: measured on the
-        bench, a 3 % change at 180 K rails the one-point band and leaves the
-        sample a kelvin low.
+        **A field ADDS heat** (measured 2026-10-30, 150-177 K: +42.8 mW at
+        100 mT, +68.6 mW at 150 mT, with the heater's output unchanged), so
+        holding a temperature at field needs LESS output: `sqrt(1 - frac)` of
+        it, for heat worth `field_power_frac` of the heater's power -- the 218
+        drives a voltage, and power goes as its square.  That is a LEVEL error
+        in the model's centre, which is what `authority_pct` is sized for and
+        what a field overruns within 100 mT.
+
+        **The floor only.**  4a-xii widened both edges, before anybody knew
+        the sign, and at the fraction 250 mT needs that put the CEILING ~8
+        points above the hold -- authority to heat that no field ever asks
+        for.  Rule 5's own argument says the floor is the safe edge: less heat
+        is never the dangerous direction.  The ceiling stays where the setpoint
+        puts it, field or no field.
 
         On from the moment a move is declared until the field is declared
-        ``zero`` and has settled, because the resistance follows the field and
-        not the move.  The same fraction the step test tolerates, so the loop
-        is never allowed to need more output than it is allowed to have.
-        Nothing here is heat: `hard_max_pct` still caps, and the output rate
-        limiter still sets how fast the heater travels into the window.
+        ``zero`` and has settled.  The same fraction the step test tolerates.
         """
         frac = self.cfg.field_power_frac
         if self._field == FIELD_ZERO or frac <= 0.0:
             return 0.0
-        return self.band_centre_pct() * (1.0 / math.sqrt(1.0 - frac) - 1.0)
+        return self.band_centre_pct() * (1.0 - math.sqrt(1.0 - frac))
 
     @property
     def band(self) -> tuple[float, float]:
         c = self.cfg
-        half = (c.authority_pct + self.ramp_lead_pct() + self.beyond_table_pct()
-                + self.field_allowance_pct())
+        half = c.authority_pct + self.ramp_lead_pct() + self.beyond_table_pct()
         centre = self.band_centre_pct()
-        lo = max(c.hard_min_pct, centre - half)
+        lo = max(c.hard_min_pct, centre - half - self.field_allowance_pct())
         hi = min(c.hard_max_pct, centre + half)
         # **THE FLOOR MAY NEVER BE ABOVE WHERE THE HEATER ALREADY IS.**  The
         # floor bounds what the PID may ASK for -- it is anti-windup, not a
@@ -886,6 +906,9 @@ class HeaterSupervisor:
             )
 
     def _enter_mode(self, mode: LoopMode) -> None:
+        # Whatever is left of a field move's feedforward belongs to the loop
+        # that queued it; a re-prime starts from where the heater IS.
+        self._field_ff_left = 0.0
         if mode is LoopMode.PID:
             # Bumpless: start from wherever the heater actually is, *now* --
             # not from where the PID last thought it was.  After a fault
@@ -1114,9 +1137,26 @@ class HeaterSupervisor:
         """Request a manual output.  Still clamped and rate limited on the way out."""
         self.manual_pct = pct
 
-    def set_field(self, state: str) -> str:
+    def field_heat_w(self, tesla: float) -> float:
+        """What a field of ``tesla`` adds to the sample, in watts, by the fit
+        in `field_heat_w_per_t` / `field_heat_exponent`."""
+        cfg = self.cfg
+        if cfg.field_heat_w_per_t <= 0.0:
+            return 0.0
+        return cfg.field_heat_w_per_t * abs(tesla) ** cfg.field_heat_exponent
+
+    def set_field(self, state: str, tesla: float | None = None) -> str:
         """The operator says what the magnet is doing: ``moving``, ``settled``
-        or ``zero``.  Returns the sentence for the acknowledgement.
+        or ``zero``, and optionally the field in tesla.  Returns the sentence
+        for the acknowledgement.
+
+        ``moving <tesla>`` is the one that ACTS (4a-xiii): the field is about
+        to go to ``tesla``, so the output is stepped by the difference in
+        `field_heat_w` between there and the field last declared, over
+        `field_ramp_s` -- only while the loop is armed, and only on
+        ``moving``.  ``settled <tesla>`` and ``zero`` RECORD a field that is
+        already there (after a restart, say), which the output already
+        answers, so they move nothing.
 
         **Why the loop has to be told.**  The heater circuit's resistance moves
         with the field, the 218 drives a voltage, so the delivered power moves
@@ -1141,6 +1181,12 @@ class HeaterSupervisor:
         if state not in FIELD_STATES:
             raise ValueError(
                 f"the field is one of {', '.join(FIELD_STATES)}, not {state!r}")
+        if tesla is not None:
+            tesla = abs(float(tesla))
+            if not math.isfinite(tesla):
+                raise ValueError(f"the field must be a number of tesla, not {tesla}")
+        if state == FIELD_ZERO:
+            tesla = 0.0
         now = self.clock()
         self._field_expired = ""
         cfg = self.cfg
@@ -1149,14 +1195,21 @@ class HeaterSupervisor:
             self._field = FIELD_MOVING
             self._field_since = now
             self._field_release_at = None
-            log.warning("field %s: the step test is widened to %.0f %% of the "
-                        "heater's power until it settles",
-                        "still moving" if again else "moving",
-                        100 * cfg.field_power_frac)
-            return (f"field {'still ' if again else ''}moving: the step test "
-                    f"tolerates {100 * cfg.field_power_frac:g} % of the heater's "
-                    f"power until the field settles (at most "
-                    f"{cfg.field_move_max_s:.0f} s from now)")
+            ff = ""
+            if tesla is not None:
+                ff = self._field_feedforward(tesla)
+                self._field_t = tesla
+            to = "" if tesla is None else f" to {tesla:g} T"
+            log.warning("field %s%s: the step test is widened to %.0f %% of "
+                        "the heater's power until it settles%s",
+                        "still moving" if again else "moving", to,
+                        100 * cfg.field_power_frac, ff)
+            return (f"field {'still ' if again else ''}moving{to}: the step "
+                    f"test tolerates {100 * cfg.field_power_frac:g} % of the "
+                    f"heater's power until the field settles (at most "
+                    f"{cfg.field_move_max_s:.0f} s from now){ff}")
+        if tesla is not None:
+            self._field_t = tesla
         if self._field == FIELD_MOVING:
             # The move is over; the test stays widened a little longer.
             self._field_release_at = now + cfg.field_settle_s
@@ -1172,6 +1225,31 @@ class HeaterSupervisor:
         log.warning("field declared %s with no move", state)
         return (f"field {state} (no move was declared, so the step test keeps "
                 "its reference)")
+
+    def _field_feedforward(self, tesla: float) -> str:
+        """Queue the output step a move to ``tesla`` needs, and say what it
+        is.  Nothing unless the loop is armed and the fit predicts any heat.
+
+        From where the output is HEADING -- here plus any step of an earlier
+        move still going in -- to the output that delivers that much less
+        power, through the model's own `P(u)`.  A step DOWN for a field going
+        up: rule 1's direction.  Going back down it is a step up, of exactly
+        the heat the field takes away again, and the authority band and
+        `hard_max_pct` still bound it like any other demand.
+        """
+        heat = self.field_heat_w(tesla) - self.field_heat_w(self._field_t)
+        if (heat == 0.0 or self.mode is not LoopMode.PID
+                or self.output_pct is None):
+            return ""
+        here = self.output_pct
+        base = here + self._field_ff_left
+        target = _M.percent_for_power(max(0.0, _M.power_w(base) - heat))
+        self._field_ff_left = target - here
+        ramp = max(self.cfg.field_ramp_s, 0.0)
+        self._field_ff_rate = (abs(self._field_ff_left) / ramp if ramp > 0
+                               else math.inf)
+        return (f"; feedforward {target - base:+.3f} % for "
+                f"{1e3 * heat:+.1f} mW over {ramp:.0f} s")
 
     def _restart_step_test(self) -> None:
         """Drop the step test's window and its average: the next level it
@@ -1398,6 +1476,7 @@ class HeaterSupervisor:
         self._advance_field(t)
         s.field_state = self._field
         s.field_moving = self._field == FIELD_MOVING
+        s.field_t = self._field_t
 
         # -- believe the sensor? --------------------------------------------
         if readings:
@@ -1691,6 +1770,16 @@ class HeaterSupervisor:
                 vel = max(-limit, min(limit, vel))
         self.pid.velocity_ff_pct = vel
         s.velocity_ff_pct = vel
+
+        # A DECLARED FIELD MOVE'S FEEDFORWARD goes into the bias -- the
+        # operating point the loop holds about -- because that is what moved:
+        # the output that holds this temperature at this field.  A bias, not a
+        # term, so the next `prime` absorbs it like any other output.
+        if self._field_ff_left and dt > 0:
+            step = min(abs(self._field_ff_left), self._field_ff_rate * dt)
+            step = math.copysign(step, self._field_ff_left)
+            self.pid.bias += step
+            self._field_ff_left -= step
 
         terms = self.pid.update(s.filtered_k, s.slope_k_per_s, dt)
         s.demand_pct = terms.unclamped
