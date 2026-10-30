@@ -785,6 +785,7 @@ class IpcService:
         person excused has to be visible as excused afterwards.
         """
         state = str(cmd.args.get("state") or "").strip().lower()
+        tesla = _as_float(cmd.args, "tesla", required=False, default=None)
         if not getattr(self.software_loop, "has_loop", False):
             raise CommandError(
                 "this recorder has no software loop to tell about the field "
@@ -797,10 +798,11 @@ class IpcService:
                 "file; set ipc.allow_analog_output: true"
             )
         try:
-            message = self.software_loop.set_field(state)
+            message = self.software_loop.set_field(state, tesla)
         except RuntimeError as exc:
             raise CommandError(str(exc)) from None
-        self._notes.append(f"[{cmd.source or '?'}] field {state}")
+        at = "" if tesla is None else f" {tesla:g} T"
+        self._notes.append(f"[{cmd.source or '?'}] field {state}{at}")
         return message
 
     def _do_ack(self, cmd: Command) -> str:

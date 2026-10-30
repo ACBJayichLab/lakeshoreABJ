@@ -256,15 +256,22 @@ def cmd_check(args) -> int:
                       "model's table is chased from the band at its edge, and "
                       "rails once the gain runs out")
             # **AND WHAT A DECLARED FIELD BUYS**, because it is the other
-            # thing that widens the band and only `send field` turns it on.
+            # thing that moves the band and only `send field` turns it on.
             frac = float(getattr(s, "field_power_frac", 0.0) or 0.0)
             if frac > 0:
                 print(f"  field          : `send field moving` tolerates a "
-                      f"{100 * frac:g}% change in the heater's delivered power "
-                      f"(the step test), and while a field is on the band "
-                      f"widens by the output that needs; a move not declared "
-                      f"settled ends after "
+                      f"{100 * frac:g}% change in the heat reaching the sample "
+                      f"(the step test), and while a field is on the band's "
+                      f"FLOOR drops by the output that needs; a move not "
+                      f"declared settled ends after "
                       f"{getattr(s, 'field_move_max_s', 0):g} s")
+                heat = float(getattr(s, "field_heat_w_per_t", 0.0) or 0.0)
+                if heat > 0:
+                    n = getattr(s, "field_heat_exponent", 1.0)
+                    print(f"  field heat     : {heat:g} W x B^{n:g} -- "
+                          f"`send field moving <tesla>` steps the output by it "
+                          f"over {getattr(s, 'field_ramp_s', 0):g} s; "
+                          f"{1e3 * heat * 0.25 ** n:.0f} mW at 250 mT")
         else:
             print(f"  authority band : {lo:.3f}% .. {hi:.3f}%, FIXED -- no "
                   f"model curve, so the centre is operating_point_pct "
@@ -899,6 +906,11 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
                     "log's Notes column.",
     )
     fld.add_argument("state", choices=("moving", "settled", "zero"))
+    fld.add_argument("tesla", type=float, nargs="?", default=None,
+                     help="the field the magnet is going to (`moving`), which "
+                          "is what the loop's feedforward is computed from; or "
+                          "the field it is already at (`settled`), recorded "
+                          "only")
 
     snd_sub.add_parser(
         "heaters_off",
@@ -934,7 +946,7 @@ def main(argv: list[str] | None = None, *, prog: str = "lschart") -> int:
             "arm": ("kelvin",),
             "disengage": (),
             "ack": (),
-            "field": ("state",),
+            "field": ("state", "tesla"),
             "source": ("name", "allowed"),
             "heaters_off": (),
             "ping": (),
