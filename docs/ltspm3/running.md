@@ -161,9 +161,19 @@ rather than quietly succeeding.
 
 **A field adds heat to the sample** — measured 2026-10-30 with the loop
 disengaged at 66.497 %: +42.8 mW at 100 mT, +68.4 mW at 150 mT, −71.0 mW back
-to 5 mT, so it is reversible. Fitted `0.654 W × B^1.17` (the armed file's
-`field_heat_w_per_t` / `field_heat_exponent`); 250 mT is ~129 mW **by
-extrapolation**. The mechanism is not settled: the coldplate dipped ~70 mK as
+to 5 mT, so it is reversible; and with the loop armed through Scan94's
+sweep, eleven points from 2.5 to 237 mT. Quadratic at low field, linear
+in the middle and saturating above ~150 mT: fitted `a × (√(B² + Bc²) − Bc) /
+(1 + B/Bs)` (the armed file's `field_heat_*`), 0.8 mW rms and 1.5 mW at worst.
+**That is not good enough on its own**: at 150 K each milliwatt the
+feedforward misses is ~100 mK of dip and, on the hold gains, a twenty-minute
+tail — Scan94's high-field moves took 18–27 min to settle. So the loop also
+**trims**: `field_settle_s` after `field settled` it compares the residual's
+level before the move and after it (`field_trim_window_s` each) with the heat
+it fed forward, and corrects the heater by the difference, measured to
+~0.2 mW. `field_trim_w` in the status file is what each trim found. And an
+error past `field_recover_error_k` after a move puts the loop on its move
+gains until the hold re-certifies. The mechanism is not settled: the coldplate dipped ~70 mK as
 the field came up and rose on the way down, which fits the sample's thermal
 link losing conductance in field better than a change in the heater. To the
 loop's watt residual it looks like a failing connector, and the recorder does
@@ -184,6 +194,16 @@ within a few tenths of a kelvin; without it the PID alone lets a 250 mT step
 overshoot by ~20 K. **After a recorder restart at field**, record it with
 `send field settled 0.25` — that moves nothing, it only tells the loop where
 the field is.
+
+**`settled` is the whole contract for a script**: `field moving <tesla>`,
+ramp, `field settled`, then wait for `settled` and measure — no fixed waits.
+It drops at `field moving`, stays false through `field_settle_s` and the trim,
+and comes back only by a full dwell after them. On the bench, Scan94's nine
+fields with the heat Scan94 measured, and with the fit 15 % wrong: once
+`settled` comes back the sample stays within 50 mK. How soon it comes back is
+the settle rule's: at 150 K the thermometer's ~25 mK noise usually sends it
+through the averaged path, which waits one plant τ (~10 min), so expect
+4–12 min per field.
 
 What the loop does with it (`control.supervisor` in the armed file, PID_PLAN.md
 4a-xii, safety.md rules 4 and 5):

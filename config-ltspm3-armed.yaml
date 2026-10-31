@@ -232,12 +232,21 @@ control:
     # moving <tesla>` before a ramp and `send field settled` (or `zero`)
     # after it; nothing else tells the loop.  PID_PLAN.md 4a-xii, 4a-xiii.
     #
-    # MEASURED 2026-10-30, 150-180 K, loop disengaged at 66.497 %: +42.8 mW
-    # at 100 mT, +68.4 mW at 150 mT, -71.0 mW back to 5 mT (reversible).
-    # Fitted 0.654 W * B^1.17, 1.1 mW rms; 250 mT is ~129 mW BY EXTRAPOLATION.
-    # Field direction as used that day; temperature dependence not measured.
-    field_heat_w_per_t: 0.654     # the fit: W at 1 T ...
-    field_heat_exponent: 1.17     # ... times |B|^this.  Drives the feedforward
+    # MEASURED 2026-10-30 at 150 K, relative to 5 mT, in mW.  Loop disengaged
+    # at 66.497 %: 100 mT +42.8, 150 mT +68.4, and -71.0 back to 5 mT
+    # (reversible).  Loop armed, Scan94's sweep, from the residual: 2.5 mT
+    # +0.0, 10 +0.9, 22 +3.8, 30 +7.1, 32 +8.1, 173 +82.9, 195 +92.8,
+    # 215 +101.1, 237 +109.7.  Fitted a * (sqrt(B^2 + Bc^2) - Bc) / (1 + B/Bs):
+    # quadratic below Bc, linear above, saturating toward Bs; 0.8 mW rms, the
+    # worst 1.5.  Field direction as used that day; temperature dependence
+    # not measured.  The trim below corrects what the curve gets wrong.
+    field_heat_w_per_t: 0.762     # a: W per T before saturation
+    field_heat_crossover_t: 0.0428  # Bc
+    field_heat_saturation_t: 0.65   # Bs.  The three drive the feedforward
+    field_trim_window_s: 60.0     # the residual averaged this long before a
+                                  # move and at its end: the trim (4a-xv)
+    field_recover_error_k: 0.15   # after a move, an error past this gets the
+                                  # MOVE gains until the hold re-certifies
     field_ramp_s: 60.0            # the magnet's ramp; the feedforward is
                                   # spread over this long
     field_power_frac: 0.20        # what a declared move may change, as a

@@ -161,12 +161,15 @@ the mean goes false only when the mean over `hold_settle_s` leaves the band —
 and then needs a
 full dwell to come back. The gains stay on `hold` until the error passes
 `move_error_k`, because retuning on every small excursion is worse than either
-tuning. A frozen or disengaged loop is never settled.
+tuning. A frozen or disengaged loop is never settled, and nor is one whose
+`field` is `moving`: a declared field move restarts the dwell, which begins
+again once the move is over.
 
-**`field`, `field_moving` and `field_t`** are what a `field` command last
-declared about the magnet, whether the loop is still treating it as moving —
-which runs a little past `settled` — and the field in tesla. Empty, `false`
-and `null` from a loop that takes no `field`.
+**`field`, `field_moving`, `field_t` and `field_trim_w`** are what a `field`
+command last declared about the magnet, whether the loop is still treating it
+as moving — which runs a little past `settled` — the field in tesla, and what
+the last move's trim found (watts). Empty, `false` and `null` from a loop that
+takes no `field`.
 
 **Why the settle rule is published beside it.** `hold_error_k`,
 `hold_settle_s` and `unsettle_s` are the rule behind the verdict — on LTSPM3, Jeff's settle gate,

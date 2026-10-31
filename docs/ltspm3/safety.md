@@ -150,7 +150,13 @@ correct aggressively.
 
    **And a declared field value moves the output first** (4a-xiii):
    `field moving <tesla>` steps the PID's bias down by the fitted heat
-   (`field_heat_w_per_t · |B|^field_heat_exponent`) over `field_ramp_s`. Left
+   (`field_heat_w_per_t · (√(B² + Bc²) − Bc) / (1 + B/Bs)` — 4a-xiv,
+   4a-xv) over `field_ramp_s`, and **trims** it when the move ends: the
+   residual's level after less before, less the heat fed forward, is the
+   miss, and the bias moves by the output it is worth. A miss past
+   `field_power_frac` is alarmed and NOT trimmed — as likely the heater
+   circuit as the field — and every trim is still bound by the band, whose
+   ceiling a field never lifts. Left
    to the PID, a 250 mT step overshoots 17–21 K on the bench; with the fit
    right it stays inside 0.25 K, and 30 % wrong costs 3–7 K. Only while
    armed, only on `moving` — `settled <tesla>` records a field the output
