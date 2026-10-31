@@ -293,15 +293,20 @@ class SupervisorConfig:
     #: settling plus the residual's slope window, which reaches back across the
     #: end of the move.
     field_settle_s: float = 120.0
-    #: **THE FIELD'S HEAT, fitted**: ``field_heat_w_per_t * |B| **
-    #: field_heat_exponent`` watts reach the sample at a field of ``B`` tesla,
-    #: on top of the heater.  Zero means no model, and then a declared move
+    #: **THE FIELD'S HEAT, fitted**: ``field_heat_w_per_t * (sqrt(B**2 +
+    #: Bc**2) - Bc)`` watts reach the sample at a field of ``B`` tesla, on top
+    #: of the heater, with ``Bc`` = `field_heat_crossover_t`.  QUADRATIC below
+    #: ``Bc`` and LINEAR above it, slope `field_heat_w_per_t` -- the shape
+    #: magnetoresistance has, and the shape the 2026-10-30 points have: a
+    #: power law through 100 and 150 mT put 22 mT's heat at 6.2 mW against a
+    #: measured 3.8, and the over-step dipped every low-field move ~150 mK for
+    #: twenty minutes (4a-xiv).  Zero means no model, and then a declared move
     #: has no feedforward.  With one, `set_field('moving', tesla)` steps the
     #: output down by the heat the move will add, spread over
     #: `field_ramp_s`, so the sample need not move first for the loop to
     #: answer -- on the bench a 150 mT step left to the PID overshot ~10 K.
     field_heat_w_per_t: float = 0.0
-    field_heat_exponent: float = 1.0
+    field_heat_crossover_t: float = 0.0
     #: The magnet's own ramp: the feedforward is spread over this long.
     field_ramp_s: float = 60.0
 
@@ -1139,11 +1144,12 @@ class HeaterSupervisor:
 
     def field_heat_w(self, tesla: float) -> float:
         """What a field of ``tesla`` adds to the sample, in watts, by the fit
-        in `field_heat_w_per_t` / `field_heat_exponent`."""
+        in `field_heat_w_per_t` / `field_heat_crossover_t`."""
         cfg = self.cfg
         if cfg.field_heat_w_per_t <= 0.0:
             return 0.0
-        return cfg.field_heat_w_per_t * abs(tesla) ** cfg.field_heat_exponent
+        bc = cfg.field_heat_crossover_t
+        return cfg.field_heat_w_per_t * (math.hypot(tesla, bc) - bc)
 
     def set_field(self, state: str, tesla: float | None = None) -> str:
         """The operator says what the magnet is doing: ``moving``, ``settled``
@@ -1646,7 +1652,16 @@ class HeaterSupervisor:
         frozen over a doubtful reading, a fault being held, manual, disengaged
         -- is one nobody can certify the hold through, so it restarts the
         dwell rather than being counted towards it."""
-        if self.state is SupervisorState.TRACKING:
+        # **A FIELD MOVE IS NOT A HOLD EITHER** (4a-xiv), any more than a
+        # setpoint move is: the sample answers a field over minutes, after the
+        # magnet has stopped, so a hold certified through the move -- or kept
+        # from before it -- is certifying a temperature that is about to
+        # leave.  The dwell restarts once the move is over, `field_settle_s`
+        # after it is declared settled.  Only the verdict: the gains stay
+        # where the error puts them, because forcing MOVE gains through a
+        # field move only made the next settle later (bench, 2026-10-30).
+        if (self.state is SupervisorState.TRACKING
+                and self._field != FIELD_MOVING):
             s.settled = self.tuner.settled
             s.settle_error_k = self.tuner.settle_error_k
             if s.filtered_k is not None:

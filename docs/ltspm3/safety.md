@@ -150,7 +150,8 @@ correct aggressively.
 
    **And a declared field value moves the output first** (4a-xiii):
    `field moving <tesla>` steps the PID's bias down by the fitted heat
-   (`field_heat_w_per_t · |B|^field_heat_exponent`) over `field_ramp_s`. Left
+   (`field_heat_w_per_t · (√(B² + Bc²) − Bc)`, quadratic below the crossover
+   `Bc` and linear above it — 4a-xiv) over `field_ramp_s`. Left
    to the PID, a 250 mT step overshoots 17–21 K on the bench; with the fit
    right it stays inside 0.25 K, and 30 % wrong costs 3–7 K. Only while
    armed, only on `moving` — `settled <tesla>` records a field the output

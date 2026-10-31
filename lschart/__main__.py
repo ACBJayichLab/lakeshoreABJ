@@ -267,11 +267,13 @@ def cmd_check(args) -> int:
                       f"{getattr(s, 'field_move_max_s', 0):g} s")
                 heat = float(getattr(s, "field_heat_w_per_t", 0.0) or 0.0)
                 if heat > 0:
-                    n = getattr(s, "field_heat_exponent", 1.0)
-                    print(f"  field heat     : {heat:g} W x B^{n:g} -- "
-                          f"`send field moving <tesla>` steps the output by it "
-                          f"over {getattr(s, 'field_ramp_s', 0):g} s; "
-                          f"{1e3 * heat * 0.25 ** n:.0f} mW at 250 mT")
+                    bc = float(getattr(s, "field_heat_crossover_t", 0.0) or 0.0)
+                    print(f"  field heat     : {heat:g} W/T x (sqrt(B^2 + "
+                          f"{bc:g}^2) - {bc:g}) -- `send field moving <tesla>` "
+                          f"steps the output by it over "
+                          f"{getattr(s, 'field_ramp_s', 0):g} s; "
+                          f"{1e3 * heat * ((0.25 ** 2 + bc ** 2) ** 0.5 - bc):.0f}"
+                          f" mW at 250 mT")
         else:
             print(f"  authority band : {lo:.3f}% .. {hi:.3f}%, FIXED -- no "
                   f"model curve, so the centre is operating_point_pct "

@@ -161,9 +161,12 @@ rather than quietly succeeding.
 
 **A field adds heat to the sample** — measured 2026-10-30 with the loop
 disengaged at 66.497 %: +42.8 mW at 100 mT, +68.4 mW at 150 mT, −71.0 mW back
-to 5 mT, so it is reversible. Fitted `0.654 W × B^1.17` (the armed file's
-`field_heat_w_per_t` / `field_heat_exponent`); 250 mT is ~129 mW **by
-extrapolation**. The mechanism is not settled: the coldplate dipped ~70 mK as
+to 5 mT, so it is reversible; and with the loop armed through Scan94's
+sweep, +0.9 mW at 10 mT and +3.8 mW at 22 mT. Quadratic at low field and
+linear at high, the shape magnetoresistance has: fitted `0.555 W/T ×
+(√(B² + Bc²) − Bc)` with `Bc` = 28.1 mT (the armed file's
+`field_heat_w_per_t` / `field_heat_crossover_t`), every point within 1 mW;
+250 mT is ~124 mW **by extrapolation**. The mechanism is not settled: the coldplate dipped ~70 mK as
 the field came up and rose on the way down, which fits the sample's thermal
 link losing conductance in field better than a change in the heater. To the
 loop's watt residual it looks like a failing connector, and the recorder does
@@ -184,6 +187,12 @@ within a few tenths of a kelvin; without it the PID alone lets a 250 mT step
 overshoot by ~20 K. **After a recorder restart at field**, record it with
 `send field settled 0.25` — that moves nothing, it only tells the loop where
 the field is.
+
+**`settled` drops for a field move**, as it does for a setpoint move, and is
+certified again by a full dwell that starts `field_settle_s` after `field
+settled`. The sample answers a field over minutes after the magnet stops, so a
+script that checks `settled` 30 s after the ramp would otherwise start on a
+hold certified before the move. The gains are not changed by it.
 
 What the loop does with it (`control.supervisor` in the armed file, PID_PLAN.md
 4a-xii, safety.md rules 4 and 5):

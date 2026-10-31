@@ -19,7 +19,7 @@ import math
 
 import pytest
 
-from bench_plant import BENCH_TEMPERATURES, FittedHarness
+from bench_plant import BENCH_TEMPERATURES, STAGE_FILE, FittedHarness
 from ltspm3.control import LoopMode, SupervisorState
 from ltspm3.model.fitted_response import DRIFT_T0_UNIX
 
@@ -316,3 +316,86 @@ def test_no_feedforward_while_the_loop_is_not_armed():
     h.sup.set_field("moving", 0.25)
     assert h.sup._field_ff_left == 0.0
     assert h.sup._field_t == pytest.approx(0.25)
+
+
+# -- 4a-xiv: the curve's low end, and the verdict through a move ---------------
+
+#: Measured 2026-10-30 at 150 K, heat relative to 5 mT, in watts: loop
+#: disengaged for 100 and 150 mT, armed through Scan94's sweep for the rest.
+MEASURED = ((0.0025, 0.0000), (0.010, 0.0009), (0.022, 0.0038),
+            (0.100, 0.0428), (0.150, 0.0684))
+
+
+def test_the_shipped_curve_goes_through_every_measured_point():
+    """Within 0.3 mW of the low points and a milliwatt of the high ones.
+    The power law it replaced was 2.4 mW over at 22 mT, and every
+    low-field move dipped ~150 mK for twenty minutes on that over-step."""
+    h = armed(150.0)
+    for tesla, heat in MEASURED:
+        model = h.sup.field_heat_w(tesla) - h.sup.field_heat_w(0.005)
+        tol = 0.0003 if tesla < 0.05 else 0.0011
+        assert model == pytest.approx(heat, abs=tol), f"{1e3 * tesla:g} mT"
+
+
+def minute_means(errs, n=30):
+    """One-minute means of the error, at the 2 s cadence: the bench Sample
+    carries 50-90 mK of reading noise at 150 K, and a dip is a mean."""
+    return [sum(errs[i:i + n]) / n for i in range(0, len(errs) - n + 1, n)]
+
+
+def low_field_sweep(truth):
+    """Scan94's start, on the cryostat's own stage: `settled 0.005` declared
+    as the script does, then 2.5 -> 10 -> 22 mT, each a 24 s ramp and ten
+    minutes of hold, with ``truth(h, tesla)`` the heat the plant gets."""
+    h = armed(150.0, stage=STAGE_FILE)
+    h.sup.set_field("settled", 0.005)
+    h.minutes(5)
+    start, previous = len(h.history), 0.0
+    for tesla in (0.0025, 0.010, 0.022):
+        h.sup.set_field("moving", tesla)
+        ramp_heat(h, previous, truth(h, tesla), seconds=24.0)
+        previous = truth(h, tesla)
+        h.sup.set_field("settled")
+        h.minutes(10)
+    return max(abs(m) for m in minute_means(errors(h, start)))
+
+
+def test_scan94s_low_field_moves_do_not_dip():
+    """With the MEASURED heat in the plant the moves stay well inside the
+    100 mK gate (bench noise alone is ~18 mK).  The same sweep against a
+    feedforward that over-steps the way the power law did -- the plant
+    getting 60 % of what the loop expects -- dips 140 mK, which is the
+    cryostat's 160 mK on 2026-10-30: the bench sees the failure it fixes."""
+    measured = dict(MEASURED)
+    assert low_field_sweep(lambda h, tesla: measured[tesla]) < 0.06
+    over = low_field_sweep(
+        lambda h, tesla: 0.6 * (h.sup.field_heat_w(tesla) - h.sup.field_heat_w(0.005)))
+    assert over > 0.10
+
+
+def test_a_field_move_clears_settled_and_leaves_the_gains():
+    """The sample answers a field over minutes after the magnet stops, so a
+    hold is not certified through a move: `settled` drops when the move is
+    declared and needs a full dwell after the move is over.  The gains stay
+    on HOLD -- forcing MOVE gains through a field move only delayed the next
+    settle."""
+    h = armed(150.0, stage=STAGE_FILE)
+    for _ in range(int(1800 / h.DT)):
+        h.step(1)
+        if h.history[-1].settled:
+            break
+    assert h.history[-1].settled
+    h.sup.set_field("moving", 0.0025)
+    h.step(1)
+    assert not h.history[-1].settled
+    assert h.history[-1].phase == "hold"
+    h.minutes(1)
+    h.sup.set_field("settled")
+    cfg, tun = h.sup.cfg, h.sup.tuner.cfg
+    h.step(int((cfg.field_settle_s + tun.hold_settle_s) / h.DT) - 3)
+    assert not any(s.settled for s in h.history[-60:]), "certified too early"
+    for _ in range(int(1200 / h.DT)):
+        h.step(1)
+        if h.history[-1].settled:
+            break
+    assert h.history[-1].settled, "never settled again after the move"
