@@ -98,11 +98,23 @@ def validate_control(cfg: ControlConfig, app: AppConfig, problems: list[str]) ->
             "declared field move may take with it unjudged, and past a quarter "
             "the step test could no longer see the heater circuit failing "
             "during one")
-    if min(s.field_heat_w_per_t, s.field_heat_crossover_t, s.field_ramp_s) < 0:
+    if min(s.field_heat_w_per_t, s.field_heat_crossover_t,
+           s.field_heat_saturation_t, s.field_ramp_s) < 0:
         problems.append(
-            "control.supervisor.field_heat_w_per_t, field_heat_crossover_t and "
-            "field_ramp_s must not be negative -- they are the fitted heat a "
-            "field adds and the time the feedforward of a move is spread over")
+            "control.supervisor.field_heat_w_per_t, field_heat_crossover_t, "
+            "field_heat_saturation_t and field_ramp_s must not be negative -- "
+            "they are the fitted heat a field adds and the time the "
+            "feedforward of a move is spread over")
+    if not 0 < s.field_trim_window_s <= s.field_settle_s:
+        problems.append(
+            f"control.supervisor.field_trim_window_s {s.field_trim_window_s:g} "
+            f"must be positive and no longer than field_settle_s "
+            f"{s.field_settle_s:g} -- the trim averages the residual over it "
+            "at the END of a move, which is what field_settle_s waits for")
+    if s.field_recover_error_k <= 0:
+        problems.append(
+            "control.supervisor.field_recover_error_k must be positive -- at "
+            "zero every reading after a field move is an error to recover")
     if s.field_move_max_s <= 0 or s.field_settle_s < 0:
         problems.append(
             "control.supervisor.field_move_max_s must be positive and "

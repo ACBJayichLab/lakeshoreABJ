@@ -298,6 +298,9 @@ classdef LSChartRecorder < handle
             %                        field as moving (field_settle_s past
             %                        setField('settled'))
             %     field_t            the field last declared, in tesla
+            %     field_trim_w       what the last move's trim found: the
+            %                        heat the field really brought less what
+            %                        was fed forward, in watts
             %
             %   Empty on a recorder with no `control:` section -- a plain
             %   `lschart` install -- which is not an error: that recorder
@@ -339,7 +342,8 @@ classdef LSChartRecorder < handle
                      'setpoint_k', 'setpoint_target_k', 'error_k', ...
                      'output_pct', 'raw_k', 'filtered_k', 'validity', ...
                      'reason', 'hold_error_k', 'hold_settle_s', 'unsettle_s', ...
-                     'max_rate_k_per_min', 'field', 'field_moving', 'field_t'}
+                     'max_rate_k_per_min', 'field', 'field_moving', 'field_t', ...
+                     'field_trim_w'}
                 if ~isfield(c, f{1}), c.(f{1}) = []; end
             end
         end
@@ -639,7 +643,11 @@ classdef LSChartRecorder < handle
             %   The field in tesla is what the loop's feedforward is computed
             %   from: it steps the heater down by the heat the field adds
             %   (fitted, field_heat_w_per_t) over field_ramp_s, so the sample
-            %   barely moves.  setField('settled', B) with no move only
+            %   barely moves; field_settle_s after 'settled' it measures what
+            %   the field really brought and trims the heater by the
+            %   difference.  control().settled is false from 'moving' until
+            %   the hold after all that is certified -- wait on it, and on
+            %   nothing else.  setField('settled', B) with no move only
             %   RECORDS a field that is already there -- after a restart.
             %
             %   While moving, the loop tolerates a change of up to

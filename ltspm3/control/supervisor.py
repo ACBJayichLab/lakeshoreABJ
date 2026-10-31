@@ -309,6 +309,24 @@ class SupervisorConfig:
     field_heat_crossover_t: float = 0.0
     #: The magnet's own ramp: the feedforward is spread over this long.
     field_ramp_s: float = 60.0
+    #: Above this the field's heat grows ever more slowly: the curve is
+    #: divided by ``1 + |B| / Bs``.  Zero for none.  Scan94 measured the
+    #: saturation to 237 mT, where the unsaturated curve was 7 mW over.
+    field_heat_saturation_t: float = 0.0
+    #: **THE TRIM** (4a-xv).  No curve gets a field's heat right to the
+    #: fraction of a milliwatt the 50 mK gate needs -- the best through
+    #: Scan94's eleven points misses by up to 1.5 mW, and each milliwatt
+    #: missed was ~100 mK and a twenty-minute tail.  The residual measures
+    #: the real heat to ~0.2 mW, so when a move ends the loop compares the
+    #: residual's level before the move and after it with what it fed
+    #: forward, and corrects the output by the difference.  This is how long
+    #: each of the two levels is averaged over.
+    field_trim_window_s: float = 60.0
+    #: After a field move, an error past this puts the loop on its MOVE gains
+    #: until the hold is certified again -- the recovery a setpoint move gets.
+    #: Above the thermometer's noise, so a move that went well never leaves
+    #: the hold gains: certifying on MOVE gains is what makes them slow.
+    field_recover_error_k: float = 0.15
 
     #: A one-cycle lurch in the *feedback* terms (P+I+D) this large means a bad
     #: reading is driving the loop, not that the cryostat needs the output.
@@ -402,6 +420,9 @@ class SupervisorStatus:
     field_moving: bool = False
     #: The field as last declared, in tesla (0 when none was given).
     field_t: float = 0.0
+    #: What the last field move's trim found: the heat the residual measured
+    #: minus the heat fed forward, in watts.  None before any trim.
+    field_trim_w: float | None = None
     phase: str = "hold"
     #: **Can this temperature be trusted for a measurement?**  ONE verdict,
     #: and every client reads it rather than working it out: `Tuner.settled`
@@ -512,6 +533,18 @@ class HeaterSupervisor:
         self._field_t = 0.0
         self._field_ff_left = 0.0
         self._field_ff_rate = 0.0
+        #: THE TRIM's bookkeeping: the residual's recent ``(t, dQ)``, its
+        #: level before the present move, the heat fed forward for the move,
+        #: when the move was declared over, and what the last trim found.
+        self._dq_recent: deque = deque()
+        self._field_q_before: float | None = None
+        self._field_ff_heat_w = 0.0
+        self._field_settled_at: float | None = None
+        self._field_trim_w: float | None = None
+        self._field_trim_alarm = ""
+        #: From a move until the hold after it is certified: the window in
+        #: which an error past `field_recover_error_k` means MOVE gains.
+        self._field_recovering = False
         #: Set BEFORE the first `_apply_band_to_pid`, because the band's floor
         #: now asks where the heater is.
         self.output_pct: float | None = None   # last value we commanded
@@ -912,8 +945,11 @@ class HeaterSupervisor:
 
     def _enter_mode(self, mode: LoopMode) -> None:
         # Whatever is left of a field move's feedforward belongs to the loop
-        # that queued it; a re-prime starts from where the heater IS.
+        # that queued it; a re-prime starts from where the heater IS -- and so
+        # does its trim, which would otherwise correct an output it never had.
         self._field_ff_left = 0.0
+        self._field_q_before, self._field_ff_heat_w = None, 0.0
+        self._field_recovering = False
         if mode is LoopMode.PID:
             # Bumpless: start from wherever the heater actually is, *now* --
             # not from where the PID last thought it was.  After a fault
@@ -1149,7 +1185,9 @@ class HeaterSupervisor:
         if cfg.field_heat_w_per_t <= 0.0:
             return 0.0
         bc = cfg.field_heat_crossover_t
-        return cfg.field_heat_w_per_t * (math.hypot(tesla, bc) - bc)
+        heat = cfg.field_heat_w_per_t * (math.hypot(tesla, bc) - bc)
+        bs = cfg.field_heat_saturation_t
+        return heat / (1.0 + abs(tesla) / bs) if bs > 0 else heat
 
     def set_field(self, state: str, tesla: float | None = None) -> str:
         """The operator says what the magnet is doing: ``moving``, ``settled``
@@ -1194,13 +1232,19 @@ class HeaterSupervisor:
         if state == FIELD_ZERO:
             tesla = 0.0
         now = self.clock()
-        self._field_expired = ""
+        self._field_expired = self._field_trim_alarm = ""
         cfg = self.cfg
         if state == FIELD_MOVING:
             again = self._field == FIELD_MOVING
+            if not again:
+                # The level the trim compares the end of the move with.
+                self._field_q_before = self._recent_residual(now)
+                self._field_ff_heat_w = 0.0
             self._field = FIELD_MOVING
             self._field_since = now
             self._field_release_at = None
+            self._field_settled_at = None
+            self._field_recovering = True
             ff = ""
             if tesla is not None:
                 ff = self._field_feedforward(tesla)
@@ -1219,6 +1263,7 @@ class HeaterSupervisor:
         if self._field == FIELD_MOVING:
             # The move is over; the test stays widened a little longer.
             self._field_release_at = now + cfg.field_settle_s
+            self._field_settled_at = now
             self._field_after = state
             log.warning("field %s: the step test re-references in %.0f s",
                         state, cfg.field_settle_s)
@@ -1251,6 +1296,7 @@ class HeaterSupervisor:
         base = here + self._field_ff_left
         target = _M.percent_for_power(max(0.0, _M.power_w(base) - heat))
         self._field_ff_left = target - here
+        self._field_ff_heat_w += heat
         ramp = max(self.cfg.field_ramp_s, 0.0)
         self._field_ff_rate = (abs(self._field_ff_left) / ramp if ramp > 0
                                else math.inf)
@@ -1263,6 +1309,62 @@ class HeaterSupervisor:
         self._dq_hist.clear()
         self._dq_slow = self._dq_since = None
 
+    def _recent_residual(self, t: float, since: float | None = None) -> float | None:
+        """The residual's mean over the last `field_trim_window_s`, and not
+        from before ``since``; None without half a window of it."""
+        start = t - self.cfg.field_trim_window_s
+        if since is not None:
+            start = max(start, since)
+        values = [q for when, q in self._dq_recent if when >= start]
+        cadence = self._cadence_s or 2.0
+        if len(values) < max(3, 0.5 * self.cfg.field_trim_window_s / cadence):
+            return None
+        return sum(values) / len(values)
+
+    def _field_trim(self, t: float) -> None:
+        """Correct the output by what the move's feedforward got wrong.
+
+        The residual carries the field's heat whatever the loop did about it
+        -- it subtracts the power actually commanded -- so its level after the
+        move less its level before is the heat the field brought, to ~0.2 mW.
+        Less the heat fed forward is the miss, and the bias moves by the
+        output that miss is worth, at once: by now the feedforward has gone
+        in, and the miss is a fraction of a percent.
+
+        **Bounded, and a large miss is not corrected.**  Past
+        `field_power_frac` of the heater it is more than a field's heat can be
+        wrong by, and as likely the heater circuit as the field: alarm, and
+        leave it to the loop.  Within it the correction is still bound by the
+        authority band, whose ceiling a field never lifts.
+        """
+        before, fed = self._field_q_before, self._field_ff_heat_w
+        self._field_q_before, self._field_ff_heat_w = None, 0.0
+        after = self._recent_residual(t, since=self._field_settled_at)
+        if (before is None or after is None or self.mode is not LoopMode.PID
+                or self.output_pct is None):
+            log.warning("field trim skipped: the residual had no level %s",
+                        "before the move" if before is None else
+                        "after the move" if after is None else
+                        "to act on with the loop not armed")
+            return
+        miss = (after - before) - fed
+        self._field_trim_w = miss
+        here = self.output_pct + self._field_ff_left
+        limit = self.cfg.field_power_frac * _M.power_w(here)
+        if abs(miss) > limit:
+            self._field_trim_alarm = (
+                f"the field move brought {1e3 * (after - before):+.1f} mW against "
+                f"{1e3 * fed:+.1f} mW fed forward: a {1e3 * miss:+.1f} mW miss is "
+                f"past field_power_frac ({1e3 * limit:.0f} mW) and was NOT "
+                "trimmed -- the heater circuit, or a fit far off")
+            log.warning("%s", self._field_trim_alarm)
+            return
+        target = _M.percent_for_power(max(0.0, _M.power_w(here) - miss))
+        self.pid.bias += target - here
+        log.warning("field trim: the move brought %+.2f mW against %+.2f fed "
+                    "forward; output %+.4f %%", 1e3 * (after - before),
+                    1e3 * fed, target - here)
+
     def _advance_field(self, t: float) -> None:
         """End a move whose settling time is up, or that nobody ended."""
         if self._field != FIELD_MOVING:
@@ -1271,6 +1373,7 @@ class HeaterSupervisor:
             if t < self._field_release_at:
                 return
             self._field = self._field_after
+            self._field_trim(t)
         elif t - self._field_since >= self.cfg.field_move_max_s:
             self._field_expired = (
                 f"a field move declared {t - self._field_since:.0f} s ago was "
@@ -1278,6 +1381,9 @@ class HeaterSupervisor:
                 "the level it has now -- `field settled` clears this")
             log.warning("%s", self._field_expired)
             self._field = FIELD_SETTLED
+            # Nobody said the magnet stopped, so the level now is not one
+            # to trim against.
+            self._field_q_before, self._field_ff_heat_w = None, 0.0
         else:
             return
         self._field_since = self._field_release_at = None
@@ -1483,6 +1589,7 @@ class HeaterSupervisor:
         s.field_state = self._field
         s.field_moving = self._field == FIELD_MOVING
         s.field_t = self._field_t
+        s.field_trim_w = self._field_trim_w
 
         # -- believe the sensor? --------------------------------------------
         if readings:
@@ -1663,6 +1770,8 @@ class HeaterSupervisor:
         if (self.state is SupervisorState.TRACKING
                 and self._field != FIELD_MOVING):
             s.settled = self.tuner.settled
+            if s.settled:
+                self._field_recovering = False
             s.settle_error_k = self.tuner.settle_error_k
             if s.filtered_k is not None:
                 s.settle_wait_s = self.tuner.averaged_wait_s(s.filtered_k)
@@ -1750,8 +1859,16 @@ class HeaterSupervisor:
         # own answer in kelvin (`SetpointSmoother.settled`), the same one the
         # status publishes.
         was = self.tuner.phase
+        # AFTER A FIELD MOVE, A REAL ERROR GETS THE MOVE GAINS (4a-xv), as a
+        # setpoint move's does: the hold gains are slow by design, and on them
+        # Scan94's 350 mK dips took twenty minutes to come back.  Gated on
+        # `field_recover_error_k`, above the thermometer's noise, so a move the
+        # feedforward and the trim got right stays on the hold gains.
+        error = self.pid.cfg.setpoint - s.filtered_k
+        recover = (self._field_recovering
+                   and abs(error) > self.cfg.field_recover_error_k)
         phase = self.tuner.update_phase(
-            t, error_k=self.pid.cfg.setpoint - s.filtered_k, ramping=s.ramping,
+            t, error_k=error, ramping=s.ramping or recover,
             kelvin=s.filtered_k)
 
         # Retune for where we are and what we are doing.  Both the gain and the
@@ -1999,8 +2116,17 @@ class HeaterSupervisor:
         # looking at the same residual, still calls them.
         if self._field_expired:
             anomalies.append(self._field_expired)
+        if self._field_trim_alarm:
+            anomalies.append(self._field_trim_alarm)
         dq, sigma, fast, why = self._missing_power(s)
         s.missing_power_w, s.sigma_q_w, s.residual_reason = dq, sigma, why
+        if dq is not None:
+            # The trim's history: what the residual read, kept long enough to
+            # average a window before a move and a window at its end.
+            self._dq_recent.append((t, dq))
+            keep = t - 2.0 * max(cfg.field_trim_window_s, cfg.field_settle_s)
+            while self._dq_recent and self._dq_recent[0][0] < keep:
+                self._dq_recent.popleft()
         if dq is None:
             # **THE STEP HISTORY BREAKS HERE**, and clearing it is the point
             # rather than merely not appending.  A range taken across a gap is

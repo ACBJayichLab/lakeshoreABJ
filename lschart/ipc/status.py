@@ -509,6 +509,10 @@ class StatusWriter:
             "field": str(getattr(status, "field_state", "") or ""),
             "field_moving": bool(getattr(status, "field_moving", False)),
             "field_t": _num(getattr(status, "field_t", None)),
+            # What the last field move's trim found: the heat the move really
+            # brought less what was fed forward, in watts.  How good the
+            # field's fit is, move by move.
+            "field_trim_w": _num(getattr(status, "field_trim_w", None)),
             # WHAT THE LOOP IS ACTING ON, which is not what the chart draws.
             # The error is computed from the filtered value, so without it
             # "why is the error not what I get off the trace" has no answer.

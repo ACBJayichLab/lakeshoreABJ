@@ -306,6 +306,7 @@ def test_the_field_the_operator_declared_is_in_the_block(tmp_path, armed):
     block = written(tmp_path, h)
     assert (block["field"], block["field_moving"]) == ("moving", True)
     assert block["field_t"] == pytest.approx(0.15)
+    assert "field_trim_w" in block
     h.sup.set_field("settled")
     h.step(1)
     assert written(tmp_path, h)["field_moving"] is True
